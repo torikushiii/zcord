@@ -2,17 +2,11 @@
 
 mod app;
 mod assets;
-mod channel_list;
-mod chat;
-mod data;
+mod credentials;
 mod discord;
-mod guild_rail;
 mod images;
-mod login;
-mod member_list;
+mod store;
 mod theme;
-mod titlebar;
-mod token_store;
 
 use gpui::{
     App, AppContext, Global, KeyBinding, TitlebarOptions, WindowBounds, WindowDecorations,

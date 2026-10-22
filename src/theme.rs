@@ -3,8 +3,8 @@ use gpui::{prelude::*, *};
 use std::{path::Path, sync::Arc};
 
 use crate::{
-    data::{Status, User},
     images,
+    store::{Status, User},
 };
 
 pub const BG: u32 = 0x08080A;

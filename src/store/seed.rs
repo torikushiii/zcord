@@ -1,0 +1,335 @@
+use super::*;
+
+const STATUS_BOT_ID: u64 = 9;
+
+impl Store {
+    pub fn seed() -> Self {
+        use Status::*;
+        let users = [
+            (
+                "Demo User One",
+                "D1",
+                Online,
+                false,
+                Some(0xC77DFF),
+                Some("DEMO"),
+                Some("Building a Discord client"),
+            ),
+            (
+                "Demo User Two",
+                "D2",
+                Online,
+                false,
+                Some(0x3BA55C),
+                None,
+                Some("Playing Example Adventure"),
+            ),
+            ("Demo User Three", "D3", Idle, false, None, None, None),
+            (
+                "Demo User Four",
+                "D4",
+                DoNotDisturb,
+                false,
+                Some(0xE67E22),
+                Some("TEST"),
+                Some("Focus mode"),
+            ),
+            ("Demo User Five", "D5", Online, false, None, None, None),
+            ("Demo User Six", "D6", Offline, false, None, None, None),
+            (
+                "Demo User Seven",
+                "D7",
+                Offline,
+                false,
+                Some(0x3BA55C),
+                None,
+                None,
+            ),
+            ("Demo User Eight", "D8", Offline, false, None, None, None),
+            (
+                "Demo Status Bot",
+                "SB",
+                Online,
+                true,
+                Some(0xF23F43),
+                None,
+                Some("Watching over 100 demo users"),
+            ),
+            ("Demo Helper Bot", "HB", Offline, true, Some(0xF23F43), None, None),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(
+            |(index, (name, initials, status, bot, role_color, tag, activity))| User {
+                id: index as u64 + 1,
+                name: name.into(),
+                initials: initials.into(),
+                status,
+                bot,
+                role_color,
+                tag: tag.map(Into::into),
+                activity: activity.map(Into::into),
+                avatar: None,
+                discriminator: None,
+            },
+        )
+        .collect::<Vec<_>>();
+
+        let snippets = [
+            "Good morning! How is everyone's week going?",
+            "I've been working on the desktop layout. Having the channels and conversation visible together makes it much easier to keep track of what is happening, even when a few discussions are moving at once.",
+            "That sounds great.",
+            "One small detail: let's keep the important notes in the channel topic so people joining later can find them without scrolling through the whole conversation.",
+            "Agreed! I'll put together a short summary after lunch.",
+            "Just got back from a walk. The weather is finally getting cooler here.",
+            "Sharing a longer update for anyone catching up: the first draft is ready, the feedback has been collected, and the next step is to review the details together.",
+            "Nice work, everyone!",
+            "lol",
+            "anyone up for raids tonight?",
+        ];
+        let human_ids = [1_u64, 2, 3, 4, 5, 6, 7];
+
+        let guild_specs: [(&str, &str, u32, &[&str], bool, u32); 6] = [
+            (
+                "Demo Server One",
+                "S1",
+                0x5865F2,
+                &["general", "introductions", "projects", "show-and-tell"],
+                true,
+                0,
+            ),
+            (
+                "Demo Server Two",
+                "S2",
+                0xE67E22,
+                &["general", "raids", "gacha-salt", "fan-art"],
+                true,
+                790,
+            ),
+            (
+                "Demo Server Three",
+                "S3",
+                0x2F3136,
+                &["general", "music", "off-topic"],
+                true,
+                329,
+            ),
+            (
+                "Demo Server Four",
+                "S4",
+                0xEB459E,
+                &["general", "design", "inspiration", "feedback", "resources"],
+                false,
+                0,
+            ),
+            (
+                "Demo Server Five",
+                "S5",
+                0xCE422B,
+                &["general", "help", "showcase"],
+                true,
+                1200,
+            ),
+            (
+                "Demo Server Six",
+                "S6",
+                0x23A55A,
+                &["general", "schedule"],
+                false,
+                89,
+            ),
+        ];
+
+        let mut next_message_id = 1;
+        let guilds = guild_specs
+            .into_iter()
+            .enumerate()
+            .map(
+                |(guild_index, (name, initials, icon_color, channel_names, unread, mentions))| {
+                    let guild_id = guild_index as u64 + 1;
+                    let text_channels = channel_names
+                        .iter()
+                        .enumerate()
+                        .map(|(channel_index, channel_name)| {
+                            let count = if channel_index == 0 {
+                                30
+                            } else {
+                                6 + (guild_index * 7 + channel_index * 5) % 20
+                            };
+                            let messages = seed_messages(
+                                count,
+                                guild_index + channel_index,
+                                &human_ids,
+                                &snippets,
+                                &mut next_message_id,
+                            );
+                            Channel {
+                                id: guild_id * 100 + channel_index as u64,
+                                name: (*channel_name).into(),
+                                kind: ChannelKind::Text,
+                                unread: unread && channel_index % 2 == 1,
+                                messages,
+                                messages_loaded: true,
+                            }
+                        })
+                        .collect();
+                    let voice_channels = ["General", "Raid Room"]
+                        .into_iter()
+                        .take(1 + guild_index % 2)
+                        .enumerate()
+                        .map(|(index, name)| Channel {
+                            id: guild_id * 100 + 50 + index as u64,
+                            name: name.into(),
+                            kind: ChannelKind::Voice,
+                            unread: false,
+                            messages: Vec::new(),
+                            messages_loaded: false,
+                        })
+                        .collect();
+
+                    Guild {
+                        id: guild_id,
+                        name: name.into(),
+                        initials: initials.into(),
+                        icon_color,
+                        unread,
+                        mentions,
+                        categories: vec![
+                            Category {
+                                id: guild_id * 10,
+                                name: "Text Channels".into(),
+                                channels: text_channels,
+                            },
+                            Category {
+                                id: guild_id * 10 + 1,
+                                name: "Voice Channels".into(),
+                                channels: voice_channels,
+                            },
+                        ],
+                        hoisted_roles: vec![HoistedRole {
+                            name: "Bots".into(),
+                            member_ids: vec![9, 10],
+                        }],
+                        member_ids: users.iter().map(|user| user.id).collect(),
+                        icon: None,
+                    }
+                },
+            )
+            .collect();
+
+        let mut store = Self {
+            guilds,
+            rail: Vec::new(),
+            users: users.into_iter().map(|user| (user.id, user)).collect(),
+            current_user_id: 1,
+            dm_mentions: 77,
+            next_message_id,
+            source: None,
+            read_states: HashMap::new(),
+            source_channels: HashMap::new(),
+            channel_locations: HashMap::new(),
+            guild_badges: Vec::new(),
+            dm_badges: 77,
+            guild_indices: HashMap::new(),
+            folder_layout: Some(vec![
+                settings_proto::GuildFolder {
+                    id: None,
+                    name: None,
+                    color: None,
+                    guild_ids: vec![1],
+                },
+                settings_proto::GuildFolder {
+                    id: Some(1),
+                    name: Some("Gaming".into()),
+                    color: Some(0x5865F2),
+                    guild_ids: vec![2, 3],
+                },
+                settings_proto::GuildFolder {
+                    id: None,
+                    name: None,
+                    color: None,
+                    guild_ids: vec![4, 5, 6],
+                },
+            ]),
+            rail_order: vec![1, 2, 3, 4, 5, 6],
+        };
+        store.index_channels();
+        store
+    }
+}
+
+pub(super) const SEED_START: Timestamp = Timestamp {
+    year: 2026,
+    month: 10,
+    day: 18,
+    hour: 21,
+    minute: 4,
+};
+
+fn seed_messages(
+    count: usize,
+    salt: usize,
+    human_ids: &[u64],
+    snippets: &[&str],
+    next_message_id: &mut u64,
+) -> Vec<Message> {
+    let mut messages = Vec::with_capacity(count);
+    let mut timestamp = SEED_START.plus_minutes((salt as u32 * 17) % 60);
+    let mut burst = 0;
+    let mut author = human_ids[salt % human_ids.len()];
+    for index in 0..count {
+        let (author_id, content, embed) = if index == 2 {
+            (STATUS_BOT_ID, String::new(), Some(status_embed(salt)))
+        } else {
+            if burst == 0 {
+                author = human_ids[(index * 3 + salt) % human_ids.len()];
+                burst = 1 + (index + salt) % 3;
+            }
+            burst -= 1;
+            (
+                author,
+                snippets[(index * 7 + salt) % snippets.len()].to_owned(),
+                None,
+            )
+        };
+        let gap = match messages.last() {
+            Some(Message {
+                author_id: previous,
+                ..
+            }) if *previous == author_id => 1,
+            _ => 20 + ((index * 53 + salt * 11) % 240) as u32,
+        };
+        timestamp = timestamp.plus_minutes(gap);
+        messages.push(Message {
+            id: *next_message_id,
+            author_id,
+            timestamp,
+            content,
+            embed,
+            attachments: Vec::new(),
+        });
+        *next_message_id += 1;
+    }
+    messages
+}
+
+fn status_embed(salt: usize) -> Embed {
+    let items = [
+        ("Arcarum Sephira Evolite", "252 days, 14 hours"),
+        ("Sample Item One", "1 year, 238 days"),
+        ("Sample Item Two", "16 days, 14 hours"),
+        ("Sample Item Three", "92 days, 14 hours"),
+        ("Sample Item Four", "1 year, 166 days"),
+        ("Sample Item Five", "228 days, 14 hours"),
+        ("Sample Item Six", "56 days, 14 hours"),
+    ];
+    Embed {
+        color: [0x23A55A, 0x5865F2, 0xF0B232][salt % 3],
+        title: "Item Status".into(),
+        lines: items
+            .iter()
+            .map(|(item, ago)| format!("{ago} ago since last {item}"))
+            .collect(),
+        footer: "Data Tracker || Demo Status Bot".into(),
+    }
+}

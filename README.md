@@ -34,7 +34,11 @@ removes it.
 
 ## Layout
 
-- `src/discord/` — gateway (zlib-stream, heartbeat, resume), REST, payload models, permissions
-- `src/data.rs` — view model built from READY and gateway events
-- `src/app.rs`, `src/*.rs` — UI
+- `src/main.rs` — bootstrap, zoom shortcuts, logging
+- `src/app.rs`, `src/app/` — root view and UI panels
+- `src/discord.rs`, `src/discord/` — Discord protocol: gateway (zlib-stream, heartbeat, resume),
+  REST, payload models, permissions, settings proto
+- `src/store.rs`, `src/store/` — view model built from READY and gateway events, demo data
+- `src/images.rs` — CDN image disk cache
+- `src/credentials.rs` — token storage in the OS credential store
 - `assets/icons/` — Lucide icons (ISC) and the Discord logo (Simple Icons, CC0)

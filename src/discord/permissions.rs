@@ -31,7 +31,7 @@ fn apply_overwrites(
 /// Channel overwrite sets are authoritative, not stacked on category overwrites. Synced
 /// children carry the same set; only an omitted set falls back to its category's set.
 /// https://docs.discord.food/topics/permissions#permission-syncing
-pub(crate) fn can_view(guild: &Guild, channel: &Channel, user_id: u64) -> bool {
+pub fn can_view(guild: &Guild, channel: &Channel, user_id: u64) -> bool {
     if guild.owner_id() == Some(user_id) {
         return true;
     }
@@ -67,4 +67,37 @@ pub(crate) fn can_view(guild: &Guild, channel: &Channel, user_id: u64) -> bool {
         .unwrap_or_default();
     permissions = apply_overwrites(permissions, overwrites, guild.id, user_id, member_roles);
     permissions & VIEW_CHANNEL != 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::discord::model;
+    use serde_json::json;
+
+    fn ready() -> model::Ready {
+        serde_json::from_str(include_str!("fixtures/ready.json")).unwrap()
+    }
+
+    #[test]
+    fn permission_admin_member_and_category_rules() {
+        let mut ready = ready();
+        let guild = &mut ready.guilds[0];
+        let member_deny: model::Channel =
+            serde_json::from_value(json!({"id":"2010", "type":0, "permission_overwrites":[
+            {"id":"201", "type":0, "allow":"1024", "deny":"0"},
+            {"id":"1", "type":1, "allow":"0", "deny":"1024"}]}))
+            .unwrap();
+        assert!(!can_view(guild, &member_deny, 1));
+        guild.roles.as_mut().unwrap()[1].permissions = 8;
+        assert!(can_view(guild, &member_deny, 1));
+        guild.roles.as_mut().unwrap()[1].permissions = 0;
+        let parent: model::Channel = serde_json::from_value(json!({"id":"230", "type":4, "permission_overwrites":[{"id":"200", "type":0, "deny":"1024", "allow":"0"}]})).unwrap();
+        guild.channels.as_mut().unwrap().push(parent);
+        let mut child: model::Channel =
+            serde_json::from_value(json!({"id":"2011", "type":0, "parent_id":"230"})).unwrap();
+        assert!(!can_view(guild, &child, 1));
+        child.permission_overwrites = Some(Vec::new());
+        assert!(can_view(guild, &child, 1));
+    }
 }

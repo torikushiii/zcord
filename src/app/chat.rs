@@ -3,8 +3,8 @@ use gpui_component::input::Input;
 
 use crate::{
     app::DiscordApp,
-    data::{Attachment, Embed, Message},
     images,
+    store::{Attachment, Embed, Message},
     theme::{self, rpx},
 };
 
