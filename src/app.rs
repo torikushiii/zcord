@@ -69,6 +69,7 @@ pub struct DiscordApp {
     drafts: HashMap<u64, String>,
     pub(crate) revealed_spoilers: HashSet<(u64, u16)>,
     pub(crate) hovered_rail: Option<u64>,
+    pub(crate) rail_morphs: guild_rail::Morphs,
     pub(crate) entity: WeakEntity<Self>,
     focus_handle: FocusHandle,
     parsed: RefCell<HashMap<u64, Rc<Parsed>>>,
@@ -107,6 +108,7 @@ impl DiscordApp {
             drafts: HashMap::new(),
             revealed_spoilers: HashSet::new(),
             hovered_rail: None,
+            rail_morphs: guild_rail::Morphs::default(),
             entity: cx.entity().downgrade(),
             focus_handle: cx.focus_handle(),
             parsed: RefCell::new(HashMap::new()),
@@ -380,6 +382,9 @@ impl DiscordApp {
             return;
         };
         if self.selected_guild_id != id {
+            if self.hovered_rail != Some(self.selected_guild_id) {
+                self.rail_morphs.start(self.selected_guild_id, false);
+            }
             self.member_rows.reset(0);
             self.member_top = 0;
         }
@@ -623,7 +628,12 @@ impl DiscordApp {
             return;
         };
         if self.hovered_rail != next {
-            self.hovered_rail = next;
+            let previous = std::mem::replace(&mut self.hovered_rail, next);
+            for key in [previous, next].into_iter().flatten() {
+                if key != self.selected_guild_id {
+                    self.rail_morphs.start(key, next == Some(key));
+                }
+            }
             cx.notify();
         }
     }
