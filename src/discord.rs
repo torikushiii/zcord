@@ -3,13 +3,15 @@ pub mod model;
 mod permissions;
 mod properties;
 mod rest;
-pub(crate) mod settings_proto;
+#[cfg(test)]
+pub mod settings_fixtures;
+pub mod settings_proto;
 
 use futures::channel::mpsc::{self, UnboundedReceiver};
 use std::{fmt, sync::Arc, time::Duration};
 use tokio::sync::watch;
 
-pub(crate) use permissions::can_view;
+pub use permissions::can_view;
 
 struct Secret(String);
 impl fmt::Debug for Secret {

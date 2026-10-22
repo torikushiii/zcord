@@ -2,7 +2,7 @@ use gpui::{prelude::*, *};
 
 use crate::{
     app::DiscordApp,
-    data::User,
+    store::User,
     theme::{self, rpx},
 };
 

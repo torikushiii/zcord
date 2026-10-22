@@ -1,3 +1,13 @@
+mod channel_list;
+mod chat;
+mod guild_rail;
+mod login;
+mod member_list;
+mod titlebar;
+
+use crate::discord::{Event, FatalError, Session};
+use login::LoginForm;
+
 use std::collections::{HashMap, HashSet};
 
 use futures::StreamExt;
@@ -6,14 +16,9 @@ use gpui_component::input::{InputEvent, InputState};
 use gpui_tokio::Tokio;
 
 use crate::{
-    channel_list, chat,
-    data::{Change, Channel, ChannelKind, Guild, Store},
-    discord::{Event, FatalError, Session},
-    guild_rail,
-    login::{self, LoginForm},
-    member_list,
+    credentials,
+    store::{Change, Channel, ChannelKind, Guild, Store},
     theme::{self, rpx},
-    titlebar, token_store,
 };
 
 pub enum Screen {
@@ -68,7 +73,7 @@ impl DiscordApp {
             _events: None,
             _composer_subscription: subscription,
         };
-        match token_store::load() {
+        match credentials::load() {
             Some(token) => app.connect(token, window, cx),
             None => app.screen = Screen::Login(LoginForm::new(window, cx)),
         }
@@ -116,7 +121,7 @@ impl DiscordApp {
 
     pub(crate) fn log_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.disconnect();
-        if let Err(error) = token_store::clear() {
+        if let Err(error) = credentials::clear() {
             log::warn!("{error}");
         }
         self.live = false;
@@ -164,7 +169,7 @@ impl DiscordApp {
             Event::Fatal(error) => {
                 let message: SharedString = match error {
                     FatalError::InvalidToken => {
-                        if let Err(error) = token_store::clear() {
+                        if let Err(error) = credentials::clear() {
                             log::warn!("{error}");
                         }
                         "Invalid token".into()
@@ -188,7 +193,7 @@ impl DiscordApp {
             }
             Event::Ready(_) => {
                 if let Some(token) = self.pending_token.take()
-                    && let Err(error) = token_store::save(&token)
+                    && let Err(error) = credentials::save(&token)
                 {
                     log::warn!("{error}");
                 }

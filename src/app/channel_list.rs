@@ -3,7 +3,7 @@ use gpui_component::tooltip::Tooltip;
 
 use crate::{
     app::DiscordApp,
-    data::{Channel, ChannelKind},
+    store::{Channel, ChannelKind},
     theme::{self, rpx},
 };
 

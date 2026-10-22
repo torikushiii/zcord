@@ -3,8 +3,8 @@ use gpui_component::tooltip::Tooltip;
 
 use crate::{
     app::DiscordApp,
-    data::{Folder, Guild, RailEntry},
     images,
+    store::{Folder, Guild, RailEntry},
     theme::{self, rpx},
 };
 
