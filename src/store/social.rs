@@ -29,6 +29,8 @@ pub(super) struct MemberInfo {
 
 #[derive(Default)]
 struct MessageInfo {
+    flags: u64,
+    embeds: Vec<model::Embed>,
     guild_id: Option<u64>,
     author_id: u64,
     mentions: Vec<u64>,
@@ -458,7 +460,7 @@ impl Store {
                 author_id: message.author.id,
                 content: message.content.clone(),
                 attachments: !message.attachments.is_empty(),
-                embeds: !message.embeds.is_empty(),
+                embeds: !message.embeds.is_empty() || !message.components.is_empty(),
             }),
             Some(None) => ReplyState::Deleted,
             None => ReplyState::Unavailable,
@@ -505,6 +507,8 @@ impl Store {
             return None;
         }
         let info = MessageInfo {
+            flags: message.flags,
+            embeds: message.embeds.clone(),
             guild_id,
             author_id: message.author.id,
             mentions: message.mentions.iter().map(|u| u.id).collect(),
@@ -525,7 +529,7 @@ impl Store {
     pub(super) fn update_message_info(
         &mut self,
         update: &model::MessageUpdate,
-    ) -> (Option<ReplyState>, bool) {
+    ) -> (Option<ReplyState>, bool, Option<Vec<Embed>>) {
         if let Some(user) = &update.author {
             self.register_author(user);
         }
@@ -567,7 +571,15 @@ impl Store {
         if update.referenced_message.is_some() {
             info.referenced.clone_from(&update.referenced_message);
         }
-        let result = (Self::reply(&info), self.mentioned(&info));
+        if let Some(flags) = update.flags {
+            info.flags = flags;
+        }
+        if let Some(embeds) = &update.embeds {
+            info.embeds.clone_from(embeds);
+        }
+        let embeds = (update.flags.is_some() || update.embeds.is_some())
+            .then(|| mapping::map_embeds(&info.embeds, info.flags));
+        let result = (Self::reply(&info), self.mentioned(&info), embeds);
         if known {
             self.social.messages.insert(key, info);
         }

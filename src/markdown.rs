@@ -76,7 +76,7 @@ pub fn is_jumbo(blocks: &[Block]) -> bool {
                     if chars[at].is_whitespace() {
                         at += 1;
                     } else {
-                        let Some(end) = emoji_sequence(&chars, at) else {
+                        let Ok(end) = emoji_sequence(&chars, at, pictographic) else {
                             return false;
                         };
                         at = end;
@@ -230,6 +230,9 @@ impl Parser {
                     } else {
                         inline_end
                     };
+                    if content[at..].starts_with('\n') {
+                        at += 1;
+                    }
                     continue;
                 }
                 if let Some(body) = prefix.strip_prefix("-# ") {
@@ -301,7 +304,7 @@ impl Parser {
                     .is_some_and(|frame| marker.indent >= frame.indent + 2)
             {
                 frames.push(ListFrame {
-                    indent: marker.indent,
+                    indent: if frames.is_empty() { 0 } else { marker.indent },
                     start: marker.start,
                     items: Vec::new(),
                 });
@@ -371,7 +374,11 @@ impl Parser {
                             push_span(&mut output, SpanKind::Text(literal), style, link)
                         }
                         Atom::Url(url) => {
-                            push_span(&mut output, SpanKind::Text(url.clone()), style, Some(&url))
+                            let kind = channel_url(&url).map_or_else(
+                                || SpanKind::Text(url.clone()),
+                                SpanKind::ChannelMention,
+                            );
+                            push_span(&mut output, kind, style, Some(&url))
                         }
                         Atom::Label { label, url } => {
                             for span in self.inline(&label, style, Some(&url), false) {
@@ -525,10 +532,10 @@ impl Delimiters {
             _ => 6,
         };
         let open = after.is_some_and(|c| character != '*' || !c.is_whitespace());
-        let close = before.is_some_and(|c| character != '*' || !c.is_whitespace());
+        let close = before.is_some_and(|c| character != '*' || count >= 2 || !c.is_whitespace());
         if close {
             loop {
-                let single = if (character == '*'
+                let single = if ((character == '*' && before.is_some_and(|c| !c.is_whitespace()))
                     || (character == '_'
                         && !after.is_some_and(word_char)
                         && before.is_some_and(|c| !c.is_whitespace())))
@@ -567,7 +574,7 @@ impl Delimiters {
         while count > 0 {
             let size = if count >= 2 { 2 } else { 1 };
             let literal = character.to_string().repeat(size);
-            let allowed = open
+            let allowed = (open || (character == '*' && size == 2 && after.is_some()))
                 && (size == 2
                     || character == '*'
                     || (character == '_'
@@ -608,6 +615,38 @@ fn atom_text(atoms: &mut Vec<Atom>, text: &str) {
 
 fn word_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
+}
+
+fn channel_url(value: &str) -> Option<u64> {
+    let url = reqwest::Url::parse(value).ok()?;
+    if url.scheme() != "https"
+        || !matches!(
+            url.host_str(),
+            Some(
+                "discord.com"
+                    | "ptb.discord.com"
+                    | "canary.discord.com"
+                    | "discordapp.com"
+                    | "ptb.discordapp.com"
+                    | "canary.discordapp.com"
+            )
+        )
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+    {
+        return None;
+    }
+    let mut segments = url.path_segments()?;
+    if segments.next()? != "channels" {
+        return None;
+    }
+    let guild = segments.next()?;
+    if guild != "@me" && guild.parse::<u64>().is_err() {
+        return None;
+    }
+    let channel = segments.next()?.parse().ok()?;
+    segments.next().is_none().then_some(channel)
 }
 
 fn syntax_pairs(text: &str) -> (Vec<Option<usize>>, Vec<Option<usize>>) {
@@ -891,11 +930,15 @@ fn special_span(body: &str) -> Option<SpanKind> {
     None
 }
 
-fn pictographic(c: char) -> bool {
+pub(crate) fn pictographic(c: char) -> bool {
     matches!(c as u32, 0x1F000..=0x1FAFF | 0x2600..=0x27BF | 0x2300..=0x23FF | 0x2B00..=0x2BFF | 0x3030 | 0x303D | 0x3297 | 0x3299 | 0x00A9 | 0x00AE | 0x203C | 0x2049 | 0x2122 | 0x2139 | 0x2194..=0x21AA)
 }
 
-fn emoji_component(chars: &[char], mut at: usize) -> Option<usize> {
+fn emoji_component(
+    chars: &[char],
+    mut at: usize,
+    is_pictographic: impl Fn(char) -> bool,
+) -> Option<usize> {
     let c = *chars.get(at)?;
     if matches!(c, '0'..='9' | '#' | '*') {
         at += 1;
@@ -913,7 +956,7 @@ fn emoji_component(chars: &[char], mut at: usize) -> Option<usize> {
             .filter(|&&c| matches!(c as u32, 0x1F1E6..=0x1F1FF))
             .map(|_| at + 2);
     }
-    if !pictographic(c) || matches!(c as u32, 0x1F3FB..=0x1F3FF) {
+    if !is_pictographic(c) || matches!(c as u32, 0x1F3FB..=0x1F3FF) {
         return None;
     }
     at += 1;
@@ -925,12 +968,16 @@ fn emoji_component(chars: &[char], mut at: usize) -> Option<usize> {
     Some(at)
 }
 
-fn emoji_sequence(chars: &[char], at: usize) -> Option<usize> {
-    let mut end = emoji_component(chars, at)?;
+pub(crate) fn emoji_sequence(
+    chars: &[char],
+    at: usize,
+    is_pictographic: impl Fn(char) -> bool + Copy,
+) -> Result<usize, usize> {
+    let mut end = emoji_component(chars, at, is_pictographic).ok_or(at + 1)?;
     while chars.get(end) == Some(&'\u{200D}') {
-        end = emoji_component(chars, end + 1)?;
+        end = emoji_component(chars, end + 1, is_pictographic).ok_or(end + 1)?;
     }
-    Some(end)
+    Ok(end)
 }
 
 #[cfg(test)]
@@ -990,7 +1037,7 @@ mod tests {
                     level: 1,
                     spans: vec![text("title")]
                 },
-                paragraph("\ntext")
+                paragraph("text")
             ]
         );
         assert_eq!(
@@ -1486,14 +1533,123 @@ mod tests {
 
     #[test]
     fn markdown_markers_require_nonspace_content() {
-        for value in [
-            "* x*", "*x *", "** x**", "**x **", "* *", "****", "||||", "~~~~",
-        ] {
+        for value in ["* x*", "*x *", "* *", "****", "||||", "~~~~"] {
             assert_eq!(
                 Parser::default().inline(value, Style::default(), None, true),
                 vec![text(value)]
             );
         }
+    }
+
+    #[test]
+    fn markdown_strong_allows_inner_whitespace() {
+        for (value, expected) in [
+            ("** x**", " x"),
+            ("**x **", "x "),
+            ("**5. No Self-Promotion **Please", "5. No Self-Promotion "),
+        ] {
+            let actual = spans(value);
+            assert_eq!(actual[0].kind, SpanKind::Text(expected.into()));
+            assert!(actual[0].style.bold);
+        }
+        let actual = spans("into the** language-specific** channels");
+        assert_eq!(actual[1].kind, SpanKind::Text(" language-specific".into()));
+        assert!(actual[1].style.bold);
+    }
+
+    #[test]
+    fn markdown_channel_links_preserve_their_original_url() {
+        for host in [
+            "discord.com",
+            "ptb.discord.com",
+            "canary.discord.com",
+            "discordapp.com",
+            "ptb.discordapp.com",
+            "canary.discordapp.com",
+        ] {
+            let url = format!("https://{host}/channels/123/456");
+            for content in [url.clone(), format!("<{url}>")] {
+                let actual = spans(&content);
+                assert_eq!(actual[0].kind, SpanKind::ChannelMention(456));
+                assert_eq!(actual[0].link.as_deref(), Some(url.as_str()));
+            }
+            let actual = spans(&format!("[{url}](https://example.com)"));
+            assert_eq!(actual[0].kind, SpanKind::Text(url.clone()));
+            assert_eq!(actual[0].link.as_deref(), Some("https://example.com"));
+            let message = format!("{url}/789");
+            assert_eq!(spans(&message)[0].kind, SpanKind::Text(message));
+        }
+        for url in [
+            "https://discord.com.evil.test/channels/123/456",
+            "https://example.com/channels/123/456",
+            "https://discord.com/channels/no/456",
+        ] {
+            assert_eq!(spans(url)[0].kind, SpanKind::Text(url.into()));
+        }
+    }
+
+    #[test]
+    fn markdown_formatting_fixture_mentions_strong_and_nested_lists() {
+        fn collect_spans<'a>(blocks: &'a [Block], output: &mut Vec<&'a Span>) {
+            for block in blocks {
+                match block {
+                    Block::Paragraph(spans)
+                    | Block::Heading { spans, .. }
+                    | Block::Subtext(spans) => output.extend(spans),
+                    Block::Quote(blocks) => collect_spans(blocks, output),
+                    Block::List { items, .. } => {
+                        for blocks in items {
+                            collect_spans(blocks, output);
+                        }
+                    }
+                    Block::CodeBlock { .. } => {}
+                }
+            }
+        }
+        let message: crate::discord::model::Message =
+            serde_json::from_str(include_str!("store/fixtures/formatting.json")).unwrap();
+        let blocks = parse(&message.content);
+        let mut actual = Vec::new();
+        collect_spans(&blocks, &mut actual);
+        for expected in ["5. No Self-Promotion ", " language-specific"] {
+            assert!(
+                actual
+                    .iter()
+                    .any(|span| span.kind == SpanKind::Text(expected.into()) && span.style.bold)
+            );
+        }
+        assert!(
+            actual
+                .iter()
+                .any(|span| span.kind == SpanKind::UserMention(1191169014890496024))
+        );
+        assert!(
+            actual
+                .iter()
+                .any(|span| span.kind == SpanKind::RoleMention(1191169065222144036))
+        );
+        assert!(actual.iter().any(|span| matches!(&span.kind, SpanKind::Emoji { id: 1191169094582272043, name, animated: false } if name == "sample_icon")));
+        assert!(actual.iter().any(|span| span.kind
+            == SpanKind::ChannelMention(1191169073610752038)
+            && span.link.as_deref()
+                == Some("https://discord.com/channels/1191169056833536034/1191169073610752038")));
+        let lists: Vec<_> = blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::List { items, .. } => Some(items),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lists.len(), 1);
+        assert_eq!(lists[0].len(), 2);
+        assert!(plain_text(&lists[0][0]).starts_with("Sample Community Mod:"));
+        assert!(
+            matches!(&lists[0][0][1], Block::List { items, .. } if items.len() == 1 && plain_text(&items[0]).starts_with("Community Mod:"))
+        );
+        assert!(plain_text(&lists[0][1]).starts_with("For Sample Community"));
+        assert!(
+            matches!(&lists[0][1][1], Block::List { items, .. } if items.len() == 2 && plain_text(&items[0]).starts_with("Discuss with"))
+        );
     }
 
     #[test]

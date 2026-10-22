@@ -583,6 +583,21 @@ fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) -> Option<E
             "MESSAGE_UPDATE" => serde_json::from_value(value)
                 .ok()
                 .map(|m| Event::MessageUpdate(Box::new(m))),
+            "MESSAGE_REACTION_ADD" => serde_json::from_value(value)
+                .ok()
+                .map(Event::MessageReactionAdd),
+            "MESSAGE_REACTION_REMOVE" => serde_json::from_value(value)
+                .ok()
+                .map(Event::MessageReactionRemove),
+            "MESSAGE_REACTION_REMOVE_ALL" => serde_json::from_value(value)
+                .ok()
+                .map(Event::MessageReactionRemoveAll),
+            "MESSAGE_REACTION_REMOVE_EMOJI" => serde_json::from_value(value)
+                .ok()
+                .map(Event::MessageReactionRemoveEmoji),
+            "MESSAGE_REACTION_ADD_MANY" => serde_json::from_value(value)
+                .ok()
+                .map(Event::MessageReactionAddMany),
             "MESSAGE_DELETE" => id(&value, "channel_id")
                 .zip(id(&value, "id"))
                 .map(|(channel_id, id)| Event::MessageDelete { channel_id, id }),
@@ -634,6 +649,40 @@ fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) -> Option<E
 mod tests {
     use super::*;
     use flate2::{Compress, Compression, FlushCompress};
+
+    #[test]
+    fn reaction_dispatches_are_receive_only() {
+        let mut ignored = HashSet::new();
+        let value = json!({"channel_id":"1","message_id":"2","user_id":"3","emoji":{"id":"4","name":"custom","animated":true}});
+        assert!(
+            matches!(dispatch("MESSAGE_REACTION_ADD", value.clone(), &mut ignored), Some(Event::MessageReactionAdd(event)) if event.user_id == Some(3) && event.emoji.animated)
+        );
+        assert!(matches!(
+            dispatch("MESSAGE_REACTION_REMOVE", value.clone(), &mut ignored),
+            Some(Event::MessageReactionRemove(_))
+        ));
+        assert!(matches!(
+            dispatch("MESSAGE_REACTION_REMOVE_EMOJI", value, &mut ignored),
+            Some(Event::MessageReactionRemoveEmoji(_))
+        ));
+        assert!(
+            matches!(dispatch("MESSAGE_REACTION_REMOVE_ALL", json!({"channel_id":"1","message_id":"2"}), &mut ignored), Some(Event::MessageReactionRemoveAll(event)) if event.channel_id == 1 && event.message_id == 2)
+        );
+        let many = json!({"channel_id":"1","message_id":"2","reactions":[false,{"users":["3","bad",4],"emoji":{"name":"ok"}}]});
+        assert!(
+            matches!(dispatch("MESSAGE_REACTION_ADD_MANY", many, &mut ignored), Some(Event::MessageReactionAddMany(event)) if event.reactions.len() == 1 && event.reactions[0].users == [3,4])
+        );
+        for kind in [
+            "MESSAGE_REACTION_ADD",
+            "MESSAGE_REACTION_REMOVE",
+            "MESSAGE_REACTION_REMOVE_ALL",
+            "MESSAGE_REACTION_REMOVE_EMOJI",
+            "MESSAGE_REACTION_ADD_MANY",
+        ] {
+            assert!(dispatch(kind, json!({"message_id":"bad"}), &mut ignored).is_none());
+        }
+        assert!(ignored.is_empty());
+    }
 
     #[test]
     fn social_dispatches_and_disconnect_generations() {

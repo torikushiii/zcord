@@ -49,18 +49,28 @@ pub enum ImageSpec {
         guild_id: u64,
         hash: String,
     },
+    Media {
+        url: String,
+        width: u32,
+        height: u32,
+    },
 }
 
 fn rounded_size(size: u32) -> u32 {
     size.clamp(16, 4096).next_power_of_two()
 }
 
-fn allowed_url(url: &reqwest::Url) -> bool {
+pub(crate) fn allowed_url(url: &reqwest::Url) -> bool {
     url.scheme() == "https"
-        && matches!(
-            url.host_str(),
-            Some("cdn.discordapp.com" | "media.discordapp.net")
-        )
+        && url.host_str().is_some_and(|host| {
+            matches!(host, "cdn.discordapp.com" | "media.discordapp.net")
+                || host
+                    .strip_prefix("images-ext-")
+                    .and_then(|rest| rest.strip_suffix(".discordapp.net"))
+                    .is_some_and(|digits| {
+                        !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+                    })
+        })
         && url.username().is_empty()
         && url.password().is_none()
         && url.port().is_none()
@@ -113,17 +123,31 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
             }
             format!("https://cdn.discordapp.com/embed/avatars/{index}.png")
         }
-        ImageSpec::Attachment { url, .. } => url.clone(),
+        ImageSpec::Attachment { url, .. } | ImageSpec::Media { url, .. } => url.clone(),
     };
     let mut url = reqwest::Url::parse(&raw).ok()?;
     if !allowed_url(&url) {
         return None;
     }
     url.set_fragment(None);
-    if let ImageSpec::Attachment { width, height, .. } = spec {
+    if let ImageSpec::Attachment { width, height, .. } | ImageSpec::Media { width, height, .. } =
+        spec
+    {
         let longest = (*width).max(*height);
         if *width == 0 || *height == 0 {
-            return None;
+            if matches!(spec, ImageSpec::Attachment { .. }) {
+                return None;
+            }
+            let params: Vec<_> = url
+                .query_pairs()
+                .filter(|(key, _)| !matches!(key.as_ref(), "width" | "height" | "size"))
+                .map(|(key, value)| (key.into_owned(), value.into_owned()))
+                .collect();
+            url.set_query(None);
+            if !params.is_empty() {
+                url.query_pairs_mut().extend_pairs(params);
+            }
+            return Some(url);
         }
         let target = size.min(longest);
         let width = (u64::from(*width) * u64::from(target) / u64::from(longest)).max(1);
@@ -373,6 +397,75 @@ fn prune(directory: &Path, limit: u64) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_proxy_hosts_and_unknown_media_dimensions() {
+        for host in [
+            "images-ext-1.discordapp.net",
+            "images-ext-2.discordapp.net",
+            "images-ext-123.discordapp.net",
+        ] {
+            let url = format!(
+                "https://{host}/external/image.png?token=keep&width=1&height=2&size=3#fragment"
+            );
+            for (width, height) in [(0, 0), (0, 200), (100, 0)] {
+                let spec = ImageSpec::Media {
+                    url: url.clone(),
+                    width,
+                    height,
+                };
+                assert_eq!(
+                    image_url(&spec, 64).unwrap().as_str(),
+                    format!("https://{host}/external/image.png?token=keep")
+                );
+                assert!(
+                    image_url(
+                        &ImageSpec::Attachment {
+                            id: 1,
+                            url: url.clone(),
+                            width,
+                            height
+                        },
+                        64
+                    )
+                    .is_none()
+                );
+            }
+            let spec = ImageSpec::Media {
+                url,
+                width: 400,
+                height: 200,
+            };
+            assert_eq!(
+                image_url(&spec, 100).unwrap().as_str(),
+                format!("https://{host}/external/image.png?token=keep&width=128&height=64")
+            );
+        }
+        for host in [
+            "images-ext-.discordapp.net",
+            "images-ext-x.discordapp.net",
+            "images-ext-1.discordapp.net.evil.test",
+            "images-ext-1.evil.test",
+            "images-ext-1x.discordapp.net",
+        ] {
+            assert!(!allowed_url(
+                &reqwest::Url::parse(&format!("https://{host}/a")).unwrap()
+            ));
+        }
+        assert_eq!(
+            image_url(
+                &ImageSpec::Media {
+                    url: "https://images-ext-1.discordapp.net/a".into(),
+                    width: 0,
+                    height: 0
+                },
+                64
+            )
+            .unwrap()
+            .as_str(),
+            "https://images-ext-1.discordapp.net/a"
+        );
+    }
 
     #[test]
     fn cdn_urls_and_size_buckets() {

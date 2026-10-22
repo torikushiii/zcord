@@ -1,0 +1,96 @@
+{
+    "type": 0,
+    "content": "",
+    "mentions": [],
+    "mention_roles": [],
+    "attachments": [],
+    "embeds": [],
+    "timestamp": "2024-01-06T00:00:00.000+00:00",
+    "edited_timestamp": "2024-01-09T00:00:00.000+00:00",
+    "flags": 32768,
+    "components": [
+        {
+            "type": 17,
+            "id": 1,
+            "accent_color": null,
+            "components": [
+                {
+                    "type": 9,
+                    "id": 2,
+                    "components": [
+                        {
+                            "type": 10,
+                            "id": 3,
+                            "content": "## SAMPLE NOTICE\n\nThis is fictional component content. The **highlighted phrase** exercises rich-text rendering."
+                        }
+                    ],
+                    "accessory": {
+                        "type": 11,
+                        "id": 4,
+                        "media": {
+                            "id": "1191169329463296099",
+                            "url": "https://media.example.com/sample-guard.png",
+                            "proxy_url": "https://images-ext-1.discordapp.net/external/sample-proxy-signature/https/media.example.com/sample-guard.png",
+                            "width": 256,
+                            "height": 256,
+                            "placeholder": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+                            "placeholder_version": 1,
+                            "content_scan_metadata": {"version": 4, "flags": 0},
+                            "content_type": "image/png",
+                            "loading_state": 2,
+                            "flags": 0
+                        },
+                        "description": null,
+                        "spoiler": false
+                    }
+                },
+                {
+                    "type": 1,
+                    "id": 5,
+                    "components": [
+                        {
+                            "type": 2,
+                            "id": 6,
+                            "custom_id": "moderated_count_button",
+                            "style": 2,
+                            "label": "Actions: 12",
+                            "emoji": {"name": "🍯"}
+                        }
+                    ]
+                }
+            ],
+            "spoiler": false
+        }
+    ],
+    "id": "1191169144913920055",
+    "channel_id": "1191169140719616054",
+    "author": {
+        "id": "1191169128136704051",
+        "username": "Sample Guard",
+        "avatar": "f000000000000000000000000000001b",
+        "discriminator": "0042",
+        "public_flags": 65536,
+        "flags": 65536,
+        "bot": true,
+        "banner": null,
+        "accent_color": null,
+        "global_name": null,
+        "avatar_decoration_data": null,
+        "collectibles": null,
+        "display_name_styles": null,
+        "vad_colors": null,
+        "banner_color": null,
+        "clan": null,
+        "primary_guild": null
+    },
+    "pinned": false,
+    "mention_everyone": false,
+    "tts": false,
+    "reactions": [
+        {"emoji": {"id": null, "name": "💀"}, "count": 383, "count_details": {"burst": 0, "normal": 383}, "burst_colors": [], "me_burst": false, "burst_me": false, "me": false, "burst_count": 0},
+        {"emoji": {"id": "1191169019084800025", "name": "sample_static"}, "count": 27, "count_details": {"burst": 0, "normal": 27}, "burst_colors": [], "me_burst": false, "burst_me": false, "me": false, "burst_count": 0},
+        {"emoji": {"id": null, "name": "⚠️"}, "count": 18, "count_details": {"burst": 18, "normal": 0}, "burst_colors": ["#4c704f", "#f0b74a"], "me_burst": false, "burst_me": false, "me": false, "burst_count": 18},
+        {"emoji": {"id": null, "name": "🇷🇺"}, "count": 19, "count_details": {"burst": 0, "normal": 19}, "burst_colors": [], "me_burst": false, "burst_me": false, "me": false, "burst_count": 0},
+        {"emoji": {"id": "1191168972947456014", "name": "sample_animated", "animated": true}, "count": 4, "count_details": {"burst": 4, "normal": 0}, "burst_colors": ["#f0a4b1"], "me_burst": false, "burst_me": false, "me": false, "burst_count": 4}
+    ]
+}

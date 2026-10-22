@@ -121,7 +121,13 @@ impl Timestamp {
     }
 
     pub fn full(self) -> String {
-        format!("{}/{}/{} {}", self.month, self.day, self.year, self.time())
+        format!(
+            "{}/{}/{:02}, {}",
+            self.month,
+            self.day,
+            self.year % 100,
+            self.time()
+        )
     }
 
     pub fn date(self) -> String {
@@ -130,11 +136,123 @@ impl Timestamp {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub struct Media {
+    pub url: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Media {
+    pub fn spec(&self) -> ImageSpec {
+        ImageSpec::Media {
+            url: self.url.clone(),
+            width: self.width,
+            height: self.height,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum EmbedKind {
+    Rich,
+    Image,
+    Gifv,
+    Video,
+    Link,
+}
+
+#[derive(Clone)]
+pub struct EmbedText {
+    pub text: String,
+    pub url: Option<String>,
+    pub icon: Option<Media>,
+}
+
+#[derive(Clone)]
+pub struct EmbedField {
+    pub name: String,
+    pub value: String,
+    pub inline: bool,
+}
+
+#[derive(Clone)]
 pub struct Embed {
-    pub color: u32,
-    pub title: String,
-    pub lines: Vec<String>,
-    pub footer: String,
+    pub kind: EmbedKind,
+    pub url: Option<String>,
+    pub color: Option<u32>,
+    pub provider: Option<EmbedText>,
+    pub author: Option<EmbedText>,
+    pub title: Option<EmbedText>,
+    pub description: Option<String>,
+    pub fields: Vec<EmbedField>,
+    pub thumbnail: Option<Media>,
+    pub images: Vec<Media>,
+    pub video: Option<Media>,
+    pub footer: Option<EmbedText>,
+    pub timestamp: Option<Timestamp>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct ReactionEmoji {
+    pub id: Option<u64>,
+    pub name: String,
+    pub animated: bool,
+}
+
+#[derive(Clone)]
+pub struct Reaction {
+    pub emoji: ReactionEmoji,
+    pub count: u32,
+    pub me: bool,
+}
+
+#[derive(Clone)]
+pub struct GalleryItem {
+    pub media: Media,
+    pub description: Option<String>,
+    pub spoiler: bool,
+}
+
+#[derive(Clone)]
+pub enum Component {
+    Row(Vec<Component>),
+    Button {
+        style: u8,
+        label: Option<String>,
+        emoji: Option<ReactionEmoji>,
+        url: Option<String>,
+        disabled: bool,
+    },
+    Select {
+        placeholder: Option<String>,
+        disabled: bool,
+    },
+    Section {
+        components: Vec<Component>,
+        accessory: Option<Box<Component>>,
+    },
+    Text(String),
+    Thumbnail {
+        media: Media,
+        description: Option<String>,
+        spoiler: bool,
+    },
+    Gallery(Vec<GalleryItem>),
+    File {
+        name: String,
+        size: u64,
+        spoiler: bool,
+    },
+    Separator {
+        divider: bool,
+        large: bool,
+    },
+    Container {
+        accent: Option<u32>,
+        spoiler: bool,
+        components: Vec<Component>,
+    },
 }
 
 pub struct Message {
@@ -142,7 +260,9 @@ pub struct Message {
     pub author_id: u64,
     pub timestamp: Timestamp,
     pub content: String,
-    pub embed: Option<Embed>,
+    pub embeds: Vec<Embed>,
+    pub components: Vec<Component>,
+    pub reactions: Vec<Reaction>,
     pub attachments: Vec<Attachment>,
     pub kind: u8,
     pub edited: bool,

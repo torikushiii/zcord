@@ -1,5 +1,6 @@
 mod channel_list;
 mod chat;
+mod embeds;
 mod guild_rail;
 mod login;
 mod member_list;

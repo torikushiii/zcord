@@ -4,6 +4,7 @@ mod app;
 mod assets;
 mod credentials;
 mod discord;
+mod emoji;
 mod fonts;
 mod images;
 mod markdown;

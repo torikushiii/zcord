@@ -7,7 +7,8 @@ mod view;
 
 use crate::discord::{self, model, settings_proto};
 use mapping::{
-    channel_unread, local_timestamp, map_embed, map_guild, map_message, map_user, read_state,
+    channel_unread, local_timestamp, map_components, map_guild, map_message, map_reactions,
+    map_user, read_state,
 };
 use seed::SEED_START;
 use std::collections::HashMap;
@@ -84,6 +85,55 @@ struct GuildBadges {
 }
 
 impl Store {
+    fn same_emoji(left: &ReactionEmoji, right: &model::Emoji) -> bool {
+        match (left.id, right.id) {
+            (Some(left), Some(right)) => left == right,
+            (None, None) => Some(left.name.as_str()) == right.name.as_deref(),
+            _ => false,
+        }
+    }
+
+    fn add_reaction(reactions: &mut Vec<Reaction>, emoji: &model::Emoji, count: u32, me: bool) {
+        if count == 0 || (emoji.id.is_none() && emoji.name.as_deref().is_none_or(str::is_empty)) {
+            return;
+        }
+        if let Some(reaction) = reactions
+            .iter_mut()
+            .find(|r| Self::same_emoji(&r.emoji, emoji))
+        {
+            reaction.count = reaction.count.saturating_add(count);
+            reaction.me |= me;
+        } else {
+            reactions.push(Reaction {
+                emoji: mapping::map_emoji(emoji),
+                count,
+                me,
+            });
+        }
+    }
+
+    fn change_reactions(
+        &mut self,
+        channel_id: u64,
+        message_id: u64,
+        update: impl FnOnce(&mut Vec<Reaction>),
+    ) -> Change {
+        let Some(channel) = self
+            .network_channel_mut(channel_id)
+            .filter(|channel| channel.messages_loaded)
+        else {
+            return Change::None;
+        };
+        let Ok(index) = channel
+            .messages
+            .binary_search_by_key(&message_id, |message| message.id)
+        else {
+            return Change::None;
+        };
+        update(&mut channel.messages[index].reactions);
+        Change::MessageChanged { channel_id, index }
+    }
+
     pub fn user(&self, id: u64) -> Option<&User> {
         self.users.get(&id)
     }
@@ -142,7 +192,9 @@ impl Store {
             author_id: self.current_user_id,
             timestamp,
             content,
-            embed: None,
+            embeds: Vec::new(),
+            components: Vec::new(),
+            reactions: Vec::new(),
             attachments: Vec::new(),
             kind: 0,
             edited: false,
@@ -620,7 +672,7 @@ impl Store {
                 }
             }
             Event::MessageUpdate(update) => {
-                let (reply, mentions_me) = self.update_message_info(&update);
+                let (reply, mentions_me, embeds) = self.update_message_info(&update);
                 let Some(channel) = self.network_channel_mut(update.channel_id) else {
                     return Change::None;
                 };
@@ -645,8 +697,14 @@ impl Store {
                 if let Some(timestamp) = update.timestamp.as_deref().and_then(local_timestamp) {
                     message.timestamp = timestamp;
                 }
-                if let Some(embeds) = update.embeds {
-                    message.embed = embeds.first().map(map_embed);
+                if let Some(embeds) = embeds {
+                    message.embeds = embeds;
+                }
+                if let Some(components) = update.components {
+                    message.components = map_components(&components);
+                }
+                if let Some(reactions) = update.reactions {
+                    message.reactions = map_reactions(&reactions);
                 }
                 if let Some(attachments) = update.attachments {
                     message.attachments = attachments;
@@ -655,6 +713,56 @@ impl Store {
                     channel_id: update.channel_id,
                     index,
                 }
+            }
+            Event::MessageReactionAdd(event) => {
+                let current_user_id = self.current_user_id;
+                self.change_reactions(event.channel_id, event.message_id, |reactions| {
+                    Self::add_reaction(
+                        reactions,
+                        &event.emoji,
+                        1,
+                        event.user_id == Some(current_user_id),
+                    );
+                })
+            }
+            Event::MessageReactionRemove(event) => {
+                let current_user_id = self.current_user_id;
+                self.change_reactions(event.channel_id, event.message_id, |reactions| {
+                    if let Some(index) = reactions
+                        .iter()
+                        .position(|r| Self::same_emoji(&r.emoji, &event.emoji))
+                    {
+                        let reaction = &mut reactions[index];
+                        reaction.count = reaction.count.saturating_sub(1);
+                        if event.user_id == Some(current_user_id) {
+                            reaction.me = false;
+                        }
+                        if reaction.count == 0 {
+                            reactions.remove(index);
+                        }
+                    }
+                })
+            }
+            Event::MessageReactionRemoveAll(event) => {
+                self.change_reactions(event.channel_id, event.message_id, Vec::clear)
+            }
+            Event::MessageReactionRemoveEmoji(event) => {
+                self.change_reactions(event.channel_id, event.message_id, |reactions| {
+                    reactions.retain(|r| !Self::same_emoji(&r.emoji, &event.emoji));
+                })
+            }
+            Event::MessageReactionAddMany(event) => {
+                let current_user_id = self.current_user_id;
+                self.change_reactions(event.channel_id, event.message_id, |reactions| {
+                    for reaction in event.reactions {
+                        Self::add_reaction(
+                            reactions,
+                            &reaction.emoji,
+                            reaction.users.len().try_into().unwrap_or(u32::MAX),
+                            reaction.users.contains(&current_user_id),
+                        );
+                    }
+                })
             }
             Event::MessageDelete { channel_id, id } => {
                 self.forget_message_info(channel_id, id);

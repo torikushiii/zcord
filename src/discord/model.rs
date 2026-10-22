@@ -400,6 +400,20 @@ impl<'de> Deserialize<'de> for Ready {
 
 #[derive(Clone, Default, Deserialize)]
 pub struct Embed {
+    #[serde(default, rename = "type")]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub timestamp: Option<String>,
+    #[serde(default)]
+    pub thumbnail: Option<EmbedMedia>,
+    #[serde(default)]
+    pub image: Option<EmbedMedia>,
+    #[serde(default)]
+    pub video: Option<EmbedMedia>,
+    #[serde(default)]
+    pub provider: Option<EmbedProvider>,
     #[serde(default)]
     pub color: Option<u32>,
     #[serde(default)]
@@ -418,6 +432,12 @@ pub struct Embed {
 pub struct EmbedAuthor {
     #[serde(default)]
     pub name: String,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub icon_url: Option<String>,
+    #[serde(default)]
+    pub proxy_icon_url: Option<String>,
 }
 #[derive(Clone, Deserialize)]
 pub struct EmbedField {
@@ -425,15 +445,168 @@ pub struct EmbedField {
     pub name: String,
     #[serde(default)]
     pub value: String,
+    #[serde(default)]
+    pub inline: bool,
 }
 #[derive(Clone, Deserialize)]
 pub struct EmbedFooter {
     #[serde(default)]
     pub text: String,
+    #[serde(default)]
+    pub icon_url: Option<String>,
+    #[serde(default)]
+    pub proxy_icon_url: Option<String>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+pub struct EmbedMedia {
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct EmbedProvider {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+pub struct Emoji {
+    #[serde(default, deserialize_with = "optional_id")]
+    pub id: Option<u64>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub animated: bool,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct Reaction {
+    #[serde(default)]
+    pub emoji: Emoji,
+    #[serde(default)]
+    pub count: u32,
+    #[serde(default)]
+    pub me: bool,
+    #[serde(default)]
+    pub me_burst: bool,
+    #[serde(default)]
+    pub burst_me: bool,
+}
+
+fn component_type<'de, D: Deserializer<'de>>(d: D) -> Result<u8, D::Error> {
+    let kind = u8::deserialize(d)?;
+    if matches!(kind, 1..=3 | 5..=14 | 17) {
+        Ok(kind)
+    } else {
+        Err(serde::de::Error::custom("unknown component type"))
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Clone, Deserialize)]
+pub struct Component {
+    #[serde(rename = "type", deserialize_with = "component_type")]
+    pub kind: u8,
+    #[serde(default, deserialize_with = "entries")]
+    pub components: Vec<Component>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub accessory: Option<Box<Component>>,
+    #[serde(default)]
+    pub style: u8,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub emoji: Option<Emoji>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub disabled: bool,
+    #[serde(default)]
+    pub placeholder: Option<String>,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub media: Option<EmbedMedia>,
+    #[serde(default)]
+    pub file: Option<EmbedMedia>,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub size: u64,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub spoiler: bool,
+    #[serde(default, deserialize_with = "entries")]
+    pub items: Vec<GalleryItem>,
+    #[serde(default = "default_true")]
+    pub divider: bool,
+    #[serde(default)]
+    pub spacing: u8,
+    #[serde(default)]
+    pub accent_color: Option<u32>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct GalleryItem {
+    #[serde(default)]
+    pub media: EmbedMedia,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub spoiler: bool,
+}
+
+#[derive(Deserialize)]
+pub struct ReactionEvent {
+    #[serde(deserialize_with = "snowflake")]
+    pub channel_id: u64,
+    #[serde(deserialize_with = "snowflake")]
+    pub message_id: u64,
+    #[serde(default, deserialize_with = "optional_id")]
+    pub user_id: Option<u64>,
+    #[serde(default)]
+    pub emoji: Emoji,
+}
+
+#[derive(Deserialize)]
+pub struct ReactionManyEvent {
+    #[serde(deserialize_with = "snowflake")]
+    pub channel_id: u64,
+    #[serde(deserialize_with = "snowflake")]
+    pub message_id: u64,
+    #[serde(default, deserialize_with = "entries")]
+    pub reactions: Vec<DebouncedReaction>,
+}
+
+#[derive(Deserialize)]
+pub struct DebouncedReaction {
+    #[serde(default, deserialize_with = "ids")]
+    pub users: Vec<u64>,
+    #[serde(default)]
+    pub emoji: Emoji,
 }
 
 #[derive(Clone, Deserialize)]
 pub struct Message {
+    #[serde(default)]
+    pub flags: u64,
+    #[serde(default, deserialize_with = "entries")]
+    pub components: Vec<Component>,
+    #[serde(default, deserialize_with = "entries")]
+    pub reactions: Vec<Reaction>,
     #[serde(deserialize_with = "snowflake")]
     pub id: u64,
     #[serde(deserialize_with = "snowflake")]
@@ -469,6 +642,12 @@ pub struct Message {
 
 #[derive(Clone, Deserialize)]
 pub struct MessageUpdate {
+    #[serde(default)]
+    pub flags: Option<u64>,
+    #[serde(default, deserialize_with = "optional_entries")]
+    pub components: Option<Vec<Component>>,
+    #[serde(default, deserialize_with = "optional_entries")]
+    pub reactions: Option<Vec<Reaction>>,
     #[serde(deserialize_with = "snowflake")]
     pub id: u64,
     #[serde(deserialize_with = "snowflake")]
@@ -552,6 +731,8 @@ pub struct MessageReference {
 
 #[derive(Clone, Deserialize)]
 pub struct ReferencedMessage {
+    #[serde(default, deserialize_with = "entries")]
+    pub components: Vec<Component>,
     #[serde(deserialize_with = "snowflake")]
     pub id: u64,
     pub author: User,

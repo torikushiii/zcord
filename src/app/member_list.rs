@@ -1,7 +1,7 @@
 use gpui::{prelude::*, *};
 
 use crate::{
-    app::DiscordApp,
+    app::{DiscordApp, message_body::label},
     store::{MemberRow, User},
     theme::{self, rpx},
 };
@@ -55,7 +55,10 @@ fn row_content(app: &DiscordApp, index: usize, cx: &App) -> AnyElement {
             .font_weight(FontWeight::MEDIUM)
             .text_color(rgb(theme::MUTED))
             .truncate()
-            .child(format!("{name} — {count}"))
+            .child(label(
+                ("member-group", index as u64),
+                &format!("{name} — {count}"),
+            ))
             .into_any_element(),
         Some(MemberRow::Member { user_id }) => match app.store.user(*user_id) {
             Some(user) => member_row(app, guild_id, user, cx).into_any_element(),
@@ -141,7 +144,7 @@ fn member_row(app: &DiscordApp, guild_id: u64, user: &User, cx: &App) -> impl In
                                 .line_height(rpx(20.))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(rgb(name_color))
-                                .child(name),
+                                .child(label(("member-name", user.id), &name)),
                         )
                         .when(user.bot, |this| this.child(theme::app_tag()))
                         .children(user.tag.as_ref().map(|tag| theme::guild_tag(tag, cx))),
@@ -158,7 +161,13 @@ fn member_row(app: &DiscordApp, guild_id: u64, user: &User, cx: &App) -> impl In
                         .when(user.playing, |this| {
                             this.child(theme::icon("gamepad-2", 14., theme::GREEN))
                         })
-                        .child(div().flex_1().min_w_0().truncate().child(activity.clone()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .child(label(("member-activity", user.id), activity)),
+                        )
                 })),
         )
 }

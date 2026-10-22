@@ -141,6 +141,11 @@ pub enum Event {
     SettingsUpdate(Box<model::SettingsUpdate>),
     MessageCreate(Box<model::Message>),
     MessageUpdate(Box<model::MessageUpdate>),
+    MessageReactionAdd(model::ReactionEvent),
+    MessageReactionRemove(model::ReactionEvent),
+    MessageReactionRemoveAll(model::ReactionEvent),
+    MessageReactionRemoveEmoji(model::ReactionEvent),
+    MessageReactionAddMany(model::ReactionManyEvent),
     MessageDelete {
         channel_id: u64,
         id: u64,
