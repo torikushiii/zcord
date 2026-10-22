@@ -63,6 +63,7 @@ fn main() {
                 KeyBinding::new("secondary-+", ZoomIn, None),
                 KeyBinding::new("secondary--", ZoomOut, None),
                 KeyBinding::new("secondary-0", ResetZoom, None),
+                KeyBinding::new("escape", app::JumpToPresent, None),
             ]);
             cx.on_action(|_: &ZoomIn, cx| set_zoom(zoom_index(cx) + 1, cx));
             cx.on_action(|_: &ZoomOut, cx| set_zoom(zoom_index(cx).saturating_sub(1), cx));
