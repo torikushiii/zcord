@@ -1,3 +1,4 @@
+mod commands;
 mod gateway;
 pub mod model;
 mod permissions;
@@ -8,10 +9,18 @@ pub mod settings_fixtures;
 pub mod settings_proto;
 
 use futures::channel::mpsc::{self, UnboundedReceiver};
-use std::{fmt, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 use tokio::sync::watch;
 
 pub use permissions::can_view;
+pub use properties::USER_AGENT;
 
 struct Secret(String);
 impl fmt::Debug for Secret {
@@ -30,6 +39,8 @@ enum Control {
 struct Inner {
     rest: Result<rest::Rest, Error>,
     control: watch::Sender<Control>,
+    commands: tokio::sync::mpsc::UnboundedSender<(u64, commands::Command)>,
+    generation: Arc<AtomicU64>,
 }
 
 #[derive(Clone)]
@@ -46,16 +57,31 @@ impl Session {
         let (sender, receiver) = mpsc::unbounded();
         let (control, shutdown) = watch::channel(Control::Running);
         let rest = rest::Rest::new(&token.0);
+        let (commands, command_receiver) = tokio::sync::mpsc::unbounded_channel();
+        let generation = Arc::new(AtomicU64::new(0));
         let session = Self {
-            inner: Arc::new(Inner { rest, control }),
+            inner: Arc::new(Inner {
+                rest,
+                control,
+                commands,
+                generation: generation.clone(),
+            }),
         };
         let owner = Arc::downgrade(&session.inner);
-        runtime.spawn(gateway::run(token, sender, shutdown, owner));
+        runtime.spawn(gateway::run(
+            token,
+            sender,
+            shutdown,
+            owner,
+            command_receiver,
+            generation,
+        ));
         (session, receiver)
     }
 
     pub async fn fetch_messages(
         &self,
+        guild_id: Option<u64>,
         channel_id: u64,
         before: Option<u64>,
     ) -> Result<Vec<model::Message>, Error> {
@@ -67,7 +93,7 @@ impl Session {
         let result = tokio::select! {
             biased;
             _ = shutdown.changed() => Err(Error::Closed),
-            result = rest.fetch_messages(channel_id, before) => result,
+            result = rest.fetch_messages(guild_id, channel_id, before) => result,
         };
         if matches!(result, Err(Error::Http(401))) {
             self.inner.control.send_replace(Control::InvalidToken);
@@ -78,9 +104,39 @@ impl Session {
     pub fn shutdown(&self) {
         self.inner.control.send_replace(Control::Shutdown);
     }
+
+    fn command(&self, command: commands::Command) {
+        let generation = self.inner.generation.load(Ordering::Acquire);
+        if generation % 2 == 0 || *self.inner.control.borrow() != Control::Running {
+            log::debug!("Dropping gateway command while disconnected/connecting");
+            return;
+        }
+        let _ = self.inner.commands.send((generation, command));
+    }
+
+    pub fn subscribe_channel(&self, guild_id: u64, channel_id: u64, ranges: &[(u32, u32)]) {
+        self.command(commands::subscription(guild_id, channel_id, ranges));
+    }
+
+    pub fn request_members(&self, guild_id: u64, user_ids: Vec<u64>) {
+        for command in commands::members(guild_id, &user_ids) {
+            self.command(command);
+        }
+    }
 }
 
 pub enum Event {
+    ReadySupplemental(Box<model::ReadySupplemental>),
+    PresenceUpdate(Box<model::Presence>),
+    MembersChunk(Box<model::MembersChunk>),
+    MemberListUpdate(Box<model::MemberListUpdate>),
+    MemberUpsert(Box<model::MemberUpdate>),
+    MemberRemove(Box<model::MemberUpdate>),
+    RoleUpsert(Box<model::RoleUpdate>),
+    RoleDelete {
+        guild_id: u64,
+        role_id: u64,
+    },
     Ready(Box<model::Ready>),
     SettingsUpdate(Box<model::SettingsUpdate>),
     MessageCreate(Box<model::Message>),

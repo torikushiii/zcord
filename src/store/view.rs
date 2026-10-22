@@ -30,6 +30,22 @@ impl Status {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub struct GuildTag {
+    pub text: String,
+    pub guild_id: u64,
+    pub badge: Option<String>,
+}
+
+impl GuildTag {
+    pub fn badge_spec(&self) -> Option<ImageSpec> {
+        self.badge.as_ref().map(|hash| ImageSpec::GuildTagBadge {
+            guild_id: self.guild_id,
+            hash: hash.clone(),
+        })
+    }
+}
+
 pub struct User {
     pub id: u64,
     pub name: String,
@@ -37,7 +53,8 @@ pub struct User {
     pub status: Status,
     pub bot: bool,
     pub role_color: Option<u32>,
-    pub tag: Option<String>,
+    pub tag: Option<GuildTag>,
+    pub playing: bool,
     pub activity: Option<String>,
     pub avatar: Option<String>,
     pub discriminator: Option<String>,
@@ -127,6 +144,49 @@ pub struct Message {
     pub content: String,
     pub embed: Option<Embed>,
     pub attachments: Vec<Attachment>,
+    pub kind: u8,
+    pub edited: bool,
+    pub reply: Option<ReplyState>,
+    pub mentions_me: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Role {
+    pub id: u64,
+    pub name: String,
+    pub color: Option<u32>,
+    pub position: i64,
+    pub hoist: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reply {
+    pub message_id: u64,
+    pub author_id: u64,
+    pub content: String,
+    pub attachments: bool,
+    pub embeds: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReplyState {
+    Loaded(Reply),
+    Deleted,
+    Unavailable,
+}
+
+#[derive(Default, Debug, PartialEq, Eq)]
+pub struct MemberList {
+    pub id: String,
+    pub member_count: u32,
+    pub online_count: u32,
+    pub rows: Vec<Option<MemberRow>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MemberRow {
+    Group { name: String, count: u32 },
+    Member { user_id: u64 },
 }
 
 impl Attachment {
@@ -184,11 +244,6 @@ pub struct Category {
     pub channels: Vec<Channel>,
 }
 
-pub struct HoistedRole {
-    pub name: String,
-    pub member_ids: Vec<u64>,
-}
-
 pub struct Guild {
     pub id: u64,
     pub name: String,
@@ -197,7 +252,6 @@ pub struct Guild {
     pub unread: bool,
     pub mentions: u32,
     pub categories: Vec<Category>,
-    pub hoisted_roles: Vec<HoistedRole>,
     pub member_ids: Vec<u64>,
     pub icon: Option<String>,
 }

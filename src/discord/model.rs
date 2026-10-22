@@ -14,9 +14,7 @@ pub fn id_value(value: &Value) -> Option<u64> {
 }
 
 fn optional_id<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
-    Option::<Value>::deserialize(d)?
-        .map(|v| id_value(&v).ok_or_else(|| serde::de::Error::custom("invalid snowflake")))
-        .transpose()
+    Ok(id_value(&Value::deserialize(d)?))
 }
 
 fn nullable_id<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Option<u64>>, D::Error> {
@@ -54,11 +52,34 @@ fn optional_entries<'de, D: Deserializer<'de>, T: DeserializeOwned>(
 }
 
 fn ids<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u64>, D::Error> {
-    let values = Vec::<Value>::deserialize(d)?;
-    values
-        .iter()
-        .map(|v| id_value(v).ok_or_else(|| serde::de::Error::custom("invalid role id")))
-        .collect()
+    let value = Value::deserialize(d)?;
+    Ok(value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(id_value)
+        .collect())
+}
+
+fn optional_ids<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<u64>>, D::Error> {
+    ids(d).map(Some)
+}
+
+fn default_value<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
+    d: D,
+) -> Result<T, D::Error> {
+    Ok(serde_json::from_value(Value::deserialize(d)?).unwrap_or_default())
+}
+
+fn nullable<'de, D: Deserializer<'de>, T: DeserializeOwned>(
+    d: D,
+) -> Result<Option<Option<T>>, D::Error> {
+    let value = Value::deserialize(d)?;
+    Ok(if value.is_null() {
+        Some(None)
+    } else {
+        serde_json::from_value(value).ok().map(Some)
+    })
 }
 
 fn timestamp<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
@@ -82,6 +103,20 @@ pub struct User {
     pub discriminator: Option<String>,
     #[serde(default)]
     pub bot: bool,
+    #[serde(default, deserialize_with = "nullable")]
+    pub primary_guild: Option<Option<PrimaryGuild>>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct PrimaryGuild {
+    #[serde(default)]
+    pub identity_enabled: Option<bool>,
+    #[serde(default, deserialize_with = "optional_id")]
+    pub identity_guild_id: Option<u64>,
+    #[serde(default)]
+    pub tag: Option<String>,
+    #[serde(default)]
+    pub badge: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -92,6 +127,10 @@ pub struct Member {
     pub user: Option<User>,
     #[serde(default, deserialize_with = "ids")]
     pub roles: Vec<u64>,
+    #[serde(default)]
+    pub nick: Option<String>,
+    #[serde(default)]
+    pub avatar: Option<String>,
 }
 
 impl Member {
@@ -104,8 +143,24 @@ impl Member {
 pub struct Role {
     #[serde(deserialize_with = "snowflake")]
     pub id: u64,
-    #[serde(deserialize_with = "snowflake")]
+    #[serde(default, deserialize_with = "snowflake")]
     pub permissions: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub color: u32,
+    #[serde(default, deserialize_with = "default_value")]
+    pub colors: RoleColors,
+    #[serde(default)]
+    pub position: i64,
+    #[serde(default)]
+    pub hoist: bool,
+}
+
+#[derive(Clone, Default, Deserialize)]
+pub struct RoleColors {
+    #[serde(default)]
+    pub primary_color: u32,
 }
 
 #[derive(Clone, Deserialize)]
@@ -138,6 +193,10 @@ pub struct Channel {
     pub last_message_id: Option<Option<u64>>,
     #[serde(default)]
     pub permission_overwrites: Option<Vec<Overwrite>>,
+    #[serde(default, deserialize_with = "ids")]
+    pub recipient_ids: Vec<u64>,
+    #[serde(default, deserialize_with = "entries")]
+    pub recipients: Vec<User>,
 }
 
 impl Channel {
@@ -152,6 +211,12 @@ impl Channel {
             last_message_id,
             permission_overwrites
         );
+        if !update.recipient_ids.is_empty() {
+            self.recipient_ids.clone_from(&update.recipient_ids);
+        }
+        if !update.recipients.is_empty() {
+            self.recipients.clone_from(&update.recipients);
+        }
     }
 }
 
@@ -175,6 +240,8 @@ pub struct Guild {
     pub legacy: GuildProperties,
     #[serde(default, deserialize_with = "optional_entries")]
     pub channels: Option<Vec<Channel>>,
+    #[serde(default, deserialize_with = "optional_entries")]
+    pub threads: Option<Vec<Channel>>,
     #[serde(default, deserialize_with = "optional_entries")]
     pub roles: Option<Vec<Role>>,
     #[serde(default, deserialize_with = "optional_entries")]
@@ -225,6 +292,9 @@ impl Guild {
         if update.channels.is_some() {
             self.channels.clone_from(&update.channels);
         }
+        if update.threads.is_some() {
+            self.threads.clone_from(&update.threads);
+        }
         if update.roles.is_some() {
             self.roles.clone_from(&update.roles);
         }
@@ -260,6 +330,7 @@ pub struct Ready {
     pub user: User,
     pub users: Vec<User>,
     pub guilds: Vec<Guild>,
+    pub guild_order: Vec<Option<u64>>,
     pub private_channels: Vec<Channel>,
     pub read_state: ReadStates,
     pub session_id: String,
@@ -289,6 +360,11 @@ impl<'de> Deserialize<'de> for Ready {
             user_settings_proto: Option<String>,
         }
         let wire = Wire::deserialize(d)?;
+        let guild_order = wire
+            .guilds
+            .iter()
+            .map(|guild| guild.get("id").and_then(id_value))
+            .collect();
         let guilds = wire
             .guilds
             .into_iter()
@@ -312,6 +388,7 @@ impl<'de> Deserialize<'de> for Ready {
             user: wire.user,
             users: wire.users,
             guilds,
+            guild_order,
             private_channels: wire.private_channels,
             read_state: wire.read_state,
             session_id: wire.session_id,
@@ -370,6 +447,24 @@ pub struct Message {
     pub embeds: Vec<Embed>,
     #[serde(default, deserialize_with = "entries")]
     pub attachments: Vec<Attachment>,
+    #[serde(default, rename = "type")]
+    pub kind: u8,
+    #[serde(default)]
+    pub edited_timestamp: Option<String>,
+    #[serde(default, deserialize_with = "entries")]
+    pub mentions: Vec<User>,
+    #[serde(default, deserialize_with = "ids")]
+    pub mention_roles: Vec<u64>,
+    #[serde(default)]
+    pub mention_everyone: bool,
+    #[serde(default)]
+    pub member: Option<PartialMember>,
+    #[serde(default, deserialize_with = "optional_id")]
+    pub guild_id: Option<u64>,
+    #[serde(default)]
+    pub message_reference: Option<MessageReference>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub referenced_message: Option<Option<Box<ReferencedMessage>>>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -388,6 +483,224 @@ pub struct MessageUpdate {
     pub embeds: Option<Vec<Embed>>,
     #[serde(default, deserialize_with = "optional_entries")]
     pub attachments: Option<Vec<Attachment>>,
+    #[serde(default, rename = "type")]
+    pub kind: Option<u8>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub edited_timestamp: Option<Option<String>>,
+    #[serde(default, deserialize_with = "optional_entries")]
+    pub mentions: Option<Vec<User>>,
+    #[serde(default, deserialize_with = "optional_ids")]
+    pub mention_roles: Option<Vec<u64>>,
+    #[serde(default)]
+    pub mention_everyone: Option<bool>,
+    #[serde(default)]
+    pub member: Option<PartialMember>,
+    #[serde(default, deserialize_with = "optional_id")]
+    pub guild_id: Option<u64>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub message_reference: Option<Option<MessageReference>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub referenced_message: Option<Option<Box<ReferencedMessage>>>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+pub struct PartialMember {
+    #[serde(default, deserialize_with = "optional_id")]
+    pub user_id: Option<u64>,
+    #[serde(default)]
+    pub user: Option<User>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub nick: Option<Option<String>>,
+    #[serde(default, deserialize_with = "optional_ids")]
+    pub roles: Option<Vec<u64>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub avatar: Option<Option<String>>,
+    #[serde(default)]
+    pub presence: Option<Presence>,
+}
+
+impl PartialMember {
+    pub fn id(&self) -> Option<u64> {
+        self.user_id.or_else(|| self.user.as_ref().map(|u| u.id))
+    }
+}
+
+impl From<&Member> for PartialMember {
+    fn from(member: &Member) -> Self {
+        Self {
+            user_id: member.id(),
+            user: member.user.clone(),
+            nick: Some(member.nick.clone()),
+            roles: Some(member.roles.clone()),
+            avatar: Some(member.avatar.clone()),
+            presence: None,
+        }
+    }
+}
+
+#[derive(Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct MessageReference {
+    #[serde(default, deserialize_with = "optional_id")]
+    pub message_id: Option<u64>,
+    #[serde(default, deserialize_with = "optional_id")]
+    pub channel_id: Option<u64>,
+    #[serde(default, deserialize_with = "optional_id")]
+    pub guild_id: Option<u64>,
+    #[serde(default, rename = "type")]
+    pub kind: u8,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct ReferencedMessage {
+    #[serde(deserialize_with = "snowflake")]
+    pub id: u64,
+    pub author: User,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default, deserialize_with = "entries")]
+    pub attachments: Vec<Attachment>,
+    #[serde(default, deserialize_with = "entries")]
+    pub embeds: Vec<Embed>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+pub struct Presence {
+    #[serde(default)]
+    pub user: Option<User>,
+    #[serde(default, deserialize_with = "optional_id")]
+    pub user_id: Option<u64>,
+    #[serde(default, deserialize_with = "optional_id")]
+    pub guild_id: Option<u64>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default, deserialize_with = "optional_entries")]
+    pub activities: Option<Vec<Activity>>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+pub struct Activity {
+    #[serde(default, rename = "type")]
+    pub kind: u8,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub details: Option<String>,
+    #[serde(default)]
+    pub emoji: Option<ActivityEmoji>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+pub struct ActivityEmoji {
+    #[serde(default, deserialize_with = "optional_id")]
+    pub id: Option<u64>,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+fn entry_groups<'de, D: Deserializer<'de>, T: DeserializeOwned>(
+    d: D,
+) -> Result<Vec<Vec<T>>, D::Error> {
+    let value = Value::deserialize(d)?;
+    Ok(value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .cloned()
+        .map(parse_entries)
+        .collect())
+}
+
+#[derive(Default, Deserialize)]
+pub struct MergedPresences {
+    #[serde(default, deserialize_with = "entry_groups")]
+    pub guilds: Vec<Vec<Presence>>,
+    #[serde(default, deserialize_with = "entries")]
+    pub friends: Vec<Presence>,
+}
+
+#[derive(Default, Deserialize)]
+pub struct ReadySupplemental {
+    #[serde(default)]
+    pub guilds: Vec<Value>,
+    #[serde(default, deserialize_with = "entry_groups")]
+    pub merged_members: Vec<Vec<PartialMember>>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub merged_presences: MergedPresences,
+}
+
+#[derive(Deserialize)]
+pub struct MembersChunk {
+    #[serde(deserialize_with = "snowflake")]
+    pub guild_id: u64,
+    #[serde(default, deserialize_with = "entries")]
+    pub members: Vec<PartialMember>,
+    #[serde(default, deserialize_with = "ids")]
+    pub not_found: Vec<u64>,
+    #[serde(default, deserialize_with = "entries")]
+    pub presences: Vec<Presence>,
+}
+
+#[derive(Deserialize)]
+pub struct MemberUpdate {
+    #[serde(deserialize_with = "snowflake")]
+    pub guild_id: u64,
+    #[serde(flatten)]
+    pub member: PartialMember,
+}
+
+#[derive(Deserialize)]
+pub struct RoleUpdate {
+    #[serde(deserialize_with = "snowflake")]
+    pub guild_id: u64,
+    pub role: Role,
+}
+
+#[derive(Default, Deserialize)]
+pub struct MemberListUpdate {
+    #[serde(default, deserialize_with = "snowflake")]
+    pub guild_id: u64,
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub member_count: u32,
+    #[serde(default)]
+    pub online_count: u32,
+    #[serde(default, deserialize_with = "entries")]
+    pub groups: Vec<MemberGroup>,
+    #[serde(default, deserialize_with = "entries")]
+    pub ops: Vec<MemberListOp>,
+}
+
+#[derive(Default, Deserialize)]
+pub struct MemberGroup {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub count: u32,
+}
+
+#[derive(Default, Deserialize)]
+pub struct MemberListOp {
+    #[serde(default)]
+    pub op: String,
+    #[serde(default)]
+    pub range: Option<[u32; 2]>,
+    #[serde(default)]
+    pub index: Option<u32>,
+    #[serde(default, deserialize_with = "entries")]
+    pub items: Vec<MemberItem>,
+    #[serde(default)]
+    pub item: Option<MemberItem>,
+}
+
+#[derive(Default, Deserialize)]
+pub struct MemberItem {
+    #[serde(default)]
+    pub group: Option<MemberGroup>,
+    #[serde(default)]
+    pub member: Option<PartialMember>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -422,4 +735,41 @@ pub struct SettingsProto {
     #[serde(rename = "type")]
     pub kind: u8,
     pub proto: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn reply_tristate_and_depth_one_and_partial_fields() {
+        let base = json!({"id":"1","channel_id":"2","author":{"id":"3"},"timestamp":"2026-10-22T00:00:00Z"});
+        let message: Message = serde_json::from_value(base.clone()).unwrap();
+        assert!(message.referenced_message.is_none());
+        assert_eq!(message.kind, 0);
+        let mut value = base;
+        value["referenced_message"] = Value::Null;
+        let message: Message = serde_json::from_value(value.clone()).unwrap();
+        assert!(matches!(message.referenced_message, Some(None)));
+        value["referenced_message"] =
+            json!({"id":"4","author":{"id":"5"},"referenced_message":{"id":null,"author":false}});
+        let message: Message = serde_json::from_value(value).unwrap();
+        assert_eq!(message.referenced_message.unwrap().unwrap().id, 4);
+        let update: MessageUpdate =
+            serde_json::from_value(json!({"id":"1","channel_id":"2"})).unwrap();
+        assert!(
+            update.kind.is_none()
+                && update.mentions.is_none()
+                && update.referenced_message.is_none()
+        );
+        let update: MessageUpdate = serde_json::from_value(json!({"id":"1","channel_id":"2","referenced_message":null,"edited_timestamp":null,"mention_roles":["8","bad"],"future":true})).unwrap();
+        assert!(matches!(update.referenced_message, Some(None)));
+        assert_eq!(update.edited_timestamp, Some(None));
+        assert_eq!(update.mention_roles, Some(vec![8]));
+        let member: PartialMember =
+            serde_json::from_value(json!({"user":{"id":"3"},"nick":null})).unwrap();
+        assert_eq!(member.nick, Some(None));
+        assert!(member.roles.is_none());
+    }
 }

@@ -1,0 +1,30 @@
+{
+  "supplemental": {
+    "guilds": [{"id":"200"},{"id":"bad"},{"id":"100"}],
+    "merged_members": [
+      [{"user_id":"2","nick":"Writer Nick","roles":["201"]}],
+      [],
+      [{"user_id":"2","nick":"Other Nick","roles":[]}]
+    ],
+    "merged_presences": {
+      "guilds": [[{"user_id":"2","status":"idle","activities":[{"type":0,"name":"Example Game"}]}],[],[]],
+      "friends": [{"user_id":"1","status":"online","activities":[]}]
+    }
+  },
+  "chunk": {
+    "guild_id":"200",
+    "members":[{"user":{"id":"3","username":"third"},"nick":"Three","roles":["201"],"avatar":"guild_hash"},{"user_id":"oops"}],
+    "not_found":["4","bad"],
+    "presences":[{"user":{"id":"3"},"status":"dnd","activities":[{"type":1,"name":"Video","details":"Making things"}]}]
+  },
+  "list": {
+    "guild_id":"200","id":"everyone","member_count":2,"online_count":1,
+    "groups":[{"id":"201","count":1},{"id":"offline","count":1},{"id":"online","count":0}],
+    "ops":[{"op":"SYNC","range":[0,3],"items":[
+      {"group":{"id":"201"}},
+      {"member":{"user":{"id":"2","username":"writer","global_name":"A Writer"},"nick":"List Nick","roles":["201"],"presence":{"status":"online","activities":[{"type":4,"state":"grinding","emoji":{"name":"🎮"}}]}}},
+      {"group":{"id":"offline"}},
+      {"member":{"user":{"id":"3","username":"third"},"roles":[],"presence":{"status":"offline","activities":[]}}}
+    ]}]
+  }
+}
