@@ -1,3 +1,8 @@
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
+
 use gpui::{prelude::*, *};
 
 use crate::{
@@ -14,6 +19,95 @@ const TOOLTIP_BG: u32 = 0x1F1F24;
 const HOME_KEY: u64 = 1;
 const ADD_SERVER_KEY: u64 = 2;
 const DISCOVER_KEY: u64 = 3;
+const CIRCLE: f32 = ICON / 2.;
+const SQUARE: f32 = 16.;
+const MORPH: Duration = Duration::from_millis(180);
+
+struct Morph {
+    id: u64,
+    started: Instant,
+    from: f32,
+    to: f32,
+}
+
+#[derive(Default)]
+pub struct Morphs {
+    active: HashMap<u64, Morph>,
+    next_id: u64,
+}
+
+impl Morphs {
+    pub fn start(&mut self, key: u64, hovered: bool) {
+        let now = Instant::now();
+        let (from, to) = if hovered {
+            (CIRCLE, SQUARE)
+        } else {
+            (SQUARE, CIRCLE)
+        };
+        let from = self.running(key, now).map_or(from, |morph| {
+            let progress = (now - morph.started).as_secs_f32() / MORPH.as_secs_f32();
+            morph.from + (morph.to - morph.from) * ease_out_quint()(progress)
+        });
+        self.active
+            .retain(|_, morph| now.duration_since(morph.started) < MORPH);
+        self.next_id += 1;
+        self.active.insert(
+            key,
+            Morph {
+                id: self.next_id,
+                started: now,
+                from,
+                to,
+            },
+        );
+    }
+
+    fn running(&self, key: u64, now: Instant) -> Option<&Morph> {
+        self.active
+            .get(&key)
+            .filter(|morph| now.duration_since(morph.started) < MORPH)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Corners {
+    Fixed(f32),
+    Morph(u64, bool),
+}
+
+fn round<E: Styled + IntoElement + 'static>(
+    element: E,
+    corners: Corners,
+    app: &DiscordApp,
+) -> AnyElement {
+    let (key, selected) = match corners {
+        Corners::Fixed(radius) => return element.rounded(rpx(radius)).into_any_element(),
+        Corners::Morph(key, selected) => (key, selected),
+    };
+    if selected {
+        return element.rounded(rpx(SQUARE)).into_any_element();
+    }
+    match app.rail_morphs.running(key, Instant::now()) {
+        Some(morph) => {
+            let (from, to) = (morph.from, morph.to);
+            element
+                .with_animation(
+                    ("rail-morph", morph.id),
+                    Animation::new(MORPH).with_easing(ease_out_quint()),
+                    move |element, delta| element.rounded(rpx(from + (to - from) * delta)),
+                )
+                .into_any_element()
+        }
+        None => {
+            let radius = if app.hovered_rail == Some(key) {
+                SQUARE
+            } else {
+                CIRCLE
+            };
+            element.rounded(rpx(radius)).into_any_element()
+        }
+    }
+}
 
 pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement + use<> {
     div()
@@ -37,17 +131,18 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 app,
                 cx,
             )
-            .child(
+            .child(round(
                 div()
                     .flex()
                     .items_center()
                     .justify_center()
                     .size(rpx(ICON))
-                    .rounded(rpx(16.))
                     .bg(rgb(theme::ELEVATED))
-                    .hover(|style| style.bg(rgb(theme::BLURPLE)))
+                    .group_hover("rail-item", |style| style.bg(rgb(theme::BLURPLE)))
                     .child(theme::icon("discord", 28., theme::STRONG)),
-            )
+                Corners::Morph(HOME_KEY, false),
+                app,
+            ))
             .children(corner_badge(app.store.dm_mentions)),
         )
         .child(
@@ -100,37 +195,40 @@ fn guild_item(app: &DiscordApp, guild: &Guild, cx: &mut Context<DiscordApp>) -> 
     .child(guild_icon(
         guild,
         ICON,
-        if selected { 16. } else { ICON / 2. },
+        Corners::Morph(id, selected),
+        app,
         cx,
     ))
     .children(corner_badge(guild.mentions))
 }
 
-fn guild_icon(guild: &Guild, size: f32, radius: f32, cx: &App) -> AnyElement {
+fn guild_icon(
+    guild: &Guild,
+    size: f32,
+    corners: Corners,
+    app: &DiscordApp,
+    cx: &App,
+) -> AnyElement {
     let image = guild
         .icon_spec()
         .and_then(|spec| images::resolve(&spec, theme::image_px(ICON), cx));
     match image {
-        Some(path) => img(path)
-            .size(rpx(size))
-            .flex_none()
-            .rounded(rpx(radius))
-            .group_hover("rail-item", |style| style.rounded(rpx(16.)))
-            .into_any_element(),
-        None => div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .justify_center()
-            .size(rpx(size))
-            .rounded(rpx(radius))
-            .group_hover("rail-item", |style| style.rounded(rpx(16.)))
-            .bg(rgb(guild.icon_color))
-            .text_size(rpx(size / 3.))
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(white())
-            .child(guild.initials.clone())
-            .into_any_element(),
+        Some(path) => round(img(path).size(rpx(size)).flex_none(), corners, app),
+        None => round(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .size(rpx(size))
+                .bg(rgb(guild.icon_color))
+                .text_size(rpx(size / 3.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(white())
+                .child(guild.initials.clone()),
+            corners,
+            app,
+        ),
     }
 }
 
@@ -187,7 +285,7 @@ fn folder_item(app: &DiscordApp, folder: &Folder, cx: &mut Context<DiscordApp>) 
                             guilds
                                 .iter()
                                 .take(4)
-                                .map(|guild| guild_icon(guild, 16., 8., cx)),
+                                .map(|guild| guild_icon(guild, 16., Corners::Fixed(8.), app, cx)),
                         ),
                     )
                 }
@@ -316,14 +414,15 @@ fn action_item(
     app: &DiscordApp,
     cx: &mut Context<DiscordApp>,
 ) -> impl IntoElement {
-    rail_item(id, key, label.into(), false, false, app, cx).child(
+    rail_item(id, key, label.into(), false, false, app, cx).child(round(
         div()
             .flex()
             .items_center()
             .justify_center()
             .size(rpx(ICON))
-            .rounded_full()
             .bg(rgb(theme::ELEVATED))
             .child(theme::icon(icon, 24., theme::TEXT)),
-    )
+        Corners::Morph(key, false),
+        app,
+    ))
 }
