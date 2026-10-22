@@ -20,6 +20,8 @@ const ICONS: &[(&str, &[u8])] = icons![
     "circle-question-mark",
     "compass",
     "discord",
+    "file",
+    "folder",
     "gem",
     "gift",
     "hash",

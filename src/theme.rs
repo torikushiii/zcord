@@ -1,6 +1,11 @@
 use gpui::{prelude::*, *};
 
-use crate::data::Status;
+use std::{path::Path, sync::Arc};
+
+use crate::{
+    data::{Status, User},
+    images,
+};
 
 pub const BG: u32 = 0x08080A;
 pub const ELEVATED: u32 = 0x121214;
@@ -44,19 +49,42 @@ pub fn icon(name: &str, size: f32, color: u32) -> Svg {
         .text_color(rgb(color))
 }
 
+pub fn image_px(css: f32) -> u32 {
+    (css * 2.).ceil() as u32
+}
+
+pub fn user_avatar(
+    user: Option<&User>,
+    user_id: u64,
+    size: f32,
+    status: Option<(Status, u32)>,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    let image = user.and_then(|user| images::resolve(&user.avatar_spec(), image_px(size), cx));
+    avatar(
+        user.map_or("?", |user| &user.initials),
+        user_color(user_id),
+        size,
+        status,
+        image,
+    )
+}
+
 pub fn avatar(
     initials: &str,
     color: Hsla,
     size: f32,
     status: Option<(Status, u32)>,
+    image: Option<Arc<Path>>,
 ) -> impl IntoElement + use<> {
     let dot = size * 0.3;
     div()
         .relative()
         .flex_none()
         .size(rpx(size))
-        .child(
-            div()
+        .child(match image {
+            Some(path) => img(path).size_full().rounded_full().into_any_element(),
+            None => div()
                 .size_full()
                 .flex()
                 .items_center()
@@ -66,8 +94,9 @@ pub fn avatar(
                 .text_color(rgb(BG))
                 .text_size(rpx(size * 0.36))
                 .font_weight(FontWeight::SEMIBOLD)
-                .child(initials.to_owned()),
-        )
+                .child(initials.to_owned())
+                .into_any_element(),
+        })
         .children(status.map(|(status, ring)| {
             div()
                 .absolute()

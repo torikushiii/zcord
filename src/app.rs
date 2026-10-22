@@ -35,6 +35,7 @@ pub struct DiscordApp {
     session: Option<Session>,
     pending_token: Option<String>,
     loading: HashSet<u64>,
+    open_folders: HashSet<u64>,
     drafts: HashMap<u64, String>,
     _events: Option<Task<()>>,
     _composer_subscription: Subscription,
@@ -62,6 +63,7 @@ impl DiscordApp {
             session: None,
             pending_token: None,
             loading: HashSet::new(),
+            open_folders: HashSet::new(),
             drafts: HashMap::new(),
             _events: None,
             _composer_subscription: subscription,
@@ -358,6 +360,17 @@ impl DiscordApp {
         self.loading.contains(&channel_id)
     }
 
+    pub(crate) fn is_folder_open(&self, id: u64) -> bool {
+        self.open_folders.contains(&id)
+    }
+
+    pub(crate) fn toggle_folder(&mut self, id: u64, cx: &mut Context<Self>) {
+        if !self.open_folders.remove(&id) {
+            self.open_folders.insert(id);
+        }
+        cx.notify();
+    }
+
     pub(crate) fn toggle_members(&mut self, cx: &mut Context<Self>) {
         self.show_members = !self.show_members;
         cx.notify();
@@ -410,7 +423,7 @@ impl Render for DiscordApp {
                         .child(channel_list::render(self, cx))
                         .child(chat::render(self, cx))
                         .when(self.show_members, |this| {
-                            this.child(member_list::render(self))
+                            this.child(member_list::render(self, cx))
                         }),
                 )
                 .into_any_element(),

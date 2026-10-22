@@ -454,6 +454,9 @@ fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) -> Option<E
     }
     let event =
         match kind {
+            "USER_SETTINGS_PROTO_UPDATE" => serde_json::from_value(value)
+                .ok()
+                .map(|settings| Event::SettingsUpdate(Box::new(settings))),
             "MESSAGE_CREATE" => serde_json::from_value(value)
                 .ok()
                 .map(|m| Event::MessageCreate(Box::new(m))),
