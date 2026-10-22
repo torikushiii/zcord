@@ -1,0 +1,39 @@
+{
+  "session_id": "fixture-session",
+  "resume_gateway_url": "wss://gateway-us-east1-b.discord.gg",
+  "user": {"id": "1", "username": "owner", "global_name": "Local Owner"},
+  "users": [{"id": "2", "username": "writer", "global_name": "A Writer", "avatar": "avatar-hash"}],
+  "guilds": [
+    {
+      "id": "200", "properties": {"name": "Second Guild Name Extra", "owner_id": "99", "icon": "guild-hash"},
+      "roles": [{"id": "200", "permissions": "1024"}, {"id": "201", "permissions": "0"}],
+      "channels": [
+        {"id": "210", "type": 4, "name": "Later", "position": 2},
+        {"id": "220", "type": 4, "name": "Earlier", "position": 1},
+        {"id": "2001", "type": 0, "name": "hidden", "position": 0, "parent_id": "220", "permission_overwrites": [{"id": "200", "type": 0, "deny": "1024", "allow": "0"}]},
+        {"id": "2002", "type": 0, "name": "reallowed", "position": 2, "parent_id": "220", "last_message_id": "60", "permission_overwrites": [{"id": "200", "type": 0, "deny": "1024", "allow": "0"}, {"id": "201", "type": 0, "deny": "0", "allow": "1024"}]},
+        {"id": "2003", "type": 0, "name": "first", "position": 1, "parent_id": "220", "last_message_id": "90"},
+        {"id": "2004", "type": 0, "name": "unparented", "position": 0, "last_message_id": "99"},
+        {"id": "2005", "type": 13, "name": "stage", "position": 3, "parent_id": "210"},
+        {"id": "2006", "type": 5, "name": "news", "position": 1, "parent_id": "210"},
+        {"id": "2007", "type": 15, "name": "forum"},
+        {"id": "bad-channel", "type": 0},
+        {"id": "2008", "type": 0, "permission_overwrites": [{"id": "200", "type": 0, "deny": "broken", "allow": "0"}]}
+      ]
+    },
+    {"id": "bad-guild"},
+    {"id": "100", "properties": {"name": "First", "owner_id": "1"}, "channels": [{"id": "1001", "type": 0, "name": "owners", "permission_overwrites": [{"id": "100", "type": 0, "deny": "1024", "allow": "0"}]}]}
+  ],
+  "merged_members": [
+    [{"user_id": "1", "roles": ["201"]}],
+    [{"user_id": "1", "roles": ["999"]}],
+    [{"user_id": "1", "roles": []}]
+  ],
+  "private_channels": [{"id": "900", "type": 1, "recipient_ids": ["2"]}],
+  "read_state": {"version": 7, "partial": false, "entries": [
+    {"id": "2002", "last_message_id": "50", "mention_count": 2},
+    {"id": "2003", "last_message_id": "90", "mention_count": 1},
+    {"id": "900", "last_message_id": "0", "mention_count": 4}
+  ]},
+  "ignored_future_field": {"anything": true}
+}

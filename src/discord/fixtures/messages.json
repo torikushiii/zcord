@@ -1,0 +1,5 @@
+[
+  {"id": "62", "channel_id": "2002", "author": {"id": "3", "username": "bot", "bot": true}, "timestamp": "2026-10-22T12:34:56.123+00:00", "content": "<@1> **raw**", "embeds": [{"author": {"name": "Status"}, "description": "one\ntwo", "fields": [{"name": "Count", "value": "3"}], "footer": {"text": "footer"}}, {"title": "ignored"}]},
+  {"id": "61", "channel_id": "2002", "author": {"id": "2", "username": "writer", "global_name": "A Writer", "avatar": "avatar-hash"}, "timestamp": "2026-10-21T23:00:00+00:00", "content": "older"},
+  {"id": "broken", "channel_id": "2002", "author": {"id": "2"}, "timestamp": "not-a-date"}
+]
