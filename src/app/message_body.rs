@@ -9,6 +9,7 @@ use crate::{
         DiscordApp,
         rich_text::{Action, Chip, Content, Piece, PieceStyle, rich_text},
     },
+    emoji::{self, Segment},
     images::{self, ImageSpec},
     markdown::{Block, Span, SpanKind, Style},
     store::Store,
@@ -55,6 +56,7 @@ pub fn render_body(
             index == 0,
             edited_here,
             jumbo,
+            0,
             context,
             &mut counter,
             cx,
@@ -78,11 +80,13 @@ pub fn render_body(
         .into_any_element()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_block(
     block: &Block,
     first: bool,
     edited: bool,
     jumbo: bool,
+    depth: usize,
     context: &BodyContext,
     counter: &mut u32,
     cx: &App,
@@ -145,6 +149,7 @@ fn render_block(
                             index == 0,
                             edited && last,
                             false,
+                            depth,
                             context,
                             counter,
                             cx,
@@ -181,7 +186,12 @@ fn render_block(
             .children(items.iter().enumerate().map(|(index, item)| {
                 let marker = match start {
                     Some(start) => format!("{}.", start + index as u64),
-                    None => "•".into(),
+                    None => match depth {
+                        0 => "•",
+                        1 => "◦",
+                        _ => "▪",
+                    }
+                    .into(),
                 };
                 let last_item = index + 1 == items.len();
                 div()
@@ -204,6 +214,7 @@ fn render_block(
                                 true,
                                 edited && last_item && block_index + 1 == item.len(),
                                 false,
+                                depth + 1,
                                 context,
                                 counter,
                                 cx,
@@ -249,9 +260,9 @@ pub fn spans_to_pieces(
 ) -> Vec<Piece> {
     spans
         .iter()
-        .map(|span| {
+        .flat_map(|span| {
             *counter += 1;
-            span_piece(span, jumbo, context, *counter, cx)
+            span_pieces(span, jumbo, context, *counter, cx)
         })
         .collect()
 }
@@ -277,7 +288,90 @@ fn base_style(style: &Style, link: Option<&str>, context: &BodyContext) -> Piece
     }
 }
 
-fn span_piece(span: &Span, jumbo: bool, context: &BodyContext, unique: u32, cx: &App) -> Piece {
+pub fn emoji_pieces(text: &str, style: &PieceStyle) -> Vec<Piece> {
+    emoji::segments(text)
+        .into_iter()
+        .map(|segment| match segment {
+            Segment::Emoji(sequence) => match emoji::image(sequence) {
+                Some(image) => Piece {
+                    content: Content::Emoji(Some(image.into())),
+                    style: style.clone(),
+                },
+                None => Piece::text(sequence.to_owned(), style.clone()),
+            },
+            Segment::Text(text) => Piece::text(text.to_owned(), style.clone()),
+        })
+        .flat_map(|piece| match &piece.content {
+            Content::Text(text) if text.chars().any(box_drawing) => cell_pieces(text, &piece.style),
+            _ => vec![piece],
+        })
+        .collect()
+}
+
+fn box_drawing(c: char) -> bool {
+    matches!(c, '\u{2500}'..='\u{257F}')
+}
+
+fn cell_pieces(text: &str, style: &PieceStyle) -> Vec<Piece> {
+    let mut pieces = Vec::new();
+    let mut start = 0;
+    for (index, c) in text.char_indices() {
+        if !box_drawing(c) {
+            continue;
+        }
+        if index > start {
+            pieces.push(Piece::text(text[start..index].to_owned(), style.clone()));
+        }
+        let end = index + c.len_utf8();
+        pieces.push(Piece::text(
+            text[index..end].to_owned(),
+            PieceStyle {
+                cell: true,
+                nowrap: true,
+                ..style.clone()
+            },
+        ));
+        start = end;
+    }
+    if start < text.len() {
+        pieces.push(Piece::text(text[start..].to_owned(), style.clone()));
+    }
+    pieces
+}
+
+fn has_emoji(text: &str) -> bool {
+    text.chars().any(box_drawing)
+        || emoji::segments(text)
+            .iter()
+            .any(|segment| matches!(segment, Segment::Emoji(_)))
+}
+
+pub fn label(id: impl Into<ElementId>, text: &str) -> AnyElement {
+    if !has_emoji(text) {
+        return SharedString::from(text.to_owned()).into_any_element();
+    }
+    rich_text(id, emoji_pieces(text, &PieceStyle::default()))
+        .emoji_scale(1.125)
+        .truncate()
+        .into_any_element()
+}
+
+pub fn wrapped_label(id: impl Into<ElementId>, text: &str) -> AnyElement {
+    if !has_emoji(text) {
+        return SharedString::from(text.to_owned()).into_any_element();
+    }
+    rich_text(id, emoji_pieces(text, &PieceStyle::default()))
+        .emoji_scale(1.125)
+        .into_any_element()
+}
+
+fn span_pieces(
+    span: &Span,
+    jumbo: bool,
+    context: &BodyContext,
+    unique: u32,
+    cx: &App,
+) -> Vec<Piece> {
     let mut style = base_style(&span.style, span.link.as_deref(), context);
     let hidden = matches!(style.chip, Some(Chip::Spoiler { revealed: false }));
     let chip = |chip: Chip, style: &mut PieceStyle| {
@@ -293,7 +387,7 @@ fn span_piece(span: &Span, jumbo: bool, context: &BodyContext, unique: u32, cx: 
             if jumbo {
                 style.scale = Some(2.6);
             }
-            text.clone()
+            return emoji_pieces(text, &style);
         }
         SpanKind::Code(code) => {
             style.mono = true;
@@ -351,13 +445,13 @@ fn span_piece(span: &Span, jumbo: bool, context: &BodyContext, unique: u32, cx: 
                 theme::image_px(size),
                 cx,
             );
-            return Piece {
-                content: Content::Emoji(image),
+            return vec![Piece {
+                content: Content::Emoji(image.map(Into::into)),
                 style,
-            };
+            }];
         }
     };
-    Piece::text(text, style)
+    vec![Piece::text(text, style)]
 }
 
 pub fn format_timestamp(unix: i64, style: char) -> String {

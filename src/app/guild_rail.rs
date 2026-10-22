@@ -6,7 +6,11 @@ use std::{
 use gpui::{prelude::*, *};
 
 use crate::{
-    app::DiscordApp,
+    app::{
+        DiscordApp,
+        message_body::emoji_pieces,
+        rich_text::{PieceStyle, rich_text},
+    },
     images,
     store::{Folder, Guild, RailEntry},
     theme::{self, rpx},
@@ -334,7 +338,7 @@ fn rail_item(
         .on_hover(
             cx.listener(move |app, hovered: &bool, _, cx| app.set_rail_hover(key, *hovered, cx)),
         )
-        .when(hovered, |this| this.child(tooltip(label)))
+        .when(hovered, |this| this.child(tooltip(key, &label)))
         .group("rail-item")
         .relative()
         .flex()
@@ -376,7 +380,7 @@ fn corner_badge(count: u32) -> Option<impl IntoElement> {
     })
 }
 
-fn tooltip(label: SharedString) -> impl IntoElement {
+fn tooltip(key: u64, label: &str) -> impl IntoElement {
     div()
         .absolute()
         .left(rpx(WIDTH - 4.))
@@ -400,7 +404,13 @@ fn tooltip(label: SharedString) -> impl IntoElement {
                             .line_height(rpx(20.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(rgb(theme::STRONG))
-                            .child(label),
+                            .child(
+                                rich_text(
+                                    ("rail-tooltip", key),
+                                    emoji_pieces(label, &PieceStyle::default()),
+                                )
+                                .emoji_scale(1.125),
+                            ),
                     ),
             ),
         ))

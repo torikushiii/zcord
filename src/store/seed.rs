@@ -389,7 +389,9 @@ fn seed_messages(
             author_id,
             timestamp,
             content,
-            embed,
+            embeds: embed.into_iter().collect(),
+            components: Vec::new(),
+            reactions: Vec::new(),
             attachments: Vec::new(),
             kind: if index == 5 { 7 } else { 0 },
             edited: index == 3,
@@ -400,7 +402,7 @@ fn seed_messages(
                         author_id: message.author_id,
                         content: message.content.clone(),
                         attachments: false,
-                        embeds: message.embed.is_some(),
+                        embeds: !message.embeds.is_empty() || !message.components.is_empty(),
                     })
                 })
             } else {
@@ -423,13 +425,21 @@ fn status_embed(salt: usize) -> Embed {
         ("Sample Item Five", "228 days, 14 hours"),
         ("Sample Item Six", "56 days, 14 hours"),
     ];
-    Embed {
-        color: [0x23A55A, 0x5865F2, 0xF0B232][salt % 3],
-        title: "Item Status".into(),
-        lines: items
-            .iter()
-            .map(|(item, ago)| format!("{ago} ago since last {item}"))
-            .collect(),
-        footer: "Data Tracker || Demo Status Bot".into(),
-    }
+    mapping::map_embed(&model::Embed {
+        color: Some([0x23A55A, 0x5865F2, 0xF0B232][salt % 3]),
+        title: Some("Item Status".into()),
+        description: Some(
+            items
+                .iter()
+                .map(|(item, ago)| format!("{ago} ago since last {item}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        footer: Some(model::EmbedFooter {
+            text: "Data Tracker || Demo Status Bot".into(),
+            icon_url: None,
+            proxy_icon_url: None,
+        }),
+        ..Default::default()
+    })
 }

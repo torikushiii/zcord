@@ -2,7 +2,7 @@ use gpui::{prelude::*, *};
 use gpui_component::tooltip::Tooltip;
 
 use crate::{
-    app::DiscordApp,
+    app::{DiscordApp, message_body::label},
     store::{Channel, ChannelKind},
     theme::{self, rpx},
 };
@@ -40,7 +40,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         .text_size(rpx(16.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(theme::STRONG))
-                        .child(guild.map_or("No server", |guild| &guild.name).to_owned()),
+                        .child(label(
+                            ("guild-header", guild.map_or(0, |guild| guild.id)),
+                            guild.map_or("No server", |guild| &guild.name),
+                        )),
                 )
                 .child(theme::icon("chevron-down", 16., theme::STRONG))
                 .child(div().flex_1())
@@ -78,7 +81,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                                         .text_color(rgb(theme::MUTED))
                                         .cursor_pointer()
                                         .hover(|style| style.text_color(rgb(theme::TEXT)))
-                                        .child(category.name.clone())
+                                        .child(div().min_w_0().truncate().child(label(
+                                            ("category", category.id),
+                                            &category.name,
+                                        )))
                                         .child(theme::icon("chevron-down", 12., theme::MUTED))
                                         .child(div().flex_1())
                                         .child(theme::icon("plus", 16., theme::MUTED)),
@@ -172,7 +178,7 @@ fn channel_row(
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .child(channel.name.clone()),
+                .child(label(("channel-name", id), &channel.name)),
         )
         .when(selected, |this| {
             this.child(theme::icon("user-plus", 14., theme::MUTED))
@@ -224,14 +230,17 @@ fn user_panel(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                                 .text_size(rpx(14.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(rgb(theme::STRONG))
-                                .child(user.name.clone()),
+                                .child(label(("self-name", user.id), &user.name)),
                         )
                         .child(
                             div()
                                 .truncate()
                                 .text_size(rpx(12.))
                                 .text_color(rgb(theme::MUTED))
-                                .child(user.activity.clone().unwrap_or_else(|| "Online".into())),
+                                .child(label(
+                                    ("self-activity", user.id),
+                                    user.activity.as_deref().unwrap_or("Online"),
+                                )),
                         ),
                 )
         }))

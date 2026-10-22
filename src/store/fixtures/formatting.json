@@ -1,0 +1,107 @@
+{
+    "type": 0,
+    "content": "Welcome to the Sample Community. <:sample_icon:1191169094582272043>\n\n**1. Example Heading**This fictional message exercises formatting.\n\n**2. Example Channels**Choose ** language-specific** channels in \"**Channels & Roles**\", or contact <@1191169014890496024>.\n\n**3. Example Lists**The contacts below use nested list items.\n\n**4. Example Links**Read https://example.com/guidelines.\n\n**5. No Self-Promotion **Share sample projects in https://discord.com/channels/1191169056833536034/1191169073610752038.\n\n**6. Example Topic**Keep sample conversations in the matching channel.\n\n**7. Example Contacts**These are fictional users and roles.\n  - Sample Community Mod: <@1191169014890496024> or <@&1191169065222144036> \n  - Community Mod: <@&1191169090387968042> (sample nested contact)\n- For Sample Community support:\n  - Discuss with sample members in https://discord.com/channels/1191169056833536034/1191169069416448037\n  - Check the sample help channel at https://discord.com/channels/1191169056833536034/1191169061027840035\n\nEnd of synthetic formatting example.",
+    "mentions": [
+        {
+            "id": "1191169014890496024",
+            "username": "sample.moderator",
+            "avatar": "f0000000000000000000000000000031",
+            "discriminator": "0",
+            "public_flags": 0,
+            "flags": 0,
+            "banner": null,
+            "accent_color": null,
+            "global_name": "Sample Moderator",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null,
+            "vad_colors": null,
+            "banner_color": null,
+            "clan": null,
+            "primary_guild": null
+        }
+    ],
+    "mention_roles": [
+        "1191169065222144036",
+        "1191169090387968042"
+    ],
+    "attachments": [],
+    "embeds": [],
+    "timestamp": "2024-01-04T00:00:00.000+00:00",
+    "edited_timestamp": "2024-01-08T00:00:00.000+00:00",
+    "flags": 0,
+    "components": [],
+    "id": "1191169115553792048",
+    "channel_id": "1191169111359488047",
+    "author": {
+        "id": "1191169052639232033",
+        "username": "sample.announcements",
+        "avatar": "f0000000000000000000000000000007",
+        "discriminator": "0",
+        "public_flags": 0,
+        "flags": 0,
+        "banner": null,
+        "accent_color": null,
+        "global_name": "Sample Announcements",
+        "avatar_decoration_data": null,
+        "collectibles": null,
+        "display_name_styles": null,
+        "vad_colors": null,
+        "banner_color": null,
+        "clan": null,
+        "primary_guild": null
+    },
+    "pinned": false,
+    "mention_everyone": false,
+    "tts": false,
+    "reactions": [
+        {
+            "emoji": {
+                "id": null,
+                "name": "👍"
+            },
+            "count": 394,
+            "count_details": {
+                "burst": 0,
+                "normal": 394
+            },
+            "burst_colors": [],
+            "me_burst": false,
+            "burst_me": false,
+            "me": false,
+            "burst_count": 0
+        },
+        {
+            "emoji": {
+                "id": "1191169094582272043",
+                "name": "sample_icon"
+            },
+            "count": 41,
+            "count_details": {
+                "burst": 0,
+                "normal": 41
+            },
+            "burst_colors": [],
+            "me_burst": false,
+            "burst_me": false,
+            "me": false,
+            "burst_count": 0
+        },
+        {
+            "emoji": {
+                "id": null,
+                "name": "👍🏿"
+            },
+            "count": 15,
+            "count_details": {
+                "burst": 0,
+                "normal": 15
+            },
+            "burst_colors": [],
+            "me_burst": false,
+            "burst_me": false,
+            "me": false,
+            "burst_count": 0
+        }
+    ]
+}

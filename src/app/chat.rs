@@ -3,12 +3,12 @@ use gpui_component::input::Input;
 
 use crate::{
     app::{
-        DiscordApp, member_list,
-        message_body::{BodyContext, preview_pieces, render_body},
+        DiscordApp, embeds, member_list,
+        message_body::{BodyContext, label, preview_pieces, render_body},
         rich_text::rich_text,
     },
     images,
-    store::{Attachment, Embed, Message, ReplyState},
+    store::{Attachment, Message, ReplyState},
     theme::{self, rpx},
 };
 
@@ -66,7 +66,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         .text_size(rpx(16.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(theme::STRONG))
-                        .child(channel_name.clone()),
+                        .child(label(
+                            ("header-channel", app.selected_channel_id),
+                            &channel_name,
+                        )),
                 )
                 .child(div().flex_1())
                 .child(theme::icon_button(
@@ -465,7 +468,10 @@ fn render_system(app: &DiscordApp, message: &Message) -> Option<AnyElement> {
                                 div()
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(author_color(app, message.author_id))
-                                    .child(author_name(app, message.author_id)),
+                                    .child(label(
+                                        ("system-author", message.id),
+                                        &author_name(app, message.author_id),
+                                    )),
                             )
                             .child(after.to_owned()),
                     )
@@ -534,7 +540,10 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
                         .flex_none()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(author_color(app, reply.author_id))
-                        .child(author_name(app, reply.author_id)),
+                        .child(label(
+                            ("reply-author", message.id),
+                            &author_name(app, reply.author_id),
+                        )),
                 )
                 .child(div().min_w_0().overflow_hidden().child(preview))
         }
@@ -563,6 +572,11 @@ fn render_message(app: &DiscordApp, message: &Message, grouped: bool, cx: &App) 
     let user = app.store.user(message.author_id);
     let parsed = app.parsed(message.id, &message.content);
     let context = body_context(app, message.id);
+    let rich = !message.embeds.is_empty() || !message.components.is_empty();
+    let trailing_edited = message.edited && parsed.blocks.is_empty() && rich;
+    let show_body = (!parsed.blocks.is_empty() || message.edited)
+        && !trailing_edited
+        && !embeds::hides_content(&message.content, &message.embeds);
     div()
         .id(("message", message.id))
         .group("message")
@@ -647,7 +661,10 @@ fn render_message(app: &DiscordApp, message: &Message, grouped: bool, cx: &App) 
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(author_color(app, message.author_id))
                                             .cursor_pointer()
-                                            .child(author_name(app, message.author_id)),
+                                            .child(label(
+                                                ("author", message.id),
+                                                &author_name(app, message.author_id),
+                                            )),
                                     )
                                     .when(user.is_some_and(|user| user.bot), |this| {
                                         this.child(theme::app_tag())
@@ -664,7 +681,7 @@ fn render_message(app: &DiscordApp, message: &Message, grouped: bool, cx: &App) 
                                     ),
                             )
                         })
-                        .when(!parsed.blocks.is_empty() || message.edited, |this| {
+                        .when(show_body, |this| {
                             this.child(
                                 div()
                                     .w_full()
@@ -679,13 +696,31 @@ fn render_message(app: &DiscordApp, message: &Message, grouped: bool, cx: &App) 
                                     )),
                             )
                         })
-                        .children(message.embed.as_ref().map(render_embed))
+                        .children(message.embeds.iter().enumerate().map(|(index, embed)| {
+                            embeds::render_embed(app, message.id, index, embed, cx)
+                        }))
+                        .children(embeds::render_components(
+                            app,
+                            message.id,
+                            &message.components,
+                            cx,
+                        ))
                         .children(
                             message
                                 .attachments
                                 .iter()
                                 .map(|attachment| render_attachment(attachment, cx)),
-                        ),
+                        )
+                        .when(trailing_edited, |this| {
+                            this.child(
+                                div()
+                                    .mt(rpx(2.))
+                                    .text_size(rpx(10.))
+                                    .text_color(rgb(theme::FAINT))
+                                    .child("(edited)"),
+                            )
+                        })
+                        .children(embeds::render_reactions(&message.reactions, cx)),
                 ),
         )
         .into_any_element()
@@ -748,47 +783,10 @@ fn file_card(attachment: &Attachment) -> impl IntoElement + use<> {
         )
 }
 
-fn file_size(bytes: u64) -> String {
+pub(super) fn file_size(bytes: u64) -> String {
     match bytes {
         0..1024 => format!("{bytes} bytes"),
         1024..1_048_576 => format!("{:.2} KB", bytes as f64 / 1024.),
         _ => format!("{:.2} MB", bytes as f64 / 1_048_576.),
     }
-}
-
-fn render_embed(embed: &Embed) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .max_w(rpx(520.))
-        .mt_1()
-        .py_2()
-        .pl_3()
-        .pr_4()
-        .rounded(rpx(4.))
-        .border_l_4()
-        .border_color(rgb(embed.color))
-        .bg(rgb(theme::ELEVATED))
-        .child(
-            div()
-                .text_size(rpx(16.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::STRONG))
-                .child(embed.title.clone()),
-        )
-        .children(embed.lines.iter().map(|line| {
-            div()
-                .text_size(rpx(14.))
-                .line_height(rpx(18.))
-                .text_color(rgb(theme::TEXT))
-                .child(line.clone())
-        }))
-        .child(
-            div()
-                .mt_1()
-                .text_size(rpx(12.))
-                .text_color(rgb(theme::MUTED))
-                .child(embed.footer.clone()),
-        )
 }

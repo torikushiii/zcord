@@ -1,7 +1,7 @@
 use gpui::{prelude::*, *};
 
 use crate::{
-    app::{DiscordApp, guild_rail},
+    app::{DiscordApp, guild_rail, message_body::label},
     images,
     store::Guild,
     theme::{self, rpx},
@@ -47,7 +47,10 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> impl IntoElement +
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(rgb(theme::STRONG))
                 .children(guild.map(|guild| guild_icon(guild, cx)))
-                .child(guild.map_or("zcord", |guild| &guild.name).to_owned()),
+                .child(label(
+                    ("titlebar-guild", guild.map_or(0, |guild| guild.id)),
+                    guild.map_or("zcord", |guild| &guild.name),
+                )),
         )
         .child(div().flex_1())
         .child(

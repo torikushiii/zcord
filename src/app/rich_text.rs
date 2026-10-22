@@ -1,4 +1,4 @@
-use std::{cell::RefCell, ops::Range, path::Path, rc::Rc, sync::Arc};
+use std::{cell::RefCell, ops::Range, rc::Rc};
 
 use gpui::{prelude::*, *};
 use gpui_component::ActiveTheme;
@@ -31,12 +31,13 @@ pub struct PieceStyle {
     pub chip: Option<Chip>,
     pub group: u32,
     pub nowrap: bool,
+    pub cell: bool,
     pub action: Option<Action>,
 }
 
 pub enum Content {
     Text(SharedString),
-    Emoji(Option<Arc<Path>>),
+    Emoji(Option<ImageSource>),
 }
 
 pub struct Piece {
@@ -58,9 +59,11 @@ type ActionHandler = Rc<dyn Fn(&Action, &mut Window, &mut App)>;
 pub struct RichText {
     id: ElementId,
     pieces: Rc<Vec<Piece>>,
-    line_height: Rems,
-    emoji_size: Rems,
+    line_height: Option<Rems>,
+    emoji_size: Option<Rems>,
+    emoji_scale: f32,
     wrap: bool,
+    truncate: bool,
     on_action: Option<ActionHandler>,
 }
 
@@ -68,26 +71,39 @@ pub fn rich_text(id: impl Into<ElementId>, pieces: Vec<Piece>) -> RichText {
     RichText {
         id: id.into(),
         pieces: Rc::new(pieces),
-        line_height: rems(1.375),
-        emoji_size: rems(1.375),
+        line_height: None,
+        emoji_size: None,
+        emoji_scale: 1.375,
         wrap: true,
+        truncate: false,
         on_action: None,
     }
 }
 
 impl RichText {
     pub fn line_height(mut self, line_height: Rems) -> Self {
-        self.line_height = line_height;
+        self.line_height = Some(line_height);
         self
     }
 
     pub fn emoji_size(mut self, size: Rems) -> Self {
-        self.emoji_size = size;
+        self.emoji_size = Some(size);
+        self
+    }
+
+    pub fn emoji_scale(mut self, scale: f32) -> Self {
+        self.emoji_scale = scale;
         self
     }
 
     pub fn single_line(mut self) -> Self {
         self.wrap = false;
+        self
+    }
+
+    pub fn truncate(mut self) -> Self {
+        self.wrap = false;
+        self.truncate = true;
         self
     }
 
@@ -200,6 +216,7 @@ struct Line {
 #[derive(Clone, Default)]
 struct Layout {
     wrap_width: Option<Pixels>,
+    truncated_to: Option<Pixels>,
     lines: Vec<Line>,
     size: Size<Pixels>,
 }
@@ -242,6 +259,26 @@ fn word_ranges(text: &str) -> Vec<Range<usize>> {
     ranges
 }
 
+fn text_lines(text: &str) -> impl Iterator<Item = (&str, usize)> {
+    let mut rest = Some(text);
+    std::iter::from_fn(move || {
+        let current = rest?;
+        match current
+            .char_indices()
+            .find(|(_, c)| matches!(c, '\n' | '\u{2028}' | '\u{2029}'))
+        {
+            Some((index, separator)) => {
+                rest = Some(&current[index + separator.len_utf8()..]);
+                Some((&current[..index], separator.len_utf8()))
+            }
+            None => {
+                rest = None;
+                Some((current, 0))
+            }
+        }
+    })
+}
+
 fn build_atoms(pieces: &[Piece], fonts: &Fonts, wrap: bool, window: &mut Window) -> Vec<Atom> {
     let mut atoms = Vec::new();
     let mut pending_break = false;
@@ -264,8 +301,20 @@ fn build_atoms(pieces: &[Piece], fonts: &Fonts, wrap: bool, window: &mut Window)
             }
             Content::Text(text) => {
                 let mut offset = 0;
-                for (line_index, line) in text.split('\n').enumerate() {
+                for (line_index, (line, separator)) in text_lines(text).enumerate() {
                     if line_index > 0 {
+                        if pending_break {
+                            atoms.push(Atom {
+                                piece: usize::MAX,
+                                range: 0..0,
+                                shaped: None,
+                                width: Pixels::ZERO,
+                                trailing_space: Pixels::ZERO,
+                                pad_left: Pixels::ZERO,
+                                pad_right: Pixels::ZERO,
+                                break_before: true,
+                            });
+                        }
                         pending_break = true;
                     }
                     let ranges = if wrap && !style.nowrap {
@@ -279,20 +328,26 @@ fn build_atoms(pieces: &[Piece], fonts: &Fonts, wrap: bool, window: &mut Window)
                         let word = &line[range.clone()];
                         let shaped = fonts.shape(word, style, false, window);
                         let trimmed = word.trim_end_matches(' ').len();
-                        let width = shaped.width();
+                        let mut width = shaped.width();
                         let trailing_space = width - shaped.x_for_index(trimmed);
+                        let mut pad_left = Pixels::ZERO;
+                        let cell = fonts.size(style) * word.chars().count() as f32;
+                        if style.cell && width < cell {
+                            pad_left = (cell - width) / 2.;
+                            width = cell;
+                        }
                         atoms.push(Atom {
                             piece: piece_index,
                             range: offset + range.start..offset + range.end,
                             shaped: Some(shaped),
                             width,
                             trailing_space,
-                            pad_left: Pixels::ZERO,
+                            pad_left,
                             pad_right: Pixels::ZERO,
                             break_before: std::mem::take(&mut pending_break),
                         });
                     }
-                    offset += line.len() + 1;
+                    offset += line.len() + separator;
                 }
             }
         }
@@ -373,10 +428,12 @@ fn layout_pieces(
     pieces: &[Piece],
     fonts: &Fonts,
     wrap: bool,
-    wrap_width: Option<Pixels>,
+    truncate: bool,
+    width_limit: Option<Pixels>,
     window: &mut Window,
 ) -> Layout {
-    let wrap_width = wrap_width.filter(|_| wrap);
+    let wrap_width = width_limit.filter(|_| wrap);
+    let truncated_to = width_limit.filter(|_| truncate);
     let mut atoms = build_atoms(pieces, fonts, wrap, window);
     atoms.reverse();
     let mut lines: Vec<Line> = vec![Line {
@@ -431,6 +488,11 @@ fn layout_pieces(
         });
         x += atom.width;
     }
+    if let Some(limit) = truncated_to {
+        for line in &mut lines {
+            truncate_line(line, limit, pieces, fonts, window);
+        }
+    }
     let mut y = Pixels::ZERO;
     let mut width = Pixels::ZERO;
     for line in &mut lines {
@@ -442,9 +504,83 @@ fn layout_pieces(
     }
     Layout {
         wrap_width,
+        truncated_to,
         lines,
         size: size(width, y),
     }
+}
+
+fn truncate_line(
+    line: &mut Line,
+    limit: Pixels,
+    pieces: &[Piece],
+    fonts: &Fonts,
+    window: &mut Window,
+) {
+    let end = |fragment: &Fragment| fragment.x + fragment.width;
+    if line.fragments.last().is_none_or(|last| end(last) <= limit) {
+        return;
+    }
+    let is_text = |piece: usize| matches!(pieces[piece].content, Content::Text(_));
+    let cut = line
+        .fragments
+        .iter()
+        .position(|fragment| end(fragment) > limit)
+        .unwrap_or(line.fragments.len());
+    let Some(style_piece) = line.fragments[..=cut.min(line.fragments.len() - 1)]
+        .iter()
+        .rev()
+        .map(|fragment| fragment.piece)
+        .chain(0..pieces.len())
+        .find(|piece| is_text(*piece))
+    else {
+        line.fragments.truncate(cut);
+        return;
+    };
+    let ellipsis = fonts.shape("…", &pieces[style_piece].style, false, window);
+    let room = limit - ellipsis.width();
+    let mut kept: Vec<Fragment> = Vec::with_capacity(cut + 1);
+    for fragment in line.fragments.drain(..) {
+        if end(&fragment) <= room {
+            kept.push(fragment);
+            continue;
+        }
+        if let (Some(shaped), Content::Text(text)) =
+            (&fragment.shaped, &pieces[fragment.piece].content)
+        {
+            let word = &text[fragment.range.clone()];
+            let available = room - fragment.x - fragment.pad_left;
+            let mut split = if available > Pixels::ZERO {
+                shaped.index_for_x(available).unwrap_or(word.len())
+            } else {
+                0
+            };
+            while split > 0 && !word.is_char_boundary(split) {
+                split -= 1;
+            }
+            let head_text = word[..split].trim_end();
+            if !head_text.is_empty() {
+                let head = fonts.shape(head_text, &pieces[fragment.piece].style, false, window);
+                kept.push(Fragment {
+                    range: fragment.range.start..fragment.range.start + head_text.len(),
+                    width: head.width() + fragment.pad_left,
+                    shaped: Some(head),
+                    ..fragment
+                });
+            }
+        }
+        break;
+    }
+    let x = kept.last().map_or(Pixels::ZERO, end);
+    kept.push(Fragment {
+        piece: style_piece,
+        range: 0..0,
+        width: ellipsis.width(),
+        shaped: Some(ellipsis),
+        x,
+        pad_left: Pixels::ZERO,
+    });
+    line.fragments = kept;
 }
 
 pub struct RichTextState {
@@ -492,8 +628,14 @@ impl Element for RichText {
             mono: cx.theme().mono_font_family.clone(),
             color: text_style.color,
             font_size: text_style.font_size.to_pixels(rem_size),
-            line_height: self.line_height.to_pixels(rem_size),
-            emoji_size: self.emoji_size.to_pixels(rem_size),
+            line_height: self.line_height.map_or_else(
+                || text_style.line_height_in_pixels(rem_size),
+                |line_height| line_height.to_pixels(rem_size),
+            ),
+            emoji_size: self.emoji_size.map_or_else(
+                || text_style.font_size.to_pixels(rem_size) * self.emoji_scale,
+                |size| size.to_pixels(rem_size),
+            ),
         };
         let layout = Rc::new(RefCell::new(Layout::default()));
         let measure = {
@@ -501,6 +643,7 @@ impl Element for RichText {
             let layout = layout.clone();
             let pieces = self.pieces.clone();
             let wrap = self.wrap;
+            let truncate = self.truncate;
             move |known: Size<Option<Pixels>>,
                   available: Size<AvailableSpace>,
                   window: &mut Window,
@@ -509,13 +652,18 @@ impl Element for RichText {
                     AvailableSpace::Definite(width) => Some(width),
                     _ => None,
                 });
-                let computed = layout_pieces(&pieces, &fonts, wrap, wrap_width, window);
+                let computed = layout_pieces(&pieces, &fonts, wrap, truncate, wrap_width, window);
                 let size = computed.size;
                 *layout.borrow_mut() = computed;
                 size
             }
         };
-        let style = Style::default();
+        let mut style = Style::default();
+        if self.truncate {
+            style.min_size.width = px(0.).into();
+            style.max_size.width = relative(1.).into();
+            style.flex_shrink = 1.;
+        }
         let layout_id = window.request_measured_layout(style, measure);
         (layout_id, RichTextState { fonts, layout })
     }
@@ -531,13 +679,15 @@ impl Element for RichText {
     ) -> Self::PrepaintState {
         let stale = {
             let layout = state.layout.borrow();
-            self.wrap && layout.wrap_width != Some(bounds.size.width)
+            (self.wrap && layout.wrap_width != Some(bounds.size.width))
+                || (self.truncate && layout.truncated_to != Some(bounds.size.width))
         };
         if stale {
             let computed = layout_pieces(
                 &self.pieces,
                 &state.fonts,
                 self.wrap,
+                self.truncate,
                 Some(bounds.size.width),
                 window,
             );
@@ -676,7 +826,7 @@ impl Element for RichText {
                 };
                 let hovered = Some(fragment.piece) == hovered_piece;
                 let reshaped;
-                let shaped = if hovered {
+                let shaped = if hovered && !fragment.range.is_empty() {
                     reshaped =
                         fonts.shape(&text[fragment.range.clone()], &piece.style, true, window);
                     &reshaped

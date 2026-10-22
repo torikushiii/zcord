@@ -56,3 +56,5 @@ Scripts neither font covers (CJK, Arabic, Thai, emoji, …) use the system's fal
 - `src/fonts.rs` — bundled and user font loading
 - `assets/icons/` — Lucide icons (ISC) and the Discord logo (Simple Icons, CC0)
 - `assets/fonts/` — Noto Sans (SIL Open Font License)
+- `src/emoji.rs`, `assets/twemoji.bin` — bundled Twemoji v17.0.3 graphics (CC-BY 4.0, © Twitter,
+  Inc and other contributors; see `assets/TWEMOJI-LICENSE.md`), packed by `scripts/pack_twemoji.py`

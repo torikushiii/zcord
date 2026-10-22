@@ -23,34 +23,233 @@ pub(super) fn local_timestamp(value: &str) -> Option<Timestamp> {
     })
 }
 
+fn nonempty(value: &Option<String>) -> Option<String> {
+    value.clone().filter(|value| !value.is_empty())
+}
+
+fn media(url: &Option<String>, proxy: &Option<String>, width: u32, height: u32) -> Option<Media> {
+    let proxied = nonempty(proxy);
+    let raw = proxied.as_ref().or(url.as_ref())?;
+    let parsed = reqwest::Url::parse(raw).ok()?;
+    if !crate::images::allowed_url(&parsed)
+        || (proxied.is_none()
+            && !matches!(
+                parsed.host_str(),
+                Some("cdn.discordapp.com" | "media.discordapp.net")
+            ))
+    {
+        return None;
+    }
+    Some(Media {
+        url: raw.clone(),
+        width,
+        height,
+    })
+}
+
+fn map_media(value: &model::EmbedMedia) -> Option<Media> {
+    media(
+        &value.url,
+        &value.proxy_url,
+        value.width.unwrap_or(0),
+        value.height.unwrap_or(0),
+    )
+}
+
 pub(super) fn map_embed(embed: &model::Embed) -> Embed {
-    let mut lines: Vec<String> = embed
-        .description
-        .as_deref()
-        .unwrap_or("")
-        .lines()
-        .map(str::to_owned)
-        .collect();
-    lines.extend(
-        embed
+    let url = nonempty(&embed.url);
+    Embed {
+        kind: match embed.kind.as_deref().filter(|kind| !kind.is_empty()) {
+            None | Some("rich") => EmbedKind::Rich,
+            Some("image") => EmbedKind::Image,
+            Some("gifv") => EmbedKind::Gifv,
+            Some("video") => EmbedKind::Video,
+            _ if embed.color.is_some() || !embed.fields.is_empty() => EmbedKind::Rich,
+            _ => EmbedKind::Link,
+        },
+        url: url.clone(),
+        color: embed.color,
+        provider: embed
+            .provider
+            .as_ref()
+            .filter(|p| !p.name.is_empty())
+            .map(|p| EmbedText {
+                text: p.name.clone(),
+                url: nonempty(&p.url),
+                icon: None,
+            }),
+        author: embed
+            .author
+            .as_ref()
+            .filter(|a| !a.name.is_empty())
+            .map(|a| EmbedText {
+                text: a.name.clone(),
+                url: nonempty(&a.url),
+                icon: media(&a.icon_url, &a.proxy_icon_url, 0, 0),
+            }),
+        title: nonempty(&embed.title).map(|text| EmbedText {
+            text,
+            url,
+            icon: None,
+        }),
+        description: nonempty(&embed.description),
+        fields: embed
             .fields
             .iter()
-            .map(|field| format!("{}: {}", field.name, field.value)),
-    );
-    Embed {
-        color: embed.color.unwrap_or(0x202225),
-        title: embed
-            .title
-            .clone()
-            .or_else(|| embed.author.as_ref().map(|a| a.name.clone()))
-            .unwrap_or_default(),
-        lines,
+            .map(|field| EmbedField {
+                name: field.name.clone(),
+                value: field.value.clone(),
+                inline: field.inline,
+            })
+            .collect(),
+        thumbnail: embed.thumbnail.as_ref().and_then(map_media),
+        images: embed
+            .image
+            .as_ref()
+            .and_then(map_media)
+            .into_iter()
+            .collect(),
+        video: embed.video.as_ref().and_then(map_media),
         footer: embed
             .footer
             .as_ref()
-            .map(|f| f.text.clone())
-            .unwrap_or_default(),
+            .filter(|f| !f.text.is_empty())
+            .map(|f| EmbedText {
+                text: f.text.clone(),
+                url: None,
+                icon: media(&f.icon_url, &f.proxy_icon_url, 0, 0),
+            }),
+        timestamp: embed.timestamp.as_deref().and_then(local_timestamp),
     }
+}
+
+pub(super) fn map_embeds(embeds: &[model::Embed], flags: u64) -> Vec<Embed> {
+    if flags & (1 << 2) != 0 {
+        return Vec::new();
+    }
+    let mut mapped: Vec<Embed> = Vec::new();
+    let mut previous_url = None;
+    for embed in embeds {
+        let url = nonempty(&embed.url);
+        let image_only = embed.image.is_some()
+            && embed.title.as_deref().is_none_or(str::is_empty)
+            && embed.description.as_deref().is_none_or(str::is_empty)
+            && embed
+                .author
+                .as_ref()
+                .is_none_or(|author| author.name.is_empty())
+            && embed
+                .provider
+                .as_ref()
+                .is_none_or(|provider| provider.name.is_empty())
+            && embed
+                .footer
+                .as_ref()
+                .is_none_or(|footer| footer.text.is_empty())
+            && embed.color.is_none()
+            && embed.fields.is_empty()
+            && embed.thumbnail.is_none()
+            && embed.video.is_none()
+            && embed.timestamp.as_deref().is_none_or(str::is_empty);
+        if image_only && url.is_some() && url == previous_url {
+            if let Some(first) = mapped.last_mut()
+                && first.images.len() < 4
+            {
+                first
+                    .images
+                    .extend(embed.image.as_ref().and_then(map_media));
+            }
+        } else {
+            mapped.push(map_embed(embed));
+        }
+        previous_url = url;
+    }
+    mapped
+}
+
+pub(super) fn map_emoji(emoji: &model::Emoji) -> ReactionEmoji {
+    ReactionEmoji {
+        id: emoji.id,
+        name: emoji.name.clone().unwrap_or_default(),
+        animated: emoji.animated,
+    }
+}
+
+pub(super) fn map_reactions(reactions: &[model::Reaction]) -> Vec<Reaction> {
+    reactions
+        .iter()
+        .map(|reaction| Reaction {
+            emoji: map_emoji(&reaction.emoji),
+            count: reaction.count,
+            me: reaction.me || reaction.me_burst || reaction.burst_me,
+        })
+        .collect()
+}
+
+pub(super) fn map_components(components: &[model::Component]) -> Vec<Component> {
+    components.iter().filter_map(map_component).collect()
+}
+
+fn map_component(component: &model::Component) -> Option<Component> {
+    Some(match component.kind {
+        1 => Component::Row(map_components(&component.components)),
+        2 => Component::Button {
+            style: component.style,
+            label: nonempty(&component.label),
+            emoji: component.emoji.as_ref().map(map_emoji),
+            url: nonempty(&component.url),
+            disabled: component.disabled,
+        },
+        3 | 5..=8 => Component::Select {
+            placeholder: nonempty(&component.placeholder),
+            disabled: component.disabled,
+        },
+        9 => Component::Section {
+            components: map_components(&component.components),
+            accessory: component
+                .accessory
+                .as_deref()
+                .and_then(map_component)
+                .map(Box::new),
+        },
+        10 => Component::Text(component.content.clone()),
+        11 => Component::Thumbnail {
+            media: component.media.as_ref().and_then(map_media)?,
+            description: nonempty(&component.description),
+            spoiler: component.spoiler,
+        },
+        12 => Component::Gallery(
+            component
+                .items
+                .iter()
+                .filter_map(|item| {
+                    Some(GalleryItem {
+                        media: map_media(&item.media)?,
+                        description: nonempty(&item.description),
+                        spoiler: item.spoiler,
+                    })
+                })
+                .collect(),
+        ),
+        13 => {
+            let _ = &component.file;
+            Component::File {
+                name: component.name.clone(),
+                size: component.size,
+                spoiler: component.spoiler,
+            }
+        }
+        14 => Component::Separator {
+            divider: component.divider,
+            large: component.spacing == 2,
+        },
+        17 => Component::Container {
+            accent: component.accent_color,
+            spoiler: component.spoiler,
+            components: map_components(&component.components),
+        },
+        _ => return None,
+    })
 }
 
 pub(super) fn map_message(message: &model::Message) -> Option<Message> {
@@ -59,7 +258,9 @@ pub(super) fn map_message(message: &model::Message) -> Option<Message> {
         author_id: message.author.id,
         timestamp: local_timestamp(&message.timestamp)?,
         content: message.content.clone(),
-        embed: message.embeds.first().map(map_embed),
+        embeds: map_embeds(&message.embeds, message.flags),
+        components: map_components(&message.components),
+        reactions: map_reactions(&message.reactions),
         attachments: message.attachments.clone(),
         kind: message.kind,
         edited: message.edited_timestamp.is_some(),
