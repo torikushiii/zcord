@@ -32,6 +32,13 @@ Paste your account token on the login screen. It is stored in Windows Credential
 (entry `zcord`) and sent only to Discord. The gear button in the user panel logs out and
 removes it.
 
+## Font
+
+zcord uses Discord's font, gg sans, when it can find it, and the bundled Noto Sans otherwise.
+gg sans can't be shipped with zcord; to use it, put its `.ttf`/`.otf` files in
+`%APPDATA%\zcord\fonts` (`~/.config/zcord/fonts` on Linux) or install them system-wide.
+Scripts neither font covers (CJK, Arabic, Thai, emoji, …) use the system's fallback fonts.
+
 ## Layout
 
 - `src/main.rs` — bootstrap, zoom shortcuts, logging
@@ -41,4 +48,6 @@ removes it.
 - `src/store.rs`, `src/store/` — view model built from READY and gateway events, demo data
 - `src/images.rs` — CDN image disk cache
 - `src/credentials.rs` — token storage in the OS credential store
+- `src/fonts.rs` — bundled and user font loading
 - `assets/icons/` — Lucide icons (ISC) and the Discord logo (Simple Icons, CC0)
+- `assets/fonts/` — Noto Sans (SIL Open Font License)
