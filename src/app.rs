@@ -5,6 +5,7 @@ mod login;
 mod member_list;
 mod message_body;
 mod rich_text;
+mod smooth_scroll;
 mod titlebar;
 
 use crate::discord::{Event, FatalError, Session};
@@ -38,6 +39,8 @@ const PARSED_CACHE_LIMIT: usize = 4096;
 const MESSAGE_PAGE: usize = 50;
 const OLDER_MESSAGES_THRESHOLD: usize = 8;
 
+actions!(zcord, [JumpToPresent]);
+
 pub enum Screen {
     Login(LoginForm),
     Connecting,
@@ -67,6 +70,7 @@ pub struct DiscordApp {
     pub(crate) revealed_spoilers: HashSet<(u64, u16)>,
     pub(crate) hovered_rail: Option<u64>,
     pub(crate) entity: WeakEntity<Self>,
+    focus_handle: FocusHandle,
     parsed: RefCell<HashMap<u64, Rc<Parsed>>>,
     _events: Option<Task<()>>,
     _composer_subscription: Subscription,
@@ -104,10 +108,17 @@ impl DiscordApp {
             revealed_spoilers: HashSet::new(),
             hovered_rail: None,
             entity: cx.entity().downgrade(),
+            focus_handle: cx.focus_handle(),
             parsed: RefCell::new(HashMap::new()),
             _events: None,
             _composer_subscription: subscription,
         };
+        cx.on_focus(&app.focus_handle, window, |app, window, cx| {
+            if matches!(app.screen, Screen::Chat) {
+                app.composer.update(cx, |input, cx| input.focus(window, cx));
+            }
+        })
+        .detach();
         cx.observe_window_bounds(window, |_, window, cx| {
             crate::settings::remember_window(window, cx)
         })
@@ -425,6 +436,15 @@ impl DiscordApp {
         self.messages.set_follow_mode(FollowMode::Tail);
     }
 
+    fn jump_to_present(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.screen, Screen::Chat) {
+            return;
+        }
+        smooth_scroll::cancel(cx);
+        self.messages.set_follow_mode(FollowMode::Tail);
+        cx.notify();
+    }
+
     fn fetch_history(&mut self, channel_id: u64, cx: &mut Context<Self>) {
         let Some(session) = self.session.clone() else {
             return;
@@ -687,11 +707,14 @@ impl Render for DiscordApp {
                 .into_any_element(),
         };
         div()
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(|app, _: &JumpToPresent, _, cx| app.jump_to_present(cx)))
             .flex()
             .flex_col()
             .size_full()
             .overflow_hidden()
             .bg(rgb(theme::BG))
+            .child(smooth_scroll::interceptor())
             .text_color(rgb(theme::TEXT))
             .text_size(rpx(16.))
             .child(titlebar::render(self, window, cx))
