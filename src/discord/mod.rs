@@ -3,6 +3,7 @@ pub mod model;
 mod permissions;
 mod properties;
 mod rest;
+pub(crate) mod settings_proto;
 
 use futures::channel::mpsc::{self, UnboundedReceiver};
 use std::{fmt, sync::Arc, time::Duration};
@@ -79,6 +80,7 @@ impl Session {
 
 pub enum Event {
     Ready(Box<model::Ready>),
+    SettingsUpdate(Box<model::SettingsUpdate>),
     MessageCreate(Box<model::Message>),
     MessageUpdate(Box<model::MessageUpdate>),
     MessageDelete {

@@ -1,4 +1,7 @@
+pub use crate::discord::model::Attachment;
+use crate::discord::settings_proto;
 use crate::discord::{self, model};
+use crate::images::ImageSpec;
 use chrono::{Datelike, Timelike};
 use std::collections::HashMap;
 
@@ -41,6 +44,26 @@ pub struct User {
     pub tag: Option<String>,
     pub activity: Option<String>,
     pub avatar: Option<String>,
+    pub discriminator: Option<String>,
+}
+
+impl User {
+    pub fn avatar_spec(&self) -> ImageSpec {
+        if let Some(hash) = &self.avatar {
+            return ImageSpec::Avatar {
+                user_id: self.id,
+                hash: hash.clone(),
+            };
+        }
+        let index = self
+            .discriminator
+            .as_deref()
+            .filter(|value| *value != "0")
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(|value| value % 5)
+            .unwrap_or((self.id >> 22) % 6) as u8;
+        ImageSpec::DefaultAvatar { index }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -107,6 +130,41 @@ pub struct Message {
     pub timestamp: Timestamp,
     pub content: String,
     pub embed: Option<Embed>,
+    pub attachments: Vec<Attachment>,
+}
+
+impl Attachment {
+    pub fn image_spec(&self) -> Option<ImageSpec> {
+        let image_type = self
+            .content_type
+            .as_deref()
+            .and_then(|mime| mime.split(';').next())
+            .is_some_and(|mime| {
+                matches!(
+                    mime.trim().to_ascii_lowercase().as_str(),
+                    "image/png" | "image/jpeg" | "image/jpg" | "image/gif" | "image/webp"
+                )
+            });
+        let extension = self
+            .filename
+            .rsplit_once('.')
+            .is_some_and(|(_, extension)| {
+                matches!(
+                    extension.to_ascii_lowercase().as_str(),
+                    "png" | "jpg" | "jpeg" | "gif" | "webp"
+                )
+            });
+        let (width, height) = (self.width?, self.height?);
+        if !(image_type || extension) || width == 0 || height == 0 || self.proxy_url.is_empty() {
+            return None;
+        }
+        Some(ImageSpec::Attachment {
+            id: self.id,
+            url: self.proxy_url.clone(),
+            width,
+            height,
+        })
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -149,6 +207,12 @@ pub struct Guild {
 }
 
 impl Guild {
+    pub fn icon_spec(&self) -> Option<ImageSpec> {
+        self.icon.as_ref().map(|hash| ImageSpec::GuildIcon {
+            guild_id: self.id,
+            hash: hash.clone(),
+        })
+    }
     pub fn channels(&self) -> impl Iterator<Item = &Channel> {
         self.categories
             .iter()
@@ -174,6 +238,7 @@ impl Guild {
 
 pub struct Store {
     pub guilds: Vec<Guild>,
+    pub rail: Vec<RailEntry>,
     pub users: HashMap<u64, User>,
     pub current_user_id: u64,
     pub dm_mentions: u32,
@@ -184,6 +249,23 @@ pub struct Store {
     channel_locations: HashMap<u64, ChannelLocation>,
     guild_badges: Vec<GuildBadges>,
     dm_badges: u64,
+    guild_indices: HashMap<u64, usize>,
+    folder_layout: Option<Vec<settings_proto::GuildFolder>>,
+    rail_order: Vec<u64>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum RailEntry {
+    Guild(u64),
+    Folder(Folder),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Folder {
+    pub id: u64,
+    pub name: Option<String>,
+    pub color: Option<u32>,
+    pub guild_ids: Vec<u64>,
 }
 
 #[derive(Clone, Copy)]
@@ -297,6 +379,7 @@ impl Store {
                 tag: tag.map(Into::into),
                 activity: activity.map(Into::into),
                 avatar: None,
+                discriminator: None,
             },
         )
         .collect::<Vec<_>>();
@@ -445,6 +528,7 @@ impl Store {
 
         let mut store = Self {
             guilds,
+            rail: Vec::new(),
             users: users.into_iter().map(|user| (user.id, user)).collect(),
             current_user_id: 1,
             dm_mentions: 77,
@@ -455,6 +539,28 @@ impl Store {
             channel_locations: HashMap::new(),
             guild_badges: Vec::new(),
             dm_badges: 77,
+            guild_indices: HashMap::new(),
+            folder_layout: Some(vec![
+                settings_proto::GuildFolder {
+                    id: None,
+                    name: None,
+                    color: None,
+                    guild_ids: vec![1],
+                },
+                settings_proto::GuildFolder {
+                    id: Some(1),
+                    name: Some("Gaming".into()),
+                    color: Some(0x5865F2),
+                    guild_ids: vec![2, 3],
+                },
+                settings_proto::GuildFolder {
+                    id: None,
+                    name: None,
+                    color: None,
+                    guild_ids: vec![4, 5, 6],
+                },
+            ]),
+            rail_order: vec![1, 2, 3, 4, 5, 6],
         };
         store.index_channels();
         store
@@ -462,6 +568,10 @@ impl Store {
 
     pub fn user(&self, id: u64) -> Option<&User> {
         self.users.get(&id)
+    }
+
+    pub fn guild_by_id(&self, id: u64) -> Option<&Guild> {
+        self.guilds.get(*self.guild_indices.get(&id)?)
     }
 
     pub fn mark_guild_read(&mut self, guild_id: u64) {
@@ -515,6 +625,7 @@ impl Store {
             timestamp,
             content,
             embed: None,
+            attachments: Vec::new(),
         });
         self.next_message_id += 1;
         Some(index)
@@ -587,6 +698,7 @@ fn map_message(message: &model::Message) -> Option<Message> {
         timestamp: local_timestamp(&message.timestamp)?,
         content: message.content.clone(),
         embed: message.embeds.first().map(map_embed),
+        attachments: message.attachments.clone(),
     })
 }
 
@@ -602,6 +714,7 @@ fn map_user(user: &model::User) -> User {
         tag: None,
         activity: None,
         avatar: user.avatar.clone(),
+        discriminator: user.discriminator.clone(),
     }
 }
 
@@ -701,6 +814,18 @@ fn map_guild(
 
 impl Store {
     pub fn from_ready(ready: model::Ready) -> Self {
+        let folder_layout = match ready
+            .user_settings_proto
+            .as_deref()
+            .map(settings_proto::decode_base64)
+        {
+            Some(Ok(Some(folders))) => Some(folders),
+            _ => {
+                log::warn!("Server folder settings unavailable; using READY order");
+                None
+            }
+        };
+        let rail_order = ready.guilds.iter().map(|guild| guild.id).collect();
         let mut read_states = HashMap::with_capacity(ready.read_state.entries.len());
         for (index, state) in ready
             .read_state
@@ -732,6 +857,7 @@ impl Store {
             .collect();
         let mut store = Self {
             guilds,
+            rail: Vec::new(),
             users,
             current_user_id: ready.user.id,
             dm_mentions: 0,
@@ -742,6 +868,9 @@ impl Store {
             channel_locations: HashMap::new(),
             guild_badges: Vec::new(),
             dm_badges: 0,
+            guild_indices: HashMap::new(),
+            folder_layout,
+            rail_order,
         };
         store.index_channels();
         store
@@ -751,6 +880,7 @@ impl Store {
         self.source_channels.clear();
         self.channel_locations.clear();
         self.guild_badges.clear();
+        self.guild_indices.clear();
         if let Some(source) = &self.source {
             for (guild, metadata) in source.guilds.iter().enumerate() {
                 for (channel, metadata) in metadata.channels.iter().flatten().enumerate() {
@@ -775,6 +905,7 @@ impl Store {
             self.dm_mentions = self.dm_badges.min(u64::from(u32::MAX)) as u32;
         }
         for (guild_index, guild) in self.guilds.iter().enumerate() {
+            self.guild_indices.insert(guild.id, guild_index);
             let mut badges = GuildBadges {
                 unread_channels: 0,
                 mentions: 0,
@@ -804,6 +935,41 @@ impl Store {
             }
             self.guild_badges.push(badges);
         }
+        self.rebuild_rail();
+    }
+
+    fn rebuild_rail(&mut self) {
+        let mut listed = std::collections::HashSet::new();
+        let mut ordered = Vec::new();
+        for folder in self.folder_layout.iter().flatten() {
+            let ids: Vec<_> = folder
+                .guild_ids
+                .iter()
+                .copied()
+                .filter(|id| self.guild_indices.contains_key(id) && listed.insert(*id))
+                .collect();
+            if ids.is_empty() {
+                continue;
+            }
+            if let Some(id) = folder.id {
+                ordered.push(RailEntry::Folder(Folder {
+                    id,
+                    name: folder.name.clone(),
+                    color: folder.color,
+                    guild_ids: ids,
+                }));
+            } else {
+                ordered.extend(ids.into_iter().map(RailEntry::Guild));
+            }
+        }
+        self.rail = self
+            .rail_order
+            .iter()
+            .copied()
+            .filter(|id| self.guild_indices.contains_key(id) && !listed.contains(id))
+            .map(RailEntry::Guild)
+            .chain(ordered)
+            .collect();
     }
 
     fn register_author(&mut self, user: &model::User) {
@@ -950,6 +1116,21 @@ impl Store {
                 *self = Self::from_ready(*ready);
                 Change::Structure
             }
+            Event::SettingsUpdate(update) => {
+                if update.settings.kind != 1 {
+                    return Change::None;
+                }
+                match settings_proto::decode_base64(&update.settings.proto) {
+                    Ok(None) if update.partial => return Change::None,
+                    Ok(Some(folders)) => self.folder_layout = Some(folders),
+                    _ => {
+                        log::warn!("Server folder settings unavailable; using READY order");
+                        self.folder_layout = None;
+                    }
+                }
+                self.rebuild_rail();
+                Change::Structure
+            }
             Event::MessageCreate(message) => {
                 if let Some(channel) = self.network_channel_mut(message.channel_id) {
                     if channel
@@ -1015,6 +1196,9 @@ impl Store {
                 if let Some(embeds) = update.embeds {
                     message.embed = embeds.first().map(map_embed);
                 }
+                if let Some(attachments) = update.attachments {
+                    message.attachments = attachments;
+                }
                 Change::MessageChanged {
                     channel_id: update.channel_id,
                     index,
@@ -1047,6 +1231,12 @@ impl Store {
             }
             Event::GuildUpsert(update) => {
                 let id = update.id;
+                if !self.guild_indices.contains_key(&id) {
+                    self.rail_order.insert(0, id);
+                    for folder in self.folder_layout.iter_mut().flatten() {
+                        folder.guild_ids.retain(|guild| *guild != id);
+                    }
+                }
                 if let Some(source) = &mut self.source {
                     if let Some(guild) = source.guilds.iter_mut().find(|g| g.id == id) {
                         guild.merge(&update);
@@ -1058,6 +1248,7 @@ impl Store {
                 Change::Structure
             }
             Event::GuildDelete { id } => {
+                self.rail_order.retain(|guild| *guild != id);
                 if let Some(source) = &mut self.source {
                     source.guilds.retain(|g| g.id != id);
                 }
@@ -1166,6 +1357,7 @@ fn seed_messages(
             timestamp,
             content,
             embed,
+            attachments: Vec::new(),
         });
         *next_message_id += 1;
     }
@@ -1206,6 +1398,148 @@ mod network_tests {
         model::parse_entries(
             serde_json::from_str(include_str!("discord/fixtures/messages.json")).unwrap(),
         )
+    }
+
+    #[test]
+    fn rail_folders_ready_join_delete_and_settings_updates() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let mut payload: serde_json::Value =
+            serde_json::from_str(include_str!("discord/fixtures/ready.json")).unwrap();
+        payload["user_settings_proto"] = settings_proto::tests::fixture(true).into();
+        let mut ready: model::Ready = serde_json::from_value(payload).unwrap();
+        ready
+            .guilds
+            .push(serde_json::from_value(json!({"id":"300","name":"New","owner_id":"1"})).unwrap());
+        let mut store = Store::from_ready(ready);
+        assert_eq!(
+            store.rail,
+            vec![
+                RailEntry::Guild(300),
+                RailEntry::Guild(100),
+                RailEntry::Folder(Folder {
+                    id: 42,
+                    name: Some("Gaming".into()),
+                    color: Some(0x5865F2),
+                    guild_ids: vec![200],
+                })
+            ]
+        );
+        assert_eq!(store.guild_by_id(100).unwrap().name, "First");
+        let guild =
+            serde_json::from_value(json!({"id":"400","name":"Joined","owner_id":"1"})).unwrap();
+        store.apply(Event::GuildUpsert(Box::new(guild)));
+        assert_eq!(store.rail[0], RailEntry::Guild(400));
+        let before = format!("{:?}", store.rail);
+        assert_eq!(
+            store.apply(Event::SettingsUpdate(Box::new(model::SettingsUpdate {
+                settings: model::SettingsProto {
+                    kind: 1,
+                    proto: STANDARD.encode([8, 1])
+                },
+                partial: true,
+            }))),
+            Change::None
+        );
+        assert_eq!(format!("{:?}", store.rail), before);
+        assert_eq!(
+            store.apply(Event::SettingsUpdate(Box::new(model::SettingsUpdate {
+                settings: model::SettingsProto {
+                    kind: 1,
+                    proto: STANDARD.encode([114, 0])
+                },
+                partial: true,
+            }))),
+            Change::Structure
+        );
+        assert_eq!(
+            store.rail,
+            vec![
+                RailEntry::Guild(400),
+                RailEntry::Guild(200),
+                RailEntry::Guild(100),
+                RailEntry::Guild(300)
+            ]
+        );
+        store.apply(Event::SettingsUpdate(Box::new(model::SettingsUpdate {
+            settings: model::SettingsProto {
+                kind: 1,
+                proto: settings_proto::tests::fixture(false),
+            },
+            partial: false,
+        })));
+        store.apply(Event::GuildDelete { id: 200 });
+        assert!(store.guild_by_id(200).is_none());
+        assert_eq!(
+            store.rail,
+            vec![
+                RailEntry::Guild(400),
+                RailEntry::Guild(300),
+                RailEntry::Guild(100)
+            ]
+        );
+        let seed = Store::seed();
+        assert!(
+            matches!(&seed.rail[1], RailEntry::Folder(folder) if folder.name.as_deref() == Some("Gaming") && folder.guild_ids == [2, 3])
+        );
+    }
+
+    #[test]
+    fn avatar_defaults_and_image_attachments() {
+        let mut user = map_user(&ready().user);
+        user.id = 5 << 22;
+        for discriminator in [None, Some("0".to_owned())] {
+            user.discriminator = discriminator;
+            assert!(matches!(
+                user.avatar_spec(),
+                ImageSpec::DefaultAvatar { index: 5 }
+            ));
+        }
+        user.discriminator = Some("1234".into());
+        assert!(matches!(
+            user.avatar_spec(),
+            ImageSpec::DefaultAvatar { index: 4 }
+        ));
+        user.avatar = Some("a_hash".into());
+        assert!(matches!(user.avatar_spec(), ImageSpec::Avatar { .. }));
+        let mut store = Store::from_ready(ready());
+        assert!(matches!(
+            store.guilds[0].icon_spec(),
+            Some(ImageSpec::GuildIcon { guild_id: 200, .. })
+        ));
+        store.set_messages(2002, messages());
+        let update = serde_json::from_value(json!({"id":"62","channel_id":"2002","attachments":[{
+            "id":"77","filename":"image.GIF","url":"https://cdn.discordapp.com/attachments/1/2/image.gif",
+            "proxy_url":"https://media.discordapp.net/attachments/1/2/image.gif", "width":400,"height":200,"size":42
+        }, {"id":"bad"}]})).unwrap();
+        store.apply(Event::MessageUpdate(Box::new(update)));
+        let message = &store.guilds[0].channel(2002).unwrap().messages[1];
+        assert_eq!(message.attachments.len(), 1);
+        assert!(matches!(
+            message.attachments[0].image_spec(),
+            Some(ImageSpec::Attachment {
+                id: 77,
+                width: 400,
+                height: 200,
+                ..
+            })
+        ));
+        let mut attachment = message.attachments[0].clone();
+        attachment.width = None;
+        assert!(attachment.image_spec().is_none());
+        attachment.width = Some(400);
+        attachment.filename = "not-image.pdf".into();
+        assert!(attachment.image_spec().is_none());
+        attachment.content_type = Some("image/png".into());
+        assert!(attachment.image_spec().is_some());
+        let update =
+            serde_json::from_value(json!({"id":"62","channel_id":"2002","attachments":[]}))
+                .unwrap();
+        store.apply(Event::MessageUpdate(Box::new(update)));
+        assert!(
+            store.guilds[0].channel(2002).unwrap().messages[1]
+                .attachments
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1474,6 +1808,7 @@ mod network_tests {
                 username: format!("user-{index}"),
                 global_name: None,
                 avatar: None,
+                discriminator: None,
                 bot: false,
             })
             .collect();

@@ -6,7 +6,7 @@ use crate::{
     theme::{self, rpx},
 };
 
-pub fn render(app: &DiscordApp) -> impl IntoElement + use<> {
+pub fn render(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
     let Some(guild) = app.guild() else {
         return div().into_any_element();
     };
@@ -78,13 +78,13 @@ pub fn render(app: &DiscordApp) -> impl IntoElement + use<> {
                                 .text_color(rgb(theme::MUTED))
                                 .child(format!("{name} — {}", users.len())),
                         )
-                        .children(users.into_iter().map(member_row))
+                        .children(users.into_iter().map(|user| member_row(user, cx)))
                 }),
         )
         .into_any_element()
 }
 
-fn member_row(user: &User) -> impl IntoElement {
+fn member_row(user: &User, cx: &App) -> impl IntoElement + use<> {
     let online = user.status.is_online();
     let name_color = user.role_color.unwrap_or(theme::TEXT);
     div()
@@ -98,11 +98,12 @@ fn member_row(user: &User) -> impl IntoElement {
         .cursor_pointer()
         .when(!online, |this| this.opacity(0.35))
         .hover(|style| style.bg(rgb(theme::HOVER)).opacity(1.))
-        .child(theme::avatar(
-            &user.initials,
-            theme::user_color(user.id),
+        .child(theme::user_avatar(
+            Some(user),
+            user.id,
             32.,
             online.then_some((user.status, theme::BG)),
+            cx,
         ))
         .child(
             div()

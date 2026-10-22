@@ -7,6 +7,7 @@ mod chat;
 mod data;
 mod discord;
 mod guild_rail;
+mod images;
 mod login;
 mod member_list;
 mod theme;
@@ -54,6 +55,7 @@ fn main() {
         .run(|cx| {
             gpui_component::init(cx);
             gpui_tokio::init(cx);
+            images::init(cx);
             Theme::change(ThemeMode::Dark, None, cx);
             set_zoom(DEFAULT_ZOOM, cx);
             cx.bind_keys([

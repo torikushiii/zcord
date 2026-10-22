@@ -79,6 +79,8 @@ pub struct User {
     #[serde(default)]
     pub avatar: Option<String>,
     #[serde(default)]
+    pub discriminator: Option<String>,
+    #[serde(default)]
     pub bot: bool,
 }
 
@@ -262,6 +264,7 @@ pub struct Ready {
     pub read_state: ReadStates,
     pub session_id: String,
     pub resume_gateway_url: Option<String>,
+    pub user_settings_proto: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for Ready {
@@ -282,6 +285,8 @@ impl<'de> Deserialize<'de> for Ready {
             session_id: String,
             #[serde(default)]
             resume_gateway_url: Option<String>,
+            #[serde(default)]
+            user_settings_proto: Option<String>,
         }
         let wire = Wire::deserialize(d)?;
         let guilds = wire
@@ -311,6 +316,7 @@ impl<'de> Deserialize<'de> for Ready {
             read_state: wire.read_state,
             session_id: wire.session_id,
             resume_gateway_url: wire.resume_gateway_url,
+            user_settings_proto: wire.user_settings_proto,
         })
     }
 }
@@ -362,6 +368,8 @@ pub struct Message {
     pub content: String,
     #[serde(default, deserialize_with = "entries")]
     pub embeds: Vec<Embed>,
+    #[serde(default, deserialize_with = "entries")]
+    pub attachments: Vec<Attachment>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -378,4 +386,40 @@ pub struct MessageUpdate {
     pub content: Option<String>,
     #[serde(default, deserialize_with = "optional_entries")]
     pub embeds: Option<Vec<Embed>>,
+    #[serde(default, deserialize_with = "optional_entries")]
+    pub attachments: Option<Vec<Attachment>>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct Attachment {
+    #[serde(deserialize_with = "snowflake")]
+    pub id: u64,
+    #[serde(default)]
+    pub filename: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub proxy_url: String,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
+    #[serde(default)]
+    pub content_type: Option<String>,
+    #[serde(default)]
+    pub size: u64,
+}
+
+#[derive(Deserialize)]
+pub struct SettingsUpdate {
+    pub settings: SettingsProto,
+    #[serde(default)]
+    pub partial: bool,
+}
+
+#[derive(Deserialize)]
+pub struct SettingsProto {
+    #[serde(rename = "type")]
+    pub kind: u8,
+    pub proto: String,
 }

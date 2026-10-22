@@ -3,7 +3,8 @@ use gpui_component::input::Input;
 
 use crate::{
     app::DiscordApp,
-    data::{Embed, Message},
+    data::{Attachment, Embed, Message},
+    images,
     theme::{self, rpx},
 };
 
@@ -112,7 +113,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
             } else {
                 this.child(
                     list(app.messages.clone(), move |index, _, cx| {
-                        render_row(entity.read(cx), index)
+                        render_row(entity.read(cx), index, cx)
                     })
                     .flex_1()
                     .min_h_0()
@@ -167,7 +168,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         )
 }
 
-fn render_row(app: &DiscordApp, index: usize) -> AnyElement {
+fn render_row(app: &DiscordApp, index: usize, cx: &App) -> AnyElement {
     let Some(messages) = app.channel().map(|channel| &channel.messages) else {
         return div().into_any_element();
     };
@@ -187,7 +188,7 @@ fn render_row(app: &DiscordApp, index: usize) -> AnyElement {
         .when(index + 1 == messages.len(), |this| {
             this.pb(rpx(BOTTOM_SPACER))
         })
-        .child(render_message(app, message, grouped))
+        .child(render_message(app, message, grouped, cx))
         .into_any_element()
 }
 
@@ -211,7 +212,12 @@ fn date_divider(message: &Message) -> impl IntoElement {
         .child(line())
 }
 
-fn render_message(app: &DiscordApp, message: &Message, grouped: bool) -> impl IntoElement {
+fn render_message(
+    app: &DiscordApp,
+    message: &Message,
+    grouped: bool,
+    cx: &App,
+) -> impl IntoElement {
     let user = app.store.user(message.author_id);
     let name_color: Hsla = user
         .and_then(|user| user.role_color)
@@ -242,11 +248,12 @@ fn render_message(app: &DiscordApp, message: &Message, grouped: bool) -> impl In
                                 .child(message.timestamp.time()),
                         )
                     } else {
-                        gutter.pt(rpx(2.)).child(theme::avatar(
-                            user.map_or("?", |user| &user.initials),
-                            theme::user_color(message.author_id),
+                        gutter.pt(rpx(2.)).child(theme::user_avatar(
+                            user,
+                            message.author_id,
                             40.,
                             None,
+                            cx,
                         ))
                     }
                 }),
@@ -298,8 +305,79 @@ fn render_message(app: &DiscordApp, message: &Message, grouped: bool) -> impl In
                             .child(message.content.clone()),
                     )
                 })
-                .children(message.embed.as_ref().map(render_embed)),
+                .children(message.embed.as_ref().map(render_embed))
+                .children(
+                    message
+                        .attachments
+                        .iter()
+                        .map(|attachment| render_attachment(attachment, cx)),
+                ),
         )
+}
+
+const MEDIA_MAX: (f32, f32) = (550., 350.);
+
+fn render_attachment(attachment: &Attachment, cx: &App) -> AnyElement {
+    let Some(spec) = attachment.image_spec() else {
+        return file_card(attachment).into_any_element();
+    };
+    let (width, height) = (
+        attachment.width.unwrap_or(1).max(1) as f32,
+        attachment.height.unwrap_or(1).max(1) as f32,
+    );
+    let scale = (MEDIA_MAX.0 / width).min(MEDIA_MAX.1 / height).min(1.);
+    let (width, height) = ((width * scale).round(), (height * scale).round());
+    let image = images::resolve(&spec, theme::image_px(width.max(height)), cx);
+    div()
+        .mt_1()
+        .w(rpx(width))
+        .h(rpx(height))
+        .rounded(rpx(8.))
+        .overflow_hidden()
+        .bg(rgb(theme::ELEVATED))
+        .children(image.map(|path| img(path).size_full().rounded(rpx(8.))))
+        .into_any_element()
+}
+
+fn file_card(attachment: &Attachment) -> impl IntoElement + use<> {
+    div()
+        .flex()
+        .items_center()
+        .gap_3()
+        .mt_1()
+        .max_w(rpx(432.))
+        .p_3()
+        .rounded(rpx(8.))
+        .bg(rgb(theme::ELEVATED))
+        .border_1()
+        .border_color(rgb(theme::BORDER))
+        .child(theme::icon("file", 32., theme::MUTED))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .min_w_0()
+                .child(
+                    div()
+                        .truncate()
+                        .text_color(rgb(0x00A8FC))
+                        .child(attachment.filename.clone()),
+                )
+                .child(
+                    div()
+                        .text_size(rpx(12.))
+                        .text_color(rgb(theme::FAINT))
+                        .child(file_size(attachment.size)),
+                ),
+        )
+}
+
+fn file_size(bytes: u64) -> String {
+    match bytes {
+        0..1024 => format!("{bytes} bytes"),
+        1024..1_048_576 => format!("{:.2} KB", bytes as f64 / 1024.),
+        _ => format!("{:.2} MB", bytes as f64 / 1_048_576.),
+    }
 }
 
 fn render_embed(embed: &Embed) -> impl IntoElement {

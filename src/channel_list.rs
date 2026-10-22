@@ -206,11 +206,12 @@ fn user_panel(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .rounded(rpx(6.))
                 .cursor_pointer()
                 .hover(|style| style.bg(rgb(theme::SELECTED)))
-                .child(theme::avatar(
-                    &user.initials,
-                    theme::user_color(user.id),
+                .child(theme::user_avatar(
+                    Some(user),
+                    user.id,
                     36.,
                     Some((user.status, theme::ELEVATED)),
+                    cx,
                 ))
                 .child(
                     div()

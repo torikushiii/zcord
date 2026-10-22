@@ -8881,6 +8881,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "chrono",
+ "dirs",
  "env_logger",
  "flate2",
  "futures",
