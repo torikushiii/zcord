@@ -11,11 +11,16 @@ A native Discord client for Windows (also builds on Linux and macOS), written in
 ## Status
 
 - Live, **read-only** connection: servers, channels you can see, message history, and live
-  new/edited/deleted messages. It never sends messages, read markers, or typing indicators.
+  new/edited/deleted messages. It never sends messages, read markers, typing indicators or
+  presence; the only requests it sends while browsing are the member-list subscription and
+  member lookups the official client also sends.
 - Discord-style UI with a custom title bar and Discord's zoom levels (`Ctrl +` / `Ctrl -` /
   `Ctrl 0`).
 - Offline demo data from the login screen.
-- Not yet: images and avatars, markdown, sending, DMs, member list. Voice is out of scope.
+- Server icons, avatars, image attachments and server folders.
+- Discord markdown, links, mentions, custom emoji, replies, `(edited)` and system messages.
+- Live member list with roles, nicknames, presence and activities; your own status.
+- Not yet: sending, DMs. Voice is out of scope.
 
 ## Build and run on Windows
 

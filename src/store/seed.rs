@@ -67,7 +67,12 @@ impl Store {
                 status,
                 bot,
                 role_color,
-                tag: tag.map(Into::into),
+                tag: tag.map(|text: &str| GuildTag {
+                    text: text.into(),
+                    guild_id: 0,
+                    badge: None,
+                }),
+                playing: false,
                 activity: activity.map(Into::into),
                 avatar: None,
                 discriminator: None,
@@ -76,11 +81,11 @@ impl Store {
         .collect::<Vec<_>>();
 
         let snippets = [
-            "Good morning! How is everyone's week going?",
-            "I've been working on the desktop layout. Having the channels and conversation visible together makes it much easier to keep track of what is happening, even when a few discussions are moving at once.",
-            "That sounds great.",
-            "One small detail: let's keep the important notes in the channel topic so people joining later can find them without scrolling through the whole conversation.",
-            "Agreed! I'll put together a short summary after lunch.",
+            "Good morning, <@1>! **The next build is ready.** :smile:",
+            "The plan is in <#100>. Thanks to <@&1001> for the review!",
+            "That sounds great. ||The surprise is a new theme.||",
+            "```rust\nfn main() { println!(\"hello\"); }\n```",
+            "> Keep the important notes in the channel topic.\nAgreed! [Rust documentation](https://doc.rust-lang.org/)",
             "Just got back from a walk. The weather is finally getting cooler here.",
             "Sharing a longer update for anyone catching up: the first draft is ready, the feedback has been collected, and the next step is to review the details together.",
             "Nice work, everyone!",
@@ -206,10 +211,6 @@ impl Store {
                                 channels: voice_channels,
                             },
                         ],
-                        hoisted_roles: vec![HoistedRole {
-                            name: "Bots".into(),
-                            member_ids: vec![9, 10],
-                        }],
                         member_ids: users.iter().map(|user| user.id).collect(),
                         icon: None,
                     }
@@ -252,7 +253,90 @@ impl Store {
                 },
             ]),
             rail_order: vec![1, 2, 3, 4, 5, 6],
+            social: social::Social::default(),
         };
+        for guild in &mut store.guilds {
+            let moderator = guild.id * 1000 + 1;
+            let member_role = guild.id * 1000 + 2;
+            let mut social = social::GuildSocial::default();
+            social.roles.insert(
+                moderator,
+                Role {
+                    id: moderator,
+                    name: "Moderators".into(),
+                    color: Some(0x3BA55C),
+                    position: 10,
+                    hoist: true,
+                },
+            );
+            social.roles.insert(
+                member_role,
+                Role {
+                    id: member_role,
+                    name: "Members".into(),
+                    color: Some(0xF0B232),
+                    position: 1,
+                    hoist: true,
+                },
+            );
+            for user in store.users.values() {
+                let role = match user.id {
+                    1 | 4 => Some(moderator),
+                    2 | 3 => Some(member_role),
+                    _ => None,
+                };
+                social.members.insert(
+                    user.id,
+                    social::MemberInfo {
+                        nick: match user.id {
+                            2 => Some("Demo Two".into()),
+                            4 => Some("Demo Four".into()),
+                            _ => None,
+                        },
+                        roles: role.into_iter().collect(),
+                        avatar: None,
+                        color: role
+                            .and_then(|id| social.roles.get(&id))
+                            .and_then(|r| r.color),
+                    },
+                );
+            }
+            let mut rows = Vec::new();
+            for (name, ids) in [
+                ("Moderators", vec![1, 4]),
+                ("Members", vec![2, 3]),
+                ("Online", vec![5, 9]),
+                ("Offline", vec![6, 7, 8, 10]),
+            ] {
+                social.list_groups.push(Some(match name {
+                    "Moderators" => moderator.to_string(),
+                    "Members" => member_role.to_string(),
+                    name => name.to_lowercase(),
+                }));
+                social
+                    .list_groups
+                    .extend(std::iter::repeat_n(None, ids.len()));
+                rows.push(Some(MemberRow::Group {
+                    name: name.into(),
+                    count: ids.len() as u32,
+                }));
+                rows.extend(
+                    ids.into_iter()
+                        .map(|user_id| Some(MemberRow::Member { user_id })),
+                );
+            }
+            social.list = Some(MemberList {
+                id: "everyone".into(),
+                member_count: store.users.len() as u32,
+                online_count: store
+                    .users
+                    .values()
+                    .filter(|u| u.status.is_online())
+                    .count() as u32,
+                rows,
+            });
+            store.social.guilds.insert(guild.id, social);
+        }
         store.index_channels();
         store
     }
@@ -307,6 +391,22 @@ fn seed_messages(
             content,
             embed,
             attachments: Vec::new(),
+            kind: if index == 5 { 7 } else { 0 },
+            edited: index == 3,
+            reply: if index == 4 {
+                messages.last().map(|message| {
+                    ReplyState::Loaded(Reply {
+                        message_id: message.id,
+                        author_id: message.author_id,
+                        content: message.content.clone(),
+                        attachments: false,
+                        embeds: message.embed.is_some(),
+                    })
+                })
+            } else {
+                None
+            },
+            mentions_me: false,
         });
         *next_message_id += 1;
     }

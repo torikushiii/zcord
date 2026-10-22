@@ -1,5 +1,4 @@
 use gpui::{prelude::*, *};
-use gpui_component::tooltip::Tooltip;
 
 use crate::{
     app::DiscordApp,
@@ -9,8 +8,12 @@ use crate::{
 };
 
 const WIDTH: f32 = 72.;
-const ICON: f32 = 48.;
+pub const ICON: f32 = 48.;
 const DEFAULT_FOLDER_COLOR: u32 = 0x5865F2;
+const TOOLTIP_BG: u32 = 0x1F1F24;
+const HOME_KEY: u64 = 1;
+const ADD_SERVER_KEY: u64 = 2;
+const DISCOVER_KEY: u64 = 3;
 
 pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement + use<> {
     div()
@@ -25,20 +28,27 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .pb_3()
         .overflow_y_scroll()
         .child(
-            rail_item("home", false, false)
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .size(rpx(ICON))
-                        .rounded(rpx(16.))
-                        .bg(rgb(theme::ELEVATED))
-                        .hover(|style| style.bg(rgb(theme::BLURPLE)))
-                        .child(theme::icon("discord", 28., theme::STRONG)),
-                )
-                .children(corner_badge(app.store.dm_mentions))
-                .tooltip(|window, cx| Tooltip::new("Direct Messages").build(window, cx)),
+            rail_item(
+                "home",
+                HOME_KEY,
+                "Direct Messages".into(),
+                false,
+                false,
+                app,
+                cx,
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(rpx(ICON))
+                    .rounded(rpx(16.))
+                    .bg(rgb(theme::ELEVATED))
+                    .hover(|style| style.bg(rgb(theme::BLURPLE)))
+                    .child(theme::icon("discord", 28., theme::STRONG)),
+            )
+            .children(corner_badge(app.store.dm_mentions)),
         )
         .child(
             div()
@@ -56,24 +66,44 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 RailEntry::Folder(folder) => Some(folder_item(app, folder, cx)),
             }
         }))
-        .child(action_item("add-server", "plus", "Add a Server"))
-        .child(action_item("discover", "compass", "Discover"))
+        .child(action_item(
+            "add-server",
+            ADD_SERVER_KEY,
+            "plus",
+            "Add a Server",
+            app,
+            cx,
+        ))
+        .child(action_item(
+            "discover",
+            DISCOVER_KEY,
+            "compass",
+            "Discover",
+            app,
+            cx,
+        ))
 }
 
 fn guild_item(app: &DiscordApp, guild: &Guild, cx: &mut Context<DiscordApp>) -> Stateful<Div> {
     let id = guild.id;
     let selected = app.selected_guild_id == id;
-    let name = guild.name.clone();
-    rail_item(("guild", id), selected, guild.unread)
-        .tooltip(move |window, cx| Tooltip::new(name.clone()).build(window, cx))
-        .on_click(cx.listener(move |this, _, window, cx| this.select_guild(id, window, cx)))
-        .child(guild_icon(
-            guild,
-            ICON,
-            if selected { 16. } else { ICON / 2. },
-            cx,
-        ))
-        .children(corner_badge(guild.mentions))
+    rail_item(
+        ("guild", id),
+        id,
+        guild.name.clone().into(),
+        selected,
+        guild.unread,
+        app,
+        cx,
+    )
+    .on_click(cx.listener(move |this, _, window, cx| this.select_guild(id, window, cx)))
+    .child(guild_icon(
+        guild,
+        ICON,
+        if selected { 16. } else { ICON / 2. },
+        cx,
+    ))
+    .children(corner_badge(guild.mentions))
 }
 
 fn guild_icon(guild: &Guild, size: f32, radius: f32, cx: &App) -> AnyElement {
@@ -129,34 +159,41 @@ fn folder_item(app: &DiscordApp, folder: &Folder, cx: &mut Context<DiscordApp>) 
     let mentions = guilds.iter().map(|guild| guild.mentions).sum::<u32>();
     let tint = rgba((color << 8) | 0x40);
 
-    let header = rail_item(("folder", id), !open && contains_selected, !open && unread)
-        .tooltip(move |window, cx| Tooltip::new(name.clone()).build(window, cx))
-        .on_click(cx.listener(move |this, _, _, cx| this.toggle_folder(id, cx)))
-        .child(
-            div()
-                .flex()
-                .flex_none()
-                .items_center()
-                .justify_center()
-                .size(rpx(ICON))
-                .rounded(rpx(16.))
-                .when(!open, |this| this.bg(tint))
-                .map(|this| {
-                    if open {
-                        this.child(theme::icon("folder", 24., color))
-                    } else {
-                        this.child(
-                            div().flex().flex_wrap().gap(rpx(4.)).w(rpx(36.)).children(
-                                guilds
-                                    .iter()
-                                    .take(4)
-                                    .map(|guild| guild_icon(guild, 16., 8., cx)),
-                            ),
-                        )
-                    }
-                }),
-        )
-        .when(!open, |this| this.children(corner_badge(mentions)));
+    let header = rail_item(
+        ("folder", id),
+        id,
+        name,
+        !open && contains_selected,
+        !open && unread,
+        app,
+        cx,
+    )
+    .on_click(cx.listener(move |this, _, _, cx| this.toggle_folder(id, cx)))
+    .child(
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .size(rpx(ICON))
+            .rounded(rpx(16.))
+            .when(!open, |this| this.bg(tint))
+            .map(|this| {
+                if open {
+                    this.child(theme::icon("folder", 24., color))
+                } else {
+                    this.child(
+                        div().flex().flex_wrap().gap(rpx(4.)).w(rpx(36.)).children(
+                            guilds
+                                .iter()
+                                .take(4)
+                                .map(|guild| guild_icon(guild, 16., 8., cx)),
+                        ),
+                    )
+                }
+            }),
+    )
+    .when(!open, |this| this.children(corner_badge(mentions)));
 
     if !open {
         return header.into_any_element();
@@ -184,9 +221,22 @@ fn folder_item(app: &DiscordApp, folder: &Folder, cx: &mut Context<DiscordApp>) 
         .into_any_element()
 }
 
-fn rail_item(id: impl Into<ElementId>, selected: bool, unread: bool) -> Stateful<Div> {
+fn rail_item(
+    id: impl Into<ElementId>,
+    key: u64,
+    label: SharedString,
+    selected: bool,
+    unread: bool,
+    app: &DiscordApp,
+    cx: &mut Context<DiscordApp>,
+) -> Stateful<Div> {
+    let hovered = app.hovered_rail == Some(key);
     div()
         .id(id)
+        .on_hover(
+            cx.listener(move |app, hovered: &bool, _, cx| app.set_rail_hover(key, *hovered, cx)),
+        )
+        .when(hovered, |this| this.child(tooltip(label)))
         .group("rail-item")
         .relative()
         .flex()
@@ -228,17 +278,52 @@ fn corner_badge(count: u32) -> Option<impl IntoElement> {
     })
 }
 
-fn action_item(id: &'static str, icon: &'static str, label: &'static str) -> impl IntoElement {
-    rail_item(id, false, false)
-        .tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(rpx(ICON))
-                .rounded_full()
-                .bg(rgb(theme::ELEVATED))
-                .child(theme::icon(icon, 24., theme::TEXT)),
-        )
+fn tooltip(label: SharedString) -> impl IntoElement {
+    div()
+        .absolute()
+        .left(rpx(WIDTH - 4.))
+        .top(rpx(ICON / 2.))
+        .size_0()
+        .child(deferred(
+            anchored().anchor(Anchor::LeftCenter).child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(theme::icon("tooltip-arrow", 6., TOOLTIP_BG).h(rpx(12.)))
+                    .child(
+                        div()
+                            .max_w(rpx(196.))
+                            .px(rpx(12.))
+                            .py(rpx(8.))
+                            .rounded(rpx(8.))
+                            .bg(rgb(TOOLTIP_BG))
+                            .shadow_lg()
+                            .text_size(rpx(16.))
+                            .line_height(rpx(20.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(theme::STRONG))
+                            .child(label),
+                    ),
+            ),
+        ))
+}
+
+fn action_item(
+    id: &'static str,
+    key: u64,
+    icon: &'static str,
+    label: &'static str,
+    app: &DiscordApp,
+    cx: &mut Context<DiscordApp>,
+) -> impl IntoElement {
+    rail_item(id, key, label.into(), false, false, app, cx).child(
+        div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(rpx(ICON))
+            .rounded_full()
+            .bg(rgb(theme::ELEVATED))
+            .child(theme::icon(icon, 24., theme::TEXT)),
+    )
 }

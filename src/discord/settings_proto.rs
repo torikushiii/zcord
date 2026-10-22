@@ -1,4 +1,4 @@
-//! Only the guild-folder subset of PreloadedUserSettings is decoded. Schema:
+//! Guild folders and status from PreloadedUserSettings. Schema:
 //! https://github.com/discord-userdoccers/discord-protos/blob/master/discord_protos/discord_users/v1/PreloadedUserSettings.proto
 use base64::{Engine, engine::general_purpose::STANDARD};
 
@@ -8,6 +8,27 @@ pub struct GuildFolder {
     pub id: Option<u64>,
     pub name: Option<String>,
     pub color: Option<u32>,
+}
+
+#[derive(Default, Debug, PartialEq, Eq)]
+pub struct Settings {
+    pub folders: Option<Vec<GuildFolder>>,
+    pub status: Option<StatusSettings>,
+}
+
+#[derive(Default, Debug, PartialEq, Eq)]
+pub struct StatusSettings {
+    pub status: Option<String>,
+    pub custom_status: Option<CustomStatus>,
+    pub custom_status_present: bool,
+}
+
+#[derive(Default, Debug, PartialEq, Eq)]
+pub struct CustomStatus {
+    pub text: String,
+    pub emoji_id: u64,
+    pub emoji_name: String,
+    pub expires_at_ms: u64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -168,13 +189,60 @@ fn folder(bytes: &[u8]) -> Result<GuildFolder> {
     Ok(folder)
 }
 
-pub fn decode(bytes: &[u8]) -> Result<Option<Vec<GuildFolder>>> {
+fn custom_status(bytes: &[u8]) -> Result<CustomStatus> {
     let mut reader = Reader::new(bytes);
-    let mut folders = None;
+    let mut status = CustomStatus::default();
+    while let Some((field, wire)) = reader.tag()? {
+        match (field, wire) {
+            (1, 2) => {
+                status.text = std::str::from_utf8(reader.bytes(wire)?)
+                    .map_err(|_| DecodeError)?
+                    .to_owned()
+            }
+            (2, 1) => status.emoji_id = reader.fixed64()?,
+            (3, 2) => {
+                status.emoji_name = std::str::from_utf8(reader.bytes(wire)?)
+                    .map_err(|_| DecodeError)?
+                    .to_owned()
+            }
+            (4, 1) => status.expires_at_ms = reader.fixed64()?,
+            _ => reader.skip(field, wire, 0)?,
+        }
+    }
+    Ok(status)
+}
+
+fn status_settings(bytes: &[u8]) -> Result<StatusSettings> {
+    let mut reader = Reader::new(bytes);
+    let mut status = StatusSettings::default();
+    while let Some((field, wire)) = reader.tag()? {
+        match field {
+            1 => status.status = Some(string_wrapper(reader.bytes(wire)?)?),
+            2 => {
+                status.custom_status_present = true;
+                let custom = custom_status(reader.bytes(wire)?)?;
+                let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+                if (custom.expires_at_ms == 0 || custom.expires_at_ms >= now)
+                    && (!custom.text.is_empty()
+                        || !custom.emoji_name.is_empty()
+                        || custom.emoji_id != 0)
+                {
+                    status.custom_status = Some(custom);
+                }
+            }
+            _ => reader.skip(field, wire, 0)?,
+        }
+    }
+    Ok(status)
+}
+
+pub fn decode(bytes: &[u8]) -> Result<Settings> {
+    let mut reader = Reader::new(bytes);
+    let mut settings = Settings::default();
     while let Some((field, wire)) = reader.tag()? {
         if field == 14 {
             let mut guilds = Reader::new(reader.bytes(wire)?);
-            let entries = folders.get_or_insert_with(Vec::new);
+            let entries = settings.folders.get_or_insert_with(Vec::new);
             while let Some((field, wire)) = guilds.tag()? {
                 match field {
                     1 => entries.push(folder(guilds.bytes(wire)?)?),
@@ -183,14 +251,16 @@ pub fn decode(bytes: &[u8]) -> Result<Option<Vec<GuildFolder>>> {
                     _ => guilds.skip(field, wire, 0)?,
                 }
             }
+        } else if field == 11 {
+            settings.status = Some(status_settings(reader.bytes(wire)?)?);
         } else {
             reader.skip(field, wire, 0)?;
         }
     }
-    Ok(folders)
+    Ok(settings)
 }
 
-pub fn decode_base64(encoded: &str) -> Result<Option<Vec<GuildFolder>>> {
+pub fn decode_base64(encoded: &str) -> Result<Settings> {
     if encoded.len() > 8 * 1024 * 1024 {
         return Err(DecodeError);
     }
@@ -206,7 +276,7 @@ pub(crate) mod tests {
     #[test]
     fn folders_decode_packed_unpacked_and_wrappers() {
         for packed in [true, false] {
-            let folders = decode_base64(&fixture(packed)).unwrap().unwrap();
+            let folders = decode_base64(&fixture(packed)).unwrap().folders.unwrap();
             assert_eq!(folders.len(), 2);
             assert_eq!(folders[0].guild_ids, [100]);
             assert_eq!(folders[0].id, None);
@@ -220,8 +290,8 @@ pub(crate) mod tests {
                 }
             );
         }
-        assert_eq!(decode(&[8, 0]).unwrap(), None);
-        assert_eq!(decode(&[114, 0]).unwrap(), Some(Vec::new()));
+        assert_eq!(decode(&[8, 0]).unwrap().folders, None);
+        assert_eq!(decode(&[114, 0]).unwrap().folders, Some(Vec::new()));
     }
     #[test]
     fn malformed_protobuf_is_rejected_without_panicking() {
@@ -240,5 +310,45 @@ pub(crate) mod tests {
             let _ = decode(&valid[..length]);
         }
         assert!(decode_base64("not base64!").is_err());
+    }
+
+    #[test]
+    fn status_presence_wrappers_and_expiry() {
+        use crate::discord::settings_fixtures::status_fixture;
+        let decoded = decode_base64(&status_fixture(
+            Some("invisible"),
+            Some(("working", 0, "\u{1f3ae}", 0)),
+        ))
+        .unwrap();
+        let status = decoded.status.unwrap();
+        assert!(decoded.folders.is_none());
+        assert_eq!(status.status.as_deref(), Some("invisible"));
+        assert!(status.custom_status_present);
+        assert_eq!(status.custom_status.unwrap().text, "working");
+        let expired = decode_base64(&status_fixture(None, Some(("gone", 7, "x", 1))))
+            .unwrap()
+            .status
+            .unwrap();
+        assert_eq!(expired.status, None);
+        assert!(expired.custom_status_present);
+        assert!(expired.custom_status.is_none());
+        let empty = decode_base64(&status_fixture(None, None))
+            .unwrap()
+            .status
+            .unwrap();
+        assert!(!empty.custom_status_present);
+        assert!(decode(&[]).unwrap().status.is_none());
+        let future = u64::MAX;
+        assert!(
+            decode_base64(&status_fixture(
+                Some("idle"),
+                Some(("future", 42, "custom", future))
+            ))
+            .unwrap()
+            .status
+            .unwrap()
+            .custom_status
+            .is_some()
+        );
     }
 }

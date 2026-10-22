@@ -6,6 +6,7 @@ mod credentials;
 mod discord;
 mod fonts;
 mod images;
+mod markdown;
 mod settings;
 mod store;
 mod theme;

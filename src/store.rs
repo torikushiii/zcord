@@ -1,5 +1,6 @@
 mod mapping;
 mod seed;
+mod social;
 #[cfg(test)]
 mod tests;
 mod view;
@@ -28,11 +29,13 @@ pub struct Store {
     guild_indices: HashMap<u64, usize>,
     folder_layout: Option<Vec<settings_proto::GuildFolder>>,
     rail_order: Vec<u64>,
+    social: social::Social,
 }
 
 #[derive(Clone, Copy)]
 enum SourceChannel {
     Guild { guild: usize, channel: usize },
+    Thread { guild: usize, channel: usize },
     Private(usize),
 }
 
@@ -41,6 +44,9 @@ impl SourceChannel {
         match self {
             Self::Guild { guild, channel } => {
                 source.guilds.get(guild)?.channels.as_ref()?.get(channel)
+            }
+            Self::Thread { guild, channel } => {
+                source.guilds.get(guild)?.threads.as_ref()?.get(channel)
             }
             Self::Private(index) => source.private_channels.get(index),
         }
@@ -52,6 +58,12 @@ impl SourceChannel {
                 .guilds
                 .get_mut(guild)?
                 .channels
+                .as_mut()?
+                .get_mut(channel),
+            Self::Thread { guild, channel } => source
+                .guilds
+                .get_mut(guild)?
+                .threads
                 .as_mut()?
                 .get_mut(channel),
             Self::Private(index) => source.private_channels.get_mut(index),
@@ -132,6 +144,10 @@ impl Store {
             content,
             embed: None,
             attachments: Vec::new(),
+            kind: 0,
+            edited: false,
+            reply: None,
+            mentions_me: false,
         });
         self.next_message_id += 1;
         Some(index)
@@ -145,21 +161,20 @@ pub enum Change {
     MessageChanged { channel_id: u64, index: usize },
     MessageRemoved { channel_id: u64, index: usize },
     Structure,
+    Members { guild_id: Option<u64> },
 }
 
 impl Store {
     pub fn from_ready(ready: model::Ready) -> Self {
-        let folder_layout = match ready
+        let settings = ready
             .user_settings_proto
             .as_deref()
-            .map(settings_proto::decode_base64)
-        {
-            Some(Ok(Some(folders))) => Some(folders),
-            _ => {
-                log::warn!("Server folder settings unavailable; using READY order");
-                None
-            }
-        };
+            .and_then(|proto| settings_proto::decode_base64(proto).ok())
+            .unwrap_or_default();
+        let folder_layout = settings.folders;
+        if folder_layout.is_none() {
+            log::warn!("Server folder settings unavailable; using READY order");
+        }
         let rail_order = ready.guilds.iter().map(|guild| guild.id).collect();
         let mut read_states = HashMap::with_capacity(ready.read_state.entries.len());
         for (index, state) in ready
@@ -206,18 +221,26 @@ impl Store {
             guild_indices: HashMap::new(),
             folder_layout,
             rail_order,
+            social: social::Social::default(),
         };
+        store.init_social();
+        store.apply_own_status(settings.status.as_ref(), false);
         store.index_channels();
         store
     }
 
     fn index_channels(&mut self) {
+        self.index_names();
         self.source_channels.clear();
         self.channel_locations.clear();
         self.guild_badges.clear();
         self.guild_indices.clear();
         if let Some(source) = &self.source {
             for (guild, metadata) in source.guilds.iter().enumerate() {
+                for (channel, metadata) in metadata.threads.iter().flatten().enumerate() {
+                    self.source_channels
+                        .insert(metadata.id, SourceChannel::Thread { guild, channel });
+                }
                 for (channel, metadata) in metadata.channels.iter().flatten().enumerate() {
                     self.source_channels
                         .insert(metadata.id, SourceChannel::Guild { guild, channel });
@@ -308,7 +331,32 @@ impl Store {
     }
 
     fn register_author(&mut self, user: &model::User) {
-        self.users.insert(user.id, map_user(user));
+        if user.username.is_empty() {
+            if let Some(existing) = self.users.get_mut(&user.id) {
+                if let Some(name) = &user.global_name {
+                    existing.name.clone_from(name);
+                }
+                if let Some(avatar) = &user.avatar {
+                    existing.avatar = Some(avatar.clone());
+                }
+                if let Some(discriminator) = &user.discriminator {
+                    existing.discriminator = Some(discriminator.clone());
+                }
+                existing.bot |= user.bot;
+                return;
+            }
+        }
+        let mut mapped = map_user(user);
+        if let Some(existing) = self.users.get(&user.id) {
+            mapped.status = existing.status;
+            mapped.activity.clone_from(&existing.activity);
+            mapped.playing = existing.playing;
+            mapped.role_color = existing.role_color;
+            if user.primary_guild.is_none() {
+                mapped.tag.clone_from(&existing.tag);
+            }
+        }
+        self.users.insert(user.id, mapped);
     }
 
     fn network_channel_mut(&mut self, channel_id: u64) -> Option<&mut Channel> {
@@ -325,13 +373,38 @@ impl Store {
         messages.retain(|m| m.channel_id == channel_id);
         messages.sort_by_key(|m| m.id);
         messages.dedup_by_key(|m| m.id);
-        for message in &messages {
-            self.register_author(&message.author);
-        }
+        self.clear_message_info(channel_id);
+        let mapped = messages
+            .iter()
+            .filter_map(|message| self.map_network_message(message, true))
+            .collect();
         if let Some(channel) = self.network_channel_mut(channel_id) {
-            channel.messages = messages.iter().filter_map(map_message).collect();
+            channel.messages = mapped;
             channel.messages_loaded = true;
         }
+    }
+
+    pub fn prepend_messages(
+        &mut self,
+        channel_id: u64,
+        mut messages: Vec<model::Message>,
+    ) -> usize {
+        let oldest = self
+            .network_channel_mut(channel_id)
+            .and_then(|channel| channel.messages.first())
+            .map_or(u64::MAX, |message| message.id);
+        messages.retain(|m| m.channel_id == channel_id && m.id < oldest);
+        messages.sort_by_key(|m| m.id);
+        messages.dedup_by_key(|m| m.id);
+        let mapped: Vec<_> = messages
+            .iter()
+            .filter_map(|message| self.map_network_message(message, true))
+            .collect();
+        let count = mapped.len();
+        if let Some(channel) = self.network_channel_mut(channel_id) {
+            channel.messages.splice(0..0, mapped);
+        }
+        count
     }
 
     fn rebuild_structure(&mut self, guild_id: Option<u64>) {
@@ -346,9 +419,14 @@ impl Store {
                     .flatten()
                     .filter_map(|m| m.user.as_ref())
                 {
-                    self.users.insert(user.id, map_user(user));
+                    if !self.users.contains_key(&user.id) {
+                        self.users.insert(user.id, map_user(user));
+                    }
                 }
                 if let Some(position) = position {
+                    if let Some(social) = self.social.guilds.get(&guild_id) {
+                        rebuilt.member_ids = social.members.keys().copied().collect();
+                    }
                     let mut histories: HashMap<_, _> = self.guilds[position]
                         .categories
                         .iter_mut()
@@ -445,7 +523,21 @@ impl Store {
     }
 
     pub fn apply(&mut self, event: discord::Event) -> Change {
+        let revision = self.social.revision;
+        let change = self.apply_inner(event);
+        if revision != self.social.revision {
+            Change::Structure
+        } else {
+            change
+        }
+    }
+
+    fn apply_inner(&mut self, event: discord::Event) -> Change {
         use discord::Event;
+        let event = match self.apply_social(event) {
+            Ok(change) => return change,
+            Err(event) => event,
+        };
         match event {
             Event::Ready(ready) => {
                 *self = Self::from_ready(*ready);
@@ -456,9 +548,26 @@ impl Store {
                     return Change::None;
                 }
                 match settings_proto::decode_base64(&update.settings.proto) {
-                    Ok(None) if update.partial => return Change::None,
-                    Ok(Some(folders)) => self.folder_layout = Some(folders),
-                    _ => {
+                    Ok(settings) => {
+                        let structure = settings.folders.is_some() || !update.partial;
+                        let status = settings.status.is_some() || !update.partial;
+                        if settings.folders.is_some() || !update.partial {
+                            self.folder_layout = settings.folders;
+                        }
+                        if status {
+                            self.apply_own_status(settings.status.as_ref(), update.partial);
+                        }
+                        if structure {
+                            self.rebuild_rail();
+                            return Change::Structure;
+                        }
+                        return if status {
+                            Change::Members { guild_id: None }
+                        } else {
+                            Change::None
+                        };
+                    }
+                    Err(_) => {
                         log::warn!("Server folder settings unavailable; using READY order");
                         self.folder_layout = None;
                     }
@@ -467,7 +576,9 @@ impl Store {
                 Change::Structure
             }
             Event::MessageCreate(message) => {
+                let mut loaded = false;
                 if let Some(channel) = self.network_channel_mut(message.channel_id) {
+                    loaded = channel.messages_loaded;
                     if channel
                         .messages
                         .binary_search_by_key(&message.id, |m| m.id)
@@ -476,7 +587,7 @@ impl Store {
                         return Change::None;
                     }
                 }
-                self.register_author(&message.author);
+                let mapped = self.map_network_message(&message, loaded);
                 let previous = self.latest_message_id(message.channel_id);
                 let mentions = self.mention_count(message.channel_id);
                 if message.id > previous {
@@ -498,7 +609,7 @@ impl Store {
                 if !channel.messages_loaded {
                     return Change::Structure;
                 }
-                let Some(mapped) = map_message(&message) else {
+                let Some(mapped) = mapped else {
                     return Change::None;
                 };
                 let index = channel.messages.partition_point(|m| m.id < message.id);
@@ -509,9 +620,7 @@ impl Store {
                 }
             }
             Event::MessageUpdate(update) => {
-                if let Some(author) = &update.author {
-                    self.register_author(author);
-                }
+                let (reply, mentions_me) = self.update_message_info(&update);
                 let Some(channel) = self.network_channel_mut(update.channel_id) else {
                     return Change::None;
                 };
@@ -519,6 +628,14 @@ impl Store {
                     return Change::None;
                 };
                 let message = &mut channel.messages[index];
+                if let Some(kind) = update.kind {
+                    message.kind = kind;
+                }
+                if let Some(edited) = &update.edited_timestamp {
+                    message.edited = edited.is_some();
+                }
+                message.reply = reply;
+                message.mentions_me = mentions_me;
                 if let Some(content) = update.content {
                     message.content = content;
                 }
@@ -540,6 +657,7 @@ impl Store {
                 }
             }
             Event::MessageDelete { channel_id, id } => {
+                self.forget_message_info(channel_id, id);
                 let Some(channel) = self.network_channel_mut(channel_id) else {
                     return Change::None;
                 };
@@ -579,10 +697,12 @@ impl Store {
                         source.guilds.push(*update);
                     }
                 }
+                self.sync_guild_social(id);
                 self.rebuild_structure(Some(id));
                 Change::Structure
             }
             Event::GuildDelete { id } => {
+                self.social.guilds.remove(&id);
                 self.rail_order.retain(|guild| *guild != id);
                 if let Some(source) = &mut self.source {
                     source.guilds.retain(|g| g.id != id);
@@ -598,13 +718,22 @@ impl Store {
                         .guild_id
                         .and_then(|id| source.guilds.iter().position(|g| g.id == id))
                         .or_else(|| match existing {
-                            Some(SourceChannel::Guild { guild, .. }) => Some(guild),
+                            Some(
+                                SourceChannel::Guild { guild, .. }
+                                | SourceChannel::Thread { guild, .. },
+                            ) => Some(guild),
                             _ => None,
                         });
                     if let Some(index) = guild_index {
                         let guild = &mut source.guilds[index];
                         guild_id = Some(guild.id);
-                        let channels = guild.channels.get_or_insert_with(Vec::new);
+                        let channels = if matches!(existing, Some(SourceChannel::Thread { .. }))
+                            || matches!(update.kind, Some(10..=12))
+                        {
+                            guild.threads.get_or_insert_with(Vec::new)
+                        } else {
+                            guild.channels.get_or_insert_with(Vec::new)
+                        };
                         if let Some(channel) = channels.iter_mut().find(|c| c.id == update.id) {
                             channel.merge(&update);
                         } else {
@@ -620,6 +749,7 @@ impl Store {
                 Change::Structure
             }
             Event::ChannelDelete { id } => {
+                self.clear_message_info(id);
                 let mut guild_id = None;
                 if let Some(source) = &mut self.source {
                     match self.source_channels.get(&id).copied() {
@@ -628,6 +758,13 @@ impl Store {
                             guild_id = Some(guild.id);
                             if let Some(channels) = &mut guild.channels {
                                 channels.retain(|c| c.id != id);
+                            }
+                        }
+                        Some(SourceChannel::Thread { guild, .. }) => {
+                            let guild = &mut source.guilds[guild];
+                            guild_id = Some(guild.id);
+                            if let Some(threads) = &mut guild.threads {
+                                threads.retain(|channel| channel.id != id);
                             }
                         }
                         Some(SourceChannel::Private(_)) => {

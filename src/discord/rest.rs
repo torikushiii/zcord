@@ -1,7 +1,7 @@
 use super::{Error, model, properties};
 use reqwest::{
     Client,
-    header::{AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT},
+    header::{AUTHORIZATION, HeaderMap, HeaderValue, REFERER, USER_AGENT},
 };
 use serde_json::Value;
 use std::time::Duration;
@@ -29,6 +29,20 @@ impl Rest {
         authorization.set_sensitive(true);
         headers.insert(AUTHORIZATION, authorization);
         headers.insert(USER_AGENT, HeaderValue::from_static(properties::USER_AGENT));
+        for (name, value) in [
+            ("accept", "*/*"),
+            ("accept-language", properties::ACCEPT_LANGUAGE),
+            ("priority", "u=1, i"),
+            ("sec-ch-ua", properties::SEC_CH_UA),
+            ("sec-ch-ua-mobile", "?0"),
+            ("sec-ch-ua-platform", "\"Windows\""),
+            ("sec-fetch-dest", "empty"),
+            ("sec-fetch-mode", "cors"),
+            ("sec-fetch-site", "same-origin"),
+            ("x-debug-options", "bugReporterEnabled"),
+        ] {
+            headers.insert(name, HeaderValue::from_static(value));
+        }
         headers.insert(
             "x-super-properties",
             HeaderValue::from_str(&properties::super_properties()).map_err(|_| Error::Decode)?,
@@ -43,6 +57,7 @@ impl Rest {
         );
         let client = Client::builder()
             .default_headers(headers)
+            .cookie_store(true)
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(30))
             .build()
@@ -58,9 +73,14 @@ impl Rest {
 
     pub async fn fetch_messages(
         &self,
+        guild_id: Option<u64>,
         channel_id: u64,
         before: Option<u64>,
     ) -> Result<Vec<model::Message>, Error> {
+        let referer = match guild_id {
+            Some(guild_id) => format!("https://discord.com/channels/{guild_id}/{channel_id}"),
+            None => format!("https://discord.com/channels/@me/{channel_id}"),
+        };
         let mut gate = self.gate.lock().await;
         if gate.unauthorized {
             return Err(Error::Http(401));
@@ -77,6 +97,7 @@ impl Rest {
                 .client
                 .get(&url)
                 .query(&query)
+                .header(REFERER, &referer)
                 .send()
                 .await
                 .map_err(|_| Error::Network)?;

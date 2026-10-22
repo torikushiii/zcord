@@ -3,12 +3,19 @@ mod chat;
 mod guild_rail;
 mod login;
 mod member_list;
+mod message_body;
+mod rich_text;
 mod titlebar;
 
 use crate::discord::{Event, FatalError, Session};
 use login::LoginForm;
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    hash::{DefaultHasher, Hash, Hasher},
+    rc::Rc,
+};
 
 use futures::StreamExt;
 use gpui::{prelude::*, *};
@@ -16,10 +23,20 @@ use gpui_component::input::{InputEvent, InputState};
 use gpui_tokio::Tokio;
 
 use crate::{
-    credentials,
-    store::{Change, Channel, ChannelKind, Guild, Store},
+    credentials, markdown,
+    store::{Change, Channel, ChannelKind, Guild, ReplyState, Store},
     theme::{self, rpx},
 };
+
+pub struct Parsed {
+    content_hash: u64,
+    pub blocks: Vec<markdown::Block>,
+    pub jumbo: bool,
+}
+
+const PARSED_CACHE_LIMIT: usize = 4096;
+const MESSAGE_PAGE: usize = 50;
+const OLDER_MESSAGES_THRESHOLD: usize = 8;
 
 pub enum Screen {
     Login(LoginForm),
@@ -35,13 +52,22 @@ pub struct DiscordApp {
     pub(crate) show_members: bool,
     pub(crate) composer: Entity<InputState>,
     pub(crate) messages: ListState,
+    pub(crate) member_rows: ListState,
+    member_subscription: Option<(u64, u64, Vec<(u32, u32)>)>,
     pub(crate) live: bool,
     pub(crate) reconnecting: bool,
     session: Option<Session>,
     pending_token: Option<String>,
     loading: HashSet<u64>,
+    loading_older: HashSet<u64>,
+    history_complete: HashSet<u64>,
+    member_top: usize,
     open_folders: HashSet<u64>,
     drafts: HashMap<u64, String>,
+    pub(crate) revealed_spoilers: HashSet<(u64, u16)>,
+    pub(crate) hovered_rail: Option<u64>,
+    pub(crate) entity: WeakEntity<Self>,
+    parsed: RefCell<HashMap<u64, Rc<Parsed>>>,
     _events: Option<Task<()>>,
     _composer_subscription: Subscription,
 }
@@ -63,13 +89,22 @@ impl DiscordApp {
             show_members: true,
             composer,
             messages,
+            member_rows: ListState::new(0, ListAlignment::Top, px(400.)),
+            member_subscription: None,
             live: false,
             reconnecting: false,
             session: None,
             pending_token: None,
             loading: HashSet::new(),
+            loading_older: HashSet::new(),
+            history_complete: HashSet::new(),
+            member_top: 0,
             open_folders: HashSet::new(),
             drafts: HashMap::new(),
+            revealed_spoilers: HashSet::new(),
+            hovered_rail: None,
+            entity: cx.entity().downgrade(),
+            parsed: RefCell::new(HashMap::new()),
             _events: None,
             _composer_subscription: subscription,
         };
@@ -77,6 +112,21 @@ impl DiscordApp {
             crate::settings::remember_window(window, cx)
         })
         .detach();
+        let weak = app.entity.clone();
+        app.member_rows.set_scroll_handler(move |event, _, cx| {
+            let top = event.visible_range.start;
+            weak.update(cx, |app, _| {
+                app.member_top = top;
+                app.update_member_subscription();
+            })
+            .ok();
+        });
+        let weak = app.entity.clone();
+        app.messages.set_scroll_handler(move |event, _, cx| {
+            if event.visible_range.start < OLDER_MESSAGES_THRESHOLD {
+                weak.update(cx, |app, cx| app.fetch_older(cx)).ok();
+            }
+        });
         match credentials::load() {
             Some(token) => app.connect(token, window, cx),
             None => app.screen = Screen::Login(LoginForm::new(window, cx)),
@@ -93,6 +143,33 @@ impl DiscordApp {
 
     pub(crate) fn channel(&self) -> Option<&Channel> {
         self.guild()?.channel(self.selected_channel_id)
+    }
+
+    pub(crate) fn parsed(&self, id: u64, content: &str) -> Rc<Parsed> {
+        let mut hasher = DefaultHasher::new();
+        content.hash(&mut hasher);
+        let content_hash = hasher.finish();
+        let mut cache = self.parsed.borrow_mut();
+        if let Some(parsed) = cache.get(&id).filter(|p| p.content_hash == content_hash) {
+            return parsed.clone();
+        }
+        if cache.len() >= PARSED_CACHE_LIMIT {
+            cache.clear();
+        }
+        let blocks = markdown::parse(content);
+        let parsed = Rc::new(Parsed {
+            content_hash,
+            jumbo: markdown::is_jumbo(&blocks),
+            blocks,
+        });
+        cache.insert(id, parsed.clone());
+        parsed
+    }
+
+    pub(crate) fn reveal_spoiler(&mut self, message_id: u64, index: u16, cx: &mut Context<Self>) {
+        if self.revealed_spoilers.insert((message_id, index)) {
+            cx.notify();
+        }
     }
 
     pub(crate) fn submit_login(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -142,6 +219,9 @@ impl DiscordApp {
         self.pending_token = None;
         self.reconnecting = false;
         self.loading.clear();
+        self.loading_older.clear();
+        self.history_complete.clear();
+        self.member_subscription = None;
     }
 
     fn connect(&mut self, token: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -193,6 +273,7 @@ impl DiscordApp {
             }
             Event::Resumed => {
                 self.reconnecting = false;
+                self.member_subscription = None;
                 cx.notify();
             }
             Event::Ready(_) => {
@@ -204,6 +285,7 @@ impl DiscordApp {
                 self.live = true;
                 self.reconnecting = false;
                 let reconnect = matches!(self.screen, Screen::Chat);
+                self.member_subscription = None;
                 self.store.apply(event);
                 self.screen = Screen::Chat;
                 if reconnect && self.channel().is_some() {
@@ -243,7 +325,13 @@ impl DiscordApp {
                 self.messages
                     .remeasure_items(index.saturating_sub(1)..(index + 1).min(len));
             }
+            Change::Members { guild_id } => {
+                if guild_id.is_none_or(|id| id == self.selected_guild_id) {
+                    self.sync_member_rows();
+                }
+            }
             Change::Structure => {
+                self.sync_member_rows();
                 if self.channel().is_none() {
                     self.select_first_guild(window, cx);
                     return;
@@ -280,7 +368,12 @@ impl DiscordApp {
         else {
             return;
         };
+        if self.selected_guild_id != id {
+            self.member_rows.reset(0);
+            self.member_top = 0;
+        }
         self.selected_guild_id = id;
+        self.sync_member_rows();
         self.store.mark_guild_read(id);
         self.select_channel(channel_id, window, cx);
     }
@@ -339,17 +432,26 @@ impl DiscordApp {
         if !self.loading.insert(channel_id) {
             return;
         }
-        let request = Tokio::spawn(
-            cx,
-            async move { session.fetch_messages(channel_id, None).await },
-        );
+        let guild_id = self
+            .store
+            .guilds
+            .iter()
+            .find(|guild| guild.channel(channel_id).is_some())
+            .map(|guild| guild.id);
+        let request = Tokio::spawn(cx, async move {
+            session.fetch_messages(guild_id, channel_id, None).await
+        });
         cx.spawn(async move |this, cx| {
             let result = request.await;
             this.update(cx, |app, cx| {
                 app.loading.remove(&channel_id);
                 match result {
                     Ok(Ok(messages)) => {
+                        if messages.len() < MESSAGE_PAGE {
+                            app.history_complete.insert(channel_id);
+                        }
                         app.store.set_messages(channel_id, messages);
+                        app.request_missing_members(channel_id);
                         if app.selected_channel_id == channel_id {
                             let count = app.channel().map_or(0, |channel| channel.messages.len());
                             app.reset_messages(count);
@@ -365,6 +467,118 @@ impl DiscordApp {
         .detach();
     }
 
+    fn fetch_older(&mut self, cx: &mut Context<Self>) {
+        let channel_id = self.selected_channel_id;
+        let Some(session) = self.session.clone().filter(|_| self.live) else {
+            return;
+        };
+        let Some(oldest) = self
+            .channel()
+            .filter(|channel| channel.messages_loaded)
+            .and_then(|channel| channel.messages.first())
+            .map(|message| message.id)
+        else {
+            return;
+        };
+        if self.history_complete.contains(&channel_id) || !self.loading_older.insert(channel_id) {
+            return;
+        }
+        let guild_id = Some(self.selected_guild_id);
+        let request = Tokio::spawn(cx, async move {
+            session
+                .fetch_messages(guild_id, channel_id, Some(oldest))
+                .await
+        });
+        cx.spawn(async move |this, cx| {
+            let result = request.await;
+            this.update(cx, |app, cx| {
+                app.loading_older.remove(&channel_id);
+                match result {
+                    Ok(Ok(messages)) => {
+                        if messages.len() < MESSAGE_PAGE {
+                            app.history_complete.insert(channel_id);
+                        }
+                        let inserted = app.store.prepend_messages(channel_id, messages);
+                        if inserted > 0 {
+                            app.request_missing_members(channel_id);
+                            if app.selected_channel_id == channel_id {
+                                app.messages.splice(0..0, inserted);
+                                app.messages.remeasure_items(inserted..inserted + 1);
+                            }
+                        }
+                    }
+                    Ok(Err(error)) => log::warn!("Could not load older messages: {error}"),
+                    Err(error) => log::warn!("History task failed: {error}"),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn request_missing_members(&mut self, channel_id: u64) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let Some(guild) = self
+            .store
+            .guilds
+            .iter()
+            .find(|guild| guild.channel(channel_id).is_some())
+        else {
+            return;
+        };
+        let guild_id = guild.id;
+        let mut ids = Vec::new();
+        for message in guild
+            .channel(channel_id)
+            .map_or(&[][..], |channel| &channel.messages)
+        {
+            ids.push(message.author_id);
+            if let Some(ReplyState::Loaded(reply)) = &message.reply {
+                ids.push(reply.author_id);
+            }
+            collect_mentions(&self.parsed(message.id, &message.content).blocks, &mut ids);
+        }
+        let missing = self.store.missing_members(guild_id, ids);
+        if !missing.is_empty() {
+            session.request_members(guild_id, missing);
+        }
+    }
+
+    fn sync_member_rows(&mut self) {
+        let count = self
+            .store
+            .member_list(self.selected_guild_id)
+            .map_or(0, |list| list.rows.len());
+        let old = self.member_rows.item_count();
+        self.member_rows.splice(0..old, count);
+    }
+
+    fn update_member_subscription(&mut self) {
+        let Some(session) = self.session.as_ref().filter(|_| self.live) else {
+            return;
+        };
+        if self.channel().is_none() {
+            return;
+        }
+        let top = self.member_top as u32;
+        let chunk = top / 100;
+        let mut ranges = vec![(0, 99)];
+        for page in [chunk, chunk + 1] {
+            if page > 0 {
+                ranges.push((page * 100, page * 100 + 99));
+            }
+        }
+        let key = (self.selected_guild_id, self.selected_channel_id, ranges);
+        if self.member_subscription.as_ref() == Some(&key) {
+            return;
+        }
+        session.subscribe_channel(key.0, key.1, &key.2);
+        self.member_subscription = Some(key);
+    }
+
     pub(crate) fn is_loading(&self, channel_id: u64) -> bool {
         self.loading.contains(&channel_id)
     }
@@ -378,6 +592,20 @@ impl DiscordApp {
             self.open_folders.insert(id);
         }
         cx.notify();
+    }
+
+    pub(crate) fn set_rail_hover(&mut self, key: u64, hovered: bool, cx: &mut Context<Self>) {
+        let next = if hovered {
+            Some(key)
+        } else if self.hovered_rail == Some(key) {
+            None
+        } else {
+            return;
+        };
+        if self.hovered_rail != next {
+            self.hovered_rail = next;
+            cx.notify();
+        }
     }
 
     pub(crate) fn toggle_members(&mut self, cx: &mut Context<Self>) {
@@ -409,8 +637,32 @@ impl DiscordApp {
     }
 }
 
+fn collect_mentions(blocks: &[markdown::Block], ids: &mut Vec<u64>) {
+    use markdown::{Block, SpanKind};
+    for block in blocks {
+        match block {
+            Block::Paragraph(spans) | Block::Subtext(spans) | Block::Heading { spans, .. } => {
+                ids.extend(spans.iter().filter_map(|span| match span.kind {
+                    SpanKind::UserMention(id) => Some(id),
+                    _ => None,
+                }));
+            }
+            Block::Quote(inner) => collect_mentions(inner, ids),
+            Block::List { items, .. } => {
+                for item in items {
+                    collect_mentions(item, ids);
+                }
+            }
+            Block::CodeBlock { .. } => {}
+        }
+    }
+}
+
 impl Render for DiscordApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if matches!(self.screen, Screen::Chat) {
+            self.update_member_subscription();
+        }
         let body = match &self.screen {
             Screen::Login(form) => login::render(form, cx).into_any_element(),
             Screen::Connecting => connecting().into_any_element(),
@@ -430,10 +682,7 @@ impl Render for DiscordApp {
                         .border_l_1()
                         .border_color(rgb(theme::BORDER))
                         .child(channel_list::render(self, cx))
-                        .child(chat::render(self, cx))
-                        .when(self.show_members, |this| {
-                            this.child(member_list::render(self, cx))
-                        }),
+                        .child(chat::render(self, cx)),
                 )
                 .into_any_element(),
         };
@@ -445,7 +694,7 @@ impl Render for DiscordApp {
             .bg(rgb(theme::BG))
             .text_color(rgb(theme::TEXT))
             .text_size(rpx(16.))
-            .child(titlebar::render(self, window))
+            .child(titlebar::render(self, window, cx))
             .when(self.reconnecting, |this| {
                 this.child(
                     div()

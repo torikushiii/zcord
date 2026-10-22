@@ -4,7 +4,7 @@ use std::{path::Path, sync::Arc};
 
 use crate::{
     images,
-    store::{Status, User},
+    store::{GuildTag, Status, Store, User},
 };
 
 pub const BG: u32 = 0x08080A;
@@ -12,6 +12,7 @@ pub const ELEVATED: u32 = 0x121214;
 pub const BORDER: u32 = 0x202024;
 pub const HOVER: u32 = 0x151518;
 pub const SELECTED: u32 = 0x24242A;
+pub const PLACEHOLDER_STRONG: u32 = 0x2E2E36;
 pub const TEXT: u32 = 0xDBDEE1;
 pub const STRONG: u32 = 0xF2F3F5;
 pub const MUTED: u32 = 0x949BA4;
@@ -70,6 +71,28 @@ pub fn user_avatar(
     )
 }
 
+pub fn member_avatar(
+    store: &Store,
+    guild_id: u64,
+    user_id: u64,
+    size: f32,
+    status: Option<(Status, u32)>,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    let user = store.user(user_id);
+    let spec = store
+        .member_avatar_spec(guild_id, user_id)
+        .or_else(|| user.map(User::avatar_spec));
+    let image = spec.and_then(|spec| images::resolve(&spec, image_px(size), cx));
+    avatar(
+        user.map_or("?", |user| &user.initials),
+        user_color(user_id),
+        size,
+        status,
+        image,
+    )
+}
+
 pub fn avatar(
     initials: &str,
     color: Hsla,
@@ -103,11 +126,37 @@ pub fn avatar(
                 .right(rpx(-2.))
                 .bottom(rpx(-2.))
                 .size(rpx(dot + 4.))
+                .flex()
+                .items_center()
+                .justify_center()
                 .rounded_full()
                 .border_2()
                 .border_color(rgb(ring))
                 .bg(rgb(status_color(status)))
+                .children(status_cutout(status, dot, ring))
         }))
+}
+
+fn status_cutout(status: Status, dot: f32, ring: u32) -> Option<Div> {
+    let cutout = div().flex_none().bg(rgb(ring));
+    match status {
+        Status::Online => None,
+        Status::DoNotDisturb => Some(
+            cutout
+                .w(rpx(dot * 0.75))
+                .h(rpx((dot * 0.25).max(2.)))
+                .rounded(rpx(dot)),
+        ),
+        Status::Idle => Some(
+            cutout
+                .absolute()
+                .left(rpx(-dot * 0.125))
+                .top(rpx(-dot * 0.125))
+                .size(rpx(dot * 0.75))
+                .rounded_full(),
+        ),
+        Status::Offline => Some(cutout.size(rpx(dot * 0.5)).rounded_full()),
+    }
 }
 
 pub fn badge(count: u32, ring: u32) -> impl IntoElement {
@@ -146,21 +195,24 @@ pub fn app_tag() -> impl IntoElement {
         .child("APP")
 }
 
-pub fn guild_tag(tag: &str) -> impl IntoElement + use<> {
+pub fn guild_tag(tag: &GuildTag, cx: &App) -> impl IntoElement + use<> {
+    let badge = tag
+        .badge_spec()
+        .and_then(|spec| images::resolve(&spec, image_px(12.), cx));
     div()
         .flex()
         .flex_none()
         .items_center()
         .gap(rpx(3.))
-        .px(rpx(5.))
+        .px(rpx(4.))
         .rounded(rpx(4.))
         .bg(rgb(SELECTED))
-        .text_size(rpx(10.))
+        .text_size(rpx(12.))
         .line_height(rpx(16.))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(rgb(STRONG))
-        .child(div().text_color(rgb(0xC77DFF)).child("♥"))
-        .child(tag.to_owned())
+        .children(badge.map(|path| img(path).size(rpx(12.)).flex_none()))
+        .child(tag.text.clone())
 }
 
 pub fn icon_button(id: impl Into<ElementId>, name: &str, size: f32, color: u32) -> Stateful<Div> {

@@ -1,14 +1,17 @@
 use gpui::{prelude::*, *};
 
 use crate::{
-    app::DiscordApp,
+    app::{DiscordApp, guild_rail},
+    images,
+    store::Guild,
     theme::{self, rpx},
 };
 
 pub const HEIGHT: f32 = 32.;
 const CAPTION_BUTTON_WIDTH: f32 = 46.;
+const GUILD_ICON: f32 = 16.;
 
-pub fn render(app: &DiscordApp, window: &Window) -> impl IntoElement + use<> {
+pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> impl IntoElement + use<> {
     let guild = app.guild();
     div()
         .id("titlebar")
@@ -43,19 +46,7 @@ pub fn render(app: &DiscordApp, window: &Window) -> impl IntoElement + use<> {
                 .text_size(rpx(13.))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(rgb(theme::STRONG))
-                .children(guild.map(|guild| {
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .size(rpx(16.))
-                        .rounded(rpx(5.))
-                        .bg(rgb(guild.icon_color))
-                        .text_size(rpx(7.))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(white())
-                        .child(guild.initials.clone())
-                }))
+                .children(guild.map(|guild| guild_icon(guild, cx)))
                 .child(guild.map_or("zcord", |guild| &guild.name).to_owned()),
         )
         .child(div().flex_1())
@@ -69,6 +60,32 @@ pub fn render(app: &DiscordApp, window: &Window) -> impl IntoElement + use<> {
                 .child(nav_button("help", "circle-question-mark")),
         )
         .child(caption_buttons(window))
+}
+
+fn guild_icon(guild: &Guild, cx: &App) -> AnyElement {
+    let image = guild
+        .icon_spec()
+        .and_then(|spec| images::resolve(&spec, theme::image_px(guild_rail::ICON), cx));
+    match image {
+        Some(path) => img(path)
+            .size(rpx(GUILD_ICON))
+            .flex_none()
+            .rounded(rpx(5.))
+            .into_any_element(),
+        None => div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .size(rpx(GUILD_ICON))
+            .rounded(rpx(5.))
+            .bg(rgb(guild.icon_color))
+            .text_size(rpx(7.))
+            .font_weight(FontWeight::BOLD)
+            .text_color(white())
+            .child(guild.initials.clone())
+            .into_any_element(),
+    }
 }
 
 fn nav_button(id: &'static str, icon: &str) -> impl IntoElement {

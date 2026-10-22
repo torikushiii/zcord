@@ -61,6 +61,22 @@ pub(super) fn map_message(message: &model::Message) -> Option<Message> {
         content: message.content.clone(),
         embed: message.embeds.first().map(map_embed),
         attachments: message.attachments.clone(),
+        kind: message.kind,
+        edited: message.edited_timestamp.is_some(),
+        reply: None,
+        mentions_me: false,
+    })
+}
+
+fn guild_tag(primary: &Option<model::PrimaryGuild>) -> Option<GuildTag> {
+    let primary = primary.as_ref()?;
+    if primary.identity_enabled == Some(false) {
+        return None;
+    }
+    Some(GuildTag {
+        text: primary.tag.clone().filter(|tag| !tag.is_empty())?,
+        guild_id: primary.identity_guild_id?,
+        badge: primary.badge.clone(),
     })
 }
 
@@ -73,7 +89,8 @@ pub(super) fn map_user(user: &model::User) -> User {
         status: Status::Offline,
         bot: user.bot,
         role_color: None,
-        tag: None,
+        tag: user.primary_guild.as_ref().and_then(guild_tag),
+        playing: false,
         activity: None,
         avatar: user.avatar.clone(),
         discriminator: user.discriminator.clone(),
@@ -168,7 +185,6 @@ pub(super) fn map_guild(
             .any(|c| c.kind == ChannelKind::Text && c.unread),
         mentions: mentions.min(u64::from(u32::MAX)) as u32,
         categories: mapped,
-        hoisted_roles: Vec::new(),
         member_ids: members.iter().filter_map(|m| m.id()).collect(),
         icon: guild.icon(),
     }

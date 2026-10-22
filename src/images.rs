@@ -36,6 +36,19 @@ pub enum ImageSpec {
         width: u32,
         height: u32,
     },
+    GuildAvatar {
+        guild_id: u64,
+        user_id: u64,
+        hash: String,
+    },
+    Emoji {
+        id: u64,
+        animated: bool,
+    },
+    GuildTagBadge {
+        guild_id: u64,
+        hash: String,
+    },
 }
 
 fn rounded_size(size: u32) -> u32 {
@@ -56,7 +69,27 @@ fn allowed_url(url: &reqwest::Url) -> bool {
 fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
     let size = rounded_size(size);
     let raw = match spec {
+        ImageSpec::GuildAvatar {
+            guild_id,
+            user_id,
+            hash,
+        } => {
+            if hash.is_empty()
+                || hash.len() > 128
+                || !hash.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+            {
+                return None;
+            }
+            format!(
+                "https://cdn.discordapp.com/guilds/{guild_id}/users/{user_id}/avatars/{hash}.png?size={size}"
+            )
+        }
+        // WebP also covers uploaded AVIF/WebP emoji. https://docs.discord.food/resources/emoji#emoji-formats
+        ImageSpec::Emoji { id, animated } => {
+            format!("https://cdn.discordapp.com/emojis/{id}.webp?size={size}&animated={animated}")
+        }
         ImageSpec::GuildIcon { guild_id, hash }
+        | ImageSpec::GuildTagBadge { guild_id, hash }
         | ImageSpec::Avatar {
             user_id: guild_id,
             hash,
@@ -67,10 +100,10 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
             {
                 return None;
             }
-            let route = if matches!(spec, ImageSpec::GuildIcon { .. }) {
-                "icons"
-            } else {
-                "avatars"
+            let route = match spec {
+                ImageSpec::GuildIcon { .. } => "icons",
+                ImageSpec::GuildTagBadge { .. } => "guild-tag-badges",
+                _ => "avatars",
             };
             format!("https://cdn.discordapp.com/{route}/{guild_id}/{hash}.png?size={size}")
         }
@@ -143,7 +176,7 @@ pub fn init(cx: &mut App) {
     }
     let directory = dirs::cache_dir().map(|dir| dir.join("zcord").join("images"));
     let client = reqwest::Client::builder()
-        .user_agent(concat!("zcord/", env!("CARGO_PKG_VERSION")))
+        .user_agent(crate::discord::USER_AGENT)
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(45))
         .build()
@@ -343,6 +376,35 @@ mod tests {
 
     #[test]
     fn cdn_urls_and_size_buckets() {
+        assert_eq!(
+            image_url(
+                &ImageSpec::GuildTagBadge {
+                    guild_id: 9,
+                    hash: "badge".into()
+                },
+                20
+            )
+            .unwrap()
+            .as_str(),
+            "https://cdn.discordapp.com/guild-tag-badges/9/badge.png?size=32"
+        );
+        let avatar = ImageSpec::GuildAvatar {
+            guild_id: 1,
+            user_id: 2,
+            hash: "a_hash".into(),
+        };
+        assert_eq!(
+            image_url(&avatar, 32).unwrap().as_str(),
+            "https://cdn.discordapp.com/guilds/1/users/2/avatars/a_hash.png?size=32"
+        );
+        for animated in [true, false] {
+            assert_eq!(
+                image_url(&ImageSpec::Emoji { id: 123, animated }, 100)
+                    .unwrap()
+                    .as_str(),
+                format!("https://cdn.discordapp.com/emojis/123.webp?size=128&animated={animated}")
+            );
+        }
         assert_eq!(
             [0, 16, 17, 32, 100, 4097, u32::MAX].map(rounded_size),
             [16, 16, 32, 32, 128, 4096, 4096]

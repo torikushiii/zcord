@@ -48,3 +48,23 @@ pub(crate) fn fixture(packed: bool) -> String {
     settings.extend([0xAB, 0x01, 8, 0, 0xAC, 0x01]);
     STANDARD.encode(settings)
 }
+
+pub(crate) fn status_fixture(
+    status: Option<&str>,
+    custom: Option<(&str, u64, &str, u64)>,
+) -> String {
+    let mut settings = Vec::new();
+    if let Some(status) = status {
+        settings.extend(field(1, &field(1, status.as_bytes())));
+    }
+    if let Some((text, emoji_id, emoji_name, expires)) = custom {
+        let mut custom = field(1, text.as_bytes());
+        custom.push(17);
+        custom.extend(emoji_id.to_le_bytes());
+        custom.extend(field(3, emoji_name.as_bytes()));
+        custom.push(33);
+        custom.extend(expires.to_le_bytes());
+        settings.extend(field(2, &custom));
+    }
+    STANDARD.encode(field(11, &settings))
+}

@@ -12,7 +12,7 @@ gpui-component = { git = "https://github.com/zeronsh/gpui-component", rev = "701
 gpui-component-assets = { git = "https://github.com/zeronsh/gpui-component", rev = "701ca97af7983bf85343d2d1d404ab528b18ec96" }
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "gzip"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "gzip", "cookies"] }
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
