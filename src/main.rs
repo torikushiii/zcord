@@ -4,6 +4,7 @@ mod app;
 mod assets;
 mod credentials;
 mod discord;
+mod fonts;
 mod images;
 mod store;
 mod theme;
@@ -51,6 +52,7 @@ fn main() {
             gpui_tokio::init(cx);
             images::init(cx);
             Theme::change(ThemeMode::Dark, None, cx);
+            fonts::init(cx);
             set_zoom(DEFAULT_ZOOM, cx);
             cx.bind_keys([
                 KeyBinding::new("secondary-=", ZoomIn, None),
