@@ -73,6 +73,10 @@ impl DiscordApp {
             _events: None,
             _composer_subscription: subscription,
         };
+        cx.observe_window_bounds(window, |_, window, cx| {
+            crate::settings::remember_window(window, cx)
+        })
+        .detach();
         match credentials::load() {
             Some(token) => app.connect(token, window, cx),
             None => app.screen = Screen::Login(LoginForm::new(window, cx)),

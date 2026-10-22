@@ -6,6 +6,7 @@ mod credentials;
 mod discord;
 mod fonts;
 mod images;
+mod settings;
 mod store;
 mod theme;
 
@@ -26,6 +27,7 @@ const DEFAULT_ZOOM: usize = 5;
 fn set_zoom(index: usize, cx: &mut App) {
     let index = index.min(theme::ZOOM_LEVELS.len() - 1);
     cx.set_global(Zoom(index));
+    settings::update(cx, |settings| settings.zoom = Some(index));
     Theme::global_mut(cx).font_size = px(theme::BASE_FONT_SIZE * theme::ZOOM_LEVELS[index]);
     cx.refresh_windows();
 }
@@ -53,7 +55,8 @@ fn main() {
             images::init(cx);
             Theme::change(ThemeMode::Dark, None, cx);
             fonts::init(cx);
-            set_zoom(DEFAULT_ZOOM, cx);
+            settings::init(cx);
+            set_zoom(settings::get(cx).zoom.unwrap_or(DEFAULT_ZOOM), cx);
             cx.bind_keys([
                 KeyBinding::new("secondary-=", ZoomIn, None),
                 KeyBinding::new("secondary-+", ZoomIn, None),
@@ -65,14 +68,18 @@ fn main() {
             cx.on_action(|_: &ResetZoom, cx| set_zoom(DEFAULT_ZOOM, cx));
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
+                    settings::flush(cx);
                     cx.quit();
                 }
             })
             .detach();
 
+            let min_size = size(px(940.), px(560.));
+            let window_bounds = settings::initial_window_bounds(min_size, cx)
+                .unwrap_or_else(|| WindowBounds::centered(size(px(1440.), px(900.)), cx));
             let options = WindowOptions {
-                window_bounds: Some(WindowBounds::centered(size(px(1440.), px(900.)), cx)),
-                window_min_size: Some(size(px(940.), px(560.))),
+                window_bounds: Some(window_bounds),
+                window_min_size: Some(min_size),
                 titlebar: Some(TitlebarOptions {
                     title: Some("zcord".into()),
                     appears_transparent: true,
