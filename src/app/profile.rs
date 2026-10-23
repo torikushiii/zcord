@@ -489,7 +489,7 @@ fn banner(card: &ProfileCard, layout: &Layout, cx: &App) -> impl IntoElement {
             .animated()
             .and_then(|animated| animated::resolve(&animated, pixels, cx));
         Some(match animated {
-            Some(image) => img(ImageSource::Render(image))
+            Some(image) => animated::image(image)
                 .size_full()
                 .rounded_t(corner)
                 .object_fit(ObjectFit::Cover)
@@ -1496,7 +1496,7 @@ fn effect_layers(card: &ProfileCard, width: f32, cx: &App) -> Vec<AnyElement> {
                     .left_0()
                     .w_full()
                     .child(
-                        img(ImageSource::Render(image))
+                        animated::image(image)
                             .id(SharedString::from(format!(
                                 "profile-effect-{index}-{replay}"
                             )))

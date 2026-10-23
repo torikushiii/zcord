@@ -103,7 +103,7 @@ fn avatar_image(spec: &ImageSpec, size: f32, animate: bool, cx: &App) -> Option<
         .flatten()
         .and_then(|animated| animated::resolve(&animated, pixels, cx));
     Some(match animated {
-        Some(image) => img(ImageSource::Render(image))
+        Some(image) => animated::image(image)
             .size_full()
             .rounded_full()
             .id("avatar-animated")
@@ -133,7 +133,7 @@ pub fn decoration(user: &User, size: f32, animate: bool, cx: &App) -> Option<Any
         .flatten()
         .and_then(|spec| animated::resolve(&spec, pixels, cx));
     let image = match animated {
-        Some(image) => img(ImageSource::Render(image))
+        Some(image) => animated::image(image)
             .id(("decoration", user.id))
             .size_full()
             .into_any_element(),
