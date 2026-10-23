@@ -262,18 +262,12 @@ pub struct MutualGuild {
 
 #[derive(Clone, Deserialize)]
 pub struct ProfileMember {
-    #[serde(default, deserialize_with = "default_value")]
-    pub nick: Option<String>,
-    #[serde(default, deserialize_with = "default_value")]
-    pub avatar: Option<String>,
+    #[serde(flatten)]
+    pub member: PartialMember,
     #[serde(default, deserialize_with = "default_value")]
     pub banner: Option<String>,
     #[serde(default, deserialize_with = "default_value")]
     pub joined_at: Option<String>,
-    #[serde(default, deserialize_with = "ids")]
-    pub roles: Vec<u64>,
-    #[serde(default, deserialize_with = "default_value")]
-    pub collectibles: Option<Collectibles>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -380,6 +374,10 @@ pub struct Member {
     pub nick: Option<String>,
     #[serde(default)]
     pub avatar: Option<String>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub avatar_decoration_data: Option<Option<AvatarDecoration>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub display_name_styles: Option<Option<DisplayNameStyles>>,
     #[serde(default, deserialize_with = "nullable")]
     pub collectibles: Option<Option<Collectibles>>,
 }
@@ -950,6 +948,10 @@ pub struct PartialMember {
     #[serde(default, deserialize_with = "nullable")]
     pub avatar: Option<Option<String>>,
     #[serde(default, deserialize_with = "nullable")]
+    pub avatar_decoration_data: Option<Option<AvatarDecoration>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub display_name_styles: Option<Option<DisplayNameStyles>>,
+    #[serde(default, deserialize_with = "nullable")]
     pub collectibles: Option<Option<Collectibles>>,
     #[serde(default)]
     pub presence: Option<Presence>,
@@ -969,6 +971,8 @@ impl From<&Member> for PartialMember {
             nick: Some(member.nick.clone()),
             roles: Some(member.roles.clone()),
             avatar: Some(member.avatar.clone()),
+            avatar_decoration_data: member.avatar_decoration_data.clone(),
+            display_name_styles: member.display_name_styles.clone(),
             collectibles: member.collectibles.clone(),
             presence: None,
         }
@@ -1217,10 +1221,13 @@ mod tests {
         );
         let member = profile.guild_member.as_ref().unwrap();
         assert_eq!(
-            nameplate(member.collectibles.as_ref()).as_deref(),
+            nameplate(member.member.collectibles.as_ref().and_then(Option::as_ref)).as_deref(),
             Some("nameplates/sample_plate_two/1191169149108224056/")
         );
-        assert_eq!(member.roles, [1191168985530368017]);
+        assert_eq!(
+            member.member.roles.as_deref(),
+            Some([1191168985530368017].as_slice())
+        );
         let styles = user.display_name_styles.clone().flatten().unwrap();
         assert_eq!((styles.font_id, styles.effect_id), (Some(14), Some(8)));
         assert_eq!(styles.colors.len(), 4);

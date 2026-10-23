@@ -26,6 +26,8 @@ pub(super) struct MemberInfo {
     pub avatar: Option<String>,
     pub color: Option<u32>,
     pub nameplate: Option<Nameplate>,
+    pub decoration: Option<Decoration>,
+    pub name_style: Option<NameStyle>,
 }
 
 #[derive(Default)]
@@ -147,6 +149,32 @@ fn refresh_group_names(guild: &mut GuildSocial) {
 }
 
 impl Store {
+    pub fn absorb_profile(&mut self, guild_id: Option<u64>, profile: &model::Profile) {
+        if let (Some(guild_id), Some(member)) = (guild_id, profile.guild_member.as_ref()) {
+            self.upsert_member(guild_id, profile.user.user.id, &member.member);
+        }
+        // The top-level user wins when present; omitted cosmetics retain the nested user's data.
+        self.absorb_user(&profile.user.user);
+    }
+
+    pub fn member_decoration(&self, guild_id: u64, user_id: u64) -> Option<&Decoration> {
+        self.social
+            .guilds
+            .get(&guild_id)
+            .and_then(|guild| guild.members.get(&user_id))
+            .and_then(|member| member.decoration.as_ref())
+            .or_else(|| self.user(user_id)?.decoration.as_ref())
+    }
+
+    pub fn member_name_style(&self, guild_id: u64, user_id: u64) -> Option<&NameStyle> {
+        self.social
+            .guilds
+            .get(&guild_id)
+            .and_then(|guild| guild.members.get(&user_id))
+            .and_then(|member| member.name_style.as_ref())
+            .or_else(|| self.user(user_id)?.name_style.as_ref())
+    }
+
     pub fn member_name(&self, guild_id: u64, user_id: u64) -> Option<&str> {
         let user = self.user(user_id).filter(|user| !user.name.is_empty())?;
         Some(
@@ -260,6 +288,16 @@ impl Store {
                                 .as_ref()
                                 .and_then(Option::as_ref)
                                 .and_then(map_nameplate),
+                            decoration: member
+                                .avatar_decoration_data
+                                .as_ref()
+                                .and_then(Option::as_ref)
+                                .map(map_decoration),
+                            name_style: member
+                                .display_name_styles
+                                .as_ref()
+                                .and_then(Option::as_ref)
+                                .map(map_name_style),
                         };
                         info.color = member_color(&social.roles, &info);
                         social.members.insert(id, info);
@@ -392,6 +430,12 @@ impl Store {
         if let Some(collectibles) = &member.collectibles {
             info.nameplate = collectibles.as_ref().and_then(map_nameplate);
         }
+        if let Some(decoration) = &member.avatar_decoration_data {
+            info.decoration = decoration.as_ref().map(map_decoration);
+        }
+        if let Some(styles) = &member.display_name_styles {
+            info.name_style = styles.as_ref().map(map_name_style);
+        }
         info.color = member_color(&guild.roles, info);
         if new {
             if let Some(index) = self.guild_indices.get(&guild_id) {
@@ -406,6 +450,14 @@ impl Store {
                         own.nick.clone_from(&info.nick);
                         own.roles.clone_from(&info.roles);
                         own.avatar.clone_from(&info.avatar);
+                        if member.avatar_decoration_data.is_some() {
+                            own.avatar_decoration_data
+                                .clone_from(&member.avatar_decoration_data);
+                        }
+                        if member.display_name_styles.is_some() {
+                            own.display_name_styles
+                                .clone_from(&member.display_name_styles);
+                        }
                     } else {
                         members.push(model::Member {
                             user_id: Some(id),
@@ -413,6 +465,8 @@ impl Store {
                             nick: info.nick.clone(),
                             roles: info.roles.clone(),
                             avatar: info.avatar.clone(),
+                            avatar_decoration_data: member.avatar_decoration_data.clone(),
+                            display_name_styles: member.display_name_styles.clone(),
                             collectibles: None,
                         });
                     }

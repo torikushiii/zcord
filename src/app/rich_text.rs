@@ -146,7 +146,7 @@ impl Fonts {
             Some(Chip::Mention { color: Some(color) }) if !hovered => rgb(color).into(),
             Some(Chip::Mention { .. }) if hovered => white(),
             Some(Chip::Mention { .. }) => rgb(MENTION_TEXT).into(),
-            _ if link => rgb(LINK).into(),
+            _ if link => style.color.unwrap_or_else(|| rgb(LINK).into()),
             _ => style.color.unwrap_or(self.color),
         };
         let underline = style.underline || (link && hovered);

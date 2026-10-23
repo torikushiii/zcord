@@ -302,6 +302,8 @@ impl Store {
                             .and_then(|id| social.roles.get(&id))
                             .and_then(|r| r.color),
                         nameplate: None,
+                        decoration: None,
+                        name_style: None,
                     },
                 );
             }

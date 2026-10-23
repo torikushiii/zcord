@@ -6,18 +6,21 @@ use std::{
 use gpui::{prelude::*, *};
 use gpui_component::tooltip::Tooltip;
 use gpui_tokio::Tokio;
+use palette::{FromColor, Lab, Mix, Srgb};
 
 use crate::{
     animated,
     app::{
         DISCORD_EPOCH_MS, DiscordApp,
-        message_body::{BodyContext, label, render_body, wrapped_label},
+        message_body::{BodyColors, BodyContext, label, render_body, wrapped_label},
     },
     discord::{ProfileKind, model},
     images::{self, ImageSpec, profile_frame_layer_url},
     store::User,
     theme::{self, rpx},
 };
+
+mod avatar_colors;
 
 const POPOUT_WIDTH: f32 = 300.;
 const MODAL_WIDTH: f32 = 962.;
@@ -50,6 +53,8 @@ pub(crate) struct ProfileCard {
     anchor: Anchor,
     modal: bool,
     profile: Option<Arc<model::Profile>>,
+    avatar_theme: Option<ProfileTheme>,
+    avatar_theme_source: Option<ImageSpec>,
     effect: Option<Arc<model::CollectibleProduct>>,
     frame: Option<Arc<model::CollectibleProduct>>,
     opened: Instant,
@@ -73,6 +78,16 @@ struct Layout {
     status_left: f32,
     header_min: f32,
     corner: f32,
+}
+
+impl ProfileCard {
+    fn theme(&self) -> Option<ProfileTheme> {
+        ProfileTheme::resolve(self.profile.as_deref(), self.avatar_theme)
+    }
+
+    fn palette(&self) -> ProfilePalette {
+        ProfilePalette::of(self.theme())
+    }
 }
 
 impl Layout {
@@ -101,7 +116,7 @@ impl Layout {
             padding: 32.,
             status_left: 32. + 120. + 20.,
             header_min: 140. + 60. + 20.,
-            corner: MODAL_CARD_RADIUS - 1.,
+            corner: MODAL_CARD_RADIUS,
         }
     }
 }
@@ -122,6 +137,8 @@ impl DiscordApp {
             anchor,
             modal: false,
             profile: None,
+            avatar_theme: None,
+            avatar_theme_source: None,
             effect: None,
             frame: None,
             opened: Instant::now(),
@@ -175,8 +192,10 @@ impl DiscordApp {
         card._tasks.push(cx.spawn(async move |this, cx| {
             let result = request.await;
             this.update(cx, |app, cx| match result {
-                Ok(Ok(profile)) => app.profile_loaded(user_id, profile, cx),
-                Ok(Err(error)) => log::warn!("Could not load profile: {error}"),
+                Ok(Ok(profile)) => app.profile_loaded(user_id, guild_id, profile, cx),
+                Ok(Err(error)) => log::warn!(
+                    "Could not load {kind:?} profile for user {user_id} in guild {guild_id:?}: {error}"
+                ),
                 Err(_) => {}
             })
             .ok();
@@ -186,14 +205,19 @@ impl DiscordApp {
     fn profile_loaded(
         &mut self,
         user_id: u64,
+        guild_id: Option<u64>,
         profile: Arc<model::Profile>,
         cx: &mut Context<Self>,
     ) {
-        self.store.absorb_user(&profile.user.user);
+        self.store.absorb_profile(guild_id, &profile);
         let Some(session) = self.session.clone() else {
             return;
         };
-        let Some(card) = self.profile.as_mut().filter(|card| card.user_id == user_id) else {
+        let Some(card) = self
+            .profile
+            .as_mut()
+            .filter(|card| card.user_id == user_id && card.guild_id == guild_id)
+        else {
             return;
         };
         let effect = guild_profile(&profile)
@@ -219,11 +243,25 @@ impl DiscordApp {
             let request =
                 Tokio::spawn(cx, async move { session.collectible_product(sku_id).await });
             card._tasks.push(cx.spawn(async move |this, cx| {
-                let Ok(Ok(product)) = request.await else {
-                    return;
+                let product = match request.await {
+                    Ok(Ok(product)) => product,
+                    Ok(Err(error)) => {
+                        log::warn!(
+                            "Could not load profile cosmetic {sku_id} for user {user_id}: {error}"
+                        );
+                        return;
+                    }
+                    Err(error) => {
+                        log::warn!("Profile cosmetic task failed for user {user_id}: {error}");
+                        return;
+                    }
                 };
                 this.update(cx, |app, cx| {
-                    let Some(card) = app.profile.as_mut().filter(|c| c.user_id == user_id) else {
+                    let Some(card) = app
+                        .profile
+                        .as_mut()
+                        .filter(|c| c.user_id == user_id && c.guild_id == guild_id)
+                    else {
                         return;
                     };
                     if is_effect {
@@ -255,7 +293,62 @@ impl DiscordApp {
                 }
             }));
         }
+        self.load_avatar_theme(cx);
         cx.notify();
+    }
+
+    fn load_avatar_theme(&mut self, cx: &mut Context<Self>) {
+        let Some(card) = &mut self.profile else {
+            return;
+        };
+        if !ProfileTheme::needs_avatar(card.profile.as_deref()) {
+            card.avatar_theme = None;
+            card.avatar_theme_source = None;
+            return;
+        }
+        let (user_id, guild_id) = (card.user_id, card.guild_id);
+        let Some(spec) = self
+            .store
+            .member_avatar_spec(guild_id.unwrap_or(0), user_id)
+            .or_else(|| self.store.user(user_id).map(User::avatar_spec))
+        else {
+            return;
+        };
+        if card.avatar_theme_source.as_ref() == Some(&spec) {
+            return;
+        }
+        let Some(service) = images::download_service(cx) else {
+            return;
+        };
+        card.avatar_theme = None;
+        card.avatar_theme_source = Some(spec.clone());
+        let source = spec.clone();
+        let request = Tokio::spawn(cx, async move {
+            let path = service.load(&source, 128).await?;
+            tokio::task::spawn_blocking(move || avatar_colors::load(&path))
+                .await
+                .ok()
+                .flatten()
+        });
+        card._tasks.push(cx.spawn(async move |this, cx| {
+            let colors = request.await.ok().flatten();
+            this.update(cx, |app, cx| {
+                let Some(card) = app.profile.as_mut().filter(|card| {
+                    card.user_id == user_id
+                        && card.guild_id == guild_id
+                        && card.avatar_theme_source.as_ref() == Some(&spec)
+                }) else {
+                    return;
+                };
+                card.avatar_theme =
+                    colors.map(|[primary, secondary]| ProfileTheme { primary, secondary });
+                if colors.is_none() {
+                    card.avatar_theme_source = None;
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
     }
 }
 
@@ -305,15 +398,25 @@ struct ProfileTheme {
 }
 
 impl ProfileTheme {
+    fn needs_avatar(profile: Option<&model::Profile>) -> bool {
+        profile.is_some_and(|profile| profile.premium_type == Some(2))
+            && Self::of(profile).is_none()
+    }
+
+    fn resolve(profile: Option<&model::Profile>, avatar: Option<Self>) -> Option<Self> {
+        Self::of(profile).or_else(|| avatar.filter(|_| Self::needs_avatar(profile)))
+    }
+
     fn of(profile: Option<&model::Profile>) -> Option<Self> {
         let profile = profile?;
-        let colors = guild_profile(profile)
-            .and_then(|p| p.theme_colors.as_ref())
-            .or_else(|| profile.user_profile.as_ref()?.theme_colors.as_ref())?;
-        Some(Self {
-            primary: *colors.first()?,
-            secondary: *colors.get(1)?,
-        })
+        let colors = |profile: &model::UserProfile| {
+            let colors = profile.theme_colors.as_deref()?;
+            Some((*colors.first()?, *colors.get(1)?))
+        };
+        let (primary, secondary) = guild_profile(profile)
+            .and_then(colors)
+            .or_else(|| profile.user_profile.as_ref().and_then(colors))?;
+        Some(Self { primary, secondary })
     }
 
     fn outer(self) -> Background {
@@ -325,22 +428,124 @@ impl ProfileTheme {
     }
 
     fn surface(self) -> u32 {
-        shade(self.primary, 1. - THEME_OVERLAY)
+        self.surface_color(self.primary)
     }
 
-    fn modal_background(self) -> Hsla {
-        let secondary: Hsla = rgb(self.secondary).into();
-        hsla(secondary.h, secondary.s * 0.5, 0.1, 1.)
+    fn is_light(self) -> bool {
+        // Discord selects the profile mode from the primary color's perceived brightness.
+        let channel = |shift: u32| ((self.primary >> shift) & 0xFF) as f64;
+        0.299 * channel(16) + 0.587 * channel(8) + 0.114 * channel(0) >= 127.5
+    }
+
+    fn overlay(self) -> Hsla {
+        hsla(0., 0., if self.is_light() { 1. } else { 0. }, THEME_OVERLAY)
+    }
+
+    fn surface_color(self, color: u32) -> u32 {
+        blend(
+            color,
+            if self.is_light() { 0xFFFFFF } else { 0 },
+            THEME_OVERLAY,
+        )
+    }
+
+    fn modal_background(self) -> Background {
+        let to_lab = |color: u32| -> Lab<_, f64> {
+            let channel = |shift: u32| ((color >> shift) & 0xFF) as f64 / 255.;
+            Lab::from_color(Srgb::new(channel(16), channel(8), channel(0)))
+        };
+        // The dialog uses a Lab midpoint with constrained lightness, not the card gradient.
+        let midpoint: Srgb<f64> =
+            Srgb::from_color(to_lab(self.primary).mix(to_lab(self.secondary), 0.5));
+        let mut background = palette::Hsl::from_color(midpoint);
+        let lightness = (background.lightness * 100.).round() / 100.;
+        background.lightness = if self.is_light() {
+            lightness.clamp(0.8, 1.)
+        } else {
+            lightness.clamp(0., 0.1)
+        };
+        let background: Srgb<u8> = Srgb::from_color(background).into_format();
+        rgb((u32::from(background.red) << 16)
+            | (u32::from(background.green) << 8)
+            | u32::from(background.blue))
+        .into()
     }
 }
 
-fn shade(color: u32, keep: f32) -> u32 {
-    let channel = |shift: u32| ((((color >> shift) & 0xFF) as f32) * keep) as u32;
+fn blend(color: u32, overlay: u32, amount: f32) -> u32 {
+    let channel = |shift: u32| {
+        let base = ((color >> shift) & 0xFF) as f32;
+        let overlay = ((overlay >> shift) & 0xFF) as f32;
+        (base * (1. - amount) + overlay * amount).round() as u32
+    };
     (channel(16) << 16) | (channel(8) << 8) | channel(0)
 }
 
+fn luminance(color: u32) -> f32 {
+    let channel = |shift: u32| {
+        let value = ((color >> shift) & 0xFF) as f32 / 255.;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+}
+
+fn contrast(foreground: u32, background: u32) -> f32 {
+    let foreground = luminance(foreground);
+    let background = luminance(background);
+    (foreground.max(background) + 0.05) / (foreground.min(background) + 0.05)
+}
+
+#[derive(Clone, Copy)]
+struct ProfilePalette {
+    light: bool,
+    strong: u32,
+    text: u32,
+    muted: u32,
+    faint: u32,
+    panel: Hsla,
+    border: Hsla,
+    hover: Hsla,
+}
+
+impl ProfilePalette {
+    fn of(theme: Option<ProfileTheme>) -> Self {
+        let light = theme.is_some_and(ProfileTheme::is_light);
+        let mut palette = Self {
+            light,
+            strong: if light { 0x18141F } else { theme::STRONG },
+            text: if light { 0x2E2938 } else { theme::TEXT },
+            muted: if light { 0x51495E } else { theme::MUTED },
+            faint: if light { 0x62596F } else { theme::FAINT },
+            panel: hsla(0., 0., 1., if light { 0.2 } else { 0.04 }),
+            border: hsla(0., 0., if light { 0. } else { 1. }, 0.08),
+            hover: hsla(0., 0., if light { 0. } else { 1. }, 0.04),
+        };
+        if let Some(theme) = theme {
+            let backgrounds = [
+                theme.surface_color(theme.primary),
+                theme.surface_color(theme.secondary),
+            ];
+            // Keep metadata readable even when the two custom stops have very different brightness.
+            for color in [&mut palette.muted, &mut palette.faint] {
+                if backgrounds
+                    .iter()
+                    .any(|background| contrast(*color, *background) < 4.5)
+                {
+                    *color = palette.text;
+                }
+            }
+        }
+        palette
+    }
+}
+
 fn popout(app: &DiscordApp, card: &ProfileCard, cx: &mut Context<DiscordApp>) -> AnyElement {
-    let theme = ProfileTheme::of(card.profile.as_deref());
+    let theme = card.theme();
+    let palette = card.palette();
     let layout = Layout::popout(theme.is_some());
     let surface = theme.map_or(theme::ELEVATED, ProfileTheme::surface);
     let entity = cx.entity();
@@ -354,8 +559,10 @@ fn popout(app: &DiscordApp, card: &ProfileCard, cx: &mut Context<DiscordApp>) ->
         .rounded(rpx(if theme.is_some() { 6. } else { 8. }))
         .overflow_hidden()
         .pb(rpx(4.))
-        .when(theme.is_some(), |this| {
-            this.bg(hsla(0., 0., 0., THEME_OVERLAY))
+        .text_color(rgb(palette.text))
+        .map(|this| match theme {
+            Some(theme) => this.bg(theme.overlay()),
+            None => this,
         })
         .child(header(
             app,
@@ -426,6 +633,7 @@ fn header(
     cx: &mut Context<DiscordApp>,
 ) -> AnyElement {
     let user = app.store.user(card.user_id);
+    let palette = card.palette();
     let status = user
         .filter(|user| !user.playing)
         .and_then(|user| user.activity.clone());
@@ -462,7 +670,7 @@ fn header(
         .h(rpx(height))
         .child(banner(card, layout, cx))
         .child(avatar)
-        .children(status.map(|text| status_bubble(card.user_id, &text, layout)))
+        .children(status.map(|text| status_bubble(card.user_id, &text, layout, palette)))
         .into_any_element()
 }
 
@@ -505,7 +713,7 @@ fn banner(card: &ProfileCard, layout: &Layout, cx: &App) -> impl IntoElement {
     let color = profile
         .and_then(|p| p.user.banner_color.or(p.user.accent_color))
         .or_else(|| profile?.user_profile.as_ref()?.accent_color)
-        .or_else(|| ProfileTheme::of(profile).map(|theme| theme.primary))
+        .or_else(|| card.theme().map(|theme| theme.primary))
         .unwrap_or(theme::SELECTED);
     div()
         .w_full()
@@ -515,15 +723,25 @@ fn banner(card: &ProfileCard, layout: &Layout, cx: &App) -> impl IntoElement {
         .children(image)
 }
 
-fn status_bubble(user_id: u64, text: &str, layout: &Layout) -> impl IntoElement + use<> {
+fn status_bubble(
+    user_id: u64,
+    text: &str,
+    layout: &Layout,
+    palette: ProfilePalette,
+) -> impl IntoElement + use<> {
+    let surface = if palette.light {
+        0xF1EDF5
+    } else {
+        SURFACE_HIGHEST
+    };
     let bubble = |size: f32| {
         div()
             .absolute()
             .size(rpx(size))
             .rounded_full()
-            .bg(rgb(SURFACE_HIGHEST))
+            .bg(rgb(surface))
             .border_1()
-            .border_color(rgba(0xFFFFFF1F))
+            .border_color(palette.border)
     };
     div()
         .absolute()
@@ -539,13 +757,13 @@ fn status_bubble(user_id: u64, text: &str, layout: &Layout) -> impl IntoElement 
                 .px(rpx(12.))
                 .py(rpx(8.))
                 .rounded(rpx(12.))
-                .bg(rgb(SURFACE_HIGHEST))
+                .bg(rgb(surface))
                 .border_1()
-                .border_color(rgba(0xFFFFFF1F))
+                .border_color(palette.border)
                 .shadow_sm()
                 .text_size(rpx(14.))
                 .line_height(rpx(18.))
-                .text_color(rgb(theme::TEXT))
+                .text_color(rgb(palette.text))
                 .child(
                     div()
                         .line_clamp(2)
@@ -564,6 +782,7 @@ fn display_names(
     cx: &App,
 ) -> impl IntoElement + use<> {
     let profile = card.profile.as_deref();
+    let palette = card.palette();
     let user = app.store.user(card.user_id);
     let guild_id = card.guild_id.unwrap_or(0);
     let name = app
@@ -581,13 +800,13 @@ fn display_names(
         .filter(|p| !p.is_empty())
         .or_else(|| profile?.user_profile.as_ref()?.pronouns.clone())
         .filter(|p| !p.is_empty());
-    let name_style = user.and_then(|user| user.name_style.as_ref());
+    let name_style = app.store.member_name_style(guild_id, card.user_id);
     let dot = || {
         div()
             .size(rpx(4.))
             .mx(rpx(1.))
             .rounded_full()
-            .bg(rgb(theme::TEXT))
+            .bg(rgb(palette.text))
     };
     div()
         .flex()
@@ -607,7 +826,7 @@ fn display_names(
                 } else {
                     FontWeight::BOLD
                 })
-                .child(theme::display_name(&name, name_style, theme::STRONG)),
+                .child(theme::display_name(&name, name_style, palette.strong)),
         )
         .child(
             div()
@@ -618,7 +837,7 @@ fn display_names(
                 .gap_y(rpx(if large { 4. } else { 2. }))
                 .text_size(rpx(14.))
                 .line_height(rpx(18.))
-                .text_color(rgb(theme::TEXT))
+                .text_color(rgb(palette.text))
                 .children(username.map(|username| div().child(username)))
                 .when(user.is_some_and(|user| user.bot), |this| {
                     this.child(theme::app_tag())
@@ -632,20 +851,23 @@ fn display_names(
                         .child(
                             div()
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(theme::STRONG))
+                                .text_color(rgb(palette.strong))
                                 .child(pronouns),
                         )
                 }))
-                .children(
-                    user.and_then(|user| user.tag.as_ref())
-                        .map(|tag| theme::guild_tag(tag, cx)),
-                )
-                .children(profile.and_then(|profile| badges(profile, cx))),
+                .children(user.and_then(|user| user.tag.as_ref()).map(|tag| {
+                    theme::guild_tag(tag, cx)
+                        .bg(palette.panel)
+                        .text_color(rgb(palette.strong))
+                }))
+                .children(profile.and_then(|profile| badges(profile, palette, cx))),
         )
-        .when(!large, |this| this.children(profile.and_then(mutuals_line)))
+        .when(!large, |this| {
+            this.children(profile.and_then(|profile| mutuals_line(profile, palette)))
+        })
 }
 
-fn mutuals_line(profile: &model::Profile) -> Option<AnyElement> {
+fn mutuals_line(profile: &model::Profile, palette: ProfilePalette) -> Option<AnyElement> {
     let friends = profile
         .mutual_friends_count
         .filter(|count| *count > 0)
@@ -668,13 +890,13 @@ fn mutuals_line(profile: &model::Profile) -> Option<AnyElement> {
             .py(rpx(4.))
             .text_size(rpx(12.))
             .line_height(rpx(16.))
-            .text_color(rgb(theme::MUTED))
+            .text_color(rgb(palette.muted))
             .children(parts.into_iter().enumerate().flat_map(|(index, part)| {
                 let spacer = (index > 0).then(|| {
                     div()
                         .size(rpx(4.))
                         .rounded_full()
-                        .bg(rgb(theme::MUTED))
+                        .bg(rgb(palette.muted))
                         .into_any_element()
                 });
                 spacer
@@ -685,7 +907,7 @@ fn mutuals_line(profile: &model::Profile) -> Option<AnyElement> {
     )
 }
 
-fn badges(profile: &model::Profile, cx: &App) -> Option<AnyElement> {
+fn badges(profile: &model::Profile, palette: ProfilePalette, cx: &App) -> Option<AnyElement> {
     if profile.badges.is_empty() {
         return None;
     }
@@ -706,9 +928,9 @@ fn badges(profile: &model::Profile, cx: &App) -> Option<AnyElement> {
             .px(rpx(3.))
             .py(rpx(1.))
             .rounded(rpx(8.))
-            .bg(rgba(0xFFFFFF0A))
+            .bg(palette.panel)
             .border_1()
-            .border_color(rgba(0xFFFFFF14))
+            .border_color(palette.border)
             .children(
                 profile
                     .badges
@@ -747,7 +969,7 @@ fn badges(profile: &model::Profile, cx: &App) -> Option<AnyElement> {
                         .items_center()
                         .justify_center()
                         .text_size(rpx(14.))
-                        .text_color(rgb(theme::TEXT))
+                        .text_color(rgb(palette.text))
                         .child(format!("+{hidden}")),
                 )
             })
@@ -762,6 +984,7 @@ fn popout_body(
     cx: &mut Context<DiscordApp>,
 ) -> impl IntoElement {
     let user = app.store.user(card.user_id);
+    let palette = card.palette();
     let entity = cx.entity();
     div()
         .flex()
@@ -780,12 +1003,13 @@ fn popout_body(
             cx,
         ))
         .children(bio(app, card, true, cx))
-        .children(user.and_then(playing))
+        .children(user.and_then(|user| playing(user, palette)))
         .children(roles(app, card))
 }
 
 fn bio(app: &DiscordApp, card: &ProfileCard, clamped: bool, cx: &App) -> Option<AnyElement> {
     let profile = card.profile.as_deref()?;
+    let palette = card.palette();
     let text = guild_profile(profile)
         .and_then(|p| p.bio.clone())
         .filter(|bio| !bio.trim().is_empty())
@@ -798,12 +1022,18 @@ fn bio(app: &DiscordApp, card: &ProfileCard, clamped: bool, cx: &App) -> Option<
         message_id: card.user_id,
         revealed: &app.revealed_spoilers,
         entity: app.entity.clone(),
+        colors: BodyColors {
+            strong: palette.strong,
+            muted: palette.muted,
+            faint: palette.faint,
+            link: palette.light.then_some(0x154C8A),
+        },
     };
     Some(
         div()
             .text_size(rpx(14.))
             .line_height(rpx(18.))
-            .text_color(rgb(theme::STRONG))
+            .text_color(rgb(palette.strong))
             .when(clamped, |this| {
                 this.max_h(rpx(18. * BIO_LINES as f32)).overflow_hidden()
             })
@@ -812,7 +1042,7 @@ fn bio(app: &DiscordApp, card: &ProfileCard, clamped: bool, cx: &App) -> Option<
     )
 }
 
-fn playing(user: &User) -> Option<AnyElement> {
+fn playing(user: &User, palette: ProfilePalette) -> Option<AnyElement> {
     let activity = user.activity.as_ref().filter(|_| user.playing)?;
     Some(section(
         "Playing",
@@ -822,23 +1052,25 @@ fn playing(user: &User) -> Option<AnyElement> {
             .gap(rpx(8.))
             .p(rpx(12.))
             .rounded(rpx(8.))
-            .bg(rgba(0xFFFFFF0A))
+            .bg(palette.panel)
             .border_1()
-            .border_color(rgba(0xFFFFFF14))
+            .border_color(palette.border)
             .child(theme::icon("gamepad-2", 20., theme::GREEN))
             .child(
                 div()
                     .min_w_0()
                     .truncate()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(theme::STRONG))
+                    .text_color(rgb(palette.strong))
                     .child(label(("profile-playing", user.id), activity)),
             )
             .into_any_element(),
+        palette,
     ))
 }
 
 fn roles(app: &DiscordApp, card: &ProfileCard) -> Option<AnyElement> {
+    let palette = card.palette();
     let roles = app.store.member_roles(card.guild_id?, card.user_id);
     if roles.is_empty() {
         return None;
@@ -859,16 +1091,16 @@ fn roles(app: &DiscordApp, card: &ProfileCard) -> Option<AnyElement> {
                     .pr(rpx(8.))
                     .rounded(rpx(8.))
                     .border_1()
-                    .border_color(rgba(0xFFFFFF1F))
+                    .border_color(palette.border)
                     .text_size(rpx(12.))
                     .line_height(rpx(16.))
-                    .text_color(rgb(theme::TEXT))
+                    .text_color(rgb(palette.text))
                     .child(
                         div()
                             .size(rpx(12.))
                             .flex_none()
                             .rounded_full()
-                            .bg(rgb(role.color.unwrap_or(theme::MUTED))),
+                            .bg(rgb(role.color.unwrap_or(palette.muted))),
                     )
                     .child(
                         div()
@@ -878,10 +1110,11 @@ fn roles(app: &DiscordApp, card: &ProfileCard) -> Option<AnyElement> {
                     )
             }))
             .into_any_element(),
+        palette,
     ))
 }
 
-fn section(title: &'static str, body: AnyElement) -> AnyElement {
+fn section(title: &'static str, body: AnyElement, palette: ProfilePalette) -> AnyElement {
     div()
         .flex()
         .flex_col()
@@ -891,20 +1124,21 @@ fn section(title: &'static str, body: AnyElement) -> AnyElement {
                 .text_size(rpx(12.))
                 .line_height(rpx(16.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(palette.muted))
                 .child(title),
         )
         .child(
             div()
                 .text_size(rpx(14.))
                 .line_height(rpx(18.))
-                .text_color(rgb(theme::TEXT))
+                .text_color(rgb(palette.text))
                 .child(body),
         )
         .into_any_element()
 }
 
 fn member_since(app: &DiscordApp, card: &ProfileCard, cx: &App) -> AnyElement {
+    let palette = card.palette();
     let format = |date: chrono::NaiveDate| date.format("%b %-d, %Y").to_string();
     let created = (card.user_id >> 22) as i64 + DISCORD_EPOCH_MS as i64;
     let created = chrono::DateTime::from_timestamp_millis(created).map(|date| date.date_naive());
@@ -926,7 +1160,7 @@ fn member_since(app: &DiscordApp, card: &ProfileCard, cx: &App) -> AnyElement {
                     .flex()
                     .items_center()
                     .gap(rpx(4.))
-                    .child(theme::icon("discord", 16., theme::MUTED))
+                    .child(theme::icon("discord", 16., palette.muted))
                     .child(format(date))
             }))
             .children(joined.zip(guild).map(|(date, guild)| {
@@ -937,7 +1171,7 @@ fn member_since(app: &DiscordApp, card: &ProfileCard, cx: &App) -> AnyElement {
                     .flex()
                     .items_center()
                     .gap(rpx(8.))
-                    .child(div().size(rpx(4.)).rounded_full().bg(rgb(theme::MUTED)))
+                    .child(div().size(rpx(4.)).rounded_full().bg(rgb(palette.muted)))
                     .child(
                         div()
                             .flex()
@@ -957,10 +1191,11 @@ fn member_since(app: &DiscordApp, card: &ProfileCard, cx: &App) -> AnyElement {
                     )
             }))
             .into_any_element(),
+        palette,
     )
 }
 
-fn connections(profile: &model::Profile) -> Option<AnyElement> {
+fn connections(profile: &model::Profile, palette: ProfilePalette) -> Option<AnyElement> {
     if profile.connected_accounts.is_empty() {
         return None;
     }
@@ -1004,22 +1239,23 @@ fn connections(profile: &model::Profile) -> Option<AnyElement> {
                                         div()
                                             .min_w_0()
                                             .truncate()
-                                            .text_color(rgb(theme::STRONG))
+                                            .text_color(rgb(palette.strong))
                                             .child(account.name.clone()),
                                     )
                                     .when(account.verified, |this| {
-                                        this.child(theme::icon("badge-check", 14., theme::MUTED))
+                                        this.child(theme::icon("badge-check", 14., palette.muted))
                                     }),
                             )
                             .child(
                                 div()
                                     .text_size(rpx(12.))
-                                    .text_color(rgb(theme::MUTED))
+                                    .text_color(rgb(palette.muted))
                                     .child(connection_name(&account.kind)),
                             ),
                     )
             }))
             .into_any_element(),
+        palette,
     ))
 }
 
@@ -1031,13 +1267,23 @@ fn connection_initial(kind: &str) -> String {
         .to_string()
 }
 
+fn profile_close_button(palette: ProfilePalette) -> Stateful<Div> {
+    let (background, hover) = if palette.light {
+        (hsla(0., 0., 1., 0.6), hsla(0., 0., 1., 0.85))
+    } else {
+        (rgba(0x00000066).into(), palette.hover)
+    };
+    theme::icon_button_with_hover("profile-close", "x", 18., palette.text, hover).bg(background)
+}
+
 fn modal(
     app: &DiscordApp,
     card: &ProfileCard,
     window: &Window,
     cx: &mut Context<DiscordApp>,
 ) -> AnyElement {
-    let theme = ProfileTheme::of(card.profile.as_deref());
+    let theme = card.theme();
+    let palette = card.palette();
     let css = |pixels: Pixels| pixels / window.rem_size() * theme::BASE_FONT_SIZE;
     let viewport = window.viewport_size();
     let (viewport, viewport_height) = (css(viewport.width), css(viewport.height));
@@ -1056,7 +1302,8 @@ fn modal(
     let card_width = (viewport * 0.455 - card_inset).clamp(300., 400.);
     let layout = Layout::modal(card_width);
     let surface = theme.map_or(theme::ELEVATED, ProfileTheme::surface);
-    let background = theme.map_or(rgb(theme::BG).into(), ProfileTheme::modal_background);
+    let background: Background =
+        theme.map_or(rgb(theme::BG).into(), ProfileTheme::modal_background);
     let profile_card = div()
         .relative()
         .w(rpx(card_width))
@@ -1064,13 +1311,19 @@ fn modal(
         .flex()
         .flex_col()
         .rounded_t(rpx(MODAL_CARD_RADIUS))
+        .shadow(vec![
+            BoxShadow::new(
+                px(0.),
+                px(2.),
+                hsla(0., 0., 0., if palette.light { 0.16 } else { 0.3 }),
+            )
+            .blur_radius(px(8.)),
+        ])
         .overflow_hidden()
         .map(|this| match theme {
             Some(theme) => this.bg(theme.outer()),
             None => this.bg(rgb(theme::ELEVATED)),
         })
-        .border_1()
-        .border_color(rgba(0xFFFFFF14))
         .child(
             div()
                 .id("profile-modal-card")
@@ -1078,8 +1331,10 @@ fn modal(
                 .flex_col()
                 .size_full()
                 .rounded_t(rpx(layout.corner))
-                .when(theme.is_some(), |this| {
-                    this.bg(hsla(0., 0., 0., THEME_OVERLAY))
+                .text_color(rgb(palette.text))
+                .map(|this| match theme {
+                    Some(theme) => this.bg(theme.overlay()),
+                    None => this,
                 })
                 .child(header(app, card, &layout, surface, None, cx))
                 .child(
@@ -1093,10 +1348,16 @@ fn modal(
                         .pb(rpx(layout.padding))
                         .overflow_y_scroll()
                         .child(display_names(app, card, true, None, cx))
-                        .children(bio(app, card, false, cx).map(|bio| section("About Me", bio)))
+                        .children(
+                            bio(app, card, false, cx).map(|bio| section("About Me", bio, palette)),
+                        )
                         .child(member_since(app, card, cx))
                         .children(roles(app, card))
-                        .children(card.profile.as_deref().and_then(connections)),
+                        .children(
+                            card.profile
+                                .as_deref()
+                                .and_then(|profile| connections(profile, palette)),
+                        ),
                 ),
         )
         .children(effect_layers(card, card_width, cx))
@@ -1122,17 +1383,44 @@ fn modal(
                 .right_0()
                 .h(rpx(BACKDROP_HEIGHT))
                 .overflow_hidden()
+                .opacity(BACKDROP_OPACITY)
                 .child(
-                    img(ImageSource::Render(image))
-                        .w(rpx(modal_width))
-                        .rounded_t(rpx(MODAL_RADIUS))
-                        .opacity(BACKDROP_OPACITY),
+                    canvas(
+                        move |_, _, _| image,
+                        |bounds, image, window, _| {
+                            if bounds.is_empty() {
+                                return;
+                            }
+                            let fitted = ObjectFit::Cover.get_bounds(bounds, image.size(0));
+                            // Fade the image itself, leaving the profile theme visible underneath.
+                            let fade = EdgeFade {
+                                bounds,
+                                band: bounds.size.height,
+                                band_top: None,
+                                band_bottom: None,
+                                band_left: None,
+                                band_right: None,
+                                top: false,
+                                bottom: true,
+                                left: false,
+                                right: false,
+                            };
+                            window.with_edge_fade(Some(fade), |window| {
+                                if let Err(error) = window.paint_image_fitted(
+                                    bounds,
+                                    fitted,
+                                    Corners::default(),
+                                    image,
+                                    0,
+                                    false,
+                                ) {
+                                    log::warn!("Could not paint profile backdrop: {error}");
+                                }
+                            });
+                        },
+                    )
+                    .size_full(),
                 )
-                .child(div().absolute().inset_0().bg(linear_gradient(
-                    180.,
-                    linear_color_stop(background.opacity(0.), 0.),
-                    linear_color_stop(background, 1.),
-                )))
         });
     let close = cx.entity();
     let dismiss = cx.entity();
@@ -1142,20 +1430,24 @@ fn modal(
         .w(rpx(modal_width))
         .h(rpx(modal_height))
         .rounded(rpx(MODAL_RADIUS))
-        .overflow_hidden()
+        .text_color(rgb(palette.text))
         .occlude()
         .on_click(|_, _, cx| cx.stop_propagation())
-        .bg(background)
-        .children(banner_backdrop)
+        // Clip the dialog surface, not the frame layers that extend beyond it.
         .child(
-            div().absolute().top(rpx(8.)).right(rpx(8.)).child(
-                theme::icon_button("profile-close", "x", 18., theme::TEXT)
-                    .bg(rgba(0x00000066))
-                    .on_click(move |_, _, cx| {
-                        close.update(cx, |app, cx| app.close_profile(cx));
-                    }),
-            ),
+            div()
+                .absolute()
+                .inset_0()
+                .rounded(rpx(MODAL_RADIUS))
+                .overflow_hidden()
+                .bg(background)
+                .children(banner_backdrop),
         )
+        .child(div().absolute().top(rpx(8.)).right(rpx(8.)).child(
+            profile_close_button(palette).on_click(move |_, _, cx| {
+                close.update(cx, |app, cx| app.close_profile(cx));
+            }),
+        ))
         .child(
             div()
                 .size_full()
@@ -1192,6 +1484,7 @@ fn modal(
 
 fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &mut Context<DiscordApp>) -> AnyElement {
     let profile = card.profile.as_deref();
+    let palette = card.palette();
     let mutual_guilds: Vec<&model::MutualGuild> = profile
         .and_then(|p| p.mutual_guilds.as_ref())
         .into_iter()
@@ -1206,7 +1499,7 @@ fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &mut Context<DiscordApp>
             .pb(rpx(12.))
             .border_b_2()
             .border_color(if selected {
-                rgb(theme::STRONG)
+                rgb(palette.strong)
             } else {
                 rgba(0)
             })
@@ -1214,11 +1507,11 @@ fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &mut Context<DiscordApp>
             .text_size(rpx(14.))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(rgb(if selected {
-                theme::STRONG
+                palette.strong
             } else {
-                theme::MUTED
+                palette.muted
             }))
-            .hover(|style| style.text_color(rgb(theme::STRONG)))
+            .hover(move |style| style.text_color(rgb(palette.strong)))
             .on_click(move |_, _, cx| {
                 entity.update(cx, |app, cx| app.select_profile_tab(id, cx));
             })
@@ -1226,7 +1519,7 @@ fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &mut Context<DiscordApp>
     };
     let panel = match card.tab {
         Tab::Activity => activity_panel(app, card),
-        Tab::Servers => servers_panel(app, &mutual_guilds, cx),
+        Tab::Servers => servers_panel(app, &mutual_guilds, palette, cx),
     };
     div()
         .flex()
@@ -1242,7 +1535,7 @@ fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &mut Context<DiscordApp>
                 .items_end()
                 .gap(rpx(24.))
                 .border_b_1()
-                .border_color(rgba(0xFFFFFF14))
+                .border_color(palette.border)
                 .child(tab(Tab::Activity, "Activity".to_owned()))
                 .when(!mutual_guilds.is_empty(), |this| {
                     this.child(tab(
@@ -1255,7 +1548,7 @@ fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &mut Context<DiscordApp>
                         .pb(rpx(12.))
                         .text_size(rpx(14.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(theme::FAINT))
+                        .text_color(rgb(palette.faint))
                         .child(plural(count as usize, "Mutual Friend"))
                 })),
         )
@@ -1273,8 +1566,9 @@ fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &mut Context<DiscordApp>
 }
 
 fn activity_panel(app: &DiscordApp, card: &ProfileCard) -> AnyElement {
+    let palette = card.palette();
     let user = app.store.user(card.user_id);
-    if let Some(playing) = user.and_then(playing) {
+    if let Some(playing) = user.and_then(|user| playing(user, palette)) {
         return playing;
     }
     let name = user.map_or("This user", |user| user.name.as_str());
@@ -1284,24 +1578,29 @@ fn activity_panel(app: &DiscordApp, card: &ProfileCard) -> AnyElement {
         .gap(rpx(4.))
         .p(rpx(24.))
         .rounded(rpx(12.))
-        .bg(rgba(0xFFFFFF08))
+        .bg(palette.panel)
         .child(
             div()
                 .text_size(rpx(16.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(palette.strong))
                 .child(format!("{name} doesn't have any activity to share here")),
         )
         .child(
             div()
                 .text_size(rpx(14.))
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(palette.muted))
                 .child("Looks like this profile is still a work in progress."),
         )
         .into_any_element()
 }
 
-fn servers_panel(app: &DiscordApp, mutuals: &[&model::MutualGuild], cx: &App) -> AnyElement {
+fn servers_panel(
+    app: &DiscordApp,
+    mutuals: &[&model::MutualGuild],
+    palette: ProfilePalette,
+    cx: &App,
+) -> AnyElement {
     div()
         .flex()
         .flex_col()
@@ -1318,7 +1617,7 @@ fn servers_panel(app: &DiscordApp, mutuals: &[&model::MutualGuild], cx: &App) ->
                     .gap(rpx(12.))
                     .p(rpx(8.))
                     .rounded(rpx(8.))
-                    .hover(|style| style.bg(rgba(0xFFFFFF0A)))
+                    .hover(move |style| style.bg(palette.hover))
                     .child(match icon {
                         Some(path) => img(path)
                             .size(rpx(40.))
@@ -1346,14 +1645,14 @@ fn servers_panel(app: &DiscordApp, mutuals: &[&model::MutualGuild], cx: &App) ->
                                     .truncate()
                                     .text_size(rpx(16.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(rgb(theme::STRONG))
+                                    .text_color(rgb(palette.strong))
                                     .child(label(("mutual-guild", guild.id), &guild.name)),
                             )
                             .children(mutual.nick.as_ref().map(|nick| {
                                 div()
                                     .truncate()
                                     .text_size(rpx(12.))
-                                    .text_color(rgb(theme::MUTED))
+                                    .text_color(rgb(palette.muted))
                                     .child(label(("mutual-nick", guild.id), nick))
                             })),
                     ),
@@ -1506,4 +1805,228 @@ fn effect_layers(card: &ProfileCard, width: f32, cx: &App) -> Vec<AnyElement> {
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ProfilePalette, ProfileTheme, THEME_OVERLAY, blend, contrast, profile_close_button,
+    };
+    use crate::discord::model;
+    use gpui::rgb;
+
+    fn profile() -> model::Profile {
+        serde_json::from_str(include_str!("../discord/fixtures/profile_modal.json")).unwrap()
+    }
+
+    #[test]
+    fn profile_theme_uses_global_colors_when_the_guild_has_no_theme() {
+        let profile = profile();
+        let theme = ProfileTheme::of(Some(&profile)).unwrap();
+        assert_eq!((theme.primary, theme.secondary), (11687486, 14261667));
+    }
+
+    #[test]
+    fn offline_user_keeps_cosmetics_and_theme_after_profile_loading() {
+        let profile = profile();
+        let ready = serde_json::from_str(include_str!("../discord/fixtures/ready.json")).unwrap();
+        let mut store = crate::store::Store::from_ready(ready);
+        store.absorb_profile(Some(1191168960364544011), &profile);
+        let user = store.user(profile.user.user.id).unwrap();
+        assert!(user.status == crate::store::Status::Offline);
+        assert!(user.decoration.is_some());
+        assert_eq!(
+            user.name_style.as_ref().unwrap().colors,
+            [16758138, 16749423, 16743544, 15756170]
+        );
+        assert_eq!(ProfileTheme::of(Some(&profile)).unwrap().primary, 11687486);
+    }
+
+    #[test]
+    fn complete_guild_theme_overrides_global_colors() {
+        let mut profile = profile();
+        profile.guild_member_profile.as_mut().unwrap().theme_colors =
+            Some(vec![0x336699, 0x993366]);
+        let theme = ProfileTheme::of(Some(&profile)).unwrap();
+        assert_eq!((theme.primary, theme.secondary), (0x336699, 0x993366));
+    }
+
+    #[test]
+    fn incomplete_guild_theme_does_not_hide_the_global_theme() {
+        let mut profile = profile();
+        for colors in [vec![], vec![0x336699]] {
+            profile.guild_member_profile.as_mut().unwrap().theme_colors = Some(colors);
+            let theme = ProfileTheme::of(Some(&profile)).unwrap();
+            assert_eq!((theme.primary, theme.secondary), (11687486, 14261667));
+        }
+        profile.user_profile.as_mut().unwrap().theme_colors = None;
+        assert!(ProfileTheme::of(Some(&profile)).is_none());
+        assert!(ProfileTheme::of(None).is_none());
+    }
+
+    #[test]
+    fn nitro_profiles_without_custom_colors_use_the_avatar_palette() {
+        let mut profile = profile();
+        profile.user_profile.as_mut().unwrap().theme_colors = None;
+        let avatar = ProfileTheme {
+            primary: 0xDCD2AF,
+            secondary: 0x292722,
+        };
+        assert!(ProfileTheme::needs_avatar(Some(&profile)));
+        let resolved = ProfileTheme::resolve(Some(&profile), Some(avatar)).unwrap();
+        assert_eq!(
+            (resolved.primary, resolved.secondary),
+            (avatar.primary, avatar.secondary)
+        );
+        assert!(ProfilePalette::of(Some(resolved)).light);
+        assert!(ProfileTheme::resolve(Some(&profile), None).is_none());
+        for premium_type in [None, Some(0), Some(1), Some(3)] {
+            profile.premium_type = premium_type;
+            assert!(!ProfileTheme::needs_avatar(Some(&profile)));
+            assert!(ProfileTheme::resolve(Some(&profile), Some(avatar)).is_none());
+        }
+    }
+
+    #[test]
+    fn saved_colors_always_take_priority_over_an_avatar_palette() {
+        let mut profile = profile();
+        let avatar = ProfileTheme {
+            primary: 0xDCD2AF,
+            secondary: 0x292722,
+        };
+        let resolved = ProfileTheme::resolve(Some(&profile), Some(avatar)).unwrap();
+        assert_eq!((resolved.primary, resolved.secondary), (11687486, 14261667));
+        assert!(!ProfileTheme::needs_avatar(Some(&profile)));
+        profile.guild_member_profile.as_mut().unwrap().theme_colors =
+            Some(vec![0x112233, 0x445566]);
+        let resolved = ProfileTheme::resolve(Some(&profile), Some(avatar)).unwrap();
+        assert_eq!((resolved.primary, resolved.secondary), (0x112233, 0x445566));
+    }
+
+    #[test]
+    fn dialog_background_matches_discord_lab_midpoint_and_lightness_limits() {
+        // Reference values from Chroma's Lab mix followed by Discord's HSL lightness clamp.
+        for (primary, secondary, expected) in [
+            (0x336699, 0x993366, 0x1D141F),
+            (0x339966, 0x993366, 0x1C1917),
+            (0x8000FF, 0x00FFFF, 0x000B33),
+            (0xA59BBC, 0x9387A9, 0xC9C3D5),
+            (0x15223A, 0x30203B, 0x141221),
+            (0x00FFFF, 0x8000FF, 0x99B0FF),
+            (0, 0xFFFFFF, 0x191A19),
+            (0xFFFFFF, 0, 0xCCCCCC),
+        ] {
+            let background = ProfileTheme { primary, secondary }.modal_background();
+            let actual: gpui::Rgba = background
+                .as_solid()
+                .expect("dialog must not repeat the card gradient")
+                .into();
+            let expected = rgb(expected);
+            for (actual, expected) in [
+                (actual.r, expected.r),
+                (actual.g, expected.g),
+                (actual.b, expected.b),
+            ] {
+                assert!((actual - expected).abs() <= 1. / 255. + f32::EPSILON);
+            }
+        }
+    }
+
+    #[test]
+    fn secondary_brightness_does_not_change_the_primary_color_mode() {
+        for primary in [0x8000FF, 0x00C000, 0xFF0000, 0x7F7F7F] {
+            for secondary in [0, 0x00FFFF, 0xFFFFFF] {
+                let theme = ProfileTheme { primary, secondary };
+                assert!(!theme.is_light());
+                assert_eq!(theme.overlay(), gpui::hsla(0., 0., 0., THEME_OVERLAY));
+            }
+        }
+        for secondary in [0, 0x8000FF, 0xFFFFFF] {
+            assert!(
+                ProfileTheme {
+                    primary: 0x808080,
+                    secondary
+                }
+                .is_light()
+            );
+        }
+    }
+
+    #[test]
+    fn pale_profile_colors_use_a_light_overlay_instead_of_becoming_charcoal() {
+        let theme = ProfileTheme {
+            primary: 0xA59BBC,
+            secondary: 0x9387A9,
+        };
+        assert!(theme.is_light());
+        assert_eq!(theme.surface(), 0xDBD7E4);
+        assert_eq!(theme.surface_color(theme.secondary), 0xD4CFDD);
+        assert_eq!(theme.overlay(), gpui::hsla(0., 0., 1., THEME_OVERLAY));
+    }
+
+    #[test]
+    fn dark_profile_colors_keep_the_dark_overlay() {
+        let theme = ProfileTheme {
+            primary: 0x15223A,
+            secondary: 0x30203B,
+        };
+        assert!(!theme.is_light());
+        assert_eq!(theme.surface(), blend(theme.primary, 0, THEME_OVERLAY));
+        assert_eq!(theme.overlay(), gpui::hsla(0., 0., 0., THEME_OVERLAY));
+    }
+
+    #[test]
+    fn profile_foreground_colors_follow_the_local_theme_not_the_app_theme() {
+        let mut profile = profile();
+        profile.user_profile.as_mut().unwrap().theme_colors = Some(vec![0xA59BBC, 0x9387A9]);
+        let light = ProfilePalette::of(ProfileTheme::of(Some(&profile)));
+        assert!(light.light);
+        assert_eq!(light.strong, 0x18141F);
+        profile.user_profile.as_mut().unwrap().theme_colors = Some(vec![0x15223A, 0x30203B]);
+        let dark = ProfilePalette::of(ProfileTheme::of(Some(&profile)));
+        assert!(!dark.light);
+        assert_eq!(dark.strong, crate::theme::STRONG);
+        profile.user_profile.as_mut().unwrap().theme_colors = Some(vec![0x8000FF, 0x00FFFF]);
+        let saturated = ProfilePalette::of(ProfileTheme::of(Some(&profile)));
+        assert!(!saturated.light);
+        assert_eq!(saturated.strong, crate::theme::STRONG);
+        let default = ProfilePalette::of(None);
+        assert!(!default.light);
+        assert_eq!(default.text, crate::theme::TEXT);
+    }
+
+    #[test]
+    fn close_button_constructs_without_duplicate_hover_styles() {
+        let mut profile = profile();
+        for colors in [
+            None,
+            Some(vec![0xA59BBC, 0x9387A9]),
+            Some(vec![0x15223A, 0x30203B]),
+        ] {
+            profile.user_profile.as_mut().unwrap().theme_colors = colors;
+            let _button =
+                profile_close_button(ProfilePalette::of(ProfileTheme::of(Some(&profile))));
+        }
+    }
+
+    #[test]
+    fn profile_text_has_readable_contrast_at_both_gradient_stops() {
+        let mut profile = profile();
+        for colors in [
+            [0xA59BBC, 0x9387A9],
+            [0x15223A, 0x30203B],
+            [0xFFFFFF, 0],
+            [0xFFFF00, 0x0000FF],
+            [0x8000FF, 0x00FFFF],
+        ] {
+            profile.user_profile.as_mut().unwrap().theme_colors = Some(colors.to_vec());
+            let palette = ProfilePalette::of(ProfileTheme::of(Some(&profile)));
+            let theme = ProfileTheme::of(Some(&profile)).unwrap();
+            for background in colors.map(|color| theme.surface_color(color)) {
+                for foreground in [palette.strong, palette.text, palette.muted, palette.faint] {
+                    assert!(contrast(foreground, background) >= 4.5);
+                }
+            }
+        }
+    }
 }
