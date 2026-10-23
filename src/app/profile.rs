@@ -21,6 +21,8 @@ use crate::{
 };
 
 mod avatar_colors;
+#[cfg(test)]
+mod activity_tests;
 
 const POPOUT_WIDTH: f32 = 300.;
 const MODAL_WIDTH: f32 = 962.;
@@ -43,8 +45,37 @@ const THEME_OVERLAY: f32 = 0.6;
 const SURFACE_HIGHEST: u32 = 0x26262C;
 const MAX_VISIBLE_BADGES: usize = 6;
 const STATUS_OVERLAP: f32 = 10.;
+/// Example questions Discord shows in your own empty status bubble.
+const STATUS_PROMPTS: [&str; 6] = [
+    "Best thing you ate this week?",
+    "What's on your mind?",
+    "What are you listening to?",
+    "Currently obsessed with...",
+    "What are you working on?",
+    "Favorite game right now?",
+];
 const THEME_BORDER: f32 = 2.;
 const BIO_LINES: usize = 3;
+
+struct ActivityPrompt {
+    heading: bool,
+    text: &'static str,
+}
+
+const ACTIVITY_PROMPTS: [ActivityPrompt; 3] = [
+    ActivityPrompt {
+        heading: true,
+        text: "They appear to be practicing the art of digital zen \u{1F9D8} take a deep breath and say hey/namaste",
+    },
+    ActivityPrompt {
+        heading: true,
+        text: "Their gaming console isn't linked \u{1F3AF} ask them what their gaming setup looks like",
+    },
+    ActivityPrompt {
+        heading: false,
+        text: "No activity shared yet - drop them a friendly hello to start chatting",
+    },
+];
 
 pub(crate) struct ProfileCard {
     user_id: u64,
@@ -59,6 +90,10 @@ pub(crate) struct ProfileCard {
     frame: Option<Arc<model::CollectibleProduct>>,
     opened: Instant,
     tab: Tab,
+    /// Index into `STATUS_PROMPTS`, rolled once per popout.
+    status_prompt: usize,
+    /// Chosen once per opening, not during redraws or tab changes.
+    activity_prompt: usize,
     _tasks: Vec<Task<()>>,
 }
 
@@ -101,7 +136,9 @@ impl Layout {
             ring: 6.,
             padding: 16.,
             status_left: 105.,
-            header_min: 105. + 35. - inset,
+            // Banner + lower half of the avatar + ring + 8px breathing room; the
+            // body's own 4px top padding brings the name 12px below the ring.
+            header_min: 105. + 40. + 6. + 8. - inset,
             corner: if themed { 6. } else { 7. },
         }
     }
@@ -143,6 +180,8 @@ impl DiscordApp {
             frame: None,
             opened: Instant::now(),
             tab: Tab::Activity,
+            status_prompt: rand::random::<usize>() % STATUS_PROMPTS.len(),
+            activity_prompt: rand::random::<usize>() % ACTIVITY_PROMPTS.len(),
             _tasks: Vec::new(),
         });
         self.load_profile(ProfileKind::Popout, cx);
@@ -637,6 +676,11 @@ fn header(
     let status = user
         .filter(|user| !user.playing)
         .and_then(|user| user.activity.clone());
+    // Your own profile shows an "add status" prompt in place of an empty bubble.
+    let prompt = status.is_none() && card.user_id == app.store.current_user_id;
+    let status = status
+        .map(|text| (text, false))
+        .or_else(|| prompt.then(|| (STATUS_PROMPTS[card.status_prompt].to_owned(), true)));
     let avatar = div()
         .id("profile-avatar")
         .absolute()
@@ -658,9 +702,13 @@ fn header(
             Some(handler) => this.cursor_pointer().on_click(handler),
             None => this,
         });
-    let status_height = status
-        .as_ref()
-        .map_or(0., |text| if text.chars().count() > 22 { 54. } else { 36. });
+    let status_height = status.as_ref().map_or(0., |(text, prompt)| {
+        if text.chars().count() > if *prompt { 18 } else { 22 } {
+            54.
+        } else {
+            36.
+        }
+    });
     let height = layout
         .header_min
         .max(layout.banner - STATUS_OVERLAP + status_height);
@@ -670,7 +718,10 @@ fn header(
         .h(rpx(height))
         .child(banner(card, layout, cx))
         .child(avatar)
-        .children(status.map(|text| status_bubble(card.user_id, &text, layout, palette)))
+        .children(
+            status
+                .map(|(text, prompt)| status_bubble(card.user_id, &text, prompt, layout, palette)),
+        )
         .into_any_element()
 }
 
@@ -726,6 +777,7 @@ fn banner(card: &ProfileCard, layout: &Layout, cx: &App) -> impl IntoElement {
 fn status_bubble(
     user_id: u64,
     text: &str,
+    prompt: bool,
     layout: &Layout,
     palette: ProfilePalette,
 ) -> impl IntoElement + use<> {
@@ -750,28 +802,59 @@ fn status_bubble(
         .right(rpx(12.))
         .flex()
         .child(
+            // Thought circles come first so the bubble paints over them,
+            // hiding their lower half behind its edge.
             div()
                 .relative()
-                .max_w(rpx(181.))
-                .min_w(rpx(42.))
-                .px(rpx(12.))
-                .py(rpx(8.))
-                .rounded(rpx(12.))
-                .bg(rgb(surface))
-                .border_1()
-                .border_color(palette.border)
-                .shadow_sm()
-                .text_size(rpx(14.))
-                .line_height(rpx(18.))
-                .text_color(rgb(palette.text))
-                .child(
+                .child(bubble(20.).left(rpx(10.)).top(rpx(-8.)))
+                .child(bubble(10.).left(rpx(-3.)).top(rpx(-15.)))
+                .child(status_body(user_id, text, prompt, surface, palette)),
+        )
+}
+
+fn status_body(
+    user_id: u64,
+    text: &str,
+    prompt: bool,
+    surface: u32,
+    palette: ProfilePalette,
+) -> Div {
+    div()
+        .max_w(rpx(181.))
+        .min_w(rpx(42.))
+        .px(rpx(12.))
+        .py(rpx(8.))
+        .rounded(rpx(12.))
+        .bg(rgb(surface))
+        .border_1()
+        .border_color(palette.border)
+        .shadow_sm()
+        .text_size(rpx(14.))
+        .line_height(rpx(18.))
+        .text_color(rgb(palette.text))
+        .map(|this| {
+            if prompt {
+                // Will open a set-status dialog once one exists.
+                this.cursor_pointer()
+                    .flex()
+                    .items_start()
+                    .gap(rpx(4.))
+                    .child(theme::icon("circle-plus-filled", 16., palette.muted).mt(rpx(1.)))
+                    .child(
+                        div()
+                            .line_clamp(2)
+                            .italic()
+                            .text_color(rgb(palette.muted))
+                            .child(text.to_owned()),
+                    )
+            } else {
+                this.child(
                     div()
                         .line_clamp(2)
                         .child(wrapped_label(("profile-status", user_id), text)),
                 )
-                .child(bubble(20.).left(rpx(10.)).top(rpx(-8.)))
-                .child(bubble(10.).left(rpx(-3.)).top(rpx(-15.))),
-        )
+            }
+        })
 }
 
 fn display_names(
@@ -1276,6 +1359,15 @@ fn profile_close_button(palette: ProfilePalette) -> Stateful<Div> {
     theme::icon_button_with_hover("profile-close", "x", 18., palette.text, hover).bg(background)
 }
 
+fn modal_backdrop_corners(rem_size: Pixels) -> Corners<Pixels> {
+    let radius = rpx(MODAL_RADIUS).to_pixels(rem_size);
+    Corners {
+        top_left: radius,
+        top_right: radius,
+        ..Corners::default()
+    }
+}
+
 fn modal(
     app: &DiscordApp,
     card: &ProfileCard,
@@ -1409,7 +1501,8 @@ fn modal(
                                 if let Err(error) = window.paint_image_fitted(
                                     bounds,
                                     fitted,
-                                    Corners::default(),
+                                    // Parent overflow clipping is rectangular, so round the image too.
+                                    modal_backdrop_corners(window.rem_size()),
                                     image,
                                     0,
                                     false,
@@ -1552,17 +1645,22 @@ fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &mut Context<DiscordApp>
                         .child(plural(count as usize, "Mutual Friend"))
                 })),
         )
-        .child(
-            div()
-                .id("profile-tab-panel")
-                .flex_1()
-                .pt(rpx(20.))
-                .pb(rpx(32.))
-                .pr(rpx(16.))
-                .overflow_y_scroll()
-                .child(panel),
-        )
+        .child(tab_panel(panel))
         .into_any_element()
+}
+
+fn tab_panel(panel: AnyElement) -> Stateful<Div> {
+    div()
+        .id("profile-tab-panel")
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .pt(rpx(20.))
+        .pb(rpx(32.))
+        .pr(rpx(16.))
+        .overflow_y_scroll()
+        .child(panel)
 }
 
 fn activity_panel(app: &DiscordApp, card: &ProfileCard) -> AnyElement {
@@ -1572,27 +1670,49 @@ fn activity_panel(app: &DiscordApp, card: &ProfileCard) -> AnyElement {
         return playing;
     }
     let name = user.map_or("This user", |user| user.name.as_str());
+    activity_empty(name, &ACTIVITY_PROMPTS[card.activity_prompt], palette).into_any_element()
+}
+
+fn activity_empty(name: &str, prompt: &ActivityPrompt, palette: ProfilePalette) -> Div {
     div()
+        .debug_selector(|| "profile-activity-empty".into())
         .flex()
         .flex_col()
-        .gap(rpx(4.))
-        .p(rpx(24.))
-        .rounded(rpx(12.))
-        .bg(palette.panel)
+        .flex_1()
+        .w_full()
+        .items_center()
+        .justify_center()
+        .px(rpx(16.))
+        .py(rpx(24.))
         .child(
             div()
+                .debug_selector(|| "profile-activity-copy".into())
+                .flex()
+                .flex_col()
+                .w_full()
+                .max_w(rpx(360.))
+                .gap(rpx(8.))
+                .text_center()
                 .text_size(rpx(16.))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(palette.strong))
-                .child(format!("{name} doesn't have any activity to share here")),
+                .line_height(rpx(20.))
+                .font_weight(FontWeight::NORMAL)
+                .text_color(rgb(palette.text))
+                .when(prompt.heading, |this| {
+                    this.child(
+                        div()
+                            .debug_selector(|| "profile-activity-heading".into())
+                            .w_full()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(format!("{name} doesn't have any activity to share here")),
+                    )
+                })
+                .child(
+                    div()
+                        .debug_selector(|| "profile-activity-flavor".into())
+                        .w_full()
+                        .child(prompt.text),
+                ),
         )
-        .child(
-            div()
-                .text_size(rpx(14.))
-                .text_color(rgb(palette.muted))
-                .child("Looks like this profile is still a work in progress."),
-        )
-        .into_any_element()
 }
 
 fn servers_panel(
@@ -1810,13 +1930,25 @@ fn effect_layers(card: &ProfileCard, width: f32, cx: &App) -> Vec<AnyElement> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ProfilePalette, ProfileTheme, THEME_OVERLAY, blend, contrast, profile_close_button,
+        ProfilePalette, ProfileTheme, THEME_OVERLAY, blend, contrast, modal_backdrop_corners,
+        profile_close_button,
     };
     use crate::discord::model;
-    use gpui::rgb;
+    use gpui::{px, rgb};
 
     fn profile() -> model::Profile {
         serde_json::from_str(include_str!("../discord/fixtures/profile_modal.json")).unwrap()
+    }
+
+    #[test]
+    fn blurred_banner_matches_dialog_top_corners_at_each_ui_scale() {
+        for scale in [1., 1.25, 1.5, 2.] {
+            let corners = modal_backdrop_corners(px(crate::theme::BASE_FONT_SIZE * scale));
+            assert_eq!(corners.top_left, px(16. * scale));
+            assert_eq!(corners.top_right, px(16. * scale));
+            assert_eq!(corners.bottom_left, px(0.));
+            assert_eq!(corners.bottom_right, px(0.));
+        }
     }
 
     #[test]
