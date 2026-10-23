@@ -8,6 +8,7 @@ use flate2::read::ZlibDecoder;
 use gpui::{Image, ImageFormat};
 
 static BUNDLE: &[u8] = include_bytes!("../assets/twemoji.bin");
+static SHORTCODES: &str = include_str!("../assets/emoji_shortcodes.tsv");
 const MAX_SVG_SIZE: u64 = 1024 * 1024;
 
 struct Entry<'a> {
@@ -219,6 +220,19 @@ fn segment_with_bundle<'a>(text: &'a str, bundle: Option<&Bundle<'_>>) -> Vec<Se
 
 pub fn image(sequence: &str) -> Option<Arc<Image>> {
     bundle()?.entry(sequence)?.image().cloned()
+}
+
+pub fn shortcode(name: &str) -> Option<&'static str> {
+    static TABLE: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
+    TABLE
+        .get_or_init(|| {
+            SHORTCODES
+                .lines()
+                .filter_map(|line| line.split_once('\t'))
+                .collect()
+        })
+        .get(name)
+        .copied()
 }
 
 fn presented(chars: &[char]) -> bool {
