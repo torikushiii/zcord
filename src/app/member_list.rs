@@ -4,7 +4,7 @@ use crate::{
     animated,
     app::{DiscordApp, message_body::label},
     images::{self, ImageSpec},
-    store::{MemberRow, Nameplate, User},
+    store::{MemberRow, NameStyle, Nameplate, User},
     theme::{self, rpx},
 };
 
@@ -195,14 +195,26 @@ fn member_row(app: &DiscordApp, guild_id: u64, user: &User, cx: &App) -> impl In
                         .max_w_full()
                         .min_w_0()
                         .when(plated, |this| this.children(nameplate_mask(dim)))
-                        .child(name_line(user, &name, role_color, cx))
+                        .child(name_line(
+                            user,
+                            &name,
+                            role_color,
+                            app.store.member_name_style(guild_id, user.id),
+                            cx,
+                        ))
                         .children(activity_line(user, online)),
                 ),
         )
 }
 
-fn name_line(user: &User, name: &str, role_color: Option<u32>, cx: &App) -> impl IntoElement {
-    let name_style = user.name_style.as_ref().filter(|_| role_color.is_none());
+fn name_line(
+    user: &User,
+    name: &str,
+    role_color: Option<u32>,
+    name_style: Option<&NameStyle>,
+    cx: &App,
+) -> impl IntoElement {
+    let name_style = name_style.filter(|_| role_color.is_none());
     div()
         .flex()
         .items_center()

@@ -1245,7 +1245,10 @@ fn decorations_survive_partial_authors_and_guild_nameplates_override() {
     store.set_messages(2002, vec![message.clone()]);
     let user = store.user(2).unwrap();
     assert_eq!(user.decoration.as_ref().unwrap().asset, "a_cat");
-    assert!(user.decoration_spec(true).is_some());
+    assert!(matches!(
+        user.decoration.as_ref().unwrap().image_spec(true),
+        ImageSpec::AvatarDecoration { animated: true, .. }
+    ));
     assert_eq!(user.name_style.as_ref().unwrap().colors, [1, 2]);
     assert_eq!(
         store.nameplate(None, 2).unwrap().asset,
@@ -1314,6 +1317,93 @@ fn decorations_survive_partial_authors_and_guild_nameplates_override() {
     let user = store.user(2).unwrap();
     assert!(user.decoration.is_none() && user.nameplate.is_none() && user.name_style.is_none());
     assert!(store.nameplate(Some(200), 2).is_none());
+}
+
+#[test]
+fn offline_profile_applies_server_cosmetics_without_replacing_global_ones() {
+    let mut store = Store::from_ready(ready());
+    let mut value: serde_json::Value =
+        serde_json::from_str(include_str!("../discord/fixtures/profile_modal.json")).unwrap();
+    value["guild_member"]["nick"] = json!("Server nickname");
+    value["guild_member"]["avatar"] = json!("server-avatar");
+    value["guild_member"]["avatar_decoration_data"] = json!({"asset": "a_server", "sku_id": "7"});
+    value["guild_member"]["display_name_styles"] =
+        json!({"font_id": 1, "colors": [0x112233, 0x445566]});
+    let profile: model::Profile = serde_json::from_value(value.clone()).unwrap();
+    let id = profile.user.user.id;
+    store.absorb_profile(Some(200), &profile);
+    assert!(store.user(id).unwrap().status == Status::Offline);
+    assert_eq!(store.member_name(200, id), Some("Server nickname"));
+    assert!(matches!(store.member_avatar_spec(200, id),
+        Some(ImageSpec::GuildAvatar { hash, .. }) if hash == "server-avatar"));
+    assert_eq!(store.member_decoration(200, id).unwrap().asset, "a_server");
+    assert_eq!(
+        store.member_name_style(200, id).unwrap().colors,
+        [0x112233, 0x445566]
+    );
+    let global = store
+        .user(id)
+        .unwrap()
+        .decoration
+        .as_ref()
+        .unwrap()
+        .asset
+        .clone();
+    assert_ne!(global, "a_server");
+    assert_eq!(store.member_decoration(201, id).unwrap().asset, global);
+    assert_ne!(
+        store.member_name_style(201, id).unwrap().colors,
+        [0x112233, 0x445566]
+    );
+
+    // An unrelated partial update must not erase server-specific cosmetics.
+    member_event(
+        &mut store,
+        json!({"guild_id": "200", "user": {"id": id.to_string()}, "nick": "Changed"}),
+    );
+    assert_eq!(store.member_decoration(200, id).unwrap().asset, "a_server");
+    assert_eq!(
+        store.member_name_style(200, id).unwrap().colors,
+        [0x112233, 0x445566]
+    );
+
+    // Explicitly removing an override restores the global cosmetics.
+    value["guild_member"]["avatar"] = serde_json::Value::Null;
+    value["guild_member"]["avatar_decoration_data"] = serde_json::Value::Null;
+    value["guild_member"]["display_name_styles"] = serde_json::Value::Null;
+    store.absorb_profile(Some(200), &serde_json::from_value(value).unwrap());
+    assert!(store.member_avatar_spec(200, id).is_none());
+    assert_eq!(store.member_decoration(200, id).unwrap().asset, global);
+    assert_eq!(
+        store.member_name_style(200, id).unwrap().colors,
+        store.user(id).unwrap().name_style.as_ref().unwrap().colors
+    );
+}
+
+#[test]
+fn profile_retains_nested_user_cosmetics_when_the_top_level_user_omits_them() {
+    let mut store = Store::from_ready(ready());
+    let mut value: serde_json::Value =
+        serde_json::from_str(include_str!("../discord/fixtures/profile_modal.json")).unwrap();
+    for key in [
+        "avatar_decoration_data",
+        "collectibles",
+        "display_name_styles",
+    ] {
+        value["user"].as_object_mut().unwrap().remove(key);
+    }
+    let profile: model::Profile = serde_json::from_value(value.clone()).unwrap();
+    let id = profile.user.user.id;
+    store.absorb_profile(Some(200), &profile);
+    let user = store.user(id).unwrap();
+    assert!(user.status == Status::Offline);
+    assert!(user.decoration.is_some() && user.nameplate.is_some() && user.name_style.is_some());
+    assert!(store.nameplate(Some(200), id).is_some());
+
+    value["user"]["avatar_decoration_data"] = serde_json::Value::Null;
+    store.absorb_profile(Some(200), &serde_json::from_value(value).unwrap());
+    assert!(store.user(id).unwrap().decoration.is_none());
+    assert!(store.member_decoration(200, id).is_none());
 }
 
 #[test]

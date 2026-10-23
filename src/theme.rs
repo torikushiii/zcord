@@ -3,8 +3,10 @@ use gpui::{prelude::*, *};
 use crate::{
     animated,
     images::{self, ImageSpec},
-    store::{GuildTag, NameStyle, Status, Store, User},
+    store::{Decoration, GuildTag, NameStyle, Status, Store, User},
 };
+
+mod profile_avatar;
 
 pub const BG: u32 = 0x08080A;
 pub const ELEVATED: u32 = 0x121214;
@@ -61,14 +63,16 @@ pub fn user_avatar(
     animate: bool,
     cx: &App,
 ) -> impl IntoElement + use<> {
-    let image = user.and_then(|user| avatar_image(&user.avatar_spec(), size, animate, cx));
+    let notch = profile_avatar::Geometry::for_avatar(size, status.is_some());
+    let image = user.and_then(|user| avatar_image(&user.avatar_spec(), size, animate, notch, cx));
     avatar(
         user.map_or("?", |user| &user.initials),
         user_color(user_id),
         size,
         status,
         image,
-        user.and_then(|user| decoration(user, size, animate, cx)),
+        user.and_then(|user| user.decoration.as_ref())
+            .and_then(|data| decoration(user_id, data, size, animate, notch, cx)),
     )
 }
 
@@ -85,23 +89,44 @@ pub fn member_avatar(
     let spec = store
         .member_avatar_spec(guild_id, user_id)
         .or_else(|| user.map(User::avatar_spec));
-    let image = spec.and_then(|spec| avatar_image(&spec, size, animate, cx));
+    let notch = profile_avatar::Geometry::for_avatar(size, status.is_some());
+    let image = spec.and_then(|spec| avatar_image(&spec, size, animate, notch, cx));
     avatar(
         user.map_or("?", |user| &user.initials),
         user_color(user_id),
         size,
         status,
         image,
-        user.and_then(|user| decoration(user, size, animate, cx)),
+        store
+            .member_decoration(guild_id, user_id)
+            .and_then(|data| decoration(user_id, data, size, animate, notch, cx)),
     )
 }
 
-fn avatar_image(spec: &ImageSpec, size: f32, animate: bool, cx: &App) -> Option<AnyElement> {
+fn avatar_image(
+    spec: &ImageSpec,
+    size: f32,
+    animate: bool,
+    notch: Option<profile_avatar::Geometry>,
+    cx: &App,
+) -> Option<AnyElement> {
     let pixels = image_px(size);
     let animated = animate
         .then(|| spec.animated())
         .flatten()
         .and_then(|animated| animated::resolve(&animated, pixels, cx));
+    if let Some(notch) = notch {
+        let source = match animated {
+            Some(image) => profile_avatar::Source::Decoded(image),
+            None => profile_avatar::Source::File(images::resolve(spec, pixels, cx)?),
+        };
+        return Some(profile_avatar::image(
+            "profile-avatar-image",
+            source,
+            notch,
+            false,
+        ));
+    }
     Some(match animated {
         Some(image) => animated::image(image)
             .size_full()
@@ -117,29 +142,42 @@ fn avatar_image(spec: &ImageSpec, size: f32, animate: bool, cx: &App) -> Option<
 
 const DECORATION_SCALE: f32 = 1.2;
 
-pub fn decoration(user: &User, size: f32, animate: bool, cx: &App) -> Option<AnyElement> {
+fn decoration(
+    user_id: u64,
+    decoration: &Decoration,
+    size: f32,
+    animate: bool,
+    notch: Option<profile_avatar::Geometry>,
+    cx: &App,
+) -> Option<AnyElement> {
     if size < 24. {
         return None;
     }
     let frame = size * DECORATION_SCALE;
     let pixels = image_px(frame);
-    let animates = animate
-        && user
-            .decoration
-            .as_ref()
-            .is_some_and(|decoration| decoration.asset.starts_with("a_"));
+    let animates = animate && decoration.asset.starts_with("a_");
     let animated = animates
-        .then(|| user.decoration_spec(true))
-        .flatten()
-        .and_then(|spec| animated::resolve(&spec, pixels, cx));
-    let image = match animated {
-        Some(image) => animated::image(image)
-            .id(("decoration", user.id))
-            .size_full()
-            .into_any_element(),
-        None => img(images::resolve(&user.decoration_spec(false)?, pixels, cx)?)
-            .size_full()
-            .into_any_element(),
+        .then(|| animated::resolve(&decoration.image_spec(true), pixels, cx))
+        .flatten();
+    let still = if animated.is_none() {
+        images::resolve(&decoration.image_spec(false), pixels, cx)
+    } else {
+        None
+    };
+    let image = if let Some(notch) = notch {
+        let source = match animated {
+            Some(image) => profile_avatar::Source::Decoded(image),
+            None => profile_avatar::Source::File(still?),
+        };
+        profile_avatar::image(("decoration", user_id), source, notch, true)
+    } else {
+        match animated {
+            Some(image) => animated::image(image)
+                .id(("decoration", user_id))
+                .size_full()
+                .into_any_element(),
+            None => img(still?).size_full().into_any_element(),
+        }
     };
     Some(
         div()
@@ -202,6 +240,7 @@ pub fn avatar(
     image: Option<AnyElement>,
     decoration: Option<AnyElement>,
 ) -> impl IntoElement + use<> {
+    let notch = profile_avatar::Geometry::for_avatar(size, status.is_some());
     let dot = size * 0.3;
     div()
         .relative()
@@ -215,7 +254,8 @@ pub fn avatar(
                 .items_center()
                 .justify_center()
                 .rounded_full()
-                .bg(color)
+                .when(notch.is_none(), |this| this.bg(color))
+                .children(notch.map(|notch| profile_avatar::background(notch, color)))
                 .text_color(rgb(BG))
                 .text_size(rpx(size * 0.36))
                 .font_weight(FontWeight::SEMIBOLD)
@@ -224,6 +264,9 @@ pub fn avatar(
         })
         .children(decoration)
         .children(status.map(|(status, ring)| {
+            if let Some(notch) = notch {
+                return profile_avatar::indicator(notch, status, ring);
+            }
             div()
                 .absolute()
                 .right(rpx(-2.))
@@ -237,6 +280,7 @@ pub fn avatar(
                 .border_color(rgb(ring))
                 .bg(rgb(status_color(status)))
                 .children(status_cutout(status, dot, ring))
+                .into_any_element()
         }))
 }
 
@@ -298,7 +342,7 @@ pub fn app_tag() -> impl IntoElement {
         .child("APP")
 }
 
-pub fn guild_tag(tag: &GuildTag, cx: &App) -> impl IntoElement + use<> {
+pub fn guild_tag(tag: &GuildTag, cx: &App) -> Div {
     let badge = tag
         .badge_spec()
         .and_then(|spec| images::resolve(&spec, image_px(12.), cx));
@@ -319,6 +363,16 @@ pub fn guild_tag(tag: &GuildTag, cx: &App) -> impl IntoElement + use<> {
 }
 
 pub fn icon_button(id: impl Into<ElementId>, name: &str, size: f32, color: u32) -> Stateful<Div> {
+    icon_button_with_hover(id, name, size, color, rgb(SELECTED).into())
+}
+
+pub fn icon_button_with_hover(
+    id: impl Into<ElementId>,
+    name: &str,
+    size: f32,
+    color: u32,
+    hover: Hsla,
+) -> Stateful<Div> {
     div()
         .id(id)
         .flex()
@@ -328,6 +382,6 @@ pub fn icon_button(id: impl Into<ElementId>, name: &str, size: f32, color: u32) 
         .size(rpx(size + 8.))
         .rounded(rpx(4.))
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(SELECTED)))
+        .hover(move |style| style.bg(hover))
         .child(icon(name, size, color))
 }

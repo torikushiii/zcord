@@ -55,6 +55,7 @@ fn markdown(
         message_id: key,
         revealed: &app.revealed_spoilers,
         entity: app.entity.clone(),
+        colors: Default::default(),
     };
     div()
         .w_full()

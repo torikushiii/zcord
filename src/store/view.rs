@@ -83,16 +83,16 @@ pub struct NameStyle {
     pub colors: Vec<u32>,
 }
 
-impl User {
-    pub fn decoration_spec(&self, animated: bool) -> Option<ImageSpec> {
-        self.decoration
-            .as_ref()
-            .map(|decoration| ImageSpec::AvatarDecoration {
-                asset: decoration.asset.clone(),
-                animated,
-            })
+impl Decoration {
+    pub fn image_spec(&self, animated: bool) -> ImageSpec {
+        ImageSpec::AvatarDecoration {
+            asset: self.asset.clone(),
+            animated,
+        }
     }
+}
 
+impl User {
     pub fn avatar_spec(&self) -> ImageSpec {
         if let Some(hash) = &self.avatar {
             return ImageSpec::Avatar {

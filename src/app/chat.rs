@@ -765,6 +765,7 @@ fn body_context<'a>(app: &'a DiscordApp, message_id: u64) -> BodyContext<'a> {
         message_id,
         revealed: &app.revealed_spoilers,
         entity: app.entity.clone(),
+        colors: Default::default(),
     }
 }
 
@@ -779,8 +780,7 @@ fn author_label(app: &DiscordApp, message: &Message) -> AnyElement {
     let name = author_name(app, message.author_id);
     let style = app
         .store
-        .user(message.author_id)
-        .and_then(|user| user.name_style.as_ref())
+        .member_name_style(app.selected_guild_id, message.author_id)
         .filter(|_| {
             app.store
                 .member_color(app.selected_guild_id, message.author_id)

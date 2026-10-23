@@ -16,12 +16,32 @@ use crate::{
     theme::{self, rpx},
 };
 
+#[derive(Clone, Copy)]
+pub struct BodyColors {
+    pub strong: u32,
+    pub muted: u32,
+    pub faint: u32,
+    pub link: Option<u32>,
+}
+
+impl Default for BodyColors {
+    fn default() -> Self {
+        Self {
+            strong: theme::STRONG,
+            muted: theme::MUTED,
+            faint: theme::FAINT,
+            link: None,
+        }
+    }
+}
+
 pub struct BodyContext<'a> {
     pub store: &'a Store,
     pub guild_id: u64,
     pub message_id: u64,
     pub revealed: &'a HashSet<(u64, u16)>,
     pub entity: WeakEntity<DiscordApp>,
+    pub colors: BodyColors,
 }
 
 impl BodyContext<'_> {
@@ -66,7 +86,7 @@ pub fn render_body(
         children.push(
             div()
                 .text_size(rpx(10.))
-                .text_color(rgb(theme::FAINT))
+                .text_color(rgb(context.colors.faint))
                 .child("(edited)")
                 .into_any_element(),
         );
@@ -113,7 +133,7 @@ fn render_block(
                 .mb(rpx(4.))
                 .text_size(rpx(size))
                 .font_weight(FontWeight::BOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(context.colors.strong))
                 .child(
                     inline(spans, edited, false, context, counter, cx)
                         .line_height(rpx(size * 1.375)),
@@ -122,7 +142,7 @@ fn render_block(
         }
         Block::Subtext(spans) => div()
             .text_size(rpx(13.))
-            .text_color(rgb(theme::MUTED))
+            .text_color(rgb(context.colors.muted))
             .child(inline(spans, edited, false, context, counter, cx).line_height(rpx(18.)))
             .into_any_element(),
         Block::Quote(blocks) => div()
@@ -166,6 +186,7 @@ fn render_block(
             .border_1()
             .border_color(rgb(theme::BORDER))
             .font_family(cx.theme().mono_font_family.clone())
+            .text_color(rgb(theme::TEXT))
             .text_size(rpx(14.))
             .line_height(rpx(18.))
             .whitespace_normal()
@@ -174,7 +195,7 @@ fn render_block(
                 this.child(
                     div()
                         .text_size(rpx(10.))
-                        .text_color(rgb(theme::FAINT))
+                        .text_color(rgb(context.colors.faint))
                         .child("(edited)"),
                 )
             })
@@ -242,7 +263,7 @@ fn inline(
             " (edited)",
             PieceStyle {
                 scale: Some(0.625),
-                color: Some(rgb(theme::FAINT).into()),
+                color: Some(rgb(context.colors.faint).into()),
                 nowrap: true,
                 ..Default::default()
             },
@@ -277,6 +298,7 @@ fn base_style(style: &Style, link: Option<&str>, context: &BodyContext) -> Piece
         _ => None,
     };
     PieceStyle {
+        color: link.and_then(|_| context.colors.link.map(|color| rgb(color).into())),
         weight: style.bold.then_some(FontWeight::BOLD),
         italic: style.italic,
         underline: style.underline,
@@ -394,6 +416,7 @@ fn span_pieces(
             style.scale = Some(0.85);
             if !hidden {
                 style.chip = Some(Chip::Code);
+                style.color = Some(rgb(theme::TEXT).into());
                 style.group = 0x8000_0000 | unique;
             }
             code.clone()
