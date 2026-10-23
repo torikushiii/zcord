@@ -190,7 +190,15 @@ fn render_block(
             .text_size(rpx(14.))
             .line_height(rpx(18.))
             .whitespace_normal()
-            .child(code.clone())
+            .child({
+                *counter += 1;
+                rich_text(
+                    ("code-body", (context.message_id << 8) ^ u64::from(*counter)),
+                    vec![Piece::text(code.clone(), PieceStyle::default())],
+                )
+                .selectable()
+                .line_height(rpx(18.))
+            })
             .when(edited, |this| {
                 this.child(
                     div()
@@ -269,7 +277,9 @@ fn inline(
             },
         ));
     }
-    rich_text(id, pieces).on_action(context.handler())
+    rich_text(id, pieces)
+        .selectable()
+        .on_action(context.handler())
 }
 
 pub fn spans_to_pieces(
@@ -316,7 +326,7 @@ pub fn emoji_pieces(text: &str, style: &PieceStyle) -> Vec<Piece> {
         .map(|segment| match segment {
             Segment::Emoji(sequence) => match emoji::image(sequence) {
                 Some(image) => Piece {
-                    content: Content::Emoji(Some(image.into())),
+                    content: Content::Emoji(Some(image.into()), sequence.to_owned().into()),
                     style: style.clone(),
                 },
                 None => Piece::text(sequence.to_owned(), style.clone()),
@@ -458,7 +468,7 @@ fn span_pieces(
             chip(Chip::Timestamp, &mut style);
             format_timestamp(*unix, *kind)
         }
-        SpanKind::Emoji { id, animated, .. } => {
+        SpanKind::Emoji { id, animated, name } => {
             let size = if jumbo { 48. } else { 22. };
             let image = images::resolve(
                 &ImageSpec::Emoji {
@@ -469,7 +479,7 @@ fn span_pieces(
                 cx,
             );
             return vec![Piece {
-                content: Content::Emoji(image.map(Into::into)),
+                content: Content::Emoji(image.map(Into::into), format!(":{name}:").into()),
                 style,
             }];
         }
