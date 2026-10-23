@@ -13,9 +13,40 @@ struct State {
     remaining: f32,
     last_frame: Option<Instant>,
     running: bool,
+    timings: Timings,
 }
 
 impl Global for State {}
+
+#[derive(Default)]
+struct Timings {
+    frames: u32,
+    slow_frames: u32,
+    total_gap: Duration,
+    max_gap: Duration,
+    max_dispatch: Duration,
+}
+
+impl Timings {
+    fn record(&mut self, gap: Duration, dispatch: Duration, done: bool) {
+        self.frames += 1;
+        self.slow_frames += u32::from(gap > Duration::from_millis(25));
+        self.total_gap += gap;
+        self.max_gap = self.max_gap.max(gap);
+        self.max_dispatch = self.max_dispatch.max(dispatch);
+        if done || self.total_gap >= Duration::from_secs(1) {
+            log::debug!(
+                target: "zcord::perf",
+                "scroll frames={} gaps_over_25ms={} mean_gap_ms={:.2} max_gap_ms={:.2} max_dispatch_ms={:.2}",
+                self.frames, self.slow_frames,
+                self.total_gap.as_secs_f64() * 1000. / f64::from(self.frames),
+                self.max_gap.as_secs_f64() * 1000.,
+                self.max_dispatch.as_secs_f64() * 1000.,
+            );
+            *self = Self::default();
+        }
+    }
+}
 
 pub fn interceptor() -> impl IntoElement {
     canvas(
@@ -63,12 +94,9 @@ pub fn cancel(cx: &mut App) {
 fn step(window: &mut Window, cx: &mut App) {
     let now = Instant::now();
     let state = cx.default_global::<State>();
-    let elapsed = state
-        .last_frame
-        .map_or(Duration::ZERO, |last| now - last)
-        .min(MAX_FRAME);
+    let elapsed = state.last_frame.map_or(Duration::ZERO, |last| now - last);
     state.last_frame = Some(now);
-    let fraction = 1. - (-elapsed.as_secs_f32() / TIME_CONSTANT).exp();
+    let fraction = 1. - (-elapsed.min(MAX_FRAME).as_secs_f32() / TIME_CONSTANT).exp();
     let mut delta = state.remaining * fraction;
     if (state.remaining - delta).abs() < 0.5 {
         delta = state.remaining;
@@ -79,6 +107,8 @@ fn step(window: &mut Window, cx: &mut App) {
         state.running = false;
         state.last_frame = None;
     }
+    let tracing = log::log_enabled!(target: "zcord::perf", log::Level::Debug);
+    let dispatch_start = tracing.then(Instant::now);
     if delta != 0. {
         window.dispatch_event(
             PlatformInput::ScrollWheel(ScrollWheelEvent {
@@ -89,6 +119,11 @@ fn step(window: &mut Window, cx: &mut App) {
             }),
             cx,
         );
+    }
+    if let Some(start) = dispatch_start {
+        cx.default_global::<State>()
+            .timings
+            .record(elapsed, start.elapsed(), done);
     }
     if !done {
         window.on_next_frame(step);
