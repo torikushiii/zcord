@@ -1,10 +1,12 @@
+use std::collections::BTreeSet;
+
 use gpui::{prelude::*, *};
 
 use crate::{
     animated,
     app::{DiscordApp, message_body::label},
     images::{self, ImageSpec},
-    store::{MemberRow, NameStyle, Nameplate, User},
+    store::{MemberList, MemberRow, NameStyle, Nameplate, User},
     theme::{self, rpx},
 };
 
@@ -17,6 +19,51 @@ const NAMEPLATE_OPACITY: f32 = 0.6;
 const NAMEPLATE_DIM: u32 = 0xB3;
 const NAMEPLATE_FADE: f32 = 50.;
 const NAMEPLATE_TEXT_MARGIN: f32 = 10.;
+
+#[cfg(test)]
+mod tests;
+
+#[derive(Default)]
+pub(crate) struct Layout {
+    groups: BTreeSet<usize>,
+}
+
+impl Layout {
+    pub fn sync(&mut self, state: &ListState, list: Option<&MemberList>) {
+        let count = list.map_or(0, |list| list.rows.len());
+        let old = state.item_count();
+        if old == 0 && count > 0 {
+            state.reset(count);
+        } else if count > old {
+            state.splice(old..old, count - old);
+        } else if count < old {
+            state.splice(count..old, 0);
+        }
+        if count != old {
+            // Only the final row has bottom padding; keep the retained rows measured.
+            if let Some(last) = count.min(old).checked_sub(1) {
+                state.remeasure_items(last..last + 1);
+            }
+        }
+
+        // Members and placeholders share a fixed height. Only becoming or ceasing to
+        // be a group header changes an existing row's layout, not presence or SYNC data.
+        let groups = list
+            .into_iter()
+            .flat_map(|list| &list.rows)
+            .enumerate()
+            .filter_map(|(index, row)| {
+                matches!(row, Some(MemberRow::Group { .. })).then_some(index)
+            })
+            .collect();
+        for &index in self.groups.symmetric_difference(&groups) {
+            if index < count {
+                state.remeasure_items(index..index + 1);
+            }
+        }
+        self.groups = groups;
+    }
+}
 
 pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement + use<> {
     let entity = cx.entity();
@@ -56,26 +103,29 @@ fn row_content(app: &DiscordApp, index: usize, cx: &App) -> AnyElement {
         .and_then(|list| list.rows.get(index))
         .and_then(Option::as_ref);
     match row {
-        Some(MemberRow::Group { name, count }) => div()
-            .pt(rpx(if index == 0 { 16. } else { 24. }))
-            .pb(rpx(4.))
-            .px_2()
-            .text_size(rpx(14.))
-            .line_height(rpx(18.))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(rgb(theme::MUTED))
-            .truncate()
-            .child(label(
-                ("member-group", index as u64),
-                &format!("{name} — {count}"),
-            ))
-            .into_any_element(),
+        Some(MemberRow::Group { name, count }) => group_row(index, name, *count).into_any_element(),
         Some(MemberRow::Member { user_id }) => match app.store.user(*user_id) {
             Some(user) => member_row(app, guild_id, user, cx).into_any_element(),
             None => placeholder_row(),
         },
         None => placeholder_row(),
     }
+}
+
+fn group_row(index: usize, name: &str, count: u32) -> Div {
+    div()
+        .pt(rpx(if index == 0 { 16. } else { 24. }))
+        .pb(rpx(4.))
+        .px_2()
+        .text_size(rpx(14.))
+        .line_height(rpx(18.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(theme::MUTED))
+        .truncate()
+        .child(label(
+            ("member-group", index as u64),
+            &format!("{name} — {count}"),
+        ))
 }
 
 fn placeholder_row() -> AnyElement {

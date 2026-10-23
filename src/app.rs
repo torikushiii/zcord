@@ -127,7 +127,9 @@ pub struct DiscordApp {
     typing_sent: Option<(u64, Instant)>,
     last_nonce: u64,
     pub(crate) messages: ListState,
+    pub(crate) channel_rows: channel_list::Rows,
     pub(crate) member_rows: ListState,
+    member_layout: member_list::Layout,
     member_subscription: Option<(u64, u64, Vec<(u32, u32)>)>,
     pub(crate) live: bool,
     pub(crate) reconnecting: bool,
@@ -219,7 +221,9 @@ impl DiscordApp {
             typing_sent: None,
             last_nonce: 0,
             messages,
+            channel_rows: channel_list::Rows::new(),
             member_rows: ListState::new(0, ListAlignment::Top, px(400.)),
+            member_layout: member_list::Layout::default(),
             member_subscription: None,
             live: false,
             reconnecting: false,
@@ -489,6 +493,7 @@ impl DiscordApp {
                 let reconnect = matches!(self.screen, Screen::Chat);
                 self.member_subscription = None;
                 self.store.apply(event);
+                self.sync_channel_rows();
                 self.screen = Screen::Chat;
                 if reconnect && self.channel().is_some() {
                     let channel = self.selected_channel_id;
@@ -567,6 +572,7 @@ impl DiscordApp {
                 }
             }
             Change::Structure => {
+                self.sync_channel_rows();
                 self.sync_member_rows();
                 if self.channel().is_none() {
                     self.select_first_guild(window, cx);
@@ -608,6 +614,7 @@ impl DiscordApp {
             None => {
                 self.selected_guild_id = 0;
                 self.selected_channel_id = 0;
+                self.sync_channel_rows();
                 self.messages.reset(0);
                 cx.notify();
             }
@@ -642,9 +649,11 @@ impl DiscordApp {
                 self.rail_morphs.start(self.selected_guild_id, false);
             }
             self.member_rows.reset(0);
+            self.member_layout = member_list::Layout::default();
             self.member_top = 0;
         }
         self.selected_guild_id = id;
+        self.sync_channel_rows();
         self.sync_member_rows();
         if !self.live {
             self.store.mark_guild_read(id);
@@ -1447,13 +1456,20 @@ impl DiscordApp {
         }
     }
 
-    fn sync_member_rows(&mut self) {
-        let count = self
+    fn sync_channel_rows(&mut self) {
+        let guild = self
             .store
-            .member_list(self.selected_guild_id)
-            .map_or(0, |list| list.rows.len());
-        let old = self.member_rows.item_count();
-        self.member_rows.splice(0..old, count);
+            .guilds
+            .iter()
+            .find(|guild| guild.id == self.selected_guild_id);
+        self.channel_rows.sync(guild);
+    }
+
+    fn sync_member_rows(&mut self) {
+        self.member_layout.sync(
+            &self.member_rows,
+            self.store.member_list(self.selected_guild_id),
+        );
     }
 
     fn update_member_subscription(&mut self) {
