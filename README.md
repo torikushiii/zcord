@@ -33,6 +33,11 @@ $env:RUST_LOG = "zcord=info"                       # optional: connection logs i
 cargo run
 ```
 
+For scroll timing diagnostics, set `$env:RUST_LOG = "zcord=info,zcord::perf=debug"` before
+launching. While smooth scrolling, the console reports callback gaps and scroll-event
+dispatch times, summarized once per second and when scrolling settles. These are CPU-side
+timings, not GPU timings; large gaps with short dispatch times need further frame profiling.
+
 Paste your account token on the login screen. It is stored in Windows Credential Manager
 (entry `zcord`) and sent only to Discord. The gear button in the user panel logs out and
 removes it.
