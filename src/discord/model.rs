@@ -17,6 +17,14 @@ fn optional_id<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error>
     Ok(id_value(&Value::deserialize(d)?))
 }
 
+fn optional_nonce<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    Ok(match Value::deserialize(d)? {
+        Value::String(text) => text.parse().ok(),
+        Value::Number(number) => number.as_u64(),
+        _ => None,
+    })
+}
+
 fn nullable_id<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Option<u64>>, D::Error> {
     optional_id(d).map(Some)
 }
@@ -89,7 +97,7 @@ fn timestamp<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
     Ok(value)
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 pub struct User {
     #[serde(deserialize_with = "snowflake")]
     pub id: u64,
@@ -105,6 +113,247 @@ pub struct User {
     pub bot: bool,
     #[serde(default, deserialize_with = "nullable")]
     pub primary_guild: Option<Option<PrimaryGuild>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub avatar_decoration_data: Option<Option<AvatarDecoration>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub collectibles: Option<Option<Collectibles>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub display_name_styles: Option<Option<DisplayNameStyles>>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct AvatarDecoration {
+    pub asset: String,
+    #[serde(default, deserialize_with = "optional_id")]
+    pub sku_id: Option<u64>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct Collectibles {
+    #[serde(default, deserialize_with = "default_value")]
+    pub nameplate: Option<Nameplate>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct Nameplate {
+    pub asset: String,
+    #[serde(default, deserialize_with = "default_value")]
+    pub palette: Option<String>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub label: Option<String>,
+    #[serde(default, deserialize_with = "optional_id")]
+    pub sku_id: Option<u64>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct DisplayNameStyles {
+    #[serde(default, deserialize_with = "default_value")]
+    pub font_id: Option<u32>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub effect_id: Option<u32>,
+    #[serde(default, deserialize_with = "entries")]
+    pub colors: Vec<u32>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct Profile {
+    pub user: ProfileUser,
+    #[serde(default, deserialize_with = "default_value")]
+    pub user_profile: Option<UserProfile>,
+    #[serde(default, deserialize_with = "entries")]
+    pub badges: Vec<Badge>,
+    #[serde(default, deserialize_with = "entries")]
+    pub connected_accounts: Vec<ConnectedAccount>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub premium_type: Option<u8>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub premium_since: Option<String>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub premium_guild_since: Option<String>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub legacy_username: Option<String>,
+    #[serde(default, deserialize_with = "optional_entries")]
+    pub mutual_guilds: Option<Vec<MutualGuild>>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub mutual_friends_count: Option<u32>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub guild_member: Option<ProfileMember>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub guild_member_profile: Option<UserProfile>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct ProfileUser {
+    #[serde(flatten)]
+    pub user: User,
+    #[serde(default, deserialize_with = "default_value")]
+    pub banner: Option<String>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub banner_color: Option<u32>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub accent_color: Option<u32>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub bio: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct UserProfile {
+    #[serde(default, deserialize_with = "default_value")]
+    pub bio: Option<String>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub pronouns: Option<String>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub accent_color: Option<u32>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub banner: Option<String>,
+    #[serde(default, deserialize_with = "optional_entries")]
+    pub theme_colors: Option<Vec<u32>>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub profile_effect: Option<ProfileEffectRef>,
+    #[serde(default, deserialize_with = "entries")]
+    pub collectibles: Vec<ProfileCollectible>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct ProfileCollectible {
+    #[serde(deserialize_with = "snowflake")]
+    pub sku_id: u64,
+    #[serde(default, rename = "type", deserialize_with = "default_value")]
+    pub kind: u8,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct ProfileEffectRef {
+    #[serde(deserialize_with = "snowflake")]
+    pub sku_id: u64,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct Badge {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default, deserialize_with = "default_value")]
+    pub link: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct ConnectedAccount {
+    #[serde(default, rename = "type", deserialize_with = "default_value")]
+    pub kind: String,
+    #[serde(default, deserialize_with = "default_value")]
+    pub id: String,
+    #[serde(default, deserialize_with = "default_value")]
+    pub name: String,
+    #[serde(default, deserialize_with = "default_value")]
+    pub verified: bool,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct MutualGuild {
+    #[serde(deserialize_with = "snowflake")]
+    pub id: u64,
+    #[serde(default, deserialize_with = "default_value")]
+    pub nick: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct ProfileMember {
+    #[serde(default, deserialize_with = "default_value")]
+    pub nick: Option<String>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub avatar: Option<String>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub banner: Option<String>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub joined_at: Option<String>,
+    #[serde(default, deserialize_with = "ids")]
+    pub roles: Vec<u64>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub collectibles: Option<Collectibles>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct CollectibleProduct {
+    #[serde(deserialize_with = "snowflake")]
+    pub sku_id: u64,
+    #[serde(default, deserialize_with = "default_value")]
+    pub name: String,
+    #[serde(default, rename = "type", deserialize_with = "default_value")]
+    pub kind: u8,
+    #[serde(default, deserialize_with = "entries")]
+    pub items: Vec<CollectibleItem>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct CollectibleItem {
+    #[serde(default, rename = "type", deserialize_with = "default_value")]
+    pub kind: u8,
+    #[serde(deserialize_with = "snowflake")]
+    pub sku_id: u64,
+    #[serde(default, deserialize_with = "default_value")]
+    pub asset: Option<String>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub label: Option<String>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub palette: Option<String>,
+    #[serde(
+        default,
+        rename = "accessibilityLabel",
+        deserialize_with = "default_value"
+    )]
+    pub accessibility_label: Option<String>,
+    #[serde(
+        default,
+        rename = "reducedMotionSrc",
+        deserialize_with = "default_value"
+    )]
+    pub reduced_motion_src: Option<String>,
+    #[serde(default, deserialize_with = "entries")]
+    pub effects: Vec<EffectLayer>,
+    #[serde(default, deserialize_with = "entries")]
+    pub layers: Vec<FrameLayer>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub inner_width: Option<u32>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub overflow_top: Option<u32>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub overflow_bottom: Option<u32>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub overflow_horizontal: Option<u32>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct EffectLayer {
+    #[serde(default, deserialize_with = "default_value")]
+    pub src: String,
+    #[serde(default, rename = "loop", deserialize_with = "default_value")]
+    pub looped: bool,
+    #[serde(default, deserialize_with = "default_value")]
+    pub duration: u32,
+    #[serde(default, deserialize_with = "default_value")]
+    pub start: u32,
+    #[serde(default, rename = "loopDelay", deserialize_with = "default_value")]
+    pub loop_delay: u32,
+    #[serde(default, rename = "zIndex", deserialize_with = "default_value")]
+    pub z_index: i32,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct FrameLayer {
+    #[serde(deserialize_with = "snowflake")]
+    pub id: u64,
+    #[serde(default, rename = "type", deserialize_with = "default_value")]
+    pub kind: String,
+    #[serde(default, deserialize_with = "default_value")]
+    pub order: String,
+    #[serde(default, deserialize_with = "default_value")]
+    pub anchor: String,
+    #[serde(default, deserialize_with = "default_value")]
+    pub responsive: bool,
 }
 
 #[derive(Clone, Deserialize)]
@@ -131,6 +380,8 @@ pub struct Member {
     pub nick: Option<String>,
     #[serde(default)]
     pub avatar: Option<String>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub collectibles: Option<Option<Collectibles>>,
 }
 
 impl Member {
@@ -468,6 +719,8 @@ pub struct EmbedMedia {
     pub width: Option<u32>,
     #[serde(default)]
     pub height: Option<u32>,
+    #[serde(default)]
+    pub flags: u64,
 }
 
 #[derive(Clone, Deserialize)]
@@ -611,6 +864,8 @@ pub struct Message {
     pub id: u64,
     #[serde(deserialize_with = "snowflake")]
     pub channel_id: u64,
+    #[serde(default, deserialize_with = "optional_nonce")]
+    pub nonce: Option<u64>,
     pub author: User,
     #[serde(deserialize_with = "timestamp")]
     pub timestamp: String,
@@ -694,6 +949,8 @@ pub struct PartialMember {
     pub roles: Option<Vec<u64>>,
     #[serde(default, deserialize_with = "nullable")]
     pub avatar: Option<Option<String>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub collectibles: Option<Option<Collectibles>>,
     #[serde(default)]
     pub presence: Option<Presence>,
 }
@@ -712,6 +969,7 @@ impl From<&Member> for PartialMember {
             nick: Some(member.nick.clone()),
             roles: Some(member.roles.clone()),
             avatar: Some(member.avatar.clone()),
+            collectibles: member.collectibles.clone(),
             presence: None,
         }
     }
@@ -727,6 +985,18 @@ pub struct MessageReference {
     pub guild_id: Option<u64>,
     #[serde(default, rename = "type")]
     pub kind: u8,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct TypingStart {
+    #[serde(deserialize_with = "snowflake")]
+    pub channel_id: u64,
+    #[serde(default, deserialize_with = "optional_id")]
+    pub guild_id: Option<u64>,
+    #[serde(deserialize_with = "snowflake")]
+    pub user_id: u64,
+    #[serde(default)]
+    pub member: Option<PartialMember>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -902,6 +1172,8 @@ pub struct Attachment {
     pub content_type: Option<String>,
     #[serde(default)]
     pub size: u64,
+    #[serde(default)]
+    pub flags: u64,
 }
 
 #[derive(Deserialize)]
@@ -922,6 +1194,157 @@ pub struct SettingsProto {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    const PROFILE: &str = include_str!("fixtures/profile_modal.json");
+    const PRODUCTS: &str = include_str!("fixtures/collectibles_products.json");
+
+    #[test]
+    fn profile_parses_decorations_and_profile_fields() {
+        let profile: Profile = serde_json::from_str(PROFILE).unwrap();
+        let user = &profile.user.user;
+        assert_eq!(user.id, 1191168931004416004);
+        let decoration = user.avatar_decoration_data.clone().flatten().unwrap();
+        assert_eq!(decoration.asset, "a_f000000000000000000000000000000b");
+        assert_eq!(decoration.sku_id, Some(1191169212022784071));
+        let nameplate = |collectibles: Option<&Collectibles>| {
+            collectibles
+                .and_then(|c| c.nameplate.as_ref())
+                .map(|n| n.asset.clone())
+        };
+        assert_eq!(
+            nameplate(user.collectibles.as_ref().and_then(Option::as_ref)).as_deref(),
+            Some("nameplates/sample_plate_one/1191169216217088072/")
+        );
+        let member = profile.guild_member.as_ref().unwrap();
+        assert_eq!(
+            nameplate(member.collectibles.as_ref()).as_deref(),
+            Some("nameplates/sample_plate_two/1191169149108224056/")
+        );
+        assert_eq!(member.roles, [1191168985530368017]);
+        let styles = user.display_name_styles.clone().flatten().unwrap();
+        assert_eq!((styles.font_id, styles.effect_id), (Some(14), Some(8)));
+        assert_eq!(styles.colors.len(), 4);
+        let user_profile = profile.user_profile.as_ref().unwrap();
+        assert_eq!(user_profile.pronouns.as_deref(), Some("they/them"));
+        assert_eq!(
+            user_profile.theme_colors.as_deref(),
+            Some(&[11687486, 14261667][..])
+        );
+        assert_eq!(
+            user_profile.profile_effect.as_ref().map(|e| e.sku_id),
+            Some(1191169220411392073)
+        );
+        assert_eq!(
+            profile.user.banner.as_deref(),
+            Some("f000000000000000000000000000002e")
+        );
+        assert_eq!(profile.badges.len(), 5);
+        assert_eq!(profile.badges[0].icon, "f000000000000000000000000000001c");
+        assert_eq!(profile.connected_accounts.len(), 3);
+        assert_eq!(profile.connected_accounts[1].kind, "github");
+        let mutuals = profile.mutual_guilds.as_ref().unwrap();
+        assert_eq!(mutuals.len(), 3);
+        assert_eq!(mutuals[1].nick.as_deref(), Some("sample.user"));
+        assert_eq!(profile.mutual_friends_count, Some(7));
+        assert_eq!(profile.legacy_username.as_deref(), Some("Sample#0042"));
+        let guild_profile = profile.guild_member_profile.as_ref().unwrap();
+        assert!(guild_profile.profile_effect.is_none() && guild_profile.theme_colors.is_none());
+        let frames: Vec<_> = user_profile
+            .collectibles
+            .iter()
+            .map(|c| (c.sku_id, c.kind))
+            .collect();
+        assert_eq!(frames, [(1191169220411392073, 1), (1191169224605696074, 3)]);
+    }
+
+    #[test]
+    fn profile_survives_malformed_entries_and_missing_mutuals() {
+        let mut value: Value = serde_json::from_str(PROFILE).unwrap();
+        value["badges"][1] = json!({"id": 5});
+        value["user"]["avatar_decoration_data"] = json!({"asset": false});
+        value["user_profile"]["theme_colors"] = json!("nope");
+        let object = value.as_object_mut().unwrap();
+        object.remove("mutual_guilds");
+        object.remove("mutual_friends_count");
+        let profile: Profile = serde_json::from_value(value).unwrap();
+        assert_eq!(profile.badges.len(), 4);
+        assert!(profile.user.user.avatar_decoration_data.is_none());
+        assert!(profile.mutual_guilds.is_none() && profile.mutual_friends_count.is_none());
+    }
+
+    #[test]
+    fn user_cosmetics_distinguish_absent_from_null() {
+        let absent: User = serde_json::from_value(json!({"id": "1"})).unwrap();
+        assert!(absent.avatar_decoration_data.is_none());
+        assert!(absent.collectibles.is_none() && absent.display_name_styles.is_none());
+        let cleared: User = serde_json::from_value(json!({
+            "id": "1",
+            "avatar_decoration_data": null,
+            "collectibles": null,
+            "display_name_styles": null
+        }))
+        .unwrap();
+        assert!(matches!(cleared.avatar_decoration_data, Some(None)));
+        assert!(matches!(cleared.collectibles, Some(None)));
+        assert!(matches!(cleared.display_name_styles, Some(None)));
+        let member: PartialMember = serde_json::from_value(json!({
+            "user": {"id": "1"},
+            "collectibles": {"nameplate": {"asset": "nameplates/a/1/", "sku_id": "1"}}
+        }))
+        .unwrap();
+        let collectibles = member.collectibles.flatten().unwrap();
+        assert_eq!(collectibles.nameplate.unwrap().asset, "nameplates/a/1/");
+    }
+
+    #[test]
+    fn collectible_products_parse_effects_and_frames() {
+        let products: Vec<CollectibleProduct> = serde_json::from_str(PRODUCTS).unwrap();
+        assert_eq!(
+            products.iter().map(|p| p.kind).collect::<Vec<_>>(),
+            [0, 1, 2, 3]
+        );
+        let decoration = &products[0].items[0];
+        assert_eq!(
+            decoration.asset.as_deref(),
+            Some("a_f0000000000000000000000000000016")
+        );
+        let effect = &products[1].items[0];
+        assert_eq!(effect.kind, 1);
+        assert!(effect.reduced_motion_src.is_some() && effect.accessibility_label.is_some());
+        let layers: Vec<_> = effect
+            .effects
+            .iter()
+            .map(|e| (e.looped, e.duration, e.start, e.loop_delay, e.z_index))
+            .collect();
+        assert_eq!(
+            layers,
+            [(false, 4981, 0, 0, 110), (true, 4980, 7981, 3000, 100)]
+        );
+        let nameplate = &products[2].items[0];
+        assert_eq!(nameplate.palette.as_deref(), Some("forest"));
+        let frame = &products[3].items[0];
+        assert_eq!(frame.layers.len(), 6);
+        assert_eq!(
+            (
+                frame.inner_width,
+                frame.overflow_top,
+                frame.overflow_bottom,
+                frame.overflow_horizontal
+            ),
+            (Some(1200), Some(304), Some(212), Some(56))
+        );
+        let top = &frame.layers[1];
+        assert_eq!(
+            (
+                top.id,
+                top.kind.as_str(),
+                top.order.as_str(),
+                top.anchor.as_str(),
+                top.responsive
+            ),
+            (1191169279131648087, "staple", "front", "top", false)
+        );
+    }
 
     #[test]
     fn reply_tristate_and_depth_one_and_partial_fields() {
@@ -952,5 +1375,27 @@ mod tests {
             serde_json::from_value(json!({"user":{"id":"3"},"nick":null})).unwrap();
         assert_eq!(member.nick, Some(None));
         assert!(member.roles.is_none());
+    }
+
+    #[test]
+    fn nonce_accepts_strings_integers_and_garbage() {
+        let base = json!({"id":"1","channel_id":"2","author":{"id":"3"},"timestamp":"2026-10-22T00:00:00Z"});
+        let parse = |extra: Value| {
+            let mut value = base.clone();
+            value["nonce"] = extra;
+            serde_json::from_value::<Message>(value).unwrap().nonce
+        };
+        assert_eq!(
+            parse(json!("1176000000000000000")),
+            Some(1176000000000000000)
+        );
+        assert_eq!(
+            parse(json!(1176000000000000000u64)),
+            Some(1176000000000000000)
+        );
+        assert_eq!(parse(json!("not-a-snowflake")), None);
+        assert_eq!(parse(json!(null)), None);
+        assert_eq!(parse(json!({"nested": true})), None);
+        assert_eq!(serde_json::from_value::<Message>(base).unwrap().nonce, None);
     }
 }

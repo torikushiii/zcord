@@ -23,7 +23,7 @@ const NATIVE_BUILD_NUMBER: u32 = 96127;
 // and CLIENT_STATE_V2: users live in `users`, own members in guild-indexed `merged_members`,
 // read_state is {entries,version,partial}, and guild metadata lives in `properties`.
 // READY_SUPPLEMENTAL supplies other members/presences; browsing sends op 37 subscriptions
-// and targeted op 8 member requests, never presence updates or message acknowledgements.
+// and targeted op 8 member requests, never presence updates.
 pub const CAPABILITIES: u64 = 1_734_653;
 
 #[derive(Serialize)]

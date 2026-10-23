@@ -23,11 +23,34 @@ pub(super) fn local_timestamp(value: &str) -> Option<Timestamp> {
     })
 }
 
+pub(super) fn timestamp_from_nonce(nonce: u64) -> Timestamp {
+    const DISCORD_EPOCH_MS: u64 = 1_420_070_400_000;
+    let local = (nonce >> 22)
+        .checked_add(DISCORD_EPOCH_MS)
+        .and_then(|ms| i64::try_from(ms).ok())
+        .and_then(chrono::DateTime::from_timestamp_millis)
+        .map(|utc| utc.with_timezone(&chrono::Local))
+        .unwrap_or_else(chrono::Local::now);
+    Timestamp {
+        year: local.year().try_into().unwrap_or(2026),
+        month: local.month() as u8,
+        day: local.day() as u8,
+        hour: local.hour() as u8,
+        minute: local.minute() as u8,
+    }
+}
+
 fn nonempty(value: &Option<String>) -> Option<String> {
     value.clone().filter(|value| !value.is_empty())
 }
 
-fn media(url: &Option<String>, proxy: &Option<String>, width: u32, height: u32) -> Option<Media> {
+fn media(
+    url: &Option<String>,
+    proxy: &Option<String>,
+    width: u32,
+    height: u32,
+    animated: bool,
+) -> Option<Media> {
     let proxied = nonempty(proxy);
     let raw = proxied.as_ref().or(url.as_ref())?;
     let parsed = reqwest::Url::parse(raw).ok()?;
@@ -44,8 +67,11 @@ fn media(url: &Option<String>, proxy: &Option<String>, width: u32, height: u32) 
         url: raw.clone(),
         width,
         height,
+        animated,
     })
 }
+
+const EMBED_MEDIA_IS_ANIMATED: u64 = 1 << 5;
 
 fn map_media(value: &model::EmbedMedia) -> Option<Media> {
     media(
@@ -53,6 +79,7 @@ fn map_media(value: &model::EmbedMedia) -> Option<Media> {
         &value.proxy_url,
         value.width.unwrap_or(0),
         value.height.unwrap_or(0),
+        value.flags & EMBED_MEDIA_IS_ANIMATED != 0,
     )
 }
 
@@ -85,7 +112,7 @@ pub(super) fn map_embed(embed: &model::Embed) -> Embed {
             .map(|a| EmbedText {
                 text: a.name.clone(),
                 url: nonempty(&a.url),
-                icon: media(&a.icon_url, &a.proxy_icon_url, 0, 0),
+                icon: media(&a.icon_url, &a.proxy_icon_url, 0, 0, false),
             }),
         title: nonempty(&embed.title).map(|text| EmbedText {
             text,
@@ -117,7 +144,7 @@ pub(super) fn map_embed(embed: &model::Embed) -> Embed {
             .map(|f| EmbedText {
                 text: f.text.clone(),
                 url: None,
-                icon: media(&f.icon_url, &f.proxy_icon_url, 0, 0),
+                icon: media(&f.icon_url, &f.proxy_icon_url, 0, 0, false),
             }),
         timestamp: embed.timestamp.as_deref().and_then(local_timestamp),
     }
@@ -257,6 +284,7 @@ pub(super) fn map_message(message: &model::Message) -> Option<Message> {
         id: message.id,
         author_id: message.author.id,
         timestamp: local_timestamp(&message.timestamp)?,
+        delivery: Delivery::Sent,
         content: message.content.clone(),
         embeds: map_embeds(&message.embeds, message.flags),
         components: map_components(&message.components),
@@ -281,6 +309,30 @@ fn guild_tag(primary: &Option<model::PrimaryGuild>) -> Option<GuildTag> {
     })
 }
 
+pub(super) fn map_decoration(decoration: &model::AvatarDecoration) -> Decoration {
+    Decoration {
+        asset: decoration.asset.clone(),
+        sku_id: decoration.sku_id,
+    }
+}
+
+pub(super) fn map_nameplate(collectibles: &model::Collectibles) -> Option<Nameplate> {
+    let nameplate = collectibles.nameplate.as_ref()?;
+    Some(Nameplate {
+        asset: nameplate.asset.clone(),
+        palette: nameplate.palette.clone(),
+        label: nameplate.label.clone(),
+    })
+}
+
+pub(super) fn map_name_style(styles: &model::DisplayNameStyles) -> NameStyle {
+    NameStyle {
+        font_id: styles.font_id,
+        effect_id: styles.effect_id,
+        colors: styles.colors.clone(),
+    }
+}
+
 pub(super) fn map_user(user: &model::User) -> User {
     let name = user.global_name.as_ref().unwrap_or(&user.username).clone();
     User {
@@ -295,6 +347,21 @@ pub(super) fn map_user(user: &model::User) -> User {
         activity: None,
         avatar: user.avatar.clone(),
         discriminator: user.discriminator.clone(),
+        decoration: user
+            .avatar_decoration_data
+            .as_ref()
+            .and_then(Option::as_ref)
+            .map(map_decoration),
+        nameplate: user
+            .collectibles
+            .as_ref()
+            .and_then(Option::as_ref)
+            .and_then(map_nameplate),
+        name_style: user
+            .display_name_styles
+            .as_ref()
+            .and_then(Option::as_ref)
+            .map(map_name_style),
     }
 }
 

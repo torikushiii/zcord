@@ -13,6 +13,7 @@ macro_rules! icons {
 const ICONS: &[(&str, &[u8])] = icons![
     "arrow-left",
     "arrow-right",
+    "badge-check",
     "bell",
     "calendar",
     "chevron-down",
@@ -34,17 +35,22 @@ const ICONS: &[(&str, &[u8])] = icons![
     "layout-grid",
     "messages-square",
     "mic",
+    "pencil",
     "pin",
     "play",
     "plus",
+    "reply",
     "search",
     "settings",
     "smile",
+    "smile-plus",
     "sticker",
     "tooltip-arrow",
+    "trash-2",
     "user-plus",
     "users",
     "volume-2",
+    "x",
 ];
 
 impl AssetSource for AppAssets {

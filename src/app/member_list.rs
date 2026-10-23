@@ -1,12 +1,22 @@
 use gpui::{prelude::*, *};
 
 use crate::{
+    animated,
     app::{DiscordApp, message_body::label},
-    store::{MemberRow, User},
+    images::{self, ImageSpec},
+    store::{MemberRow, Nameplate, User},
     theme::{self, rpx},
 };
 
 pub const WIDTH: f32 = 264.;
+const ROW_HEIGHT: f32 = 44.;
+const ROW_PADDING: f32 = 8.;
+const AVATAR: f32 = 32.;
+const AVATAR_GAP: f32 = 12.;
+const NAMEPLATE_OPACITY: f32 = 0.6;
+const NAMEPLATE_DIM: u32 = 0xB3;
+const NAMEPLATE_FADE: f32 = 50.;
+const NAMEPLATE_TEXT_MARGIN: f32 = 10.;
 
 pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement + use<> {
     let entity = cx.entity();
@@ -99,75 +109,258 @@ fn member_row(app: &DiscordApp, guild_id: u64, user: &User, cx: &App) -> impl In
         .member_name(guild_id, user.id)
         .unwrap_or(&user.name)
         .to_owned();
-    let name_color = app
+    let role_color = app.store.member_color(guild_id, user.id);
+    let hovered = app.hovered_member == Some(user.id);
+    let nameplate = app
         .store
-        .member_color(guild_id, user.id)
-        .unwrap_or(theme::TEXT);
+        .nameplate(Some(guild_id), user.id)
+        .and_then(|nameplate| nameplate_layer(nameplate, user.id, hovered, cx));
+    let plated = nameplate.is_some();
+    let row_background = if hovered { theme::HOVER } else { theme::BG };
+    let dim = rgba(row_background << 8 | NAMEPLATE_DIM);
+    let entity = app.entity.clone();
+    let id = user.id;
     div()
         .id(("member", user.id))
+        .relative()
         .flex()
         .items_center()
-        .gap_3()
+        .gap(rpx(AVATAR_GAP))
         .w_full()
-        .h(rpx(44.))
-        .px_2()
+        .h(rpx(ROW_HEIGHT))
+        .px(rpx(ROW_PADDING))
         .rounded(rpx(8.))
         .overflow_hidden()
         .cursor_pointer()
         .when(!online, |this| this.opacity(0.35))
         .hover(|style| style.bg(rgb(theme::HOVER)).opacity(1.))
+        .on_hover(move |hovered, _, cx| {
+            entity
+                .update(cx, |app, cx| {
+                    let value = hovered.then_some(id);
+                    if *hovered || app.hovered_member == Some(id) {
+                        app.hovered_member = value;
+                        cx.notify();
+                    }
+                })
+                .ok();
+        })
+        .on_click({
+            let entity = app.entity.clone();
+            move |event, window, cx| {
+                cx.stop_propagation();
+                let list_left = window.viewport_size().width
+                    - window.rem_size() * (WIDTH / theme::BASE_FONT_SIZE);
+                let position = point(list_left - px(8.), event.position().y - px(40.));
+                entity
+                    .update(cx, |app, cx| {
+                        app.open_profile(id, position, Anchor::TopRight, cx)
+                    })
+                    .ok();
+            }
+        })
+        .children(nameplate)
+        .when(plated, |this| {
+            this.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(rpx(ROW_PADDING + AVATAR + AVATAR_GAP))
+                    .bg(dim),
+            )
+        })
         .child(theme::member_avatar(
             &app.store,
             guild_id,
             user.id,
-            32.,
+            AVATAR,
             online.then_some((user.status, theme::BG)),
+            hovered,
             cx,
         ))
         .child(
             div()
                 .flex()
                 .flex_col()
+                .items_start()
                 .flex_1()
                 .min_w_0()
                 .child(
                     div()
+                        .relative()
                         .flex()
-                        .items_center()
-                        .gap_1()
+                        .flex_col()
+                        .max_w_full()
                         .min_w_0()
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(rpx(16.))
-                                .line_height(rpx(20.))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(name_color))
-                                .child(label(("member-name", user.id), &name)),
-                        )
-                        .when(user.bot, |this| this.child(theme::app_tag()))
-                        .children(user.tag.as_ref().map(|tag| theme::guild_tag(tag, cx))),
-                )
-                .children(user.activity.as_ref().filter(|_| online).map(|activity| {
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(rpx(4.))
-                        .min_w_0()
-                        .text_size(rpx(12.))
-                        .line_height(rpx(16.))
-                        .text_color(rgb(theme::MUTED))
-                        .when(user.playing, |this| {
-                            this.child(theme::icon("gamepad-2", 14., theme::GREEN))
-                        })
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .child(label(("member-activity", user.id), activity)),
-                        )
-                })),
+                        .when(plated, |this| this.children(nameplate_mask(dim)))
+                        .child(name_line(user, &name, role_color, cx))
+                        .children(activity_line(user, online)),
+                ),
         )
+}
+
+fn name_line(user: &User, name: &str, role_color: Option<u32>, cx: &App) -> impl IntoElement {
+    let name_style = user.name_style.as_ref().filter(|_| role_color.is_none());
+    div()
+        .flex()
+        .items_center()
+        .gap_1()
+        .min_w_0()
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(rpx(16.))
+                .line_height(rpx(20.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(role_color.unwrap_or(theme::TEXT)))
+                .child(match name_style {
+                    Some(style) => theme::display_name(name, Some(style), theme::TEXT),
+                    None => label(("member-name", user.id), name),
+                }),
+        )
+        .when(user.bot, |this| this.child(theme::app_tag()))
+        .children(user.tag.as_ref().map(|tag| theme::guild_tag(tag, cx)))
+}
+
+fn activity_line(user: &User, online: bool) -> Option<impl IntoElement> {
+    let activity = user.activity.as_ref().filter(|_| online)?;
+    Some(
+        div()
+            .flex()
+            .items_center()
+            .gap(rpx(4.))
+            .min_w_0()
+            .text_size(rpx(12.))
+            .line_height(rpx(16.))
+            .text_color(rgb(theme::MUTED))
+            .when(user.playing, |this| {
+                this.child(theme::icon("gamepad-2", 14., theme::GREEN))
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(label(("member-activity", user.id), activity)),
+            ),
+    )
+}
+
+fn palette_color(palette: &str) -> Option<u32> {
+    Some(match palette {
+        "crimson" => 0x900007,
+        "berry" => 0x893A99,
+        "sky" => 0x0080B7,
+        "teal" => 0x086460,
+        "forest" => 0x2D5401,
+        "bubble_gum" => 0xDC3E97,
+        "violet" => 0x730BC8,
+        "cobalt" => 0x0131C2,
+        "clover" => 0x047B20,
+        "lemon" => 0xF6CD12,
+        "white" => 0xFFFFFF,
+        "black" => 0x000000,
+        _ => return None,
+    })
+}
+
+fn nameplate_layer(
+    nameplate: &Nameplate,
+    user_id: u64,
+    hovered: bool,
+    cx: &App,
+) -> Option<AnyElement> {
+    let image = nameplate_image(&nameplate.asset, user_id, hovered, cx)?;
+    let wash = nameplate
+        .palette
+        .as_deref()
+        .and_then(palette_color)
+        .map(|color| palette_wash(color, hovered));
+    Some(
+        div()
+            .absolute()
+            .inset_0()
+            .children(wash)
+            .child(image)
+            .into_any_element(),
+    )
+}
+
+fn palette_wash(color: u32, hovered: bool) -> impl IntoElement {
+    let tint = |alpha: u32| rgba(color << 8 | alpha);
+    let flat = tint(0x14);
+    let end = tint(if hovered { 0x4D } else { 0x33 });
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .child(div().h_full().w(relative(0.2)).bg(linear_gradient(
+            90.,
+            linear_color_stop(tint(0), 0.),
+            linear_color_stop(flat, 1.),
+        )))
+        .child(div().h_full().w(relative(0.3)).bg(flat))
+        .child(div().h_full().flex_1().bg(linear_gradient(
+            90.,
+            linear_color_stop(flat, 0.),
+            linear_color_stop(end, 1.),
+        )))
+}
+
+fn nameplate_mask(dim: Rgba) -> [AnyElement; 2] {
+    let full_row = rpx(ROW_HEIGHT);
+    [
+        div()
+            .absolute()
+            .top(-full_row)
+            .bottom(-full_row)
+            .left_0()
+            .right(rpx(-NAMEPLATE_TEXT_MARGIN))
+            .bg(dim)
+            .into_any_element(),
+        div()
+            .absolute()
+            .top(-full_row)
+            .bottom(-full_row)
+            .right(rpx(-NAMEPLATE_TEXT_MARGIN - NAMEPLATE_FADE))
+            .w(rpx(NAMEPLATE_FADE))
+            .bg(linear_gradient(
+                90.,
+                linear_color_stop(dim, 0.),
+                linear_color_stop(rgba(0), 1.),
+            ))
+            .into_any_element(),
+    ]
+}
+
+fn nameplate_image(asset: &str, user_id: u64, animate: bool, cx: &App) -> Option<AnyElement> {
+    let spec = |animated| ImageSpec::Nameplate {
+        asset: asset.to_owned(),
+        animated,
+    };
+    let pixels = theme::image_px(WIDTH);
+    let image = match animate
+        .then(|| animated::resolve(&spec(true), pixels, cx))
+        .flatten()
+    {
+        Some(image) => img(ImageSource::Render(image))
+            .h(rpx(ROW_HEIGHT))
+            .id(("nameplate", user_id))
+            .into_any_element(),
+        None => img(images::resolve(&spec(false), pixels, cx)?)
+            .h(rpx(ROW_HEIGHT))
+            .into_any_element(),
+    };
+    Some(
+        div()
+            .absolute()
+            .top_0()
+            .right_0()
+            .opacity(NAMEPLATE_OPACITY)
+            .child(image)
+            .into_any_element(),
+    )
 }

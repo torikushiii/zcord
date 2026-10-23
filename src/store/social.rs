@@ -25,6 +25,7 @@ pub(super) struct MemberInfo {
     pub roles: Vec<u64>,
     pub avatar: Option<String>,
     pub color: Option<u32>,
+    pub nameplate: Option<Nameplate>,
 }
 
 #[derive(Default)]
@@ -207,6 +208,28 @@ impl Store {
         })
     }
 
+    pub fn member_roles(&self, guild_id: u64, user_id: u64) -> Vec<&Role> {
+        let Some(guild) = self.social.guilds.get(&guild_id) else {
+            return Vec::new();
+        };
+        let mut roles: Vec<&Role> = guild
+            .members
+            .get(&user_id)
+            .into_iter()
+            .flat_map(|member| member.roles.iter())
+            .filter_map(|id| guild.roles.get(id))
+            .collect();
+        roles.sort_by_key(|role| std::cmp::Reverse(role.position));
+        roles
+    }
+
+    pub fn nameplate(&self, guild_id: Option<u64>, user_id: u64) -> Option<&Nameplate> {
+        guild_id
+            .and_then(|guild_id| self.social.guilds.get(&guild_id)?.members.get(&user_id))
+            .and_then(|member| member.nameplate.as_ref())
+            .or_else(|| self.users.get(&user_id)?.nameplate.as_ref())
+    }
+
     pub(super) fn init_social(&mut self) {
         let Some(source) = &self.source else {
             return;
@@ -232,6 +255,11 @@ impl Store {
                             roles: member.roles.clone(),
                             avatar: member.avatar.clone(),
                             color: None,
+                            nameplate: member
+                                .collectibles
+                                .as_ref()
+                                .and_then(Option::as_ref)
+                                .and_then(map_nameplate),
                         };
                         info.color = member_color(&social.roles, &info);
                         social.members.insert(id, info);
@@ -335,7 +363,12 @@ impl Store {
         })
     }
 
-    fn upsert_member(&mut self, guild_id: u64, id: u64, member: &model::PartialMember) -> bool {
+    pub(super) fn upsert_member(
+        &mut self,
+        guild_id: u64,
+        id: u64,
+        member: &model::PartialMember,
+    ) -> bool {
         if let Some(user) = &member.user {
             self.register_author(user);
         }
@@ -355,6 +388,9 @@ impl Store {
         }
         if let Some(avatar) = &member.avatar {
             info.avatar.clone_from(avatar);
+        }
+        if let Some(collectibles) = &member.collectibles {
+            info.nameplate = collectibles.as_ref().and_then(map_nameplate);
         }
         info.color = member_color(&guild.roles, info);
         if new {
@@ -377,6 +413,7 @@ impl Store {
                             nick: info.nick.clone(),
                             roles: info.roles.clone(),
                             avatar: info.avatar.clone(),
+                            collectibles: None,
                         });
                     }
                 }
@@ -406,12 +443,7 @@ impl Store {
         let user = self.users.entry(id).or_insert_with(|| {
             map_user(&model::User {
                 id,
-                username: String::new(),
-                global_name: None,
-                avatar: None,
-                discriminator: None,
-                bot: false,
-                primary_guild: None,
+                ..Default::default()
             })
         });
         if let Some(value) = &presence.status {

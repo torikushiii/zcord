@@ -1,6 +1,8 @@
 use super::model::{Channel, Guild, Member, Overwrite};
 
-const VIEW_CHANNEL: u64 = 1 << 10;
+pub const VIEW_CHANNEL: u64 = 1 << 10;
+pub const SEND_MESSAGES: u64 = 1 << 11;
+pub const MANAGE_MESSAGES: u64 = 1 << 13;
 const ADMINISTRATOR: u64 = 1 << 3;
 
 fn apply_overwrites(
@@ -31,9 +33,9 @@ fn apply_overwrites(
 /// Channel overwrite sets are authoritative, not stacked on category overwrites. Synced
 /// children carry the same set; only an omitted set falls back to its category's set.
 /// https://docs.discord.food/topics/permissions#permission-syncing
-pub fn can_view(guild: &Guild, channel: &Channel, user_id: u64) -> bool {
+pub fn channel_permissions(guild: &Guild, channel: &Channel, user_id: u64) -> u64 {
     if guild.owner_id() == Some(user_id) {
-        return true;
+        return u64::MAX;
     }
     let member = guild
         .members
@@ -46,15 +48,15 @@ pub fn can_view(guild: &Guild, channel: &Channel, user_id: u64) -> bool {
         ..
     }) = member
     else {
-        return false;
+        return 0;
     };
     let roles = guild.roles.as_deref().unwrap_or_default();
-    let mut permissions = roles
+    let permissions = roles
         .iter()
         .filter(|r| r.id == guild.id || member_roles.contains(&r.id))
         .fold(0, |p, role| p | role.permissions);
     if permissions & ADMINISTRATOR != 0 {
-        return true;
+        return u64::MAX;
     }
     let parent = channel
         .parent_id
@@ -65,8 +67,11 @@ pub fn can_view(guild: &Guild, channel: &Channel, user_id: u64) -> bool {
         .as_deref()
         .or_else(|| parent.and_then(|c| c.permission_overwrites.as_deref()))
         .unwrap_or_default();
-    permissions = apply_overwrites(permissions, overwrites, guild.id, user_id, member_roles);
-    permissions & VIEW_CHANNEL != 0
+    apply_overwrites(permissions, overwrites, guild.id, user_id, member_roles)
+}
+
+pub fn can_view(guild: &Guild, channel: &Channel, user_id: u64) -> bool {
+    channel_permissions(guild, channel, user_id) & VIEW_CHANNEL != 0
 }
 
 #[cfg(test)]
@@ -77,6 +82,48 @@ mod tests {
 
     fn ready() -> model::Ready {
         serde_json::from_str(include_str!("fixtures/ready.json")).unwrap()
+    }
+
+    #[test]
+    fn send_manage_and_role_grants() {
+        let mut ready = ready();
+        let guild = &mut ready.guilds[0];
+        let plain: model::Channel = serde_json::from_value(json!({"id":"3001","type":0})).unwrap();
+        assert_eq!(
+            channel_permissions(guild, &plain, 1) & VIEW_CHANNEL,
+            VIEW_CHANNEL
+        );
+        assert_eq!(channel_permissions(guild, &plain, 1) & SEND_MESSAGES, 0);
+        assert_eq!(channel_permissions(guild, &plain, 1) & MANAGE_MESSAGES, 0);
+        let denied: model::Channel = serde_json::from_value(json!({"id":"3002","type":0,
+            "permission_overwrites":[{"id":"1","type":1,"allow":"0","deny":"2048"}]}))
+        .unwrap();
+        assert_eq!(channel_permissions(guild, &denied, 1) & SEND_MESSAGES, 0);
+        assert_eq!(
+            channel_permissions(guild, &denied, 1) & VIEW_CHANNEL,
+            VIEW_CHANNEL
+        );
+        guild.roles.as_mut().unwrap()[1].permissions = MANAGE_MESSAGES;
+        assert_eq!(
+            channel_permissions(guild, &plain, 1) & MANAGE_MESSAGES,
+            MANAGE_MESSAGES
+        );
+        assert_eq!(
+            channel_permissions(guild, &denied, 1) & MANAGE_MESSAGES,
+            MANAGE_MESSAGES
+        );
+        guild.roles.as_mut().unwrap()[1].permissions = ADMINISTRATOR;
+        assert_eq!(channel_permissions(guild, &denied, 1), u64::MAX);
+        guild.roles.as_mut().unwrap()[1].permissions = 0;
+        let owned = ready.guilds.iter().find(|guild| guild.id == 100).unwrap();
+        let hidden = owned
+            .channels
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|channel| channel.id == 1001)
+            .unwrap();
+        assert_eq!(channel_permissions(owned, hidden, 1), u64::MAX);
     }
 
     #[test]

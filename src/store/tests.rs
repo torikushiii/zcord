@@ -889,11 +889,7 @@ fn thousand_message_creates_with_large_ready_are_fast() {
         .map(|index| model::User {
             id: 10 + index,
             username: format!("user-{index}"),
-            global_name: None,
-            avatar: None,
-            discriminator: None,
-            bot: false,
-            primary_guild: None,
+            ..Default::default()
         })
         .collect();
     ready.private_channels.clear();
@@ -1235,6 +1231,92 @@ fn primary_guild_tag_maps_and_survives_users_without_the_field() {
 }
 
 #[test]
+fn decorations_survive_partial_authors_and_guild_nameplates_override() {
+    let mut store = Store::from_ready(ready());
+    let mut message = messages().remove(0);
+    message.author = serde_json::from_value(json!({
+        "id": "2",
+        "username": "writer",
+        "avatar_decoration_data": {"asset": "a_cat", "sku_id": "7"},
+        "collectibles": {"nameplate": {"asset": "nameplates/mouse/1/", "palette": "berry"}},
+        "display_name_styles": {"font_id": 14, "effect_id": 8, "colors": [1, 2]}
+    }))
+    .unwrap();
+    store.set_messages(2002, vec![message.clone()]);
+    let user = store.user(2).unwrap();
+    assert_eq!(user.decoration.as_ref().unwrap().asset, "a_cat");
+    assert!(user.decoration_spec(true).is_some());
+    assert_eq!(user.name_style.as_ref().unwrap().colors, [1, 2]);
+    assert_eq!(
+        store.nameplate(None, 2).unwrap().asset,
+        "nameplates/mouse/1/"
+    );
+
+    message.author = serde_json::from_value(json!({"id": "2", "username": "writer"})).unwrap();
+    store.set_messages(2002, vec![message.clone()]);
+    message.author = serde_json::from_value(json!({"id": "2", "global_name": "W"})).unwrap();
+    store.set_messages(2002, vec![message.clone()]);
+    let user = store.user(2).unwrap();
+    assert!(user.decoration.is_some() && user.nameplate.is_some() && user.name_style.is_some());
+
+    member_event(
+        &mut store,
+        json!({
+            "guild_id": "200",
+            "user": {"id": "2"},
+            "collectibles": {"nameplate": {"asset": "nameplates/rain/2/"}}
+        }),
+    );
+    assert_eq!(
+        store.nameplate(Some(200), 2).unwrap().asset,
+        "nameplates/rain/2/"
+    );
+    assert_eq!(
+        store.nameplate(Some(201), 2).unwrap().asset,
+        "nameplates/mouse/1/"
+    );
+    assert_eq!(
+        store.nameplate(None, 2).unwrap().asset,
+        "nameplates/mouse/1/"
+    );
+    member_event(
+        &mut store,
+        json!({"guild_id": "200", "user": {"id": "2"}, "nick": "N"}),
+    );
+    assert_eq!(
+        store.nameplate(Some(200), 2).unwrap().asset,
+        "nameplates/rain/2/"
+    );
+    member_event(
+        &mut store,
+        json!({"guild_id": "200", "user": {"id": "2"}, "collectibles": null}),
+    );
+    assert_eq!(
+        store.nameplate(Some(200), 2).unwrap().asset,
+        "nameplates/mouse/1/"
+    );
+
+    message.author = serde_json::from_value(json!({
+        "id": "2",
+        "global_name": "W",
+        "avatar_decoration_data": null,
+        "collectibles": null
+    }))
+    .unwrap();
+    store.set_messages(2002, vec![message.clone()]);
+    message.author = serde_json::from_value(json!({
+        "id": "2",
+        "username": "writer",
+        "display_name_styles": null
+    }))
+    .unwrap();
+    store.set_messages(2002, vec![message]);
+    let user = store.user(2).unwrap();
+    assert!(user.decoration.is_none() && user.nameplate.is_none() && user.name_style.is_none());
+    assert!(store.nameplate(Some(200), 2).is_none());
+}
+
+#[test]
 fn settings_own_status_partial_updates_do_not_reorder_folders() {
     let mut store = Store::from_ready(ready());
     let rail = format!("{:?}", store.rail);
@@ -1440,4 +1522,218 @@ fn prepend_messages_inserts_only_older_messages_in_order() {
         page.iter().map(|message| message.id).collect::<Vec<_>>()
     );
     assert_eq!(store.prepend_messages(2002, older.to_vec()), 0);
+}
+
+fn server_message(id: u64, channel_id: u64, author_id: u64, nonce: Option<u64>) -> model::Message {
+    let mut value = json!({
+        "id": id.to_string(), "channel_id": channel_id.to_string(),
+        "author": {"id": author_id.to_string(), "username": "me"},
+        "timestamp": "2026-10-22T12:00:00Z", "content": "hi"
+    });
+    if let Some(nonce) = nonce {
+        value["nonce"] = json!(nonce.to_string());
+    }
+    serde_json::from_value(value).unwrap()
+}
+
+#[test]
+fn queued_message_is_replaced_by_rest_then_gateway_duplicate() {
+    let mut store = Store::from_ready(ready());
+    store.set_messages(2002, messages());
+    assert_eq!(
+        store.queue_message(2002, 1000, "hello".into(), Some(61)),
+        Change::MessageInserted {
+            channel_id: 2002,
+            index: 2
+        }
+    );
+    let queued = &store
+        .guild_by_id(200)
+        .unwrap()
+        .channel(2002)
+        .unwrap()
+        .messages[2];
+    assert_eq!(queued.delivery, Delivery::Pending);
+    assert_eq!(queued.author_id, 1);
+    assert!(matches!(&queued.reply, Some(ReplyState::Loaded(reply)) if reply.message_id == 61));
+    assert_eq!(
+        store.queue_message(2002, 1002, "missing".into(), Some(9999)),
+        Change::MessageInserted {
+            channel_id: 2002,
+            index: 3
+        }
+    );
+    assert!(matches!(
+        &store
+            .guild_by_id(200)
+            .unwrap()
+            .channel(2002)
+            .unwrap()
+            .messages[3]
+            .reply,
+        Some(ReplyState::Unavailable)
+    ));
+    store.discard_message(2002, 1002);
+
+    let created = server_message(1001, 2002, 1, Some(1000));
+    assert_eq!(
+        store.apply(Event::MessageCreate(Box::new(created.clone()))),
+        Change::MessageReplaced {
+            channel_id: 2002,
+            removed: 2,
+            inserted: 2
+        }
+    );
+    let messages = &store
+        .guild_by_id(200)
+        .unwrap()
+        .channel(2002)
+        .unwrap()
+        .messages;
+    assert_eq!(messages[2].delivery, Delivery::Sent);
+    assert_eq!(messages[2].id, 1001);
+    assert_eq!(store.last_read(2002), Some(1001));
+    assert!(
+        !store
+            .guild_by_id(200)
+            .unwrap()
+            .channel(2002)
+            .unwrap()
+            .unread
+    );
+    assert_eq!(
+        store.apply(Event::MessageCreate(Box::new(created))),
+        Change::None
+    );
+}
+
+#[test]
+fn queued_message_is_replaced_by_gateway_then_rest_duplicate() {
+    let mut store = Store::from_ready(ready());
+    store.set_messages(2002, messages());
+    store.queue_message(2002, 2000, "first".into(), None);
+    let created = server_message(2001, 2002, 1, Some(2000));
+    assert_eq!(
+        store.apply(Event::MessageCreate(Box::new(created.clone()))),
+        Change::MessageReplaced {
+            channel_id: 2002,
+            removed: 2,
+            inserted: 2
+        }
+    );
+    assert_eq!(
+        store.apply(Event::MessageCreate(Box::new(created))),
+        Change::None
+    );
+}
+
+#[test]
+fn replacement_indices_account_for_messages_arriving_between() {
+    let mut store = Store::from_ready(ready());
+    store.set_messages(2002, messages());
+    store.queue_message(2002, 1000, "mine".into(), None);
+    assert_eq!(
+        store.apply(Event::MessageCreate(Box::new(server_message(
+            1500, 2002, 2, None
+        )))),
+        Change::MessageInserted {
+            channel_id: 2002,
+            index: 3
+        }
+    );
+    assert_eq!(
+        store.apply(Event::MessageCreate(Box::new(server_message(
+            2000,
+            2002,
+            1,
+            Some(1000)
+        )))),
+        Change::MessageReplaced {
+            channel_id: 2002,
+            removed: 2,
+            inserted: 3
+        }
+    );
+    let ids: Vec<_> = store
+        .guild_by_id(200)
+        .unwrap()
+        .channel(2002)
+        .unwrap()
+        .messages
+        .iter()
+        .map(|message| message.id)
+        .collect();
+    assert_eq!(ids, [61, 62, 1500, 2000]);
+}
+
+#[test]
+fn failed_and_discarded_messages_and_sent_rows_stay() {
+    let mut store = Store::from_ready(ready());
+    store.set_messages(2002, messages());
+    store.queue_message(2002, 5000, "oops".into(), None);
+    assert_eq!(
+        store.fail_message(2002, 5000),
+        Change::MessageChanged {
+            channel_id: 2002,
+            index: 2
+        }
+    );
+    assert_eq!(
+        store
+            .guild_by_id(200)
+            .unwrap()
+            .channel(2002)
+            .unwrap()
+            .messages[2]
+            .delivery,
+        Delivery::Failed
+    );
+    assert_eq!(store.fail_message(2002, 5000), Change::None);
+    assert_eq!(store.discard_message(2002, 61), Change::None);
+    assert_eq!(
+        store.discard_message(2002, 5000),
+        Change::MessageRemoved {
+            channel_id: 2002,
+            index: 2
+        }
+    );
+    assert_eq!(store.discard_message(2002, 5000), Change::None);
+    assert_eq!(
+        store
+            .guild_by_id(200)
+            .unwrap()
+            .channel(2002)
+            .unwrap()
+            .messages
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn channel_permissions_gate_sending_and_managing() {
+    let store = Store::from_ready(ready());
+    assert!(!store.can_send(2002));
+    assert!(!store.can_manage_messages(2002));
+    assert!(store.can_send(1001));
+    assert!(store.can_manage_messages(1001));
+    let demo = Store::seed();
+    assert!(demo.can_send(0));
+    assert!(demo.can_manage_messages(0));
+}
+
+#[test]
+fn typing_start_registers_member_without_state_change() {
+    let mut store = Store::from_ready(ready());
+    let typing: model::TypingStart = serde_json::from_value(json!({
+        "channel_id": "2002", "guild_id": "200", "user_id": "77",
+        "timestamp": 1770000000,
+        "member": {"user": {"id": "77", "username": "typer"}, "roles": []}
+    }))
+    .unwrap();
+    assert_eq!(
+        store.apply(Event::TypingStart(Box::new(typing))),
+        Change::None
+    );
+    assert_eq!(store.member_name(200, 77), Some("typer"));
 }

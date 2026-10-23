@@ -713,6 +713,7 @@ impl Element for RichText {
                     && !hidden
                 {
                     let mut element = img(path.clone())
+                        .id(("emoji", fragment.piece))
                         .size(emoji_size)
                         .flex_none()
                         .into_any_element();
