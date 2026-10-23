@@ -79,13 +79,21 @@ impl Rest {
         before: Option<u64>,
         limit: usize,
     ) -> Result<Vec<model::Message>, Error> {
+        let anchor = before.map_or(Anchor::Latest, Anchor::Before);
+        self.fetch_messages_anchor(guild_id, channel_id, anchor, limit)
+            .await
+    }
+
+    async fn fetch_messages_anchor(
+        &self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        anchor: Anchor,
+        limit: usize,
+    ) -> Result<Vec<model::Message>, Error> {
         let referer = referer(guild_id, channel_id);
         let url = format!("https://discord.com/api/v9/channels/{channel_id}/messages");
-        let mut query = Vec::new();
-        if let Some(before) = before {
-            query.push(("before", before.to_string()));
-        }
-        query.push(("limit", limit.to_string()));
+        let query = history_query(anchor, limit);
         let response = self
             .send(|| {
                 self.client
@@ -103,6 +111,44 @@ impl Rest {
         messages.sort_by_key(|m| m.id);
         messages.dedup_by_key(|m| m.id);
         Ok(messages)
+    }
+
+    async fn add_reaction(
+        &self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        message_id: u64,
+        emoji: &str,
+    ) -> Result<(), Error> {
+        let referer = referer(guild_id, channel_id);
+        let url = reaction_url(channel_id, message_id, emoji);
+        self.send(|| {
+            self.client
+                .put(&url)
+                .header(REFERER, &referer)
+                .query(&[("location", "Message"), ("type", "0")])
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn remove_reaction(
+        &self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        message_id: u64,
+        emoji: &str,
+    ) -> Result<(), Error> {
+        let referer = referer(guild_id, channel_id);
+        let url = reaction_url(channel_id, message_id, emoji);
+        self.send(|| {
+            self.client
+                .delete(&url)
+                .header(REFERER, &referer)
+                .query(&[("location", "Message"), ("type", "0")])
+        })
+        .await?;
+        Ok(())
     }
 
     pub async fn ack_bulk(
@@ -355,6 +401,84 @@ impl Rest {
 
 const ACK_BULK_LIMIT: usize = 100;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Anchor {
+    Before(u64),
+    After(u64),
+    Around(u64),
+    Latest,
+}
+
+fn history_query(anchor: Anchor, limit: usize) -> Vec<(&'static str, String)> {
+    let mut query = Vec::new();
+    match anchor {
+        Anchor::Before(id) => query.push(("before", id.to_string())),
+        Anchor::After(id) => query.push(("after", id.to_string())),
+        Anchor::Around(id) => query.push(("around", id.to_string())),
+        Anchor::Latest => {}
+    }
+    query.push(("limit", limit.to_string()));
+    query
+}
+
+impl super::Session {
+    pub async fn fetch_messages_after(
+        &self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        after: u64,
+        limit: usize,
+    ) -> Result<Vec<model::Message>, Error> {
+        self.rest(async |rest| {
+            rest.fetch_messages_anchor(guild_id, channel_id, Anchor::After(after), limit)
+                .await
+        })
+        .await
+    }
+
+    pub async fn fetch_messages_around(
+        &self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        around: u64,
+        limit: usize,
+    ) -> Result<Vec<model::Message>, Error> {
+        self.rest(async |rest| {
+            rest.fetch_messages_anchor(guild_id, channel_id, Anchor::Around(around), limit)
+                .await
+        })
+        .await
+    }
+
+    pub async fn add_reaction(
+        &self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        message_id: u64,
+        emoji: &str,
+    ) -> Result<(), Error> {
+        self.rest(async |rest| {
+            rest.add_reaction(guild_id, channel_id, message_id, emoji)
+                .await
+        })
+        .await
+    }
+
+    pub async fn remove_reaction(
+        &self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        message_id: u64,
+        emoji: &str,
+    ) -> Result<(), Error> {
+        self.rest(async |rest| {
+            rest.remove_reaction(guild_id, channel_id, message_id, emoji)
+                .await
+        })
+        .await
+    }
+}
+
 #[derive(Serialize)]
 struct CreateMessage<'a> {
     mobile_network_type: &'static str,
@@ -479,6 +603,25 @@ fn referer(guild_id: Option<u64>, channel_id: u64) -> String {
     }
 }
 
+fn percent_encode(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for &byte in value.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+fn reaction_url(channel_id: u64, message_id: u64, emoji: &str) -> String {
+    format!(
+        "https://discord.com/api/v9/channels/{channel_id}/messages/{message_id}/reactions/{}/@me",
+        percent_encode(emoji)
+    )
+}
+
 fn seconds(value: Option<f64>) -> Option<Duration> {
     value
         .filter(|v| v.is_finite() && *v >= 0.0)
@@ -490,6 +633,33 @@ fn seconds(value: Option<f64>) -> Option<Duration> {
 mod tests {
     use super::*;
     use crate::discord::OutgoingReply;
+
+    #[test]
+    fn emoji_api_reaction_path_encodes_custom_and_unicode() {
+        assert_eq!(
+            reaction_url(20, 30, "wave:123"),
+            "https://discord.com/api/v9/channels/20/messages/30/reactions/wave%3A123/@me"
+        );
+        assert_eq!(
+            reaction_url(20, 30, "\u{1F44D}"),
+            "https://discord.com/api/v9/channels/20/messages/30/reactions/%F0%9F%91%8D/@me"
+        );
+    }
+
+    #[test]
+    fn open_at_query_builds_history_anchors() {
+        let encode = |anchor| {
+            history_query(anchor, 50)
+                .into_iter()
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect::<Vec<_>>()
+                .join("&")
+        };
+        assert_eq!(encode(Anchor::Latest), "limit=50");
+        assert_eq!(encode(Anchor::Before(61)), "before=61&limit=50");
+        assert_eq!(encode(Anchor::After(61)), "after=61&limit=50");
+        assert_eq!(encode(Anchor::Around(61)), "around=61&limit=50");
+    }
 
     #[test]
     fn profile_queries_match_the_official_client() {

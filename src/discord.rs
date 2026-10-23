@@ -21,7 +21,8 @@ use std::{
 use tokio::sync::watch;
 
 pub use permissions::{
-    MANAGE_MESSAGES, SEND_MESSAGES, VIEW_CHANNEL, can_view, channel_permissions,
+    MANAGE_MESSAGES, SEND_MESSAGES, USE_EXTERNAL_EMOJIS, VIEW_CHANNEL, can_view,
+    channel_permissions,
 };
 pub use properties::USER_AGENT;
 
@@ -361,6 +362,7 @@ pub enum Event {
     ChannelUpsert(Box<model::Channel>),
     ChannelDelete { id: u64 },
     GuildUpsert(Box<model::Guild>),
+    GuildEmojisUpdate(model::GuildEmojisUpdate),
     GuildDelete { id: u64 },
     MessageAck { channel_id: u64, message_id: u64 },
     Reconnecting,

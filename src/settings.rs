@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf, time::Duration};
+use std::{collections::HashMap, fs, path::PathBuf, time::Duration};
 
 use gpui::{App, Bounds, Global, Pixels, Task, Window, WindowBounds, point, px, size};
 use serde::{Deserialize, Serialize};
@@ -11,6 +11,18 @@ pub struct Settings {
     pub zoom: Option<usize>,
     #[serde(default)]
     pub window: Option<SavedWindow>,
+    #[serde(default)]
+    pub last_channel: Option<SavedChannel>,
+    #[serde(default)]
+    pub guild_channels: HashMap<u64, u64>,
+    #[serde(default)]
+    pub recent_emojis: Vec<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedChannel {
+    pub guild_id: u64,
+    pub channel_id: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]

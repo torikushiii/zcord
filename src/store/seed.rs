@@ -216,6 +216,7 @@ impl Store {
                         ],
                         member_ids: users.iter().map(|user| user.id).collect(),
                         icon: None,
+                        emojis: Vec::new(),
                     }
                 },
             )
@@ -228,6 +229,7 @@ impl Store {
             current_user_id: 1,
             dm_mentions: 77,
             next_message_id,
+            premium_type: None,
             source: None,
             read_states: HashMap::new(),
             source_channels: HashMap::new(),
@@ -407,7 +409,12 @@ fn seed_messages(
                     ReplyState::Loaded(Reply {
                         message_id: message.id,
                         author_id: message.author_id,
-                        content: message.content.clone(),
+                        timestamp: message.timestamp,
+                        content: if hides_embed_content(&message.content, &message.embeds) {
+                            String::new()
+                        } else {
+                            message.content.clone()
+                        },
                         attachments: false,
                         embeds: !message.embeds.is_empty() || !message.components.is_empty(),
                     })
@@ -415,6 +422,7 @@ fn seed_messages(
             } else {
                 None
             },
+            forward: None,
             mentions_me: false,
         });
         *next_message_id += 1;

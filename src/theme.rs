@@ -306,6 +306,47 @@ fn status_cutout(status: Status, dot: f32, ring: u32) -> Option<Div> {
     }
 }
 
+pub const TOOLTIP_BG: u32 = 0x1F1F24;
+
+/// Body of a Discord-style tooltip. Pair it with a `tooltip-arrow*` icon and
+/// position it with `deferred(anchored())`; callers set the text size.
+pub fn tooltip_bubble() -> Div {
+    div()
+        .max_w(rpx(196.))
+        .px(rpx(12.))
+        .py(rpx(8.))
+        .rounded(rpx(8.))
+        .bg(rgb(TOOLTIP_BG))
+        .shadow_lg()
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(rgb(STRONG))
+}
+
+/// Tooltip shown centred above an element, arrow pointing down. Add it as a
+/// child of a `relative()` element while that element is hovered.
+pub fn tooltip_above(label: impl Into<SharedString>) -> impl IntoElement {
+    div()
+        .absolute()
+        .top(rpx(-4.))
+        .left(relative(0.5))
+        .size_0()
+        .child(deferred(
+            anchored().anchor(Anchor::BottomCenter).child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .child(
+                        tooltip_bubble()
+                            .text_size(rpx(14.))
+                            .line_height(rpx(18.))
+                            .child(label.into()),
+                    )
+                    .child(icon("tooltip-arrow-down", 12., TOOLTIP_BG).h(rpx(6.))),
+            ),
+        ))
+}
+
 pub fn badge(count: u32, ring: u32) -> impl IntoElement {
     let label = if count >= 1000 {
         format!("{}K+", count / 1000)

@@ -195,6 +195,7 @@ fn embeds_map_kinds_text_fields_timestamps_and_proxy_only_media() {
         (Some("image"), EmbedKind::Image),
         (Some("gifv"), EmbedKind::Gifv),
         (Some("video"), EmbedKind::Video),
+        (Some("components"), EmbedKind::Components),
         (Some("article"), EmbedKind::Link),
         (Some("link"), EmbedKind::Link),
         (Some("future"), EmbedKind::Link),
@@ -247,6 +248,75 @@ fn embeds_map_kinds_text_fields_timestamps_and_proxy_only_media() {
 }
 
 #[test]
+fn reddit_component_embeds_preserve_text_galleries_and_link_buttons() {
+    let source: model::Message = serde_json::from_str(include_str!("fixtures/reddit_embeds.json")).unwrap();
+    let message = map_message(&source).unwrap();
+    assert!(message.components.is_empty());
+    assert_eq!(message.content, source.content);
+    assert_eq!(message.embeds.len(), 3);
+    for embed in &message.embeds[..2] {
+        assert!(embed.kind == EmbedKind::Components);
+        assert!(embed.title.is_none());
+        assert_eq!(embed.components.len(), 1);
+    }
+    let Component::Container { accent, components, .. } = &message.embeds[0].components[0] else {
+        panic!("vxReddit container expected");
+    };
+    assert_eq!(*accent, Some(16729344));
+    assert!(matches!(&components[0], Component::Text(text) if text == "-# vxReddit"));
+    assert!(matches!(&components[1], Component::Text(text) if text.contains("Sample multi-image post")));
+    let Component::Gallery(items) = &components[2] else { panic!("gallery expected"); };
+    assert_eq!(items.len(), 1);
+    assert_eq!((items[0].media.width, items[0].media.height), (1080, 1350));
+    assert!(items[0].media.url.starts_with("https://images-ext-1.discordapp.net/"));
+    assert_eq!(items[0].media.source, "https://i.redd.it/sample-image-one.jpeg");
+    assert!(matches!(&components[3], Component::Row(buttons)
+        if matches!(&buttons[..], [Component::Button { style: 5, label: Some(label), url: Some(url), .. }]
+            if label == "View post" && url == "https://www.reddit.com/comments/samplePostOne")));
+    let Component::Container { components, .. } = &message.embeds[1].components[0] else {
+        panic!("Reddit container expected");
+    };
+    assert!(matches!(&components[2], Component::Gallery(items) if items.len() == 1 && items[0].spoiler));
+    assert!(message.embeds[2].kind == EmbedKind::Rich);
+    assert_eq!(message.embeds[2].title.as_ref().unwrap().text, "Existing standard embed");
+    assert_eq!(message.embeds[2].images.len(), 1);
+
+    let snapshot: model::SnapshotMessage = serde_json::from_value(json!({
+        "embeds": serde_json::from_str::<serde_json::Value>(include_str!("fixtures/reddit_embeds.json")).unwrap()["embeds"].clone()
+    })).unwrap();
+    let forward = mapping::map_snapshot(&snapshot, Some(2002), Some(200));
+    assert_eq!(forward.embeds[0].components.len(), 1);
+    assert!(mapping::map_embeds(&source.embeds, 4).is_empty());
+}
+
+#[test]
+fn component_embed_updates_are_not_lost_or_merged_into_other_cards() {
+    let mut store = Store::from_ready(ready());
+    let source = serde_json::from_str(include_str!("fixtures/reddit_embeds.json")).unwrap();
+    store.set_messages(2002, vec![source]);
+    let component = json!({
+        "type":"components", "url":"https://www.reddit.com/comments/samplePostTwo",
+        "components":[false, {"type":17,"components":[{"type":99}, {"type":10,"content":"Updated Reddit preview"}]}]
+    });
+    let update = json!({
+        "id":"500", "channel_id":"2002",
+        "embeds":[{"type":"rich","url":"https://www.reddit.com/comments/samplePostTwo","title":"Legacy preview"}, component.clone(), component]
+    });
+    assert_eq!(store.apply(Event::MessageUpdate(Box::new(serde_json::from_value(update).unwrap()))),
+        Change::MessageChanged { channel_id: 2002, index: 0 });
+    let message = &store.guild_by_id(200).unwrap().channel(2002).unwrap().messages[0];
+    assert_eq!(message.embeds.len(), 3);
+    for embed in &message.embeds[1..] {
+        assert!(embed.kind == EmbedKind::Components);
+        let Component::Container { components, .. } = &embed.components[0] else {
+            panic!("updated container expected");
+        };
+        assert!(matches!(&components[..], [Component::Text(text)] if text == "Updated Reddit preview"));
+    }
+    assert!(message.components.is_empty());
+}
+
+#[test]
 fn embed_galleries_are_consecutive_capped_and_suppressible() {
     let mut embeds = vec![
         json!({"url":"https://example.com/post","title":"gallery","image":{"url":"https://cdn.discordapp.com/first"}}),
@@ -265,6 +335,127 @@ fn embed_galleries_are_consecutive_capped_and_suppressible() {
     assert_eq!(mapped[0].images[3].url, "https://cdn.discordapp.com/2");
     assert_eq!(mapped[2].images.len(), 1);
     assert!(mapping::map_embeds(&embeds, 1 << 2).is_empty());
+}
+
+#[test]
+fn embed_merge_same_url_skips_duplicate_thumbnail() {
+    let embeds: Vec<model::Embed> = model::parse_entries(json!([
+        {
+            "url": "https://fixupx.com/sample_account/status/1191169333657600100",
+            "author": {"name": "Sample Author"},
+            "description": "tweet text",
+            "image": {"url": "https://cdn.discordapp.com/photo"}
+        },
+        {
+            "url": "https://fixupx.com/sample_account/status/1191169333657600100",
+            "thumbnail": {"url": "https://cdn.discordapp.com/photo"}
+        }
+    ]));
+    let mapped = mapping::map_embeds(&embeds, 0);
+    assert_eq!(mapped.len(), 1);
+    assert_eq!(mapped[0].images.len(), 1);
+    assert_eq!(mapped[0].images[0].url, "https://cdn.discordapp.com/photo");
+}
+
+#[test]
+fn embed_merge_same_url_adds_distinct_thumbnail() {
+    let embeds: Vec<model::Embed> = model::parse_entries(json!([
+        {
+            "url": "https://fixupx.com/sample_account/status/1191169333657600100",
+            "description": "tweet text",
+            "image": {"url": "https://cdn.discordapp.com/first"}
+        },
+        {
+            "url": "https://fixupx.com/sample_account/status/1191169333657600100",
+            "thumbnail": {"url": "https://cdn.discordapp.com/second"}
+        }
+    ]));
+    let mapped = mapping::map_embeds(&embeds, 0);
+    assert_eq!(mapped.len(), 1);
+    assert_eq!(mapped[0].images.len(), 2);
+    assert_eq!(mapped[0].images[0].url, "https://cdn.discordapp.com/first");
+    assert_eq!(mapped[0].images[1].url, "https://cdn.discordapp.com/second");
+}
+
+#[test]
+fn embed_merge_same_url_folds_four_embeds() {
+    let embeds: Vec<model::Embed> = model::parse_entries(json!([
+        {
+            "url": "https://fixupx.com/sample_account/status/1",
+            "title": "tweet",
+            "image": {"url": "https://cdn.discordapp.com/0"}
+        },
+        {
+            "url": "https://fixupx.com/sample_account/status/1",
+            "color": 123,
+            "footer": {"text": "first"},
+            "image": {"url": "https://cdn.discordapp.com/1"}
+        },
+        {
+            "url": "https://fixupx.com/sample_account/status/1",
+            "color": 456,
+            "footer": {"text": "second"},
+            "image": {"url": "https://cdn.discordapp.com/2"}
+        },
+        {
+            "url": "https://fixupx.com/sample_account/status/1",
+            "color": 789,
+            "footer": {"text": "third"},
+            "image": {"url": "https://cdn.discordapp.com/3"}
+        }
+    ]));
+    let mapped = mapping::map_embeds(&embeds, 0);
+    assert_eq!(mapped.len(), 1);
+    assert_eq!(mapped[0].title.as_ref().unwrap().text, "tweet");
+    assert!(mapped[0].color.is_none() && mapped[0].footer.is_none());
+    assert_eq!(mapped[0].images.len(), 4);
+    for (index, image) in mapped[0].images.iter().enumerate() {
+        assert_eq!(image.url, format!("https://cdn.discordapp.com/{index}"));
+    }
+}
+
+#[test]
+fn embed_merge_different_urls_stay_separate() {
+    let embeds: Vec<model::Embed> = model::parse_entries(json!([
+        {
+            "url": "https://example.com/one",
+            "title": "one",
+            "image": {"url": "https://cdn.discordapp.com/one"}
+        },
+        {
+            "url": "https://example.com/two",
+            "title": "two",
+            "image": {"url": "https://cdn.discordapp.com/two"}
+        }
+    ]));
+    let mapped = mapping::map_embeds(&embeds, 0);
+    assert_eq!(mapped.len(), 2);
+    assert_eq!(mapped[0].title.as_ref().unwrap().text, "one");
+    assert_eq!(mapped[1].title.as_ref().unwrap().text, "two");
+    assert_eq!(mapped[0].images.len(), 1);
+    assert_eq!(mapped[1].images.len(), 1);
+}
+
+#[test]
+fn embed_merge_same_url_video_follower_moves_video_to_first() {
+    let embeds: Vec<model::Embed> = model::parse_entries(json!([
+        {
+            "url": "https://example.com/clip",
+            "title": "clip",
+            "image": {"url": "https://cdn.discordapp.com/still"}
+        },
+        {
+            "url": "https://example.com/clip",
+            "video": {"url": "https://media.discordapp.net/clip"}
+        }
+    ]));
+    let mapped = mapping::map_embeds(&embeds, 0);
+    assert_eq!(mapped.len(), 1);
+    assert_eq!(mapped[0].images.len(), 1);
+    assert_eq!(
+        mapped[0].video.as_ref().map(|video| video.url.as_str()),
+        Some("https://media.discordapp.net/clip")
+    );
 }
 
 #[test]
@@ -455,7 +646,8 @@ fn receive_only_reaction_events_update_loaded_messages_in_order() {
     let reactions = &store.guilds[0].channel(2002).unwrap().messages[0].reactions;
     assert_eq!(reactions.len(), 2);
     assert_eq!(reactions[0].emoji.id, Some(99));
-    assert_eq!(reactions[0].count, 3);
+    // The bulk event includes our already-counted reaction; only user 8 is new.
+    assert_eq!(reactions[0].count, 2);
     assert_eq!(reactions[1].emoji.name, "new");
     assert_eq!(
         store.apply(Event::MessageReactionRemoveEmoji(reaction(
@@ -1451,6 +1643,80 @@ fn settings_own_status_partial_updates_do_not_reorder_folders() {
 }
 
 #[test]
+fn reply_previews_hide_only_standalone_media_urls_and_keep_the_original_time() {
+    let mut store = Store::from_ready(ready());
+    let url = "https://klipy.com/gifs/pardofelis-honkai-impact";
+    let timestamp = "2026-10-22T12:57:00Z";
+    for (kind, content, embed_url, flags, expected) in [
+        ("gifv", url.to_owned(), url, 0, String::new()),
+        ("image", format!("  {url}\n"), url, 0, String::new()),
+        ("article", url.to_owned(), url, 0, url.to_owned()),
+        ("gifv", format!("Look at this {url}"), url, 0, format!("Look at this {url}")),
+        ("gifv", url.to_owned(), url, 4, url.to_owned()),
+        ("gifv", url.to_owned(), "https://example.com/different", 0, url.to_owned()),
+    ] {
+        let value = json!({
+            "id":"500", "channel_id":"2002", "guild_id":"200",
+            "author":{"id":"2","username":"writer"},
+            "timestamp":"2026-10-22T13:00:00Z", "content":"reply",
+            "message_reference":{"message_id":"400","channel_id":"2002"},
+            "referenced_message":{
+                "id":"400", "author":{"id":"8","username":"original"},
+                "timestamp":timestamp, "content":content, "flags":flags,
+                "embeds":[{"type":kind,"url":embed_url}]
+            }
+        });
+        store.set_messages(2002, vec![serde_json::from_value(value).unwrap()]);
+        let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+        let Some(ReplyState::Loaded(reply)) = &channel.messages[0].reply else {
+            panic!("loaded reply expected");
+        };
+        assert_eq!(reply.content, expected, "kind={kind} flags={flags}");
+        assert_eq!(Some(reply.timestamp), local_timestamp(timestamp));
+    }
+}
+
+#[test]
+fn queued_and_forwarded_gif_replies_use_the_same_media_preview_rule() {
+    let mut store = Store::from_ready(ready());
+    let url = "https://klipy.com/gifs/example";
+    let original = json!({
+        "id":"400", "channel_id":"2002", "guild_id":"200",
+        "author":{"id":"8","username":"original"},
+        "timestamp":"2026-10-22T12:57:00Z", "content":url,
+        "embeds":[{"type":"gifv","url":url}]
+    });
+    store.set_messages(2002, vec![serde_json::from_value(original).unwrap()]);
+    store.queue_message(2002, 600, "reply".into(), Some(400));
+    let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+    assert_eq!(channel.messages[0].content, url);
+    let Some(ReplyState::Loaded(reply)) = &channel.messages[1].reply else {
+        panic!("queued reply expected");
+    };
+    assert!(reply.content.is_empty() && reply.embeds);
+    assert_eq!(reply.timestamp, channel.messages[0].timestamp);
+
+    let forwarded = json!({
+        "id":"700", "channel_id":"2002", "guild_id":"200",
+        "author":{"id":"2","username":"writer"},
+        "timestamp":"2026-10-22T13:00:00Z", "content":"reply",
+        "message_reference":{"message_id":"500","channel_id":"2002"},
+        "referenced_message":{
+            "id":"500", "author":{"id":"8","username":"original"},
+            "content":"", "message_snapshots":[{"message":{
+                "content":url, "embeds":[{"type":"gifv","url":url}]
+            }}]
+        }
+    });
+    store.set_messages(2002, vec![serde_json::from_value(forwarded).unwrap()]);
+    let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+    let Some(ReplyState::Loaded(reply)) = &channel.messages[0].reply else {
+        panic!("forwarded reply expected");
+    };
+    assert!(reply.content.is_empty() && reply.embeds);
+}
+
+#[test]
 fn replies_mentions_and_partial_message_updates() {
     let mut store = Store::from_ready(ready());
     let base = json!({"id":"500","channel_id":"2002","guild_id":"200","author":{"id":"2","username":"writer"},"timestamp":"2026-10-22T00:00:00Z","content":"reply","member":{"nick":"Message Nick","roles":["201"]},"message_reference":{"message_id":"400","channel_id":"2002","guild_id":"200"}});
@@ -1464,6 +1730,7 @@ fn replies_mentions_and_partial_message_updates() {
             ReplyState::Loaded(Reply {
                 message_id: 400,
                 author_id: 8,
+                timestamp: timestamp_from_nonce(400),
                 content: "original".into(),
                 attachments: true,
                 embeds: true,
@@ -1491,17 +1758,31 @@ fn replies_mentions_and_partial_message_updates() {
     assert_eq!(store.member_name(200, 2), Some("Message Nick"));
     let mut forwarded = base.clone();
     forwarded["message_reference"]["type"] = 1.into();
+    forwarded["message_snapshots"] = json!([{
+        "message": {
+            "content": "forwarded text",
+            "embeds": [],
+            "attachments": [],
+            "components": [],
+            "flags": 0,
+            "type": 0,
+            "timestamp": "2026-10-22T02:00:00Z",
+            "edited_timestamp": null
+        }
+    }]);
     store.set_messages(2002, vec![serde_json::from_value(forwarded).unwrap()]);
-    assert!(
-        store
-            .guild_by_id(200)
-            .unwrap()
-            .channel(2002)
-            .unwrap()
-            .messages[0]
-            .reply
-            .is_none()
-    );
+    let message = &store
+        .guild_by_id(200)
+        .unwrap()
+        .channel(2002)
+        .unwrap()
+        .messages[0];
+    assert!(message.reply.is_none());
+    let forward = message.forward.as_ref().unwrap();
+    assert_eq!(forward.content, "forwarded text");
+    assert_eq!(forward.channel_id, Some(2002));
+    assert_eq!(forward.guild_id, Some(200));
+    assert!(forward.timestamp.is_some() && !forward.edited);
     for fields in [
         json!({"mentions":[{"id":"1"}]}),
         json!({"mention_roles":["201"]}),
@@ -1546,6 +1827,75 @@ fn replies_mentions_and_partial_message_updates() {
         assert_eq!(message.reply, Some(ReplyState::Deleted));
         assert_eq!(store.member_name(200, 2), Some("Updated Nick"));
     }
+}
+
+#[test]
+fn message_update_replaces_forward_snapshot() {
+    let mut store = Store::from_ready(ready());
+    let message = json!({"id":"500","channel_id":"2002","guild_id":"200","author":{"id":"2","username":"writer"},"timestamp":"2026-10-22T00:00:00Z","message_reference":{"type":1,"channel_id":"2002","guild_id":"200"},"message_snapshots":[{"message":{"content":"first"}}]});
+    store.set_messages(2002, vec![serde_json::from_value(message).unwrap()]);
+    let update: model::MessageUpdate = serde_json::from_value(json!({
+        "id": "500",
+        "channel_id": "2002",
+        "message_snapshots": [{"message": {"content": "second"}}]
+    }))
+    .unwrap();
+    store.apply(Event::MessageUpdate(Box::new(update)));
+    let forward = store
+        .guild_by_id(200)
+        .unwrap()
+        .channel(2002)
+        .unwrap()
+        .messages[0]
+        .forward
+        .as_ref()
+        .unwrap();
+    assert_eq!(forward.content, "second");
+    assert_eq!(forward.channel_id, Some(2002));
+}
+
+#[test]
+fn reply_to_forward_previews_snapshot() {
+    let mut store = Store::from_ready(ready());
+    let message = json!({
+        "id": "500",
+        "channel_id": "2002",
+        "guild_id": "200",
+        "author": {"id": "2", "username": "writer"},
+        "timestamp": "2026-10-22T00:00:00Z",
+        "message_reference": {"message_id": "400", "channel_id": "2002", "guild_id": "200"},
+        "referenced_message": {
+            "id": "400",
+            "author": {"id": "8", "username": "reply-author"},
+            "content": "",
+            "attachments": [],
+            "embeds": [],
+            "message_reference": {"type": 1, "channel_id": "2002", "guild_id": "200"},
+            "message_snapshots": [{"message": {
+                "content": "forwarded preview",
+                "attachments": [{"id": "1"}],
+                "embeds": [{}]
+            }}]
+        }
+    });
+    store.set_messages(2002, vec![serde_json::from_value(message).unwrap()]);
+    assert_eq!(
+        store
+            .guild_by_id(200)
+            .unwrap()
+            .channel(2002)
+            .unwrap()
+            .messages[0]
+            .reply,
+        Some(ReplyState::Loaded(Reply {
+            message_id: 400,
+            author_id: 8,
+            timestamp: timestamp_from_nonce(400),
+            content: "forwarded preview".into(),
+            attachments: true,
+            embeds: true,
+        }))
+    );
 }
 
 #[test]
@@ -1612,6 +1962,322 @@ fn prepend_messages_inserts_only_older_messages_in_order() {
         page.iter().map(|message| message.id).collect::<Vec<_>>()
     );
     assert_eq!(store.prepend_messages(2002, older.to_vec()), 0);
+}
+
+#[test]
+fn open_at_detached_channel_ignores_live_message() {
+    let mut store = Store::from_ready(ready());
+    store.set_around_messages(2002, vec![server_message(55, 2002, 2, None)]);
+    assert!(!store.at_present(2002));
+    assert_eq!(
+        store.apply(Event::MessageCreate(Box::new(server_message(
+            70, 2002, 3, None
+        )))),
+        Change::Structure
+    );
+    let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+    assert_eq!(
+        channel
+            .messages
+            .iter()
+            .map(|message| message.id)
+            .collect::<Vec<_>>(),
+        [55]
+    );
+    assert!(channel.unread);
+    assert_eq!(store.channel_ack(2002), Some(70));
+    assert_eq!(
+        store.queue_message(2002, 90, "mine".into(), None),
+        Change::None
+    );
+
+    store.set_messages(2002, vec![server_message(55, 2002, 2, None)]);
+    assert!(store.at_present(2002));
+    assert_eq!(
+        store.apply(Event::MessageCreate(Box::new(server_message(
+            70, 2002, 3, None
+        )))),
+        Change::MessageInserted {
+            channel_id: 2002,
+            index: 1
+        }
+    );
+    let ids: Vec<_> = store
+        .guild_by_id(200)
+        .unwrap()
+        .channel(2002)
+        .unwrap()
+        .messages
+        .iter()
+        .map(|message| message.id)
+        .collect();
+    assert_eq!(ids, [55, 70]);
+    assert_eq!(
+        store.queue_message(2002, 90, "mine".into(), None),
+        Change::MessageInserted {
+            channel_id: 2002,
+            index: 2
+        }
+    );
+}
+
+#[test]
+fn open_at_append_messages_dedups_and_short_page_marks_present() {
+    let mut store = Store::from_ready(ready());
+    store.set_around_messages(
+        2002,
+        vec![
+            server_message(55, 2002, 2, None),
+            server_message(56, 2002, 2, None),
+        ],
+    );
+    assert!(!store.at_present(2002));
+    assert_eq!(
+        store.append_messages(
+            2002,
+            vec![
+                server_message(57, 2002, 2, None),
+                server_message(56, 2002, 2, None),
+                server_message(58, 2002, 2, None),
+            ],
+            50,
+        ),
+        2
+    );
+    let ids: Vec<_> = store
+        .guild_by_id(200)
+        .unwrap()
+        .channel(2002)
+        .unwrap()
+        .messages
+        .iter()
+        .map(|message| message.id)
+        .collect();
+    assert_eq!(ids, [55, 56, 57, 58]);
+    assert!(store.at_present(2002));
+
+    let mut store = Store::from_ready(ready());
+    store.set_around_messages(2002, vec![server_message(55, 2002, 2, None)]);
+    assert_eq!(
+        store.append_messages(
+            2002,
+            vec![
+                server_message(57, 2002, 2, None),
+                server_message(58, 2002, 2, None),
+            ],
+            2,
+        ),
+        2
+    );
+    assert!(!store.at_present(2002));
+    assert_eq!(store.append_messages(2002, Vec::new(), 50), 0);
+    assert!(store.at_present(2002));
+}
+
+#[test]
+fn open_at_settings_without_new_fields_load() {
+    let settings: crate::settings::Settings = serde_json::from_str(
+        r#"{"zoom":4,"window":{"x":1.0,"y":2.0,"width":800.0,"height":600.0,"maximized":false}}"#,
+    )
+    .unwrap();
+    assert_eq!(settings.zoom, Some(4));
+    assert!(settings.last_channel.is_none());
+    assert!(settings.guild_channels.is_empty());
+
+    let saved: crate::settings::Settings = serde_json::from_value(json!({
+        "last_channel": {"guild_id": 200, "channel_id": 2002},
+        "guild_channels": {"200": 2002}
+    }))
+    .unwrap();
+    assert_eq!(saved.last_channel.unwrap().channel_id, 2002);
+    assert_eq!(saved.guild_channels.get(&200), Some(&2002));
+    let round_trip: crate::settings::Settings =
+        serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+    assert!(round_trip == saved);
+}
+
+fn custom_emoji(id: u64, guild_id: u64, name: &str) -> CustomEmoji {
+    CustomEmoji {
+        id,
+        name: name.to_owned(),
+        animated: false,
+        guild_id,
+        available: true,
+        roles: Vec::new(),
+    }
+}
+
+fn guild_emoji(id: u64, name: &str) -> model::GuildEmoji {
+    model::GuildEmoji {
+        id,
+        name: name.to_owned(),
+        animated: false,
+        available: true,
+        roles: Vec::new(),
+        require_colons: true,
+    }
+}
+
+#[test]
+fn emoji_api_access_rules() {
+    let store = Store::from_ready(ready());
+    let usable = custom_emoji(1, 200, "usable");
+    assert_eq!(store.emoji_access(&usable, 200, 2002), EmojiAccess::Usable);
+
+    let mut unavailable = usable.clone();
+    unavailable.available = false;
+    assert_eq!(
+        store.emoji_access(&unavailable, 200, 2002),
+        EmojiAccess::Unavailable
+    );
+
+    let mut restricted = usable.clone();
+    restricted.roles = vec![999];
+    assert_eq!(
+        store.emoji_access(&restricted, 200, 2002),
+        EmojiAccess::NeedsRole
+    );
+
+    let mut animated = usable.clone();
+    animated.animated = true;
+    assert_eq!(
+        store.emoji_access(&animated, 200, 2002),
+        EmojiAccess::NeedsNitro
+    );
+
+    let external = custom_emoji(2, 100, "external");
+    assert_eq!(
+        store.emoji_access(&external, 200, 2002),
+        EmojiAccess::NeedsNitro
+    );
+
+    let mut ready = ready();
+    ready.user.premium_type = Some(2);
+    let store = Store::from_ready(ready);
+    assert!(store.has_nitro());
+    assert_eq!(store.emoji_access(&animated, 200, 2002), EmojiAccess::Usable);
+    assert_eq!(
+        store.emoji_access(&external, 200, 2002),
+        EmojiAccess::NoExternalPermission
+    );
+}
+
+#[test]
+fn emoji_api_search_orders_current_guild_then_others_then_unicode() {
+    let mut ready = ready();
+    ready
+        .guilds
+        .iter_mut()
+        .find(|guild| guild.id == 200)
+        .unwrap()
+        .emojis = Some(vec![
+        guild_emoji(1, "qqq_prefix"),
+        guild_emoji(2, "xqqq_sub"),
+    ]);
+    ready
+        .guilds
+        .iter_mut()
+        .find(|guild| guild.id == 100)
+        .unwrap()
+        .emojis = Some(vec![guild_emoji(3, "qqq_other")]);
+    let store = Store::from_ready(ready);
+
+    let results = store.search_emoji("qqq", 200, 2002, 10);
+    let names: Vec<_> = results
+        .iter()
+        .map(|(choice, _)| match choice {
+            EmojiChoice::Custom(emoji) => emoji.name.as_str(),
+            EmojiChoice::Unicode { shortcode, .. } => shortcode.as_str(),
+        })
+        .collect();
+    assert_eq!(names, ["qqq_prefix", "xqqq_sub", "qqq_other"]);
+    assert_eq!(results[2].1, EmojiAccess::NeedsNitro);
+    assert!(store.search_emoji("", 200, 2002, 10).is_empty());
+
+    let unicode = store.search_emoji("wave", 200, 2002, 3);
+    assert!(matches!(
+        &unicode[0].0,
+        EmojiChoice::Unicode { shortcode, .. } if shortcode == "wave"
+    ));
+    assert_eq!(unicode[0].1, EmojiAccess::Usable);
+}
+
+#[test]
+fn emoji_api_guild_emojis_update_replaces_and_skips_malformed() {
+    let mut store = Store::from_ready(ready());
+    let update: model::GuildEmojisUpdate = serde_json::from_value(json!({
+        "guild_id": "200",
+        "emojis": [
+            {"id":"9001","name":"party","animated":true,"available":false,
+             "roles":["7"],"require_colons":true},
+            {"name":"missing-id"},
+            {"id":"bad","name":"bad-id"},
+            {"id":"9002","name":"plain"}
+        ]
+    }))
+    .unwrap();
+    assert_eq!(
+        store.apply(Event::GuildEmojisUpdate(update)),
+        Change::Structure
+    );
+    let guild = store.guild_by_id(200).unwrap();
+    let names: Vec<_> = guild.emojis.iter().map(|emoji| emoji.name.as_str()).collect();
+    assert_eq!(names, ["party", "plain"]);
+    assert!(guild.emojis[0].animated && !guild.emojis[0].available);
+    assert_eq!(guild.emojis[0].roles, [7]);
+
+    let update: model::GuildEmojisUpdate = serde_json::from_value(json!({
+        "guild_id": "200",
+        "emojis": [{"id":"9003","name":"replacement"}]
+    }))
+    .unwrap();
+    store.apply(Event::GuildEmojisUpdate(update));
+    let names: Vec<_> = store
+        .guild_by_id(200)
+        .unwrap()
+        .emojis
+        .iter()
+        .map(|emoji| emoji.name.as_str())
+        .collect();
+    assert_eq!(names, ["replacement"]);
+}
+
+#[test]
+fn emoji_api_reaction_echo_does_not_double_count() {
+    let mut store = Store::from_ready(ready());
+    store.set_messages(2002, messages());
+    let emoji = ReactionEmoji {
+        id: None,
+        name: "\u{1F44D}".into(),
+        animated: false,
+    };
+    assert_ne!(
+        store.set_reaction(2002, 61, &emoji, true),
+        Change::None
+    );
+    let event: model::ReactionEvent = serde_json::from_value(json!({
+        "channel_id": "2002",
+        "message_id": "61",
+        "user_id": "1",
+        "emoji": {"name": "\u{1F44D}"}
+    }))
+    .unwrap();
+    store.apply(Event::MessageReactionAdd(event));
+    let reaction = store
+        .guild_by_id(200)
+        .unwrap()
+        .channel(2002)
+        .unwrap()
+        .messages
+        .iter()
+        .find(|message| message.id == 61)
+        .unwrap()
+        .reactions
+        .iter()
+        .find(|reaction| reaction.emoji.name == "\u{1F44D}")
+        .unwrap();
+    assert_eq!(reaction.count, 1);
+    assert!(reaction.me);
 }
 
 fn server_message(id: u64, channel_id: u64, author_id: u64, nonce: Option<u64>) -> model::Message {

@@ -19,7 +19,6 @@ use crate::{
 const WIDTH: f32 = 72.;
 pub const ICON: f32 = 48.;
 const DEFAULT_FOLDER_COLOR: u32 = 0x5865F2;
-const TOOLTIP_BG: u32 = 0x1F1F24;
 const HOME_KEY: u64 = 1;
 const ADD_SERVER_KEY: u64 = 2;
 const DISCOVER_KEY: u64 = 3;
@@ -391,19 +390,11 @@ fn tooltip(key: u64, label: &str) -> impl IntoElement {
                 div()
                     .flex()
                     .items_center()
-                    .child(theme::icon("tooltip-arrow", 6., TOOLTIP_BG).h(rpx(12.)))
+                    .child(theme::icon("tooltip-arrow", 6., theme::TOOLTIP_BG).h(rpx(12.)))
                     .child(
-                        div()
-                            .max_w(rpx(196.))
-                            .px(rpx(12.))
-                            .py(rpx(8.))
-                            .rounded(rpx(8.))
-                            .bg(rgb(TOOLTIP_BG))
-                            .shadow_lg()
+                        theme::tooltip_bubble()
                             .text_size(rpx(16.))
                             .line_height(rpx(20.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(theme::STRONG))
                             .child(
                                 rich_text(
                                     ("rail-tooltip", key),

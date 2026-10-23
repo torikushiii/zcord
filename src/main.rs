@@ -9,6 +9,7 @@ mod emoji;
 mod fonts;
 mod images;
 mod markdown;
+mod player;
 mod settings;
 mod store;
 mod theme;
@@ -70,6 +71,8 @@ fn main() {
                 KeyBinding::new("escape", app::JumpToPresent, None),
                 KeyBinding::new("shift-escape", app::MarkGuildRead, None),
                 KeyBinding::new("up", app::ComposerUp, Some("Input")),
+                KeyBinding::new("down", app::ComposerDown, Some("Input")),
+                KeyBinding::new("tab", app::ComposerTab, Some("Input")),
             ]);
             cx.on_action(|_: &ZoomIn, cx| set_zoom(zoom_index(cx) + 1, cx));
             cx.on_action(|_: &ZoomOut, cx| set_zoom(zoom_index(cx).saturating_sub(1), cx));

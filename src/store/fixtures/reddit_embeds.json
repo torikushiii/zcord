@@ -1,0 +1,80 @@
+{
+  "id": "500",
+  "channel_id": "2002",
+  "guild_id": "200",
+  "author": { "id": "2", "username": "writer" },
+  "timestamp": "2026-10-23T18:00:00Z",
+  "content": "https://www.vxreddit.com/r/ExampleCommunityOne/s/sampleShare\nhttps://www.reddit.com/r/ExampleCommunityTwo/comments/samplePostTwo/sample_post_two/",
+  "flags": 0,
+  "components": [],
+  "embeds": [
+    {
+      "type": "components",
+      "url": "https://www.vxreddit.com/r/ExampleCommunityOne/s/sampleShare",
+      "components": [
+        {
+          "type": 17,
+          "accent_color": 16729344,
+          "components": [
+            { "type": 10, "content": "-# vxReddit" },
+            { "type": 10, "content": "## Sample multi-image post\nPreview text from the linked Reddit post." },
+            {
+              "type": 12,
+              "items": [
+                {
+                  "media": {
+                    "url": "https://i.redd.it/sample-image-one.jpeg",
+                    "proxy_url": "https://images-ext-1.discordapp.net/external/fixture/https/i.redd.it/sample-image-one.jpeg",
+                    "width": 1080,
+                    "height": 1350
+                  },
+                  "description": "Reddit post image"
+                }
+              ]
+            },
+            {
+              "type": 1,
+              "components": [
+                { "type": 2, "style": 5, "label": "View post", "url": "https://www.reddit.com/comments/samplePostOne" }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "components",
+      "url": "https://www.reddit.com/r/ExampleCommunityTwo/comments/samplePostTwo/sample_post_two/",
+      "components": [
+        {
+          "type": 17,
+          "components": [
+            { "type": 10, "content": "-# r/ExampleCommunityTwo" },
+            { "type": 10, "content": "## Sample gallery post" },
+            {
+              "type": 12,
+              "items": [
+                {
+                  "media": {
+                    "url": "https://preview.redd.it/sample-image-two.png?width=1080&format=png",
+                    "proxy_url": "https://images-ext-2.discordapp.net/external/fixture/https/preview.redd.it/sample-image-two.png",
+                    "width": 1080,
+                    "height": 1080
+                  },
+                  "spoiler": true
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "rich",
+      "url": "https://example.com/article",
+      "title": "Existing standard embed",
+      "description": "Classic embeds continue to use the same card renderer.",
+      "image": { "url": "https://cdn.discordapp.com/example.png", "width": 400, "height": 200 }
+    }
+  ]
+}

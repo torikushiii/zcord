@@ -1,10 +1,15 @@
+use std::borrow::Cow;
+
 use gpui::{prelude::*, *};
-use gpui_component::tooltip::Tooltip;
+
+#[cfg(test)]
+mod tests;
 
 use crate::{
     app::{
         DiscordApp,
         chat::file_size,
+        emoji_picker::PickerTarget,
         message_body::{BodyContext, render_body, wrapped_label},
     },
     emoji, images,
@@ -13,9 +18,11 @@ use crate::{
 };
 
 const EMBED_WIDTH: f32 = 516.;
+const EMBED_PADDING_LEFT: f32 = 15.;
+const EMBED_PADDING_RIGHT: f32 = 16.;
+const EMBED_HORIZONTAL_INSET: f32 = EMBED_PADDING_LEFT + EMBED_PADDING_RIGHT + 2.;
 const CONTAINER_WIDTH: f32 = 600.;
 const EMBED_MEDIA: (f32, f32) = (400., 300.);
-const VIDEO_MEDIA: (f32, f32) = (400., 225.);
 const PLAIN_MEDIA: (f32, f32) = (550., 350.);
 const THUMBNAIL: f32 = 80.;
 const SECTION_THUMBNAIL: f32 = 85.;
@@ -27,18 +34,19 @@ const FIELD_SLOT: u64 = 1;
 const EMBED_SLOTS: u64 = 64;
 const COMPONENT_SLOT: u64 = 1 << 20;
 const SPOILER_SLOT: u64 = 1 << 21;
+const VIDEO_SLOT: u64 = 1 << 22;
+const IMAGE_SLOT: u64 = 50;
+const SIDE_THUMBNAIL_SLOT: u64 = 51;
+const IMAGE_GRID_SLOT: u64 = 52;
+/// Free slot for forwarded content. Its mask has the top bit set, so a key derived
+/// from a snowflake is never itself a snowflake.
+pub(super) const FORWARD_SLOT: u64 = 0x50_0000;
 
-fn part_key(message_id: u64, slot: u64) -> u64 {
+pub(super) fn part_key(message_id: u64, slot: u64) -> u64 {
     message_id ^ slot.wrapping_add(1).wrapping_mul(0x9E37_79B9_7F4A_7C15)
 }
 
-pub fn hides_content(content: &str, embeds: &[Embed]) -> bool {
-    let [embed] = embeds else {
-        return false;
-    };
-    matches!(embed.kind, EmbedKind::Image | EmbedKind::Gifv)
-        && embed.url.as_deref() == Some(content.trim())
-}
+pub use crate::store::hides_embed_content as hides_content;
 
 fn markdown(
     app: &DiscordApp,
@@ -79,6 +87,57 @@ fn linked(element: Stateful<Div>, url: Option<&String>) -> Stateful<Div> {
     }
 }
 
+fn description_text(text: &str) -> Cow<'_, str> {
+    // FxEmbed inserts unattached variation selectors after line breaks. Some native
+    // font backends give them advance width; selectors attached to real glyphs stay.
+    let selector = |c: char| matches!(c, '\u{FE00}'..='\u{FE0F}');
+    if !text.split('\n').any(|line| line.starts_with(selector)) {
+        return Cow::Borrowed(text);
+    }
+    Cow::Owned(
+        text.split_inclusive('\n')
+            .map(|line| line.trim_start_matches(selector))
+            .collect(),
+    )
+}
+
+fn embed_card(color: Option<u32>, media_width: Option<f32>) -> Div {
+    div()
+        .relative()
+        .self_start()
+        .flex()
+        .flex_col()
+        .min_w_0()
+        .gap(rpx(8.))
+        .mt_1()
+        .map(|this| match media_width {
+            // Resolve the card width before its percent-width text row is measured.
+            Some(width) => this.w(rpx(width + EMBED_HORIZONTAL_INSET)).max_w_full(),
+            None => this.max_w(rpx(EMBED_WIDTH)),
+        })
+        .font_weight(FontWeight::NORMAL)
+        .text_color(rgb(theme::TEXT))
+        .pt(rpx(8.))
+        .pr(rpx(EMBED_PADDING_RIGHT))
+        .pb(rpx(16.))
+        // 1px border + 15px = Discord's 4px accent + 12px gutter.
+        .pl(rpx(EMBED_PADDING_LEFT))
+        .rounded(rpx(4.))
+        .border_1()
+        .border_color(rgb(theme::BORDER))
+        .bg(rgb(theme::ELEVATED))
+        .child(
+            div()
+                .absolute()
+                .left(px(-1.))
+                .top(px(-1.))
+                .bottom(px(-1.))
+                .w(rpx(4.))
+                .rounded_l(rpx(4.))
+                .bg(rgb(color.unwrap_or(EMBED_BORDER))),
+        )
+}
+
 fn fit(media: &Media, max: (f32, f32)) -> (f32, f32) {
     if media.width == 0 || media.height == 0 {
         return max;
@@ -109,6 +168,8 @@ fn image_box(media: &Media, width: f32, height: f32, radius: f32, cx: &App) -> D
         .when(image.is_none(), |this| this.bg(rgb(theme::BORDER)))
         .children(image.map(|path| {
             animated(path, &media.url)
+                .absolute()
+                .inset_0()
                 .size_full()
                 .object_fit(ObjectFit::Cover)
                 .rounded(rpx(radius))
@@ -141,9 +202,46 @@ fn gifv_box(still: &Media, video: Option<&Media>, cx: &App) -> Div {
     }
 }
 
-fn fitted(media: &Media, max: (f32, f32), cx: &App) -> Div {
+fn fitted(app: &DiscordApp, key: u64, media: &Media, max: (f32, f32), cx: &App) -> Stateful<Div> {
     let (width, height) = fit(media, max);
-    image_box(media, width, height, 8., cx)
+    lightbox_box(app, key, media, width, height, 8., cx)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lightbox_box(
+    app: &DiscordApp,
+    key: u64,
+    media: &Media,
+    width: f32,
+    height: f32,
+    radius: f32,
+    cx: &App,
+) -> Stateful<Div> {
+    let entity = app.entity.clone();
+    let spec = media.spec();
+    let url = media.source.clone();
+    let preview = theme::image_px(width.max(height));
+    let (original_width, original_height) = if media.width > 0 && media.height > 0 {
+        (media.width, media.height)
+    } else {
+        (width.round().max(1.) as u32, height.round().max(1.) as u32)
+    };
+    image_box(media, width, height, radius, cx)
+        .id(("lightbox-open", key))
+        .cursor_pointer()
+        .on_click(move |_, _, cx| {
+            entity
+                .update(cx, |app, cx| {
+                    app.open_lightbox(
+                        spec.clone(),
+                        (original_width, original_height),
+                        preview,
+                        url.clone(),
+                        cx,
+                    )
+                })
+                .ok();
+        })
 }
 
 fn spoiler_cover(app: &DiscordApp, key: u64, spoiler: bool, element: Div) -> AnyElement {
@@ -151,7 +249,7 @@ fn spoiler_cover(app: &DiscordApp, key: u64, spoiler: bool, element: Div) -> Any
         return element.into_any_element();
     }
     element
-        .child(spoiler_overlay(app, key).bg(rgb(0x1A1A1E)))
+        .child(spoiler_overlay(app, key, 8.).bg(rgb(0x1A1A1E)))
         .into_any_element()
 }
 
@@ -165,13 +263,13 @@ fn spoiler_media(
     height: f32,
     radius: f32,
     cx: &App,
-) -> AnyElement {
+) -> Stateful<Div> {
     if spoiler && !app.revealed_spoilers.contains(&(key, 0)) {
         blurred_box(&media.spec(), width, height, radius, cx)
-            .child(spoiler_overlay(app, key))
-            .into_any_element()
+            .id(("hidden-media", key))
+            .child(spoiler_overlay(app, key, radius))
     } else {
-        image_box(media, width, height, radius, cx).into_any_element()
+        lightbox_box(app, key, media, width, height, radius, cx)
     }
 }
 
@@ -190,24 +288,25 @@ pub(super) fn blurred_box(
         .rounded(rpx(radius))
         .overflow_hidden()
         .bg(rgb(theme::BORDER))
+        // GPUI clips children to the parent's rectangle, not its rounded corners,
+        // so the image must carry the radius itself and stay inside the box.
         .children(images::blurred(spec, cx).map(|image| {
-            let bleed = (width.max(height) / images::BLUR_SOURCE as f32 * 1.5).ceil();
             img(image)
                 .absolute()
-                .left(rpx(-bleed))
-                .top(rpx(-bleed))
-                .w(rpx(width + bleed * 2.))
-                .h(rpx(height + bleed * 2.))
+                .inset_0()
+                .size_full()
+                .rounded(rpx(radius))
                 .object_fit(ObjectFit::Cover)
         }))
 }
 
-pub(super) fn spoiler_overlay(app: &DiscordApp, key: u64) -> Stateful<Div> {
+pub(super) fn spoiler_overlay(app: &DiscordApp, key: u64, radius: f32) -> Stateful<Div> {
     let entity = app.entity.clone();
     div()
         .id(("spoiler", key))
         .absolute()
         .inset_0()
+        .rounded(rpx(radius))
         .flex()
         .items_center()
         .justify_center()
@@ -276,6 +375,12 @@ pub fn render_embed(
     cx: &App,
 ) -> AnyElement {
     let key = |slot: u64| part_key(message_id, index as u64 * EMBED_SLOTS + slot);
+    if embed.kind == EmbedKind::Components {
+        // Link-preview components live inside embeds, not message.components. Give
+        // each embed its own keys for markdown, spoilers, media, and link controls.
+        return render_components(app, key(COMPONENT_SLOT), &embed.components, cx)
+            .unwrap_or_else(|| div().into_any_element());
+    }
     let media = embed.thumbnail.as_ref().or(embed.images.first());
     let bare = embed.title.is_none() && embed.description.is_none() && embed.author.is_none();
     match embed.kind {
@@ -304,13 +409,19 @@ pub fn render_embed(
             };
             return div()
                 .mt_1()
-                .child(fitted(media, PLAIN_MEDIA, cx))
+                .child(fitted(app, key(IMAGE_SLOT), media, PLAIN_MEDIA, cx))
                 .into_any_element();
         }
         _ => {}
     }
 
-    let video = embed.kind == EmbedKind::Video;
+    // Mastodon-style embeds (e.g. FxTwitter) carry a playable `video` without being
+    // typed as video embeds, so a trusted video makes the embed a video one.
+    let video_url = embed
+        .video
+        .as_ref()
+        .and_then(|media| images::trusted_video_url(&media.url));
+    let video = embed.kind == EmbedKind::Video || video_url.is_some();
     let side_thumbnail = embed
         .thumbnail
         .as_ref()
@@ -326,6 +437,25 @@ pub fn render_embed(
         embed.thumbnail.iter().collect()
     } else {
         embed.images.iter().collect()
+    };
+    let video_dimensions = video_url.as_ref().map(|_| {
+        embed
+            .thumbnail
+            .as_ref()
+            .or(embed.images.first())
+            .or(embed.video.as_ref())
+            .map_or(EMBED_MEDIA, |media| fit(media, EMBED_MEDIA))
+    });
+    let media_width = if side_thumbnail.is_none() {
+        video_dimensions
+            .map(|dimensions| dimensions.0)
+            .or_else(|| match big_media.as_slice() {
+                [] => None,
+                [single] => Some(fit(single, EMBED_MEDIA).0),
+                _ => Some(EMBED_MEDIA.0),
+            })
+    } else {
+        None
     };
 
     let mut body = div().flex().flex_col().flex_1().min_w_0().gap(rpx(8.));
@@ -384,10 +514,11 @@ pub fn render_embed(
         );
     }
     if let Some(description) = &embed.description {
+        let description = description_text(description);
         body = body.child(markdown(
             app,
             key(DESCRIPTION_SLOT),
-            description,
+            &description,
             14.,
             18.,
             cx,
@@ -409,28 +540,66 @@ pub fn render_embed(
         .child(body)
         .children(side_thumbnail.map(|thumbnail| {
             let (width, height) = fit(thumbnail, (THUMBNAIL, THUMBNAIL));
-            image_box(thumbnail, width, height, 4., cx)
+            lightbox_box(
+                app,
+                key(SIDE_THUMBNAIL_SLOT),
+                thumbnail,
+                width,
+                height,
+                4.,
+                cx,
+            )
         }));
 
-    let media_max = if video { VIDEO_MEDIA } else { EMBED_MEDIA };
-    let media = match big_media.as_slice() {
-        [] => None,
-        [single] => Some(
-            fitted(single, media_max, cx)
-                .when(video, play_badge)
+    let media_max = EMBED_MEDIA;
+    let media = if let Some(url) = video_url.as_deref() {
+        let poster = embed.thumbnail.as_ref().or(embed.images.first());
+        let dimensions = video_dimensions.expect("playable video has dimensions");
+        Some(crate::player::video_box(
+            app,
+            crate::player::Video {
+                key: key(VIDEO_SLOT),
+                url,
+                poster: poster.map(Media::spec),
+                width: dimensions.0,
+                height: dimensions.1,
+                radius: 8.,
+            },
+            cx,
+        ))
+    } else {
+        match big_media.as_slice() {
+            [] => None,
+            [single] if video => {
+                let (width, height) = fit(single, media_max);
+                Some(play_badge(image_box(single, width, height, 8., cx)).into_any_element())
+            }
+            [single] => {
+                Some(fitted(app, key(IMAGE_SLOT), single, media_max, cx).into_any_element())
+            }
+            many => Some(
+                media_grid(
+                    app,
+                    many,
+                    media_max.0,
+                    |slot| key(IMAGE_GRID_SLOT + slot as u64),
+                    cx,
+                )
                 .into_any_element(),
-        ),
-        many => Some(media_grid(many, media_max.0, cx).into_any_element()),
+            ),
+        }
     };
-    let media = media.map(|media| match (video, embed.url.clone()) {
-        (true, Some(url)) => div()
-            .id(("embed-video", key(63)))
-            .cursor_pointer()
-            .on_click(move |_, _, cx| cx.open_url(&url))
-            .child(media)
-            .into_any_element(),
-        _ => media,
-    });
+    let media = media.map(
+        |media| match (video, video_url.is_none(), embed.url.clone()) {
+            (true, true, Some(url)) => div()
+                .id(("embed-video", key(63)))
+                .cursor_pointer()
+                .on_click(move |_, _, cx| cx.open_url(&url))
+                .child(media)
+                .into_any_element(),
+            _ => media,
+        },
+    );
 
     let footer = embed.footer.as_ref().map(|footer| footer.text.clone());
     let stamp = embed.timestamp.map(|timestamp| timestamp.full());
@@ -439,20 +608,7 @@ pub fn render_embed(
         (text, stamp) => text.or(stamp),
     };
 
-    div()
-        .flex()
-        .flex_col()
-        .gap(rpx(8.))
-        .mt_1()
-        .max_w(rpx(EMBED_WIDTH))
-        .pt(rpx(8.))
-        .pr(rpx(16.))
-        .pb(rpx(16.))
-        .pl(rpx(12.))
-        .rounded(rpx(4.))
-        .border_l_4()
-        .border_color(rgb(embed.color.unwrap_or(EMBED_BORDER)))
-        .bg(rgb(theme::ELEVATED))
+    embed_card(embed.color, media_width)
         .child(content)
         .children(media)
         .children(footer_text.map(|text| {
@@ -528,7 +684,13 @@ fn fields(
         }))
 }
 
-fn media_grid(media: &[&Media], width: f32, cx: &App) -> Div {
+fn media_grid(
+    app: &DiscordApp,
+    media: &[&Media],
+    width: f32,
+    key: impl Fn(usize) -> u64,
+    cx: &App,
+) -> Div {
     let columns = if media.len() == 3 { 3 } else { 2 };
     let gap = 4.;
     let cell = ((width - gap * (columns as f32 - 1.)) / columns as f32).floor();
@@ -543,9 +705,9 @@ fn media_grid(media: &[&Media], width: f32, cx: &App) -> Div {
         .gap(rpx(gap))
         .w(rpx(width))
         .children(
-            media
-                .iter()
-                .map(|media| image_box(media, cell, height.floor(), 4., cx)),
+            media.iter().enumerate().map(|(slot, media)| {
+                lightbox_box(app, key(slot), media, cell, height.floor(), 4., cx)
+            }),
         )
 }
 
@@ -671,6 +833,7 @@ fn render_component(
                         (width, height)
                     };
                     spoiler_media(app, key, *spoiler, media, width, height, 8., cx)
+                        .into_any_element()
                 }
                 other => render_component(app, message_id, other, counter, cx),
             }))
@@ -695,6 +858,7 @@ fn render_component(
                 8.,
                 cx,
             )
+            .into_any_element()
         }
         Component::Gallery(items) => gallery(app, message_id, items, counter, cx),
         Component::File {
@@ -743,33 +907,49 @@ fn render_component(
             components,
         } => {
             let key = part_key(message_id, SPOILER_SLOT + slot);
-            let inner = div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_w_0()
-                .gap(rpx(8.))
-                .p(rpx(16.))
-                .children(
-                    components
-                        .iter()
-                        .map(|child| render_component(app, message_id, child, counter, cx)),
-                );
-            let element = div()
-                .relative()
-                .flex()
-                .w_full()
-                .max_w(rpx(CONTAINER_WIDTH))
-                .rounded(rpx(8.))
-                .overflow_hidden()
-                .border_1()
-                .border_color(rgb(theme::BORDER))
-                .bg(rgb(theme::ELEVATED))
-                .children(accent.map(|color| div().w(rpx(4.)).flex_none().bg(rgb(color))))
-                .child(inner);
+            let element = component_container(
+                *accent,
+                components
+                    .iter()
+                    .map(|child| render_component(app, message_id, child, counter, cx)),
+            );
             spoiler_cover(app, key, *spoiler, element)
         }
     }
+}
+
+fn component_container(accent: Option<u32>, children: impl IntoIterator<Item = AnyElement>) -> Div {
+    // Resolve the constrained column width before measuring long wrapped text.
+    // Nested flex rows can retain a height measured at the wider message width.
+    div()
+        .relative()
+        .grid()
+        .grid_cols(1)
+        .flex_shrink_0()
+        .w_full()
+        .max_w(rpx(CONTAINER_WIDTH))
+        .gap(rpx(8.))
+        .p(rpx(16.))
+        .when(accent.is_some(), |this| this.pl(rpx(20.)))
+        .rounded(rpx(8.))
+        .overflow_hidden()
+        .border_1()
+        .border_color(rgb(theme::BORDER))
+        .bg(rgb(theme::ELEVATED))
+        .children(accent.map(|color| {
+            div()
+                .absolute()
+                .left_0()
+                .top_0()
+                .bottom_0()
+                .w(rpx(4.))
+                .bg(rgb(color))
+        }))
+        .children(children)
+}
+
+fn single_gallery_frame(element: Stateful<Div>, width: f32, height: f32) -> Stateful<Div> {
+    element.max_w_full().h_auto().aspect_ratio(width / height)
 }
 
 fn gallery(
@@ -786,7 +966,12 @@ fn gallery(
     }
     if let [(key, item)] = keyed.as_slice() {
         let (width, height) = fit(&item.media, PLAIN_MEDIA);
-        return spoiler_media(app, *key, item.spoiler, &item.media, width, height, 8., cx);
+        return single_gallery_frame(
+            spoiler_media(app, *key, item.spoiler, &item.media, width, height, 8., cx),
+            width,
+            height,
+        )
+        .into_any_element();
     }
     let width = PLAIN_MEDIA.0;
     let columns = if items.len() == 2 || items.len() == 4 {
@@ -895,10 +1080,19 @@ fn emoji_element(emoji: &ReactionEmoji, size: f32, cx: &App) -> AnyElement {
     }
 }
 
-pub fn render_reactions(message_id: u64, reactions: &[Reaction], cx: &App) -> Option<AnyElement> {
+pub fn render_reactions(
+    app: &DiscordApp,
+    message_id: u64,
+    reactions: &[Reaction],
+    cx: &App,
+) -> Option<AnyElement> {
     if reactions.is_empty() {
         return None;
     }
+    let entity = app.entity.clone();
+    let open = app.entity.clone();
+    let tip_shown = app.hovered_add_reaction == Some(message_id);
+    let picking = app.picking_reaction_for(message_id);
     let pill = || {
         div()
             .flex()
@@ -915,8 +1109,19 @@ pub fn render_reactions(message_id: u64, reactions: &[Reaction], cx: &App) -> Op
             .flex_wrap()
             .gap(rpx(4.))
             .mt(rpx(4.))
-            .children(reactions.iter().map(|reaction| {
+            .children(reactions.iter().enumerate().map(|(index, reaction)| {
+                let entity = entity.clone();
+                let emoji = reaction.emoji.clone();
                 pill()
+                    .id(format!("reaction-{message_id}-{index}"))
+                    .cursor_pointer()
+                    .on_click(move |_, _, cx| {
+                        entity
+                            .update(cx, |app, cx| {
+                                app.toggle_reaction(message_id, emoji.clone(), cx)
+                            })
+                            .ok();
+                    })
                     .map(|this| {
                         if reaction.me {
                             this.bg(rgba(0x5865F226)).border_color(rgb(theme::BLURPLE))
@@ -939,12 +1144,34 @@ pub fn render_reactions(message_id: u64, reactions: &[Reaction], cx: &App) -> Op
                     .id(("add-reaction", message_id))
                     .bg(rgb(theme::ELEVATED))
                     .border_color(rgb(theme::ELEVATED))
-                    .opacity(0.)
+                    .opacity(if picking { 1. } else { 0. })
                     .group_hover("message", |style| style.opacity(1.))
                     .hover(|style| style.bg(rgb(theme::SELECTED)))
                     .cursor_pointer()
-                    .tooltip(|window, cx| Tooltip::new("Add Reaction").build(window, cx))
-                    .child(theme::icon("smile-plus", 20., theme::MUTED)),
+                    .relative()
+                    .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                        let position = event.position - point(px(0.), px(8.));
+                        open.update(cx, |app, cx| {
+                            app.toggle_emoji_picker(
+                                PickerTarget::Reaction(message_id),
+                                position,
+                                window,
+                                cx,
+                            )
+                        })
+                        .ok();
+                    })
+                    .on_hover(move |hovered, _, cx| {
+                        entity
+                            .update(cx, |app, cx| {
+                                app.set_add_reaction_hover(message_id, *hovered, cx)
+                            })
+                            .ok();
+                    })
+                    .child(theme::icon("smile-plus", 20., theme::MUTED))
+                    .when(tip_shown && !picking, |this| {
+                        this.child(theme::tooltip_above("Add Reaction"))
+                    }),
             )
             .into_any_element(),
     )

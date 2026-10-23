@@ -6,13 +6,14 @@ use gpui_component::{input::Textarea, tooltip::Tooltip};
 use crate::{
     app::{
         DIALOG_EXIT, DISCORD_EPOCH_MS, DiscordApp, Editing, MESSAGE_LIMIT, ReplyTarget, embeds,
+        emoji_picker::{self, PickerTarget},
         member_list,
         message_body::{BodyContext, label, preview_pieces, render_body, wrapped_label},
         profile,
         rich_text::rich_text,
     },
     images,
-    store::{Attachment, Delivery, Message, ReplyState},
+    store::{Attachment, Delivery, Forward, Message, ReplyState},
     theme::{self, rpx},
 };
 
@@ -21,6 +22,9 @@ const GUTTER: f32 = 72.;
 const BOTTOM_SPACER: f32 = 24.;
 const LINK: u32 = 0x00A8FC;
 const DIALOG_ENTER: Duration = Duration::from_millis(200);
+
+#[cfg(test)]
+mod reply_tests;
 
 pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement + use<> {
     let channel = app.channel();
@@ -171,7 +175,12 @@ fn messages_column(
                         .children(welcome(app)),
                 )
             } else {
-                let bar = new_messages_bar(app, entity.clone());
+                let bar = if is_detached(app) {
+                    None
+                } else {
+                    new_messages_bar(app, entity.clone())
+                };
+                let older = older_messages_bar(app, entity.clone());
                 this.child(
                     div()
                         .relative()
@@ -188,7 +197,8 @@ fn messages_column(
                             .min_h_0()
                             .w_full(),
                         )
-                        .children(bar),
+                        .children(bar)
+                        .children(older),
                 )
             }
         })
@@ -224,6 +234,7 @@ fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 .bg(rgb(theme::ELEVATED))
                 .border_1()
                 .border_color(rgb(theme::BORDER))
+                .children(emoji_picker::suggestions(app, cx))
                 .child(div().my(rpx(12.)).child(theme::icon_button(
                     "attach",
                     "circle-plus",
@@ -254,7 +265,25 @@ fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                         ))
                         .child(theme::icon_button("gif", "image-play", 24., theme::MUTED))
                         .child(theme::icon_button("stickers", "sticker", 24., theme::MUTED))
-                        .child(theme::icon_button("emoji", "smile", 24., theme::MUTED))
+                        .child({
+                            let entity = app.entity.clone();
+                            theme::icon_button("emoji", "smile", 24., theme::MUTED).on_mouse_down(
+                                MouseButton::Left,
+                                move |event, window, cx| {
+                                    let position = event.position - point(px(0.), px(16.));
+                                    entity
+                                        .update(cx, |app, cx| {
+                                            app.toggle_emoji_picker(
+                                                PickerTarget::Composer,
+                                                position,
+                                                window,
+                                                cx,
+                                            )
+                                        })
+                                        .ok();
+                                },
+                            )
+                        })
                         .child(theme::icon_button("apps", "layout-grid", 24., theme::MUTED)),
                 )
                 .when(remaining < 200, |this| {
@@ -683,7 +712,15 @@ fn new_badge() -> impl IntoElement {
         .child("NEW")
 }
 
+fn is_detached(app: &DiscordApp) -> bool {
+    app.channel()
+        .is_some_and(|channel| channel.messages_loaded && !app.store.at_present(channel.id))
+}
+
 fn new_messages_bar(app: &DiscordApp, entity: Entity<DiscordApp>) -> Option<AnyElement> {
+    if !app.unread_bar || is_detached(app) {
+        return None;
+    }
     let since = app.unread_since?;
     let channel = app.channel()?;
     let index = channel
@@ -749,10 +786,72 @@ fn new_messages_bar(app: &DiscordApp, entity: Entity<DiscordApp>) -> Option<AnyE
                     .flex_none()
                     .font_weight(FontWeight::SEMIBOLD)
                     .cursor_pointer()
-                    .on_click(move |_, _, cx| {
-                        entity.update(cx, |app, cx| app.mark_channel_read(cx));
+                    .on_click(move |_, window, cx| {
+                        entity.update(cx, |app, cx| app.jump_to_present(window, cx));
                     })
                     .child("Mark As Read"),
+            )
+            .into_any_element(),
+    )
+}
+
+fn older_messages_bar(app: &DiscordApp, entity: Entity<DiscordApp>) -> Option<AnyElement> {
+    if !app.live || !is_detached(app) {
+        return None;
+    }
+    let jump = entity;
+    // Floating pill centred above the composer; the full-width wrapper has no
+    // listeners, so clicks beside the pill still reach the list.
+    Some(
+        div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom(rpx(8.))
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(rpx(12.))
+                    .pl(rpx(16.))
+                    .pr(rpx(6.))
+                    .py(rpx(6.))
+                    .rounded(rpx(12.))
+                    .border_1()
+                    .border_color(rgb(theme::PLACEHOLDER_STRONG))
+                    .bg(rgb(theme::ELEVATED))
+                    .shadow_lg()
+                    .child(
+                        div()
+                            .text_size(rpx(15.))
+                            .line_height(rpx(20.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(rgb(theme::TEXT))
+                            .whitespace_nowrap()
+                            .child("You're Viewing Older Messages"),
+                    )
+                    .child(
+                        div()
+                            .id("jump-to-present")
+                            .flex_none()
+                            .px(rpx(12.))
+                            .py(rpx(6.))
+                            .rounded(rpx(8.))
+                            .bg(rgb(theme::BLURPLE))
+                            .hover(|style| style.bg(rgb(0x4752C4)))
+                            .text_size(rpx(15.))
+                            .line_height(rpx(20.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(0xFFFFFF))
+                            .whitespace_nowrap()
+                            .cursor_pointer()
+                            .on_click(move |_, window, cx| {
+                                jump.update(cx, |app, cx| app.jump_to_present(window, cx));
+                            })
+                            .child("Jump To Present"),
+                    ),
             )
             .into_any_element(),
     )
@@ -767,6 +866,10 @@ fn body_context<'a>(app: &'a DiscordApp, message_id: u64) -> BodyContext<'a> {
         entity: app.entity.clone(),
         colors: Default::default(),
     }
+}
+
+fn forward_key(message_id: u64) -> u64 {
+    embeds::part_key(message_id, embeds::FORWARD_SLOT)
 }
 
 fn author_name(app: &DiscordApp, user_id: u64) -> String {
@@ -905,6 +1008,28 @@ fn render_system(app: &DiscordApp, message: &Message) -> Option<AnyElement> {
     )
 }
 
+fn attachment_reply_preview() -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(rpx(4.))
+        .min_w_0()
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .italic()
+                .debug_selector(|| "reply-attachment-label".into())
+                .child("Click to see attachment"),
+        )
+        .child(
+            div()
+                .flex_none()
+                .debug_selector(|| "reply-attachment-icon".into())
+                .child(theme::icon("image", 18., theme::MUTED)),
+        )
+}
+
 fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) -> AnyElement {
     let spine = div()
         .absolute()
@@ -924,6 +1049,7 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
         .min_w_0()
         .overflow_hidden()
         .text_size(rpx(14.))
+        .line_height(rpx(18.))
         .text_color(rgb(theme::MUTED));
     let content = match reply {
         ReplyState::Loaded(reply) => {
@@ -932,12 +1058,11 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
             let mut counter = 0;
             let pieces = preview_pieces(&parsed.blocks, &context, &mut counter, cx);
             let preview: AnyElement = if pieces.is_empty() {
-                let label = if reply.attachments || reply.embeds {
-                    "Click to see attachment"
+                if reply.attachments || reply.embeds {
+                    attachment_reply_preview().into_any_element()
                 } else {
-                    ""
-                };
-                div().italic().child(label).into_any_element()
+                    div().into_any_element()
+                }
             } else {
                 rich_text(("reply", message.id), pieces)
                     .single_line()
@@ -945,7 +1070,24 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
                     .emoji_size(rpx(16.))
                     .into_any_element()
             };
+            let target = reply.message_id;
+            let entity = app.entity.clone();
             content
+                .id(("reply-preview", message.id))
+                .cursor_pointer()
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    entity
+                        .update(cx, |app, cx| app.jump_to_message(target, window, cx))
+                        .ok();
+                })
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(rpx(11.))
+                        .text_color(rgb(theme::FAINT))
+                        .child(reply.timestamp.time()),
+                )
                 .child(theme::member_avatar(
                     &app.store,
                     app.selected_guild_id,
@@ -958,6 +1100,9 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
                 .child(
                     div()
                         .flex_none()
+                        .max_w(relative(0.5))
+                        .min_w_0()
+                        .truncate()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(author_color(app, reply.author_id))
                         .child(label(
@@ -965,12 +1110,15 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
                             &author_name(app, reply.author_id),
                         )),
                 )
-                .child(div().min_w_0().overflow_hidden().child(preview))
+                .child(div().flex_1().min_w_0().overflow_hidden().child(preview))
+                .into_any_element()
         }
-        ReplyState::Deleted => content.child(div().italic().child("Original message was deleted")),
-        ReplyState::Unavailable => {
-            content.child(div().italic().child("Message could not be loaded"))
-        }
+        ReplyState::Deleted => content
+            .child(div().italic().child("Original message was deleted"))
+            .into_any_element(),
+        ReplyState::Unavailable => content
+            .child(div().italic().child("Message could not be loaded"))
+            .into_any_element(),
     };
     div()
         .relative()
@@ -980,6 +1128,91 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
         .child(spine)
         .child(div().w(rpx(GUTTER)).flex_none())
         .child(content)
+        .into_any_element()
+}
+
+fn render_forward(
+    app: &DiscordApp,
+    message_id: u64,
+    forward: &Forward,
+    cx: &App,
+) -> AnyElement {
+    let key = forward_key(message_id);
+    let parsed = app.parsed(key, &forward.content);
+    let context = body_context(app, key);
+    let show_body =
+        !parsed.blocks.is_empty() && !embeds::hides_content(&forward.content, &forward.embeds);
+    let channel = forward
+        .channel_id
+        .and_then(|channel_id| app.store.channel_name(channel_id));
+    let footer = (channel.is_some() || forward.timestamp.is_some()).then(|| {
+        let text = match (channel, forward.timestamp) {
+            (Some(channel), Some(timestamp)) => format!("#{channel} • {}", timestamp.full()),
+            (Some(channel), None) => format!("#{channel}"),
+            (None, timestamp) => timestamp.map(|timestamp| timestamp.full()).unwrap_or_default(),
+        };
+        div()
+            .mt(rpx(2.))
+            .text_size(rpx(12.))
+            .line_height(rpx(16.))
+            .text_color(rgb(theme::FAINT))
+            .child(text)
+    });
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .mt(rpx(2.))
+        .py(rpx(2.))
+        .pl(rpx(12.))
+        .rounded_l(rpx(4.))
+        .border_l_4()
+        .border_color(rgb(theme::BORDER))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(rpx(4.))
+                .child(theme::icon("forward", 16., theme::MUTED))
+                .child(
+                    div()
+                        .italic()
+                        .text_size(rpx(14.))
+                        .line_height(rpx(18.))
+                        .text_color(rgb(theme::MUTED))
+                        .child("Forwarded"),
+                ),
+        )
+        .when(show_body, |this| {
+            this.child(
+                div()
+                    .w_full()
+                    .text_size(rpx(16.))
+                    .line_height(rpx(22.))
+                    .child(render_body(
+                        &parsed.blocks,
+                        forward.edited,
+                        parsed.jumbo,
+                        &context,
+                        cx,
+                    )),
+            )
+        })
+        .children(
+            forward
+                .attachments
+                .iter()
+                .map(|attachment| render_attachment(app, attachment, cx)),
+        )
+        .children(
+            forward
+                .embeds
+                .iter()
+                .enumerate()
+                .map(|(index, embed)| embeds::render_embed(app, key, index, embed, cx)),
+        )
+        .children(embeds::render_components(app, key, &forward.components, cx))
+        .children(footer)
         .into_any_element()
 }
 
@@ -1177,6 +1410,12 @@ fn render_message(
                             ),
                             None => this,
                         })
+                        .children(
+                            message
+                                .forward
+                                .as_ref()
+                                .map(|forward| render_forward(app, message.id, forward, cx)),
+                        )
                         .when(message.delivery == Delivery::Failed && !preview, |this| {
                             this.child(send_failure(app, message.id))
                         })
@@ -1204,7 +1443,7 @@ fn render_message(
                                     .child("(edited)"),
                             )
                         })
-                        .children(embeds::render_reactions(message.id, &message.reactions, cx)),
+                        .children(embeds::render_reactions(app, message.id, &message.reactions, cx)),
                 ),
         )
         .when(!preview && editing.is_none(), |this| {
@@ -1538,23 +1777,74 @@ pub(super) fn delete_dialog(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
 const MEDIA_MAX: (f32, f32) = (550., 350.);
 
 fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &App) -> AnyElement {
+    if attachment.is_video() {
+        let Some(url) = attachment.video_url() else {
+            return file_card(attachment).into_any_element();
+        };
+        let (width, height) = (
+            attachment.width.unwrap_or(1).max(1) as f32,
+            attachment.height.unwrap_or(1).max(1) as f32,
+        );
+        let scale = (MEDIA_MAX.0 / width).min(MEDIA_MAX.1 / height).min(1.);
+        let (width, height) = ((width * scale).round(), (height * scale).round());
+        let poster = attachment.video_poster_spec();
+        if attachment.spoiler() && !app.revealed_spoilers.contains(&(attachment.id, 0)) {
+            let media = poster.as_ref().map_or_else(
+                || {
+                    div()
+                        .relative()
+                        .flex_none()
+                        .w(rpx(width))
+                        .h(rpx(height))
+                        .rounded(rpx(8.))
+                        .overflow_hidden()
+                        .bg(rgb(theme::BORDER))
+                },
+                |spec| embeds::blurred_box(spec, width, height, 8., cx),
+            );
+            return media
+                .mt_1()
+                .child(embeds::spoiler_overlay(app, attachment.id, 8.))
+                .into_any_element();
+        }
+        return div()
+            .mt_1()
+            .child(crate::player::video_box(
+                app,
+                crate::player::Video {
+                    key: attachment.id,
+                    url: &url,
+                    poster,
+                    width,
+                    height,
+                    radius: 8.,
+                },
+                cx,
+            ))
+            .into_any_element();
+    }
     let Some(spec) = attachment.image_spec() else {
         return file_card(attachment).into_any_element();
     };
-    let (width, height) = (
-        attachment.width.unwrap_or(1).max(1) as f32,
-        attachment.height.unwrap_or(1).max(1) as f32,
+    let (original_width, original_height) = (
+        attachment.width.unwrap_or(1).max(1),
+        attachment.height.unwrap_or(1).max(1),
     );
+    let (width, height) = (original_width as f32, original_height as f32);
     let scale = (MEDIA_MAX.0 / width).min(MEDIA_MAX.1 / height).min(1.);
     let (width, height) = ((width * scale).round(), (height * scale).round());
     if attachment.spoiler() && !app.revealed_spoilers.contains(&(attachment.id, 0)) {
         return embeds::blurred_box(&spec, width, height, 8., cx)
             .mt_1()
-            .child(embeds::spoiler_overlay(app, attachment.id))
+            .child(embeds::spoiler_overlay(app, attachment.id, 8.))
             .into_any_element();
     }
-    let image = images::resolve(&spec, theme::image_px(width.max(height)), cx);
+    let preview = theme::image_px(width.max(height));
+    let image = images::resolve(&spec, preview, cx);
+    let entity = app.entity.clone();
+    let url = attachment.url.clone();
     div()
+        .id(("lightbox-open", attachment.id))
         .relative()
         .mt_1()
         .w(rpx(width))
@@ -1562,6 +1852,20 @@ fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &App) -> Any
         .rounded(rpx(8.))
         .overflow_hidden()
         .bg(rgb(theme::ELEVATED))
+        .cursor_pointer()
+        .on_click(move |_, _, cx| {
+            entity
+                .update(cx, |app, cx| {
+                    app.open_lightbox(
+                        spec.clone(),
+                        (original_width, original_height),
+                        preview,
+                        url.clone(),
+                        cx,
+                    )
+                })
+                .ok();
+        })
         .children(image.map(|path| {
             embeds::animated(path, &attachment.url)
                 .size_full()

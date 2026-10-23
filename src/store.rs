@@ -8,10 +8,12 @@ mod view;
 use crate::discord::{self, model, settings_proto};
 use mapping::{
     channel_unread, local_timestamp, map_components, map_decoration, map_guild, map_message,
-    map_name_style, map_nameplate, map_reactions, map_user, read_state, timestamp_from_nonce,
+    map_name_style, map_nameplate, map_reactions, map_snapshot, map_user, read_state,
+    timestamp_from_nonce,
 };
 use seed::SEED_START;
 use std::collections::HashMap;
+use crate::images::ImageSpec;
 pub use view::*;
 
 pub struct Store {
@@ -20,6 +22,7 @@ pub struct Store {
     pub users: HashMap<u64, User>,
     pub current_user_id: u64,
     pub dm_mentions: u32,
+    premium_type: Option<u8>,
     next_message_id: u64,
     source: Option<model::Ready>,
     read_states: HashMap<u64, usize>,
@@ -77,6 +80,8 @@ struct ChannelLocation {
     guild: usize,
     category: usize,
     channel: usize,
+    /// Whether the loaded message window reaches the newest message.
+    at_present: bool,
 }
 
 struct GuildBadges {
@@ -140,6 +145,222 @@ impl Store {
 
     pub fn guild_by_id(&self, id: u64) -> Option<&Guild> {
         self.guilds.get(*self.guild_indices.get(&id)?)
+    }
+
+    pub fn has_nitro(&self) -> bool {
+        self.premium_type.is_some_and(|premium_type| premium_type != 0)
+    }
+
+    pub fn emoji_access(
+        &self,
+        emoji: &CustomEmoji,
+        guild_id: u64,
+        channel_id: u64,
+    ) -> EmojiAccess {
+        if !emoji.available {
+            return EmojiAccess::Unavailable;
+        }
+        if !emoji.roles.is_empty()
+            && !self
+                .member_roles(emoji.guild_id, self.current_user_id)
+                .iter()
+                .any(|role| emoji.roles.contains(&role.id))
+        {
+            return EmojiAccess::NeedsRole;
+        }
+        if emoji.animated && !self.has_nitro() {
+            return EmojiAccess::NeedsNitro;
+        }
+        if emoji.guild_id != guild_id {
+            if !self.has_nitro() {
+                return EmojiAccess::NeedsNitro;
+            }
+            let external = self.source_channel_guild(channel_id).is_some_and(|(guild, channel)| {
+                discord::channel_permissions(guild, channel, self.current_user_id)
+                    & discord::USE_EXTERNAL_EMOJIS
+                    != 0
+            });
+            if !external {
+                return EmojiAccess::NoExternalPermission;
+            }
+        }
+        EmojiAccess::Usable
+    }
+
+    pub fn search_emoji(
+        &self,
+        query: &str,
+        guild_id: u64,
+        channel_id: u64,
+        limit: usize,
+    ) -> Vec<(EmojiChoice, EmojiAccess)> {
+        if query.is_empty() || limit == 0 {
+            return Vec::new();
+        }
+        let needle = query.to_lowercase();
+        let rank = |name: &str| {
+            let name = name.to_lowercase();
+            if name.starts_with(&needle) {
+                Some(true)
+            } else if name.contains(&needle) {
+                Some(false)
+            } else {
+                None
+            }
+        };
+        let mut output: Vec<(EmojiChoice, EmojiAccess)> = Vec::new();
+        for prefix in [true, false] {
+            let Some(guild) = self.guild_by_id(guild_id) else {
+                break;
+            };
+            for emoji in &guild.emojis {
+                if rank(&emoji.name) == Some(prefix) {
+                    output.push((
+                        EmojiChoice::Custom(emoji.clone()),
+                        self.emoji_access(emoji, guild_id, channel_id),
+                    ));
+                    if output.len() >= limit {
+                        return output;
+                    }
+                }
+            }
+        }
+        for prefix in [true, false] {
+            for guild in &self.guilds {
+                if guild.id == guild_id {
+                    continue;
+                }
+                for emoji in &guild.emojis {
+                    if rank(&emoji.name) == Some(prefix) {
+                        output.push((
+                            EmojiChoice::Custom(emoji.clone()),
+                            self.emoji_access(emoji, guild_id, channel_id),
+                        ));
+                        if output.len() >= limit {
+                            return output;
+                        }
+                    }
+                }
+            }
+        }
+        for prefix in [true, false] {
+            for &(shortcode, emoji) in crate::emoji::shortcodes() {
+                if rank(shortcode) == Some(prefix) {
+                    output.push((
+                        EmojiChoice::Unicode {
+                            emoji: emoji.to_owned(),
+                            shortcode: shortcode.to_owned(),
+                        },
+                        EmojiAccess::Usable,
+                    ));
+                    if output.len() >= limit {
+                        return output;
+                    }
+                }
+            }
+        }
+        output
+    }
+
+    pub fn emoji_guilds(
+        &self,
+    ) -> Vec<(u64, String, Option<ImageSpec>, Vec<CustomEmoji>)> {
+        self.rail
+            .iter()
+            .flat_map(|entry| match entry {
+                RailEntry::Guild(id) => std::slice::from_ref(id),
+                RailEntry::Folder(folder) => &folder.guild_ids,
+            })
+            .filter_map(|id| {
+                let guild = self.guild_by_id(*id)?;
+                if guild.emojis.is_empty() {
+                    return None;
+                }
+                let mut emojis = guild.emojis.clone();
+                emojis.sort_by(|left, right| left.name.cmp(&right.name));
+                Some((guild.id, guild.name.clone(), guild.icon_spec(), emojis))
+            })
+            .collect()
+    }
+
+    pub fn reaction_state(
+        &self,
+        channel_id: u64,
+        message_id: u64,
+        emoji: &ReactionEmoji,
+    ) -> Option<bool> {
+        let channel = self.network_channel(channel_id)?;
+        let index = channel
+            .messages
+            .binary_search_by_key(&message_id, |message| message.id)
+            .ok()?;
+        channel.messages[index]
+            .reactions
+            .iter()
+            .find(|reaction| Self::same_view_emoji(&reaction.emoji, emoji))
+            .map(|reaction| reaction.me)
+    }
+
+    pub fn set_reaction(
+        &mut self,
+        channel_id: u64,
+        message_id: u64,
+        emoji: &ReactionEmoji,
+        me: bool,
+    ) -> Change {
+        let Some(channel) = self
+            .network_channel_mut(channel_id)
+            .filter(|channel| channel.messages_loaded)
+        else {
+            return Change::None;
+        };
+        let Ok(index) = channel
+            .messages
+            .binary_search_by_key(&message_id, |message| message.id)
+        else {
+            return Change::None;
+        };
+        let reactions = &mut channel.messages[index].reactions;
+        let existing = reactions
+            .iter()
+            .position(|reaction| Self::same_view_emoji(&reaction.emoji, emoji));
+        if me {
+            match existing {
+                Some(reaction) => {
+                    if reactions[reaction].me {
+                        return Change::None;
+                    }
+                    reactions[reaction].me = true;
+                    reactions[reaction].count = reactions[reaction].count.saturating_add(1);
+                }
+                None => reactions.push(Reaction {
+                    emoji: emoji.clone(),
+                    count: 1,
+                    me: true,
+                }),
+            }
+        } else {
+            let Some(reaction) = existing else {
+                return Change::None;
+            };
+            if !reactions[reaction].me {
+                return Change::None;
+            }
+            reactions[reaction].me = false;
+            reactions[reaction].count = reactions[reaction].count.saturating_sub(1);
+            if reactions[reaction].count == 0 {
+                reactions.remove(reaction);
+            }
+        }
+        Change::MessageChanged { channel_id, index }
+    }
+
+    fn same_view_emoji(left: &ReactionEmoji, right: &ReactionEmoji) -> bool {
+        match (left.id, right.id) {
+            (Some(left), Some(right)) => left == right,
+            (None, None) => left.name == right.name,
+            _ => false,
+        }
     }
 
     pub fn mark_guild_read(&mut self, guild_id: u64) {
@@ -241,6 +462,7 @@ impl Store {
             kind: 0,
             edited: false,
             reply: None,
+            forward: None,
             mentions_me: false,
         });
         self.next_message_id += 1;
@@ -255,6 +477,16 @@ impl Store {
             .get(location.category)?
             .channels
             .get(location.channel)
+    }
+
+    /// Whether the loaded message window reaches the newest message.
+    pub fn at_present(&self, channel_id: u64) -> bool {
+        self.network_channel(channel_id)
+            .is_some_and(|channel| channel.messages_loaded)
+            && self
+                .channel_locations
+                .get(&channel_id)
+                .is_some_and(|location| location.at_present)
     }
 
     pub fn queue_message(
@@ -273,24 +505,41 @@ impl Store {
                         .iter()
                         .find(|message| message.id == message_id)
                 })
-                .map(|message| Reply {
-                    message_id: message.id,
-                    author_id: message.author_id,
-                    content: message.content.clone(),
-                    attachments: !message.attachments.is_empty(),
-                    embeds: !message.embeds.is_empty() || !message.components.is_empty(),
+                .map(|message| {
+                    let forward = message.forward.as_ref();
+                    let (content, embeds) = match forward.filter(|_| message.content.is_empty()) {
+                        Some(forward) => (&forward.content, &forward.embeds),
+                        None => (&message.content, &message.embeds),
+                    };
+                    Reply {
+                        message_id: message.id,
+                        author_id: message.author_id,
+                        timestamp: message.timestamp,
+                        content: if hides_embed_content(content, embeds) {
+                            String::new()
+                        } else {
+                            content.clone()
+                        },
+                        attachments: !message.attachments.is_empty()
+                            || forward.is_some_and(|forward| !forward.attachments.is_empty()),
+                        embeds: !message.embeds.is_empty()
+                            || !message.components.is_empty()
+                            || forward.is_some_and(|forward| {
+                                !forward.embeds.is_empty() || !forward.components.is_empty()
+                            }),
+                    }
                 }) {
                 Some(reply) => ReplyState::Loaded(reply),
                 None => ReplyState::Unavailable,
             }
         });
         let author_id = self.current_user_id;
+        if !self.at_present(channel_id) {
+            return Change::None;
+        }
         let Some(channel) = self.network_channel_mut(channel_id) else {
             return Change::None;
         };
-        if !channel.messages_loaded {
-            return Change::None;
-        }
         let index = channel
             .messages
             .partition_point(|message| message.id < nonce);
@@ -309,6 +558,7 @@ impl Store {
                 kind: 0,
                 edited: false,
                 reply,
+                forward: None,
                 mentions_me: false,
             },
         );
@@ -479,12 +729,14 @@ impl Store {
             .iter()
             .map(|g| map_guild(g, &ready, &read_states))
             .collect();
+        let premium_type = ready.user.premium_type;
         let mut store = Self {
             guilds,
             rail: Vec::new(),
             users,
             current_user_id: ready.user.id,
             dm_mentions: 0,
+            premium_type,
             next_message_id: 1,
             source: Some(ready),
             read_states,
@@ -505,6 +757,11 @@ impl Store {
 
     fn index_channels(&mut self) {
         self.index_names();
+        let present: HashMap<u64, bool> = self
+            .channel_locations
+            .iter()
+            .map(|(id, location)| (*id, location.at_present))
+            .collect();
         self.source_channels.clear();
         self.channel_locations.clear();
         self.guild_badges.clear();
@@ -550,6 +807,10 @@ impl Store {
                             guild: guild_index,
                             category: category_index,
                             channel: channel_index,
+                            at_present: present
+                                .get(&channel.id)
+                                .copied()
+                                .unwrap_or(channel.messages_loaded),
                         },
                     );
                     badges.unread_channels +=
@@ -657,7 +918,7 @@ impl Store {
             .get_mut(location.channel)
     }
 
-    pub fn set_messages(&mut self, channel_id: u64, mut messages: Vec<model::Message>) {
+    fn replace_messages(&mut self, channel_id: u64, mut messages: Vec<model::Message>) {
         messages.retain(|m| m.channel_id == channel_id);
         messages.sort_by_key(|m| m.id);
         messages.dedup_by_key(|m| m.id);
@@ -669,6 +930,27 @@ impl Store {
         if let Some(channel) = self.network_channel_mut(channel_id) {
             channel.messages = mapped;
             channel.messages_loaded = true;
+        }
+    }
+
+    /// Replace the window with a page fetched without an anchor, which reaches the present.
+    pub fn set_messages(&mut self, channel_id: u64, messages: Vec<model::Message>) {
+        self.replace_messages(channel_id, messages);
+        self.set_at_present(channel_id, true);
+    }
+
+    /// Replace the window with a page fetched around `last_read`.
+    pub fn set_around_messages(&mut self, channel_id: u64, mut messages: Vec<model::Message>) {
+        messages.retain(|m| m.channel_id == channel_id);
+        let newest = messages.iter().map(|message| message.id).max().unwrap_or(0);
+        let present = newest >= self.latest_message_id(channel_id);
+        self.replace_messages(channel_id, messages);
+        self.set_at_present(channel_id, present);
+    }
+
+    fn set_at_present(&mut self, channel_id: u64, present: bool) {
+        if let Some(location) = self.channel_locations.get_mut(&channel_id) {
+            location.at_present = present;
         }
     }
 
@@ -691,6 +973,39 @@ impl Store {
         let count = mapped.len();
         if let Some(channel) = self.network_channel_mut(channel_id) {
             channel.messages.splice(0..0, mapped);
+        }
+        count
+    }
+
+    pub fn append_messages(
+        &mut self,
+        channel_id: u64,
+        mut messages: Vec<model::Message>,
+        limit: usize,
+    ) -> usize {
+        let complete = messages.len() < limit;
+        let newest = self
+            .network_channel(channel_id)
+            .and_then(|channel| channel.messages.last())
+            .map_or(0, |message| message.id);
+        messages.retain(|m| m.channel_id == channel_id && m.id > newest);
+        messages.sort_by_key(|m| m.id);
+        messages.dedup_by_key(|m| m.id);
+        let mapped: Vec<_> = messages
+            .iter()
+            .filter_map(|message| self.map_network_message(message, true))
+            .collect();
+        let count = mapped.len();
+        if let Some(channel) = self.network_channel_mut(channel_id) {
+            channel.messages.extend(mapped);
+        }
+        let latest = self.latest_message_id(channel_id);
+        let reached = self
+            .network_channel(channel_id)
+            .and_then(|channel| channel.messages.last())
+            .is_some_and(|message| message.id >= latest);
+        if complete || reached {
+            self.set_at_present(channel_id, true);
         }
         count
     }
@@ -877,6 +1192,10 @@ impl Store {
             }
             Event::MessageCreate(message) => {
                 let mut loaded = false;
+                let present = self
+                    .channel_locations
+                    .get(&message.channel_id)
+                    .is_none_or(|location| location.at_present);
                 if let Some(channel) = self.network_channel_mut(message.channel_id) {
                     loaded = channel.messages_loaded;
                     if channel
@@ -916,6 +1235,9 @@ impl Store {
                     return Change::None;
                 };
                 if !channel.messages_loaded {
+                    return Change::Structure;
+                }
+                if !present {
                     return Change::Structure;
                 }
                 let Some(mapped) = mapped else {
@@ -987,6 +1309,22 @@ impl Store {
                 if let Some(attachments) = update.attachments {
                     message.attachments = attachments;
                 }
+                if let Some(snapshots) = &update.message_snapshots {
+                    let reference = update
+                        .message_reference
+                        .as_ref()
+                        .and_then(Option::as_ref);
+                    let previous = message.forward.as_ref();
+                    let channel_id = reference
+                        .and_then(|reference| reference.channel_id)
+                        .or_else(|| previous.and_then(|forward| forward.channel_id));
+                    let guild_id = reference
+                        .and_then(|reference| reference.guild_id)
+                        .or_else(|| previous.and_then(|forward| forward.guild_id));
+                    message.forward = snapshots
+                        .first()
+                        .map(|snapshot| map_snapshot(&snapshot.message, channel_id, guild_id));
+                }
                 Change::MessageChanged {
                     channel_id: update.channel_id,
                     index,
@@ -994,25 +1332,34 @@ impl Store {
             }
             Event::MessageReactionAdd(event) => {
                 let current_user_id = self.current_user_id;
+                let own = event.user_id == Some(current_user_id);
                 self.change_reactions(event.channel_id, event.message_id, |reactions| {
-                    Self::add_reaction(
-                        reactions,
-                        &event.emoji,
-                        1,
-                        event.user_id == Some(current_user_id),
-                    );
+                    // Our optimistic toggle already added it; the echo must not double count.
+                    if own
+                        && reactions
+                            .iter()
+                            .any(|reaction| reaction.me && Self::same_emoji(&reaction.emoji, &event.emoji))
+                    {
+                        return;
+                    }
+                    Self::add_reaction(reactions, &event.emoji, 1, own);
                 })
             }
             Event::MessageReactionRemove(event) => {
                 let current_user_id = self.current_user_id;
+                let own = event.user_id == Some(current_user_id);
                 self.change_reactions(event.channel_id, event.message_id, |reactions| {
                     if let Some(index) = reactions
                         .iter()
                         .position(|r| Self::same_emoji(&r.emoji, &event.emoji))
                     {
+                        // Our optimistic toggle already removed it.
+                        if own && !reactions[index].me {
+                            return;
+                        }
                         let reaction = &mut reactions[index];
                         reaction.count = reaction.count.saturating_sub(1);
-                        if event.user_id == Some(current_user_id) {
+                        if own {
                             reaction.me = false;
                         }
                         if reaction.count == 0 {
@@ -1033,12 +1380,16 @@ impl Store {
                 let current_user_id = self.current_user_id;
                 self.change_reactions(event.channel_id, event.message_id, |reactions| {
                     for reaction in event.reactions {
-                        Self::add_reaction(
-                            reactions,
-                            &reaction.emoji,
-                            reaction.users.len().try_into().unwrap_or(u32::MAX),
-                            reaction.users.contains(&current_user_id),
-                        );
+                        let own = reaction.users.contains(&current_user_id);
+                        let mut count = reaction.users.len().try_into().unwrap_or(u32::MAX);
+                        if own
+                            && reactions.iter().any(|r| {
+                                r.me && Self::same_emoji(&r.emoji, &reaction.emoji)
+                            })
+                        {
+                            count = count.saturating_sub(1);
+                        }
+                        Self::add_reaction(reactions, &reaction.emoji, count, own);
                     }
                 })
             }
@@ -1093,6 +1444,20 @@ impl Store {
                 self.sync_guild_social(id);
                 self.rebuild_structure(Some(id));
                 Change::Structure
+            }
+            Event::GuildEmojisUpdate(update) => {
+                if let Some(guild) = self
+                    .source
+                    .as_mut()
+                    .and_then(|source| source.guilds.iter_mut().find(|g| g.id == update.guild_id))
+                {
+                    guild.emojis = Some(update.emojis);
+                    let id = update.guild_id;
+                    self.rebuild_structure(Some(id));
+                    Change::Structure
+                } else {
+                    Change::None
+                }
             }
             Event::GuildDelete { id } => {
                 self.social.guilds.remove(&id);
