@@ -26,6 +26,10 @@ env_logger = "0.11"
 anyhow = "1"
 rand = "0.8"
 dirs = "6"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = ["Win32_Media_MediaFoundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant"] }
 
 [profile.dev]
 debug = "line-tables-only"
@@ -40,3 +44,6 @@ strip = "symbols"
 
 [build-dependencies]
 winresource = "0.1"
+
+[dev-dependencies]
+png = "=0.18.1"

@@ -1,5 +1,6 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod animated;
 mod app;
 mod assets;
 mod credentials;
@@ -11,6 +12,7 @@ mod markdown;
 mod settings;
 mod store;
 mod theme;
+mod video;
 
 use gpui::{
     App, AppContext, Global, KeyBinding, TitlebarOptions, WindowBounds, WindowDecorations,
@@ -55,6 +57,7 @@ fn main() {
             gpui_component::init(cx);
             gpui_tokio::init(cx);
             images::init(cx);
+            animated::init(cx);
             Theme::change(ThemeMode::Dark, None, cx);
             fonts::init(cx);
             settings::init(cx);
@@ -65,6 +68,8 @@ fn main() {
                 KeyBinding::new("secondary--", ZoomOut, None),
                 KeyBinding::new("secondary-0", ResetZoom, None),
                 KeyBinding::new("escape", app::JumpToPresent, None),
+                KeyBinding::new("shift-escape", app::MarkGuildRead, None),
+                KeyBinding::new("up", app::ComposerUp, Some("Input")),
             ]);
             cx.on_action(|_: &ZoomIn, cx| set_zoom(zoom_index(cx) + 1, cx));
             cx.on_action(|_: &ZoomOut, cx| set_zoom(zoom_index(cx).saturating_sub(1), cx));

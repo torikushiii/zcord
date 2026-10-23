@@ -583,6 +583,9 @@ fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) -> Option<E
             "MESSAGE_UPDATE" => serde_json::from_value(value)
                 .ok()
                 .map(|m| Event::MessageUpdate(Box::new(m))),
+            "TYPING_START" => serde_json::from_value(value)
+                .ok()
+                .map(|t| Event::TypingStart(Box::new(t))),
             "MESSAGE_REACTION_ADD" => serde_json::from_value(value)
                 .ok()
                 .map(Event::MessageReactionAdd),
@@ -649,6 +652,26 @@ fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) -> Option<E
 mod tests {
     use super::*;
     use flate2::{Compress, Compression, FlushCompress};
+
+    #[test]
+    fn typing_start_dispatches_with_member() {
+        let mut ignored = HashSet::new();
+        let event = dispatch(
+            "TYPING_START",
+            json!({"channel_id":"2","guild_id":"3","user_id":"4","timestamp":1770000000,
+                "member":{"user":{"id":"4","username":"typer"},"roles":["5"]}}),
+            &mut ignored,
+        );
+        assert!(matches!(
+            event,
+            Some(Event::TypingStart(typing))
+                if typing.channel_id == 2
+                    && typing.guild_id == Some(3)
+                    && typing.user_id == 4
+                    && typing.member.as_ref().and_then(|m| m.user.as_ref()).is_some_and(|u| u.id == 4)
+        ));
+        assert!(ignored.is_empty());
+    }
 
     #[test]
     fn reaction_dispatches_are_receive_only() {

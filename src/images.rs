@@ -53,10 +53,80 @@ pub enum ImageSpec {
         url: String,
         width: u32,
         height: u32,
+        animated: bool,
+    },
+    Video {
+        url: String,
+        width: u32,
+        height: u32,
+    },
+    AvatarDecoration {
+        asset: String,
+        animated: bool,
+    },
+    Nameplate {
+        asset: String,
+        animated: bool,
+    },
+    Banner {
+        user_id: u64,
+        hash: String,
+    },
+    GuildBanner {
+        guild_id: u64,
+        user_id: u64,
+        hash: String,
+    },
+    Badge {
+        icon: String,
+    },
+    Collectible {
+        url: String,
+    },
+    Animated {
+        still: Box<ImageSpec>,
     },
 }
 
-fn rounded_size(size: u32) -> u32 {
+impl ImageSpec {
+    pub fn animated(&self) -> Option<ImageSpec> {
+        let hash = match self {
+            ImageSpec::Avatar { hash, .. }
+            | ImageSpec::GuildAvatar { hash, .. }
+            | ImageSpec::Banner { hash, .. }
+            | ImageSpec::GuildBanner { hash, .. } => hash,
+            _ => return None,
+        };
+        hash.starts_with("a_").then(|| ImageSpec::Animated {
+            still: Box::new(self.clone()),
+        })
+    }
+}
+
+const COLLECTIBLES_SHOP: &str = "https://cdn.discordapp.com/media/v1/collectibles-shop/";
+const COLLECTIBLE_PATHS: [&str; 2] = ["/media/v1/collectibles-shop/", "/assets/content/"];
+
+fn valid_hash(hash: &str) -> bool {
+    !hash.is_empty()
+        && hash.len() <= 128
+        && hash.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+}
+
+fn valid_nameplate(asset: &str) -> bool {
+    asset.len() <= 256
+        && asset.starts_with("nameplates/")
+        && asset.ends_with('/')
+        && !asset.contains("//")
+        && asset
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b'/'))
+}
+
+pub fn profile_frame_layer_url(product_sku: u64, layer_id: u64) -> String {
+    format!("{COLLECTIBLES_SHOP}{product_sku}/{layer_id}/static")
+}
+
+pub(crate) fn rounded_size(size: u32) -> u32 {
     size.clamp(16, 4096).next_power_of_two()
 }
 
@@ -77,6 +147,14 @@ pub(crate) fn allowed_url(url: &reqwest::Url) -> bool {
 }
 
 fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
+    if let ImageSpec::Animated { still } = spec {
+        still.animated()?;
+        let mut url = image_url(still, size)?;
+        let path = url.path().strip_suffix(".png")?.to_owned();
+        url.set_path(&format!("{path}.webp"));
+        url.query_pairs_mut().append_pair("animated", "true");
+        return Some(url);
+    }
     let size = rounded_size(size);
     let raw = match spec {
         ImageSpec::GuildAvatar {
@@ -84,10 +162,7 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
             user_id,
             hash,
         } => {
-            if hash.is_empty()
-                || hash.len() > 128
-                || !hash.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
-            {
+            if !valid_hash(hash) {
                 return None;
             }
             format!(
@@ -104,10 +179,7 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
             user_id: guild_id,
             hash,
         } => {
-            if hash.is_empty()
-                || hash.len() > 128
-                || !hash.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
-            {
+            if !valid_hash(hash) {
                 return None;
             }
             let route = match spec {
@@ -123,10 +195,64 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
             }
             format!("https://cdn.discordapp.com/embed/avatars/{index}.png")
         }
-        ImageSpec::Attachment { url, .. } | ImageSpec::Media { url, .. } => url.clone(),
+        ImageSpec::AvatarDecoration { asset, animated } => {
+            if !valid_hash(asset) {
+                return None;
+            }
+            // Only passthrough serves the animated APNG, and only `a_` presets have one.
+            let passthrough = *animated && asset.starts_with("a_");
+            format!(
+                "https://cdn.discordapp.com/avatar-decoration-presets/{asset}.png?size={size}&passthrough={passthrough}"
+            )
+        }
+        // `img.png` is the APNG twin of the webm Discord's client plays.
+        ImageSpec::Nameplate { asset, animated } => {
+            if !valid_nameplate(asset) {
+                return None;
+            }
+            let file = if *animated { "img" } else { "static" };
+            format!("https://cdn.discordapp.com/assets/collectibles/{asset}{file}.png")
+        }
+        ImageSpec::Banner { user_id, hash } => {
+            if !valid_hash(hash) {
+                return None;
+            }
+            format!("https://cdn.discordapp.com/banners/{user_id}/{hash}.png?size={size}")
+        }
+        ImageSpec::GuildBanner {
+            guild_id,
+            user_id,
+            hash,
+        } => {
+            if !valid_hash(hash) {
+                return None;
+            }
+            format!(
+                "https://cdn.discordapp.com/guilds/{guild_id}/users/{user_id}/banners/{hash}.png?size={size}"
+            )
+        }
+        ImageSpec::Badge { icon } => {
+            if !valid_hash(icon) {
+                return None;
+            }
+            format!("https://cdn.discordapp.com/badge-icons/{icon}.png")
+        }
+        ImageSpec::Attachment { url, .. }
+        | ImageSpec::Media { url, .. }
+        | ImageSpec::Video { url, .. }
+        | ImageSpec::Collectible { url } => url.clone(),
+        ImageSpec::Animated { .. } => return None,
     };
     let mut url = reqwest::Url::parse(&raw).ok()?;
     if !allowed_url(&url) {
+        return None;
+    }
+    if matches!(spec, ImageSpec::Collectible { .. })
+        && (url.host_str() != Some("cdn.discordapp.com")
+            || !COLLECTIBLE_PATHS
+                .iter()
+                .any(|prefix| url.path().starts_with(prefix)))
+    {
         return None;
     }
     url.set_fragment(None);
@@ -147,6 +273,9 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
             if !params.is_empty() {
                 url.query_pairs_mut().extend_pairs(params);
             }
+            if matches!(spec, ImageSpec::Media { animated: true, .. }) {
+                url.query_pairs_mut().append_pair("animated", "true");
+            }
             return Some(url);
         }
         let target = size.min(longest);
@@ -164,6 +293,9 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
             .extend_pairs(params)
             .append_pair("width", &width.to_string())
             .append_pair("height", &height.to_string());
+        if matches!(spec, ImageSpec::Media { animated: true, .. }) {
+            url.query_pairs_mut().append_pair("animated", "true");
+        }
     }
     Some(url)
 }
@@ -187,7 +319,7 @@ struct Cache {
 struct ImageCache(Rc<RefCell<Cache>>);
 impl Global for ImageCache {}
 
-struct Service {
+pub(crate) struct Service {
     client: reqwest::Client,
     directory: PathBuf,
     permits: Semaphore,
@@ -226,6 +358,12 @@ pub fn init(cx: &mut App) {
         service,
         refresh_pending: false,
     }))));
+    #[cfg(windows)]
+    crate::video::init(cx);
+}
+
+pub(crate) fn download_service(cx: &App) -> Option<Arc<Service>> {
+    cx.try_global::<ImageCache>()?.0.borrow().service.clone()
 }
 
 pub fn resolve(spec: &ImageSpec, size: u32, cx: &App) -> Option<Arc<Path>> {
@@ -279,6 +417,50 @@ pub fn resolve(spec: &ImageSpec, size: u32, cx: &App) -> Option<Arc<Path>> {
     None
 }
 
+pub const BLUR_SOURCE: u32 = 64;
+const BLUR_SIGMA: f32 = 5.;
+
+pub fn blurred(spec: &ImageSpec, cx: &App) -> Option<Arc<gpui::RenderImage>> {
+    blurred_with(spec, BLUR_SOURCE, BLUR_SIGMA, 1., cx)
+}
+
+pub fn blurred_with(
+    spec: &ImageSpec,
+    source: u32,
+    sigma: f32,
+    saturation: f32,
+    cx: &App,
+) -> Option<Arc<gpui::RenderImage>> {
+    type Key = (Arc<Path>, u32, u32);
+    thread_local! {
+        static BLURRED: RefCell<HashMap<Key, Option<Arc<gpui::RenderImage>>>> =
+            RefCell::new(HashMap::new());
+    }
+    let path = resolve(spec, source, cx)?;
+    BLURRED.with(|cache| {
+        cache
+            .borrow_mut()
+            .entry((path.clone(), sigma.to_bits(), saturation.to_bits()))
+            .or_insert_with(|| blur_file(&path, sigma, saturation))
+            .clone()
+    })
+}
+
+fn blur_file(path: &Path, sigma: f32, saturation: f32) -> Option<Arc<gpui::RenderImage>> {
+    let bytes = std::fs::read(path).ok()?;
+    let image = image::load_from_memory(&bytes).ok()?.to_rgba8();
+    let mut blurred = image::imageops::fast_blur(&image, sigma);
+    for pixel in blurred.pixels_mut() {
+        let [r, g, b, _] = pixel.0.map(f32::from);
+        let gray = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        let saturate = |channel: f32| (gray + (channel - gray) * saturation).round() as u8;
+        pixel.0 = [saturate(b), saturate(g), saturate(r), 255];
+    }
+    Some(Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+        blurred,
+    )])))
+}
+
 impl Service {
     async fn initialize(&self) -> bool {
         *self
@@ -299,7 +481,7 @@ impl Service {
             .await
     }
 
-    async fn load(&self, spec: &ImageSpec, size: u32) -> Option<PathBuf> {
+    pub(crate) async fn load(&self, spec: &ImageSpec, size: u32) -> Option<PathBuf> {
         let url = image_url(spec, size)?;
         if !self.initialize().await {
             return None;
@@ -310,6 +492,15 @@ impl Service {
             .await
             .is_ok_and(|m| m.is_file() && m.len() > 0 && m.len() <= MAX_DOWNLOAD)
         {
+            if matches!(spec, ImageSpec::Video { .. }) {
+                use tokio::io::AsyncReadExt;
+                let mut file = tokio::fs::File::open(&path).await.ok()?;
+                let mut header = [0; 8];
+                file.read_exact(&mut header).await.ok()?;
+                if !download_bytes(spec, &header) {
+                    return None;
+                }
+            }
             return Some(path);
         }
         let mut response = self.client.get(url).send().await.ok()?;
@@ -327,11 +518,19 @@ impl Service {
             }
             bytes.extend_from_slice(&chunk);
         }
-        if !image_bytes(&bytes) {
+        if !download_bytes(spec, &bytes) {
             return None;
         }
         atomic_write(&path, &bytes).await.ok()?;
         Some(path)
+    }
+}
+
+fn download_bytes(spec: &ImageSpec, bytes: &[u8]) -> bool {
+    if matches!(spec, ImageSpec::Video { .. }) {
+        bytes.get(4..8) == Some(b"ftyp")
+    } else {
+        image_bytes(bytes)
     }
 }
 
@@ -399,6 +598,253 @@ mod tests {
     use super::*;
 
     #[test]
+    fn profile_cosmetic_urls() {
+        let url = |spec: ImageSpec, size| image_url(&spec, size).map(String::from);
+        let decoration = |asset: &str, animated| ImageSpec::AvatarDecoration {
+            asset: asset.into(),
+            animated,
+        };
+        assert_eq!(
+            url(decoration("a_f0000000000000000000000000000016", true), 96).as_deref(),
+            Some(
+                "https://cdn.discordapp.com/avatar-decoration-presets/a_f0000000000000000000000000000016.png?size=128&passthrough=true"
+            )
+        );
+        assert_eq!(
+            url(decoration("a_f0000000000000000000000000000016", false), 96).as_deref(),
+            Some(
+                "https://cdn.discordapp.com/avatar-decoration-presets/a_f0000000000000000000000000000016.png?size=128&passthrough=false"
+            )
+        );
+        assert_eq!(
+            url(decoration("f000000000000015", true), 64).as_deref(),
+            Some(
+                "https://cdn.discordapp.com/avatar-decoration-presets/f000000000000015.png?size=64&passthrough=false"
+            )
+        );
+        let nameplate = "nameplates/sample_plate_one/1191169245577216079/";
+        for (animated, file) in [(false, "static"), (true, "img")] {
+            let spec = ImageSpec::Nameplate {
+                asset: nameplate.into(),
+                animated,
+            };
+            assert_eq!(
+                url(spec, 0),
+                Some(format!(
+                    "https://cdn.discordapp.com/assets/collectibles/nameplates/sample_plate_one/1191169245577216079/{file}.png"
+                ))
+            );
+        }
+        assert_eq!(
+            url(
+                ImageSpec::Banner {
+                    user_id: 1,
+                    hash: "a_ff".into()
+                },
+                600
+            )
+            .as_deref(),
+            Some("https://cdn.discordapp.com/banners/1/a_ff.png?size=1024")
+        );
+        assert_eq!(
+            url(
+                ImageSpec::GuildBanner {
+                    guild_id: 2,
+                    user_id: 1,
+                    hash: "ff".into()
+                },
+                300
+            )
+            .as_deref(),
+            Some("https://cdn.discordapp.com/guilds/2/users/1/banners/ff.png?size=512")
+        );
+        assert_eq!(
+            url(
+                ImageSpec::Badge {
+                    icon: "f0000000000000000000000000000001".into()
+                },
+                16
+            )
+            .as_deref(),
+            Some("https://cdn.discordapp.com/badge-icons/f0000000000000000000000000000001.png")
+        );
+        let frame = profile_frame_layer_url(1191169253965824081, 1191169279131648087);
+        assert_eq!(
+            frame,
+            "https://cdn.discordapp.com/media/v1/collectibles-shop/1191169253965824081/1191169279131648087/static"
+        );
+        assert_eq!(
+            url(ImageSpec::Collectible { url: frame.clone() }, 0),
+            Some(frame)
+        );
+        let banner = ImageSpec::Banner {
+            user_id: 1,
+            hash: "a_ff".into(),
+        };
+        assert_eq!(
+            url(banner.animated().unwrap(), 480).as_deref(),
+            Some("https://cdn.discordapp.com/banners/1/a_ff.webp?size=512&animated=true")
+        );
+        let avatar = ImageSpec::GuildAvatar {
+            guild_id: 2,
+            user_id: 1,
+            hash: "a_ee".into(),
+        };
+        assert_eq!(
+            url(avatar.animated().unwrap(), 80).as_deref(),
+            Some(
+                "https://cdn.discordapp.com/guilds/2/users/1/avatars/a_ee.webp?size=128&animated=true"
+            )
+        );
+        let still = ImageSpec::Avatar {
+            user_id: 1,
+            hash: "ff".into(),
+        };
+        assert!(still.animated().is_none());
+        assert!(
+            image_url(
+                &ImageSpec::Animated {
+                    still: Box::new(still)
+                },
+                80
+            )
+            .is_none()
+        );
+        let effect = "https://cdn.discordapp.com/assets/content/f0000000000000000000000000000000000000000000002b";
+        assert_eq!(
+            url(ImageSpec::Collectible { url: effect.into() }, 0).as_deref(),
+            Some(effect)
+        );
+    }
+
+    #[test]
+    fn profile_cosmetic_urls_reject_untrusted_input() {
+        for asset in ["", "a_../x", "a_x?size=1", "a_x#y", "a/b", &"a".repeat(129)] {
+            let spec = ImageSpec::AvatarDecoration {
+                asset: asset.into(),
+                animated: true,
+            };
+            assert!(image_url(&spec, 96).is_none(), "{asset}");
+            assert!(
+                image_url(&ImageSpec::Badge { icon: asset.into() }, 16).is_none(),
+                "{asset}"
+            );
+        }
+        for asset in [
+            "nameplates/../x/",
+            "nameplates/a/b",
+            "harvest/a/",
+            "nameplates//a/",
+            "nameplates/a?b/",
+            "nameplates/a.b/",
+        ] {
+            for animated in [false, true] {
+                let spec = ImageSpec::Nameplate {
+                    asset: asset.into(),
+                    animated,
+                };
+                assert!(image_url(&spec, 0).is_none(), "{asset}");
+            }
+        }
+        for url in [
+            "http://cdn.discordapp.com/media/v1/collectibles-shop/a",
+            "https://media.discordapp.net/media/v1/collectibles-shop/a",
+            "https://cdn.discordapp.com/attachments/1/2/a.png",
+            "https://cdn.discordapp.com/media/v1/collectibles-shop/../../attachments/a",
+            "https://evil.example/media/v1/collectibles-shop/a",
+            "https://cdn.discordapp.com.evil.example/media/v1/collectibles-shop/a",
+        ] {
+            let spec = ImageSpec::Collectible { url: url.into() };
+            assert!(image_url(&spec, 0).is_none(), "{url}");
+        }
+    }
+
+    #[test]
+    fn video_urls_preserve_parameters_and_reject_untrusted_sources() {
+        for host in [
+            "cdn.discordapp.com",
+            "media.discordapp.net",
+            "images-ext-1.discordapp.net",
+            "images-ext-123.discordapp.net",
+        ] {
+            for dimensions in [(0, 0), (400, 200)] {
+                let raw = format!(
+                    "https://{host}/external/x.mp4?width=1&height=2&size=3&format=mp4&token=a%2Fb#fragment"
+                );
+                let spec = ImageSpec::Video {
+                    url: raw.clone(),
+                    width: dimensions.0,
+                    height: dimensions.1,
+                };
+                for size in [0, 64, 4096] {
+                    assert_eq!(
+                        image_url(&spec, size).unwrap().as_str(),
+                        raw.split('#').next().unwrap()
+                    );
+                }
+                assert!(file_name(&spec, 64).ends_with("-64.img"));
+            }
+        }
+        for url in [
+            "https://media.tenor.com/a.mp4",
+            "https://i.giphy.com/a.mp4",
+            "http://cdn.discordapp.com/a.mp4",
+            "https://user:pass@cdn.discordapp.com/a.mp4",
+            "https://media.discordapp.net:444/a.mp4",
+            "https://images-ext-.discordapp.net/a.mp4",
+            "https://images-ext-x.discordapp.net/a.mp4",
+            "https://images-ext-1.discordapp.net.evil.test/a.mp4",
+            "not a URL",
+        ] {
+            assert!(
+                image_url(
+                    &ImageSpec::Video {
+                        url: url.into(),
+                        width: 1,
+                        height: 1,
+                    },
+                    64
+                )
+                .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn video_and_image_download_formats_are_separate() {
+        let video = ImageSpec::Video {
+            url: String::new(),
+            width: 1,
+            height: 1,
+        };
+        let image = ImageSpec::DefaultAvatar { index: 0 };
+        for bytes in [b"\0\0\0\x18ftypisom".as_slice(), b"\0\0\0\x20ftypmp42"] {
+            assert!(download_bytes(&video, bytes));
+            assert!(!download_bytes(&image, bytes));
+        }
+        for bytes in [
+            b"".as_slice(),
+            b"ftyp",
+            b"\0\0\0\x18fty",
+            b"\0\0\0\x18moov",
+            b"<html>",
+        ] {
+            assert!(!download_bytes(&video, bytes));
+            assert!(!download_bytes(&image, bytes));
+        }
+        for bytes in [
+            b"\x89PNG\r\n\x1a\n".as_slice(),
+            &[0xff, 0xd8, 0xff],
+            b"GIF87a",
+            b"GIF89a",
+            b"RIFF\0\0\0\0WEBP",
+        ] {
+            assert!(download_bytes(&image, bytes));
+            assert!(!download_bytes(&video, bytes));
+        }
+    }
+
+    #[test]
     fn external_proxy_hosts_and_unknown_media_dimensions() {
         for host in [
             "images-ext-1.discordapp.net",
@@ -413,6 +859,7 @@ mod tests {
                     url: url.clone(),
                     width,
                     height,
+                    animated: false,
                 };
                 assert_eq!(
                     image_url(&spec, 64).unwrap().as_str(),
@@ -432,13 +879,26 @@ mod tests {
                 );
             }
             let spec = ImageSpec::Media {
-                url,
+                url: url.clone(),
                 width: 400,
                 height: 200,
+                animated: false,
             };
             assert_eq!(
                 image_url(&spec, 100).unwrap().as_str(),
                 format!("https://{host}/external/image.png?token=keep&width=128&height=64")
+            );
+            let animated = ImageSpec::Media {
+                url,
+                width: 400,
+                height: 200,
+                animated: true,
+            };
+            assert_eq!(
+                image_url(&animated, 100).unwrap().as_str(),
+                format!(
+                    "https://{host}/external/image.png?token=keep&width=128&height=64&animated=true"
+                )
             );
         }
         for host in [
@@ -457,7 +917,8 @@ mod tests {
                 &ImageSpec::Media {
                     url: "https://images-ext-1.discordapp.net/a".into(),
                     width: 0,
-                    height: 0
+                    height: 0,
+                    animated: false,
                 },
                 64
             )

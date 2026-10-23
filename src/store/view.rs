@@ -58,9 +58,41 @@ pub struct User {
     pub activity: Option<String>,
     pub avatar: Option<String>,
     pub discriminator: Option<String>,
+    pub decoration: Option<Decoration>,
+    pub nameplate: Option<Nameplate>,
+    pub name_style: Option<NameStyle>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct Decoration {
+    pub asset: String,
+    pub sku_id: Option<u64>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct Nameplate {
+    pub asset: String,
+    pub palette: Option<String>,
+    pub label: Option<String>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct NameStyle {
+    pub font_id: Option<u32>,
+    pub effect_id: Option<u32>,
+    pub colors: Vec<u32>,
 }
 
 impl User {
+    pub fn decoration_spec(&self, animated: bool) -> Option<ImageSpec> {
+        self.decoration
+            .as_ref()
+            .map(|decoration| ImageSpec::AvatarDecoration {
+                asset: decoration.asset.clone(),
+                animated,
+            })
+    }
+
     pub fn avatar_spec(&self) -> ImageSpec {
         if let Some(hash) = &self.avatar {
             return ImageSpec::Avatar {
@@ -141,11 +173,21 @@ pub struct Media {
     pub url: String,
     pub width: u32,
     pub height: u32,
+    pub animated: bool,
 }
 
 impl Media {
     pub fn spec(&self) -> ImageSpec {
         ImageSpec::Media {
+            url: self.url.clone(),
+            width: self.width,
+            height: self.height,
+            animated: self.animated,
+        }
+    }
+
+    pub fn video_spec(&self) -> ImageSpec {
+        ImageSpec::Video {
             url: self.url.clone(),
             width: self.width,
             height: self.height,
@@ -255,10 +297,18 @@ pub enum Component {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Delivery {
+    Sent,
+    Pending,
+    Failed,
+}
+
 pub struct Message {
     pub id: u64,
     pub author_id: u64,
     pub timestamp: Timestamp,
+    pub delivery: Delivery,
     pub content: String,
     pub embeds: Vec<Embed>,
     pub components: Vec<Component>,
@@ -295,6 +345,8 @@ pub enum ReplyState {
     Unavailable,
 }
 
+const ATTACHMENT_IS_SPOILER: u64 = 1 << 3;
+
 #[derive(Default, Debug, PartialEq, Eq)]
 pub struct MemberList {
     pub id: String,
@@ -310,6 +362,10 @@ pub enum MemberRow {
 }
 
 impl Attachment {
+    pub fn spoiler(&self) -> bool {
+        self.flags & ATTACHMENT_IS_SPOILER != 0 || self.filename.starts_with("SPOILER_")
+    }
+
     pub fn image_spec(&self) -> Option<ImageSpec> {
         let image_type = self
             .content_type

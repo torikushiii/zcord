@@ -7,8 +7,8 @@ mod view;
 
 use crate::discord::{self, model, settings_proto};
 use mapping::{
-    channel_unread, local_timestamp, map_components, map_guild, map_message, map_reactions,
-    map_user, read_state,
+    channel_unread, local_timestamp, map_components, map_decoration, map_guild, map_message,
+    map_name_style, map_nameplate, map_reactions, map_user, read_state, timestamp_from_nonce,
 };
 use seed::SEED_START;
 use std::collections::HashMap;
@@ -170,6 +170,47 @@ impl Store {
         }
     }
 
+    pub fn last_read(&self, channel_id: u64) -> Option<u64> {
+        let source = self.source.as_ref()?;
+        read_state(source, &self.read_states, channel_id)?.last_message_id
+    }
+
+    pub fn channel_ack(&self, channel_id: u64) -> Option<u64> {
+        let source = self.source.as_ref()?;
+        let channel = self.source_channels.get(&channel_id)?.get(source)?;
+        channel_unread(channel, read_state(source, &self.read_states, channel_id))
+            .then(|| channel.last_message_id.flatten())
+            .flatten()
+    }
+
+    pub fn unread_acks(&self, guild_id: u64, now_snowflake: u64) -> Vec<(u64, u64)> {
+        let Some(source) = &self.source else {
+            return Vec::new();
+        };
+        let Some(guild) = source
+            .guilds
+            .iter()
+            .find(|guild| guild.id == guild_id && guild.unavailable != Some(true))
+        else {
+            return Vec::new();
+        };
+        guild
+            .channels
+            .iter()
+            .flatten()
+            .filter_map(|channel| {
+                let message_id = match channel.kind {
+                    Some(0 | 5) => channel.last_message_id.flatten()?,
+                    Some(15 | 16) => now_snowflake,
+                    _ => return None,
+                };
+                (discord::can_view(guild, channel, source.user.id)
+                    && channel_unread(channel, read_state(source, &self.read_states, channel.id)))
+                .then_some((channel.id, message_id))
+            })
+            .collect()
+    }
+
     pub fn append_message(
         &mut self,
         guild_id: u64,
@@ -191,6 +232,7 @@ impl Store {
             id: self.next_message_id,
             author_id: self.current_user_id,
             timestamp,
+            delivery: Delivery::Sent,
             content,
             embeds: Vec::new(),
             components: Vec::new(),
@@ -204,16 +246,196 @@ impl Store {
         self.next_message_id += 1;
         Some(index)
     }
+
+    fn network_channel(&self, channel_id: u64) -> Option<&Channel> {
+        let location = *self.channel_locations.get(&channel_id)?;
+        self.guilds
+            .get(location.guild)?
+            .categories
+            .get(location.category)?
+            .channels
+            .get(location.channel)
+    }
+
+    pub fn queue_message(
+        &mut self,
+        channel_id: u64,
+        nonce: u64,
+        content: String,
+        reply_to: Option<u64>,
+    ) -> Change {
+        let reply = reply_to.map(|message_id| {
+            match self
+                .network_channel(channel_id)
+                .and_then(|channel| {
+                    channel
+                        .messages
+                        .iter()
+                        .find(|message| message.id == message_id)
+                })
+                .map(|message| Reply {
+                    message_id: message.id,
+                    author_id: message.author_id,
+                    content: message.content.clone(),
+                    attachments: !message.attachments.is_empty(),
+                    embeds: !message.embeds.is_empty() || !message.components.is_empty(),
+                }) {
+                Some(reply) => ReplyState::Loaded(reply),
+                None => ReplyState::Unavailable,
+            }
+        });
+        let author_id = self.current_user_id;
+        let Some(channel) = self.network_channel_mut(channel_id) else {
+            return Change::None;
+        };
+        if !channel.messages_loaded {
+            return Change::None;
+        }
+        let index = channel
+            .messages
+            .partition_point(|message| message.id < nonce);
+        channel.messages.insert(
+            index,
+            Message {
+                id: nonce,
+                author_id,
+                timestamp: timestamp_from_nonce(nonce),
+                delivery: Delivery::Pending,
+                content,
+                embeds: Vec::new(),
+                components: Vec::new(),
+                reactions: Vec::new(),
+                attachments: Vec::new(),
+                kind: 0,
+                edited: false,
+                reply,
+                mentions_me: false,
+            },
+        );
+        Change::MessageInserted { channel_id, index }
+    }
+
+    pub fn edit_message_locally(
+        &mut self,
+        channel_id: u64,
+        message_id: u64,
+        content: String,
+    ) -> Change {
+        let Some(channel) = self.network_channel_mut(channel_id) else {
+            return Change::None;
+        };
+        let Ok(index) = channel
+            .messages
+            .binary_search_by_key(&message_id, |message| message.id)
+        else {
+            return Change::None;
+        };
+        let message = &mut channel.messages[index];
+        message.content = content;
+        message.edited = true;
+        Change::MessageChanged { channel_id, index }
+    }
+
+    pub fn fail_message(&mut self, channel_id: u64, nonce: u64) -> Change {
+        let Some(channel) = self.network_channel_mut(channel_id) else {
+            return Change::None;
+        };
+        let Ok(index) = channel
+            .messages
+            .binary_search_by_key(&nonce, |message| message.id)
+        else {
+            return Change::None;
+        };
+        if channel.messages[index].delivery != Delivery::Pending {
+            return Change::None;
+        }
+        channel.messages[index].delivery = Delivery::Failed;
+        Change::MessageChanged { channel_id, index }
+    }
+
+    pub fn discard_message(&mut self, channel_id: u64, nonce: u64) -> Change {
+        let Some(channel) = self.network_channel_mut(channel_id) else {
+            return Change::None;
+        };
+        let Ok(index) = channel
+            .messages
+            .binary_search_by_key(&nonce, |message| message.id)
+        else {
+            return Change::None;
+        };
+        if channel.messages[index].delivery == Delivery::Sent {
+            return Change::None;
+        }
+        channel.messages.remove(index);
+        Change::MessageRemoved { channel_id, index }
+    }
+
+    fn source_channel_guild(&self, channel_id: u64) -> Option<(&model::Guild, &model::Channel)> {
+        let source = self.source.as_ref()?;
+        let entry = self.source_channels.get(&channel_id).copied()?;
+        let (SourceChannel::Guild { guild, .. } | SourceChannel::Thread { guild, .. }) = entry
+        else {
+            return None;
+        };
+        Some((source.guilds.get(guild)?, entry.get(source)?))
+    }
+
+    pub fn can_send(&self, channel_id: u64) -> bool {
+        if self.source.is_none() {
+            return true;
+        }
+        if matches!(
+            self.source_channels.get(&channel_id),
+            Some(SourceChannel::Private(_))
+        ) {
+            return true;
+        }
+        self.source_channel_guild(channel_id)
+            .is_some_and(|(guild, channel)| {
+                let permissions =
+                    discord::channel_permissions(guild, channel, self.current_user_id);
+                permissions & (discord::VIEW_CHANNEL | discord::SEND_MESSAGES)
+                    == discord::VIEW_CHANNEL | discord::SEND_MESSAGES
+            })
+    }
+
+    pub fn can_manage_messages(&self, channel_id: u64) -> bool {
+        if self.source.is_none() {
+            return true;
+        }
+        self.source_channel_guild(channel_id)
+            .is_some_and(|(guild, channel)| {
+                discord::channel_permissions(guild, channel, self.current_user_id)
+                    & discord::MANAGE_MESSAGES
+                    != 0
+            })
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Change {
     None,
-    MessageInserted { channel_id: u64, index: usize },
-    MessageChanged { channel_id: u64, index: usize },
-    MessageRemoved { channel_id: u64, index: usize },
+    MessageInserted {
+        channel_id: u64,
+        index: usize,
+    },
+    MessageChanged {
+        channel_id: u64,
+        index: usize,
+    },
+    MessageRemoved {
+        channel_id: u64,
+        index: usize,
+    },
+    MessageReplaced {
+        channel_id: u64,
+        removed: usize,
+        inserted: usize,
+    },
     Structure,
-    Members { guild_id: Option<u64> },
+    Members {
+        guild_id: Option<u64>,
+    },
 }
 
 impl Store {
@@ -382,6 +604,10 @@ impl Store {
             .collect();
     }
 
+    pub fn absorb_user(&mut self, user: &model::User) {
+        self.register_author(user);
+    }
+
     fn register_author(&mut self, user: &model::User) {
         if user.username.is_empty() {
             if let Some(existing) = self.users.get_mut(&user.id) {
@@ -395,6 +621,7 @@ impl Store {
                     existing.discriminator = Some(discriminator.clone());
                 }
                 existing.bot |= user.bot;
+                apply_cosmetics(existing, user);
                 return;
             }
         }
@@ -406,6 +633,15 @@ impl Store {
             mapped.role_color = existing.role_color;
             if user.primary_guild.is_none() {
                 mapped.tag.clone_from(&existing.tag);
+            }
+            if user.avatar_decoration_data.is_none() {
+                mapped.decoration.clone_from(&existing.decoration);
+            }
+            if user.collectibles.is_none() {
+                mapped.nameplate.clone_from(&existing.nameplate);
+            }
+            if user.display_name_styles.is_none() {
+                mapped.name_style.clone_from(&existing.name_style);
             }
         }
         self.users.insert(user.id, mapped);
@@ -574,6 +810,18 @@ impl Store {
         }
     }
 
+    fn apply_ack(&mut self, channel_id: u64, message_id: u64) {
+        let latest = self.latest_message_id(channel_id);
+        let mentions = self.mention_count(channel_id);
+        if let Some(state) = self.read_state_mut(channel_id, message_id) {
+            state.last_message_id = Some(message_id);
+            if message_id >= latest {
+                state.mention_count = 0;
+            }
+        }
+        self.refresh_badges(channel_id, mentions);
+    }
+
     pub fn apply(&mut self, event: discord::Event) -> Change {
         let revision = self.social.revision;
         let change = self.apply_inner(event);
@@ -655,6 +903,15 @@ impl Store {
                     }
                 }
                 self.refresh_badges(message.channel_id, mentions);
+                let current_user_id = self.current_user_id;
+                let own = message.author.id == current_user_id;
+                if own
+                    && self
+                        .last_read(message.channel_id)
+                        .is_none_or(|last| message.id > last)
+                {
+                    self.apply_ack(message.channel_id, message.id);
+                }
                 let Some(channel) = self.network_channel_mut(message.channel_id) else {
                     return Change::None;
                 };
@@ -664,6 +921,27 @@ impl Store {
                 let Some(mapped) = mapped else {
                     return Change::None;
                 };
+                let pending = if own {
+                    message.nonce.and_then(|nonce| {
+                        channel.messages.iter().position(|m| {
+                            m.id == nonce
+                                && m.delivery != Delivery::Sent
+                                && m.author_id == current_user_id
+                        })
+                    })
+                } else {
+                    None
+                };
+                if let Some(removed) = pending {
+                    channel.messages.remove(removed);
+                    let inserted = channel.messages.partition_point(|m| m.id < mapped.id);
+                    channel.messages.insert(inserted, mapped);
+                    return Change::MessageReplaced {
+                        channel_id: message.channel_id,
+                        removed,
+                        inserted,
+                    };
+                }
                 let index = channel.messages.partition_point(|m| m.id < message.id);
                 channel.messages.insert(index, mapped);
                 Change::MessageInserted {
@@ -779,16 +1057,23 @@ impl Store {
                 channel_id,
                 message_id,
             } => {
-                let latest = self.latest_message_id(channel_id);
-                let mentions = self.mention_count(channel_id);
-                if let Some(state) = self.read_state_mut(channel_id, message_id) {
-                    state.last_message_id = Some(message_id);
-                    if message_id >= latest {
-                        state.mention_count = 0;
+                self.apply_ack(channel_id, message_id);
+                Change::Structure
+            }
+            Event::TypingStart(typing) => {
+                if let Some(member) = &typing.member {
+                    match typing.guild_id {
+                        Some(guild_id) => {
+                            self.upsert_member(guild_id, typing.user_id, member);
+                        }
+                        None => {
+                            if let Some(user) = &member.user {
+                                self.register_author(user);
+                            }
+                        }
                     }
                 }
-                self.refresh_badges(channel_id, mentions);
-                Change::Structure
+                Change::None
             }
             Event::GuildUpsert(update) => {
                 let id = update.id;
@@ -886,5 +1171,18 @@ impl Store {
             }
             _ => Change::None,
         }
+    }
+}
+
+// Partial user objects omit these fields when unchanged; only an explicit null clears them.
+fn apply_cosmetics(target: &mut User, user: &model::User) {
+    if let Some(decoration) = &user.avatar_decoration_data {
+        target.decoration = decoration.as_ref().map(map_decoration);
+    }
+    if let Some(collectibles) = &user.collectibles {
+        target.nameplate = collectibles.as_ref().and_then(map_nameplate);
+    }
+    if let Some(styles) = &user.display_name_styles {
+        target.name_style = styles.as_ref().map(map_name_style);
     }
 }

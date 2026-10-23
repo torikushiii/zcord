@@ -76,6 +76,9 @@ impl Store {
                 activity: activity.map(Into::into),
                 avatar: None,
                 discriminator: None,
+                decoration: None,
+                nameplate: None,
+                name_style: None,
             },
         )
         .collect::<Vec<_>>();
@@ -298,6 +301,7 @@ impl Store {
                         color: role
                             .and_then(|id| social.roles.get(&id))
                             .and_then(|r| r.color),
+                        nameplate: None,
                     },
                 );
             }
@@ -388,6 +392,7 @@ fn seed_messages(
             id: *next_message_id,
             author_id,
             timestamp,
+            delivery: Delivery::Sent,
             content,
             embeds: embed.into_iter().collect(),
             components: Vec::new(),

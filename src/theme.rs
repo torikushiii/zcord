@@ -1,10 +1,9 @@
 use gpui::{prelude::*, *};
 
-use std::{path::Path, sync::Arc};
-
 use crate::{
-    images,
-    store::{GuildTag, Status, Store, User},
+    animated,
+    images::{self, ImageSpec},
+    store::{GuildTag, NameStyle, Status, Store, User},
 };
 
 pub const BG: u32 = 0x08080A;
@@ -59,15 +58,17 @@ pub fn user_avatar(
     user_id: u64,
     size: f32,
     status: Option<(Status, u32)>,
+    animate: bool,
     cx: &App,
 ) -> impl IntoElement + use<> {
-    let image = user.and_then(|user| images::resolve(&user.avatar_spec(), image_px(size), cx));
+    let image = user.and_then(|user| avatar_image(&user.avatar_spec(), size, animate, cx));
     avatar(
         user.map_or("?", |user| &user.initials),
         user_color(user_id),
         size,
         status,
         image,
+        user.and_then(|user| decoration(user, size, animate, cx)),
     )
 }
 
@@ -77,20 +78,120 @@ pub fn member_avatar(
     user_id: u64,
     size: f32,
     status: Option<(Status, u32)>,
+    animate: bool,
     cx: &App,
 ) -> impl IntoElement + use<> {
     let user = store.user(user_id);
     let spec = store
         .member_avatar_spec(guild_id, user_id)
         .or_else(|| user.map(User::avatar_spec));
-    let image = spec.and_then(|spec| images::resolve(&spec, image_px(size), cx));
+    let image = spec.and_then(|spec| avatar_image(&spec, size, animate, cx));
     avatar(
         user.map_or("?", |user| &user.initials),
         user_color(user_id),
         size,
         status,
         image,
+        user.and_then(|user| decoration(user, size, animate, cx)),
     )
+}
+
+fn avatar_image(spec: &ImageSpec, size: f32, animate: bool, cx: &App) -> Option<AnyElement> {
+    let pixels = image_px(size);
+    let animated = animate
+        .then(|| spec.animated())
+        .flatten()
+        .and_then(|animated| animated::resolve(&animated, pixels, cx));
+    Some(match animated {
+        Some(image) => img(ImageSource::Render(image))
+            .size_full()
+            .rounded_full()
+            .id("avatar-animated")
+            .into_any_element(),
+        None => img(images::resolve(spec, pixels, cx)?)
+            .size_full()
+            .rounded_full()
+            .into_any_element(),
+    })
+}
+
+const DECORATION_SCALE: f32 = 1.2;
+
+pub fn decoration(user: &User, size: f32, animate: bool, cx: &App) -> Option<AnyElement> {
+    if size < 24. {
+        return None;
+    }
+    let frame = size * DECORATION_SCALE;
+    let pixels = image_px(frame);
+    let animates = animate
+        && user
+            .decoration
+            .as_ref()
+            .is_some_and(|decoration| decoration.asset.starts_with("a_"));
+    let animated = animates
+        .then(|| user.decoration_spec(true))
+        .flatten()
+        .and_then(|spec| animated::resolve(&spec, pixels, cx));
+    let image = match animated {
+        Some(image) => img(ImageSource::Render(image))
+            .id(("decoration", user.id))
+            .size_full()
+            .into_any_element(),
+        None => img(images::resolve(&user.decoration_spec(false)?, pixels, cx)?)
+            .size_full()
+            .into_any_element(),
+    };
+    Some(
+        div()
+            .absolute()
+            .left(rpx((size - frame) / 2.))
+            .top(rpx((size - frame) / 2.))
+            .size(rpx(frame))
+            .child(image)
+            .into_any_element(),
+    )
+}
+
+pub fn display_name(text: &str, style: Option<&NameStyle>, fallback: u32) -> AnyElement {
+    let colors: Vec<Rgba> = style
+        .map(|style| style.colors.iter().map(|color| rgb(*color)).collect())
+        .unwrap_or_default();
+    if colors.len() < 2 {
+        let color = colors.first().copied().unwrap_or(rgb(fallback));
+        return div()
+            .text_color(color)
+            .child(SharedString::from(text.to_owned()))
+            .into_any_element();
+    }
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let last = chars.len().saturating_sub(1).max(1) as f32;
+    let highlights = chars.iter().enumerate().map(|(index, (offset, ch))| {
+        let color = gradient_at(&colors, index as f32 / last);
+        (
+            *offset..offset + ch.len_utf8(),
+            HighlightStyle {
+                color: Some(color.into()),
+                ..Default::default()
+            },
+        )
+    });
+    div()
+        .text_color(colors[0])
+        .child(StyledText::new(text.to_owned()).with_highlights(highlights))
+        .into_any_element()
+}
+
+fn gradient_at(colors: &[Rgba], position: f32) -> Rgba {
+    let scaled = position.clamp(0., 1.) * (colors.len() - 1) as f32;
+    let index = (scaled.floor() as usize).min(colors.len() - 2);
+    let t = scaled - index as f32;
+    let (a, b) = (colors[index], colors[index + 1]);
+    Rgba {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: a.a + (b.a - a.a) * t,
+    }
 }
 
 pub fn avatar(
@@ -98,7 +199,8 @@ pub fn avatar(
     color: Hsla,
     size: f32,
     status: Option<(Status, u32)>,
-    image: Option<Arc<Path>>,
+    image: Option<AnyElement>,
+    decoration: Option<AnyElement>,
 ) -> impl IntoElement + use<> {
     let dot = size * 0.3;
     div()
@@ -106,7 +208,7 @@ pub fn avatar(
         .flex_none()
         .size(rpx(size))
         .child(match image {
-            Some(path) => img(path).size_full().rounded_full().into_any_element(),
+            Some(image) => image,
             None => div()
                 .size_full()
                 .flex()
@@ -120,6 +222,7 @@ pub fn avatar(
                 .child(initials.to_owned())
                 .into_any_element(),
         })
+        .children(decoration)
         .children(status.map(|(status, ring)| {
             div()
                 .absolute()

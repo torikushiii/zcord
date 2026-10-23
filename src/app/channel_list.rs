@@ -2,7 +2,7 @@ use gpui::{prelude::*, *};
 use gpui_component::tooltip::Tooltip;
 
 use crate::{
-    app::{DiscordApp, message_body::label},
+    app::{DiscordApp, message_body::label, profile},
     store::{Channel, ChannelKind},
     theme::{self, rpx},
 };
@@ -212,11 +212,17 @@ fn user_panel(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .rounded(rpx(6.))
                 .cursor_pointer()
                 .hover(|style| style.bg(rgb(theme::SELECTED)))
+                .on_hover(cx.listener(|app, hovered: &bool, _, cx| {
+                    app.hovered_account = *hovered;
+                    cx.notify();
+                }))
+                .on_click(profile::opener(app, user.id, Anchor::BottomLeft))
                 .child(theme::user_avatar(
                     Some(user),
                     user.id,
                     36.,
                     Some((user.status, theme::ELEVATED)),
+                    app.hovered_account,
                     cx,
                 ))
                 .child(

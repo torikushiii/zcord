@@ -1,4 +1,5 @@
 use gpui::{prelude::*, *};
+use gpui_component::tooltip::Tooltip;
 
 use crate::{
     app::{
@@ -89,6 +90,12 @@ fn fit(media: &Media, max: (f32, f32)) -> (f32, f32) {
     )
 }
 
+pub(super) fn animated(source: impl Into<ImageSource>, key: &str) -> Stateful<Img> {
+    let mut hasher = std::hash::DefaultHasher::new();
+    std::hash::Hash::hash(key, &mut hasher);
+    img(source).id(("animated", std::hash::Hasher::finish(&hasher)))
+}
+
 fn image_box(media: &Media, width: f32, height: f32, radius: f32, cx: &App) -> Div {
     let image = images::resolve(&media.spec(), theme::image_px(width.max(height)), cx);
     div()
@@ -100,11 +107,37 @@ fn image_box(media: &Media, width: f32, height: f32, radius: f32, cx: &App) -> D
         .overflow_hidden()
         .when(image.is_none(), |this| this.bg(rgb(theme::BORDER)))
         .children(image.map(|path| {
-            img(path)
+            animated(path, &media.url)
                 .size_full()
                 .object_fit(ObjectFit::Cover)
                 .rounded(rpx(radius))
         }))
+}
+
+fn gifv_box(still: &Media, video: Option<&Media>, cx: &App) -> Div {
+    let (width, height) = fit(
+        video.filter(|video| video.width > 0).unwrap_or(still),
+        PLAIN_MEDIA,
+    );
+    let pixels = theme::image_px(width.max(height));
+    let playing = video.and_then(|video| {
+        crate::video::resolve(&video.video_spec(), pixels, cx).map(|frames| (video, frames))
+    });
+    match playing {
+        Some((video, frames)) => div()
+            .flex_none()
+            .w(rpx(width))
+            .h(rpx(height))
+            .rounded(rpx(8.))
+            .overflow_hidden()
+            .child(
+                animated(frames, &video.url)
+                    .size_full()
+                    .object_fit(ObjectFit::Cover)
+                    .rounded(rpx(8.)),
+            ),
+        None => image_box(still, width, height, 8., cx),
+    }
 }
 
 fn fitted(media: &Media, max: (f32, f32), cx: &App) -> Div {
@@ -116,36 +149,86 @@ fn spoiler_cover(app: &DiscordApp, key: u64, spoiler: bool, element: Div) -> Any
     if !spoiler || app.revealed_spoilers.contains(&(key, 0)) {
         return element.into_any_element();
     }
-    let entity = app.entity.clone();
     element
+        .child(spoiler_overlay(app, key).bg(rgb(0x1A1A1E)))
+        .into_any_element()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spoiler_media(
+    app: &DiscordApp,
+    key: u64,
+    spoiler: bool,
+    media: &Media,
+    width: f32,
+    height: f32,
+    radius: f32,
+    cx: &App,
+) -> AnyElement {
+    if spoiler && !app.revealed_spoilers.contains(&(key, 0)) {
+        blurred_box(&media.spec(), width, height, radius, cx)
+            .child(spoiler_overlay(app, key))
+            .into_any_element()
+    } else {
+        image_box(media, width, height, radius, cx).into_any_element()
+    }
+}
+
+pub(super) fn blurred_box(
+    spec: &images::ImageSpec,
+    width: f32,
+    height: f32,
+    radius: f32,
+    cx: &App,
+) -> Div {
+    div()
+        .relative()
+        .flex_none()
+        .w(rpx(width))
+        .h(rpx(height))
+        .rounded(rpx(radius))
+        .overflow_hidden()
+        .bg(rgb(theme::BORDER))
+        .children(images::blurred(spec, cx).map(|image| {
+            let bleed = (width.max(height) / images::BLUR_SOURCE as f32 * 1.5).ceil();
+            img(image)
+                .absolute()
+                .left(rpx(-bleed))
+                .top(rpx(-bleed))
+                .w(rpx(width + bleed * 2.))
+                .h(rpx(height + bleed * 2.))
+                .object_fit(ObjectFit::Cover)
+        }))
+}
+
+pub(super) fn spoiler_overlay(app: &DiscordApp, key: u64) -> Stateful<Div> {
+    let entity = app.entity.clone();
+    div()
+        .id(("spoiler", key))
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(rgba(0x4E505840))
+        .cursor_pointer()
+        .on_click(move |_, _, cx| {
+            entity
+                .update(cx, |app, cx| app.reveal_spoiler(key, 0, cx))
+                .ok();
+        })
         .child(
             div()
-                .id(("spoiler", key))
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(rgb(0x1A1A1E))
-                .cursor_pointer()
-                .on_click(move |_, _, cx| {
-                    entity
-                        .update(cx, |app, cx| app.reveal_spoiler(key, 0, cx))
-                        .ok();
-                })
-                .child(
-                    div()
-                        .px(rpx(12.))
-                        .py(rpx(6.))
-                        .rounded_full()
-                        .bg(rgba(0x000000B3))
-                        .text_size(rpx(14.))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(theme::STRONG))
-                        .child("SPOILER"),
-                ),
+                .px(rpx(12.))
+                .py(rpx(8.))
+                .rounded_full()
+                .bg(rgba(0x000000B3))
+                .text_size(rpx(15.))
+                .line_height(rpx(16.))
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(theme::STRONG))
+                .child("SPOILER"),
         )
-        .into_any_element()
 }
 
 fn play_badge(element: Div) -> Div {
@@ -166,22 +249,6 @@ fn play_badge(element: Div) -> Div {
                     .bg(rgba(0x000000A6))
                     .child(theme::icon("play", 20., theme::STRONG)),
             ),
-    )
-}
-
-fn gif_badge(element: Div) -> Div {
-    element.child(
-        div()
-            .absolute()
-            .top(rpx(6.))
-            .left(rpx(6.))
-            .px(rpx(4.))
-            .rounded(rpx(4.))
-            .bg(rgba(0x000000A6))
-            .text_size(rpx(12.))
-            .font_weight(FontWeight::BOLD)
-            .text_color(rgb(theme::STRONG))
-            .child("GIF"),
     )
 }
 
@@ -211,14 +278,33 @@ pub fn render_embed(
     let media = embed.thumbnail.as_ref().or(embed.images.first());
     let bare = embed.title.is_none() && embed.description.is_none() && embed.author.is_none();
     match embed.kind {
-        EmbedKind::Image | EmbedKind::Gifv if bare => {
+        EmbedKind::Gifv => {
             let Some(media) = media else {
                 return div().into_any_element();
             };
-            let element = div().mt_1().child(
-                fitted(media, PLAIN_MEDIA, cx).when(embed.kind == EmbedKind::Gifv, gif_badge),
-            );
-            return element.into_any_element();
+            return div()
+                .flex()
+                .flex_col()
+                .mt_1()
+                .child(gifv_box(media, embed.video.as_ref(), cx))
+                .child(
+                    div()
+                        .mt(rpx(4.))
+                        .text_size(rpx(12.))
+                        .line_height(rpx(16.))
+                        .text_color(rgb(theme::MUTED))
+                        .child("GIF"),
+                )
+                .into_any_element();
+        }
+        EmbedKind::Image if bare => {
+            let Some(media) = media else {
+                return div().into_any_element();
+            };
+            return div()
+                .mt_1()
+                .child(fitted(media, PLAIN_MEDIA, cx))
+                .into_any_element();
         }
         _ => {}
     }
@@ -227,7 +313,7 @@ pub fn render_embed(
     let side_thumbnail = embed
         .thumbnail
         .as_ref()
-        .filter(|_| !video && embed.images.is_empty() && embed.kind != EmbedKind::Image);
+        .filter(|_| !video && embed.kind != EmbedKind::Image);
     let big_media: Vec<&Media> = if video {
         embed
             .thumbnail
@@ -331,7 +417,6 @@ pub fn render_embed(
         [single] => Some(
             fitted(single, media_max, cx)
                 .when(video, play_badge)
-                .when(embed.kind == EmbedKind::Gifv, gif_badge)
                 .into_any_element(),
         ),
         many => Some(media_grid(many, media_max.0, cx).into_any_element()),
@@ -584,7 +669,7 @@ fn render_component(
                     } else {
                         (width, height)
                     };
-                    spoiler_cover(app, key, *spoiler, image_box(media, width, height, 8., cx))
+                    spoiler_media(app, key, *spoiler, media, width, height, 8., cx)
                 }
                 other => render_component(app, message_id, other, counter, cx),
             }))
@@ -597,12 +682,19 @@ fn render_component(
             20.,
             cx,
         ),
-        Component::Thumbnail { media, spoiler, .. } => spoiler_cover(
-            app,
-            part_key(message_id, SPOILER_SLOT + slot),
-            *spoiler,
-            fitted(media, (SECTION_THUMBNAIL, SECTION_THUMBNAIL), cx),
-        ),
+        Component::Thumbnail { media, spoiler, .. } => {
+            let (width, height) = fit(media, (SECTION_THUMBNAIL, SECTION_THUMBNAIL));
+            spoiler_media(
+                app,
+                part_key(message_id, SPOILER_SLOT + slot),
+                *spoiler,
+                media,
+                width,
+                height,
+                8.,
+                cx,
+            )
+        }
         Component::Gallery(items) => gallery(app, message_id, items, counter, cx),
         Component::File {
             name,
@@ -692,12 +784,8 @@ fn gallery(
         keyed.push((part_key(message_id, SPOILER_SLOT + *counter), item));
     }
     if let [(key, item)] = keyed.as_slice() {
-        return spoiler_cover(
-            app,
-            *key,
-            item.spoiler,
-            fitted(&item.media, PLAIN_MEDIA, cx),
-        );
+        let (width, height) = fit(&item.media, PLAIN_MEDIA);
+        return spoiler_media(app, *key, item.spoiler, &item.media, width, height, 8., cx);
     }
     let width = PLAIN_MEDIA.0;
     let columns = if items.len() == 2 || items.len() == 4 {
@@ -714,11 +802,15 @@ fn gallery(
         .gap(rpx(gap))
         .w(rpx(width))
         .children(keyed.into_iter().map(|(key, item)| {
-            spoiler_cover(
+            spoiler_media(
                 app,
                 key,
                 item.spoiler,
-                image_box(&item.media, cell, height.floor(), 4., cx),
+                &item.media,
+                cell,
+                height.floor(),
+                4.,
+                cx,
             )
         }))
         .into_any_element()
@@ -778,7 +870,12 @@ fn emoji_element(emoji: &ReactionEmoji, size: f32, cx: &App) -> AnyElement {
             div()
                 .size(rpx(size))
                 .flex_none()
-                .children(image.map(|path| img(path).size_full().object_fit(ObjectFit::Contain)))
+                .children(image.map(|path| {
+                    img(path)
+                        .id(("emoji", id))
+                        .size_full()
+                        .object_fit(ObjectFit::Contain)
+                }))
                 .into_any_element()
         }
         None => match emoji::image(&emoji.name) {
@@ -797,10 +894,20 @@ fn emoji_element(emoji: &ReactionEmoji, size: f32, cx: &App) -> AnyElement {
     }
 }
 
-pub fn render_reactions(reactions: &[Reaction], cx: &App) -> Option<AnyElement> {
+pub fn render_reactions(message_id: u64, reactions: &[Reaction], cx: &App) -> Option<AnyElement> {
     if reactions.is_empty() {
         return None;
     }
+    let pill = || {
+        div()
+            .flex()
+            .items_center()
+            .gap(rpx(6.))
+            .h(rpx(30.))
+            .px(rpx(8.))
+            .rounded(rpx(8.))
+            .border_1()
+    };
     Some(
         div()
             .flex()
@@ -808,14 +915,7 @@ pub fn render_reactions(reactions: &[Reaction], cx: &App) -> Option<AnyElement> 
             .gap(rpx(4.))
             .mt(rpx(4.))
             .children(reactions.iter().map(|reaction| {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(rpx(6.))
-                    .h(rpx(28.))
-                    .px(rpx(8.))
-                    .rounded(rpx(8.))
-                    .border_1()
+                pill()
                     .map(|this| {
                         if reaction.me {
                             this.bg(rgba(0x5865F226)).border_color(rgb(theme::BLURPLE))
@@ -824,15 +924,27 @@ pub fn render_reactions(reactions: &[Reaction], cx: &App) -> Option<AnyElement> 
                                 .border_color(rgb(theme::ELEVATED))
                         }
                     })
-                    .child(emoji_element(&reaction.emoji, 18., cx))
+                    .child(emoji_element(&reaction.emoji, 20., cx))
                     .child(
                         div()
-                            .text_size(rpx(14.))
+                            .text_size(rpx(15.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(rgb(if reaction.me { 0xC9CDFB } else { theme::MUTED }))
                             .child(reaction.count.to_string()),
                     )
             }))
+            .child(
+                pill()
+                    .id(("add-reaction", message_id))
+                    .bg(rgb(theme::ELEVATED))
+                    .border_color(rgb(theme::ELEVATED))
+                    .opacity(0.)
+                    .group_hover("message", |style| style.opacity(1.))
+                    .hover(|style| style.bg(rgb(theme::SELECTED)))
+                    .cursor_pointer()
+                    .tooltip(|window, cx| Tooltip::new("Add Reaction").build(window, cx))
+                    .child(theme::icon("smile-plus", 20., theme::MUTED)),
+            )
             .into_any_element(),
     )
 }

@@ -8959,14 +8959,17 @@ dependencies = [
  "gpui_platform",
  "gpui_tokio",
  "iana-time-zone",
+ "image",
  "keyring",
  "log",
+ "png 0.18.1",
  "rand 0.8.8",
  "reqwest",
  "serde",
  "serde_json",
  "tokio",
  "tokio-tungstenite",
+ "windows 0.62.2",
  "winresource",
 ]
 
