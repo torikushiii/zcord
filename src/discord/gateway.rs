@@ -620,6 +620,9 @@ fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) -> Option<E
                     }
                     Event::GuildUpsert(Box::new(guild))
                 }),
+            "GUILD_EMOJIS_UPDATE" => serde_json::from_value(value)
+                .ok()
+                .map(Event::GuildEmojisUpdate),
             "GUILD_DELETE" => id(&value, "id").map(|id| Event::GuildDelete { id }),
             "MESSAGE_ACK" => {
                 if value.get("ack_type").and_then(Value::as_u64).unwrap_or(0) != 0 {

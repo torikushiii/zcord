@@ -60,6 +60,12 @@ pub enum ImageSpec {
         width: u32,
         height: u32,
     },
+    VideoPoster {
+        id: u64,
+        url: String,
+        width: u32,
+        height: u32,
+    },
     AvatarDecoration {
         asset: String,
         animated: bool,
@@ -144,6 +150,30 @@ pub(crate) fn allowed_url(url: &reqwest::Url) -> bool {
         && url.username().is_empty()
         && url.password().is_none()
         && url.port().is_none()
+}
+
+pub(crate) fn trusted_video_url(raw: &str) -> Option<String> {
+    let mut url = reqwest::Url::parse(raw).ok()?;
+    if !allowed_url(&url) {
+        return None;
+    }
+    let extension = url
+        .path()
+        .rsplit('/')
+        .next()
+        .and_then(|name| name.rsplit_once('.'))
+        .map(|(_, extension)| extension.to_ascii_lowercase());
+    let video_file = matches!(extension.as_deref(), Some("mp4" | "mov" | "webm" | "m4v"));
+    // Discord's external proxy only serves media it already resolved, and redirect-style
+    // sources (FxTwitter's `/2/go?url=…mp4`) end up with an extensionless proxy path.
+    let proxied = url
+        .host_str()
+        .is_some_and(|host| host.starts_with("images-ext-"));
+    if !video_file && !proxied {
+        return None;
+    }
+    url.set_fragment(None);
+    Some(url.into())
 }
 
 fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
@@ -240,6 +270,7 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
         ImageSpec::Attachment { url, .. }
         | ImageSpec::Media { url, .. }
         | ImageSpec::Video { url, .. }
+        | ImageSpec::VideoPoster { url, .. }
         | ImageSpec::Collectible { url } => url.clone(),
         ImageSpec::Animated { .. } => return None,
     };
@@ -256,12 +287,17 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
         return None;
     }
     url.set_fragment(None);
-    if let ImageSpec::Attachment { width, height, .. } | ImageSpec::Media { width, height, .. } =
-        spec
+    if let ImageSpec::Attachment { width, height, .. }
+    | ImageSpec::Media { width, height, .. }
+    | ImageSpec::VideoPoster { width, height, .. } = spec
     {
+        let poster = matches!(spec, ImageSpec::VideoPoster { .. });
         let longest = (*width).max(*height);
         if *width == 0 || *height == 0 {
-            if matches!(spec, ImageSpec::Attachment { .. }) {
+            if matches!(
+                spec,
+                ImageSpec::Attachment { .. } | ImageSpec::VideoPoster { .. }
+            ) {
                 return None;
             }
             let params: Vec<_> = url
@@ -283,7 +319,9 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
         let height = (u64::from(*height) * u64::from(target) / u64::from(longest)).max(1);
         let params: Vec<_> = url
             .query_pairs()
-            .filter(|(key, _)| !matches!(key.as_ref(), "width" | "height" | "size"))
+            .filter(|(key, _)| {
+                !matches!(key.as_ref(), "width" | "height" | "size") && !(poster && key == "format")
+            })
             .map(|(key, value)| (key.into_owned(), value.into_owned()))
             .collect();
         // The media proxy keeps the original format (and GIF animation); WebP conversion isn't
@@ -295,6 +333,9 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
             .append_pair("height", &height.to_string());
         if matches!(spec, ImageSpec::Media { animated: true, .. }) {
             url.query_pairs_mut().append_pair("animated", "true");
+        }
+        if poster {
+            url.query_pairs_mut().append_pair("format", "webp");
         }
     }
     Some(url)
@@ -417,7 +458,7 @@ pub fn resolve(spec: &ImageSpec, size: u32, cx: &App) -> Option<Arc<Path>> {
     None
 }
 
-pub const BLUR_SOURCE: u32 = 64;
+const BLUR_SOURCE: u32 = 64;
 const BLUR_SIGMA: f32 = 5.;
 
 pub fn blurred(spec: &ImageSpec, cx: &App) -> Option<Arc<gpui::RenderImage>> {
@@ -807,6 +848,50 @@ mod tests {
                 )
                 .is_none()
             );
+        }
+    }
+
+    #[test]
+    fn video_posters_use_the_proxy_webp_format() {
+        let raw = "https://media.discordapp.net/attachments/1/2/clip.mp4?ex=abc&width=9&height=9&size=9&format=mp4#fragment";
+        let spec = ImageSpec::VideoPoster {
+            id: 1,
+            url: raw.into(),
+            width: 640,
+            height: 360,
+        };
+        assert_eq!(
+            image_url(&spec, 128).unwrap().as_str(),
+            "https://media.discordapp.net/attachments/1/2/clip.mp4?ex=abc&width=128&height=72&format=webp"
+        );
+        assert!(
+            image_url(
+                &ImageSpec::VideoPoster {
+                    id: 1,
+                    url: raw.into(),
+                    width: 0,
+                    height: 360,
+                },
+                128,
+            )
+            .is_none()
+        );
+        assert_eq!(
+            trusted_video_url(raw).as_deref(),
+            Some(
+                "https://media.discordapp.net/attachments/1/2/clip.mp4?ex=abc&width=9&height=9&size=9&format=mp4"
+            )
+        );
+        let redirect = "https://images-ext-1.discordapp.net/external/abc/%3Furl%3Dhttps%253A%252F%252Fvideo.twimg.com%252Fa.mp4/https/api.fxtwitter.com/2/go";
+        assert_eq!(trusted_video_url(redirect).as_deref(), Some(redirect));
+        for url in [
+            "https://media.tenor.com/a.mp4",
+            "https://cdn.discordapp.com/a.m3u8",
+            "https://media.discordapp.net/external/abc/https/example.com/go",
+            "http://cdn.discordapp.com/a.mp4",
+            "https://cdn.discordapp.com:444/a.mp4",
+        ] {
+            assert!(trusted_video_url(url).is_none(), "{url}");
         }
     }
 

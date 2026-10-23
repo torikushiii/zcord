@@ -97,6 +97,14 @@ fn timestamp<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
     Ok(value)
 }
 
+fn optional_timestamp<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    let value = Value::deserialize(d)?;
+    Ok(value
+        .as_str()
+        .filter(|value| chrono::DateTime::parse_from_rfc3339(value).is_ok())
+        .map(str::to_owned))
+}
+
 #[derive(Clone, Default, Deserialize)]
 pub struct User {
     #[serde(deserialize_with = "snowflake")]
@@ -111,6 +119,8 @@ pub struct User {
     pub discriminator: Option<String>,
     #[serde(default)]
     pub bot: bool,
+    #[serde(default)]
+    pub premium_type: Option<u8>,
     #[serde(default, deserialize_with = "nullable")]
     pub primary_guild: Option<Option<PrimaryGuild>>,
     #[serde(default, deserialize_with = "nullable")]
@@ -495,6 +505,8 @@ pub struct Guild {
     pub roles: Option<Vec<Role>>,
     #[serde(default, deserialize_with = "optional_entries")]
     pub members: Option<Vec<Member>>,
+    #[serde(default, deserialize_with = "optional_entries")]
+    pub emojis: Option<Vec<GuildEmoji>>,
     #[serde(default)]
     pub unavailable: Option<bool>,
 }
@@ -550,10 +562,37 @@ impl Guild {
         if update.members.is_some() {
             self.members.clone_from(&update.members);
         }
+        if update.emojis.is_some() {
+            self.emojis.clone_from(&update.emojis);
+        }
         if update.unavailable.is_some() {
             self.unavailable = update.unavailable;
         }
     }
+}
+
+#[derive(Clone, Deserialize)]
+pub struct GuildEmoji {
+    #[serde(deserialize_with = "snowflake")]
+    pub id: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub animated: bool,
+    #[serde(default = "default_true")]
+    pub available: bool,
+    #[serde(default, deserialize_with = "ids")]
+    pub roles: Vec<u64>,
+    #[serde(default = "default_true")]
+    pub require_colons: bool,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct GuildEmojisUpdate {
+    #[serde(deserialize_with = "snowflake")]
+    pub guild_id: u64,
+    #[serde(default, deserialize_with = "entries")]
+    pub emojis: Vec<GuildEmoji>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -673,6 +712,8 @@ pub struct Embed {
     pub description: Option<String>,
     #[serde(default, deserialize_with = "entries")]
     pub fields: Vec<EmbedField>,
+    #[serde(default, deserialize_with = "entries")]
+    pub components: Vec<Component>,
     #[serde(default)]
     pub footer: Option<EmbedFooter>,
 }
@@ -889,6 +930,8 @@ pub struct Message {
     pub guild_id: Option<u64>,
     #[serde(default)]
     pub message_reference: Option<MessageReference>,
+    #[serde(default, deserialize_with = "entries")]
+    pub message_snapshots: Vec<MessageSnapshot>,
     #[serde(default, deserialize_with = "nullable")]
     pub referenced_message: Option<Option<Box<ReferencedMessage>>>,
 }
@@ -931,6 +974,8 @@ pub struct MessageUpdate {
     pub guild_id: Option<u64>,
     #[serde(default, deserialize_with = "nullable")]
     pub message_reference: Option<Option<MessageReference>>,
+    #[serde(default, deserialize_with = "optional_entries")]
+    pub message_snapshots: Option<Vec<MessageSnapshot>>,
     #[serde(default, deserialize_with = "nullable")]
     pub referenced_message: Option<Option<Box<ReferencedMessage>>>,
 }
@@ -992,6 +1037,29 @@ pub struct MessageReference {
 }
 
 #[derive(Clone, Deserialize)]
+pub struct MessageSnapshot {
+    pub message: SnapshotMessage,
+}
+
+#[derive(Clone, Default, Deserialize)]
+pub struct SnapshotMessage {
+    #[serde(default)]
+    pub content: String,
+    #[serde(default, deserialize_with = "entries")]
+    pub embeds: Vec<Embed>,
+    #[serde(default, deserialize_with = "entries")]
+    pub attachments: Vec<Attachment>,
+    #[serde(default, deserialize_with = "entries")]
+    pub components: Vec<Component>,
+    #[serde(default)]
+    pub flags: u64,
+    #[serde(default, deserialize_with = "optional_timestamp")]
+    pub timestamp: Option<String>,
+    #[serde(default, deserialize_with = "optional_timestamp")]
+    pub edited_timestamp: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
 pub struct TypingStart {
     #[serde(deserialize_with = "snowflake")]
     pub channel_id: u64,
@@ -1010,12 +1078,18 @@ pub struct ReferencedMessage {
     #[serde(deserialize_with = "snowflake")]
     pub id: u64,
     pub author: User,
+    #[serde(default, deserialize_with = "optional_timestamp")]
+    pub timestamp: Option<String>,
+    #[serde(default)]
+    pub flags: u64,
     #[serde(default)]
     pub content: String,
     #[serde(default, deserialize_with = "entries")]
     pub attachments: Vec<Attachment>,
     #[serde(default, deserialize_with = "entries")]
     pub embeds: Vec<Embed>,
+    #[serde(default, deserialize_with = "entries")]
+    pub message_snapshots: Vec<MessageSnapshot>,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -1404,5 +1478,48 @@ mod tests {
         assert_eq!(parse(json!(null)), None);
         assert_eq!(parse(json!({"nested": true})), None);
         assert_eq!(serde_json::from_value::<Message>(base).unwrap().nonce, None);
+    }
+
+    #[test]
+    fn message_snapshots_are_lenient() {
+        let message: Message = serde_json::from_value(json!({
+            "id": "1",
+            "channel_id": "2",
+            "author": {"id": "3"},
+            "timestamp": "2026-10-22T00:00:00Z",
+            "message_reference": {"type": 1, "channel_id": "4", "guild_id": "5"},
+            "message_snapshots": [
+                {"message": {
+                    "content": "forwarded",
+                    "embeds": [{}],
+                    "attachments": [{"id": "6"}],
+                    "components": [],
+                    "flags": 0,
+                    "type": 0,
+                    "timestamp": "not a timestamp",
+                    "edited_timestamp": "2026-10-22T01:00:00Z"
+                }},
+                {"message": "malformed"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(message.message_reference.unwrap().kind, 1);
+        assert_eq!(message.message_snapshots.len(), 1);
+        let snapshot = &message.message_snapshots[0].message;
+        assert_eq!(snapshot.content, "forwarded");
+        assert_eq!(snapshot.attachments[0].id, 6);
+        assert_eq!(snapshot.embeds.len(), 1);
+        assert!(snapshot.timestamp.is_none());
+        assert_eq!(
+            snapshot.edited_timestamp.as_deref(),
+            Some("2026-10-22T01:00:00Z")
+        );
+        let update: MessageUpdate = serde_json::from_value(json!({
+            "id": "1",
+            "channel_id": "2",
+            "message_snapshots": [{"message": {"content": "edited"}}]
+        }))
+        .unwrap();
+        assert_eq!(update.message_snapshots.unwrap()[0].message.content, "edited");
     }
 }

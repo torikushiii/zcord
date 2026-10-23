@@ -1,7 +1,9 @@
 mod channel_list;
 mod chat;
 mod embeds;
+mod emoji_picker;
 mod guild_rail;
+mod lightbox;
 mod login;
 mod member_list;
 mod message_body;
@@ -27,8 +29,12 @@ use gpui_component::input::{InputEvent, RopeExt, TextareaState};
 use gpui_tokio::Tokio;
 
 use crate::{
-    credentials, markdown,
-    store::{Change, Channel, ChannelKind, Guild, ReplyState, Store},
+    credentials, emoji, markdown,
+    player::{Player, VideoDrag},
+    store::{
+        Change, Channel, ChannelKind, EmojiAccess, EmojiChoice, Guild, ReactionEmoji,
+        ReplyState, Store,
+    },
     theme::{self, rpx},
 };
 
@@ -42,6 +48,7 @@ const PARSED_CACHE_LIMIT: usize = 4096;
 const MESSAGE_PAGE: usize = 50;
 const OLDER_PAGE: usize = 20;
 const OLDER_MESSAGES_THRESHOLD: usize = 8;
+const NEWER_MESSAGES_THRESHOLD: usize = 8;
 
 pub(crate) const DISCORD_EPOCH_MS: u64 = 1_420_070_400_000;
 const ACK_DELAY: Duration = Duration::from_secs(1);
@@ -65,7 +72,10 @@ fn days_since_discord_epoch() -> u32 {
     ms_since_discord_epoch().div_ceil(86_400_000) as u32
 }
 
-actions!(zcord, [JumpToPresent, MarkGuildRead, ComposerUp]);
+actions!(
+    zcord,
+    [JumpToPresent, MarkGuildRead, ComposerUp, ComposerDown, ComposerTab]
+);
 
 #[derive(Clone, Copy)]
 pub(crate) struct ReplyTarget {
@@ -108,6 +118,10 @@ pub struct DiscordApp {
     pub(crate) hovered_member: Option<u64>,
     pub(crate) hovered_account: bool,
     pub(crate) profile: Option<profile::ProfileCard>,
+    pub(crate) lightbox: Option<lightbox::Lightbox>,
+    pub(crate) emoji_picker: Option<emoji_picker::EmojiPicker>,
+    emoji_picker_closed_at: Option<Instant>,
+    pub(crate) emoji_suggest: emoji_picker::Suggest,
     typing: HashMap<u64, Vec<(u64, Instant)>>,
     typing_timer: Option<Task<()>>,
     typing_sent: Option<(u64, Instant)>,
@@ -121,17 +135,33 @@ pub struct DiscordApp {
     pending_token: Option<String>,
     loading: HashSet<u64>,
     loading_older: HashSet<u64>,
+    loading_newer: HashSet<u64>,
+    /// Channels waiting for a latest-page fetch before jumping to the present.
+    pending_present: HashSet<u64>,
+    pending_sends: Vec<(u64, String, Option<ReplyTarget>)>,
     history_complete: HashSet<u64>,
     member_top: usize,
     open_folders: HashSet<u64>,
     drafts: HashMap<u64, String>,
     pub(crate) revealed_spoilers: HashSet<(u64, u16)>,
     pub(crate) hovered_rail: Option<u64>,
+    /// Message whose "Add Reaction" button is hovered, for its tooltip.
+    pub(crate) hovered_add_reaction: Option<u64>,
+    pub(crate) player: Option<Player>,
+    pub(crate) hovered_video: Option<u64>,
+    video_drag: Option<(u64, VideoDrag)>,
+    video_dragged_at: Option<Instant>,
+    pub(crate) video_seek_bounds: Rc<RefCell<Option<(u64, Bounds<Pixels>)>>>,
+    pub(crate) video_volume_bounds: Rc<RefCell<Option<(u64, Bounds<Pixels>)>>>,
+    /// Hover over the active player's mute button and its volume popup.
+    video_volume_hover: [bool; 2],
     pub(crate) rail_morphs: guild_rail::Morphs,
     pub(crate) entity: WeakEntity<Self>,
     focus_handle: FocusHandle,
     window_active: bool,
     pub(crate) unread_since: Option<u64>,
+    /// Whether the top "new messages" bar is still shown; `unread_since` keeps the divider.
+    pub(crate) unread_bar: bool,
     ack_timer: Option<Task<()>>,
     parsed: RefCell<HashMap<u64, Rc<Parsed>>>,
     _events: Option<Task<()>>,
@@ -151,8 +181,15 @@ impl DiscordApp {
                 &composer,
                 window,
                 |this, _, event, window, cx| match event {
-                    InputEvent::PressEnter { shift: false, .. } => this.send_message(window, cx),
-                    InputEvent::Change => this.send_typing(cx),
+                    InputEvent::PressEnter { shift: false, .. } => {
+                        if !this.accept_emoji_suggestion(None, window, cx) {
+                            this.send_message(window, cx);
+                        }
+                    }
+                    InputEvent::Change => {
+                        this.reset_emoji_suggest(cx);
+                        this.send_typing(cx);
+                    }
                     _ => {}
                 },
             );
@@ -173,6 +210,10 @@ impl DiscordApp {
             hovered_member: None,
             hovered_account: false,
             profile: None,
+            lightbox: None,
+            emoji_picker: None,
+            emoji_picker_closed_at: None,
+            emoji_suggest: Default::default(),
             typing: HashMap::new(),
             typing_timer: None,
             typing_sent: None,
@@ -186,17 +227,29 @@ impl DiscordApp {
             pending_token: None,
             loading: HashSet::new(),
             loading_older: HashSet::new(),
+            loading_newer: HashSet::new(),
+            pending_present: HashSet::new(),
+            pending_sends: Vec::new(),
             history_complete: HashSet::new(),
             member_top: 0,
             open_folders: HashSet::new(),
             drafts: HashMap::new(),
             revealed_spoilers: HashSet::new(),
             hovered_rail: None,
+            hovered_add_reaction: None,
+            player: None,
+            hovered_video: None,
+            video_drag: None,
+            video_dragged_at: None,
+            video_seek_bounds: Rc::new(RefCell::new(None)),
+            video_volume_bounds: Rc::new(RefCell::new(None)),
+            video_volume_hover: [false; 2],
             rail_morphs: guild_rail::Morphs::default(),
             entity: cx.entity().downgrade(),
             focus_handle: cx.focus_handle(),
             window_active: window.is_window_active(),
             unread_since: None,
+            unread_bar: false,
             ack_timer: None,
             parsed: RefCell::new(HashMap::new()),
             _events: None,
@@ -231,6 +284,38 @@ impl DiscordApp {
             weak.update(cx, |app, cx| {
                 if event.visible_range.start < OLDER_MESSAGES_THRESHOLD {
                     app.fetch_older(cx);
+                }
+                // GPUI runs this handler while the list's state is mutably borrowed, so any
+                // `app.messages` call here panics; read the event and defer list access.
+                if event.visible_range.end + NEWER_MESSAGES_THRESHOLD >= event.count {
+                    app.fetch_newer(cx);
+                }
+                if app.live && (!event.is_following_tail || app.unread_bar) {
+                    let entity = app.entity.clone();
+                    let channel_id = app.selected_channel_id;
+                    cx.defer(move |cx| {
+                        entity
+                            .update(cx, |app, cx| {
+                                // `is_scrolled_to_end` is None while off-screen rows are
+                                // unmeasured, so compare the logical top with the item count.
+                                if app.selected_channel_id != channel_id
+                                    || !app.store.at_present(channel_id)
+                                    || app.messages.logical_scroll_top().item_ix
+                                        < app.messages.item_count()
+                                {
+                                    return;
+                                }
+                                if !app.messages.is_following_tail() {
+                                    app.messages.set_follow_mode(FollowMode::Tail);
+                                }
+                                if app.unread_bar {
+                                    app.unread_bar = false;
+                                    cx.notify();
+                                }
+                                app.schedule_ack(cx);
+                            })
+                            .ok();
+                    });
                 }
                 app.schedule_ack(cx);
                 if app.unread_since.is_some() {
@@ -332,6 +417,9 @@ impl DiscordApp {
         self.reconnecting = false;
         self.loading.clear();
         self.loading_older.clear();
+        self.loading_newer.clear();
+        self.pending_present.clear();
+        self.pending_sends.clear();
         self.history_complete.clear();
         self.member_subscription = None;
     }
@@ -406,7 +494,7 @@ impl DiscordApp {
                     let channel = self.selected_channel_id;
                     self.select_channel(channel, window, cx);
                 } else {
-                    self.select_first_guild(window, cx);
+                    self.select_initial(window, cx);
                 }
             }
             event => {
@@ -445,6 +533,7 @@ impl DiscordApp {
                         .channel()
                         .and_then(|channel| channel.messages.get(index.checked_sub(1)?))
                         .map(|message| message.id);
+                    self.unread_bar = self.unread_since.is_some();
                 }
                 self.schedule_ack(cx);
             }
@@ -467,6 +556,7 @@ impl DiscordApp {
             Change::MessageRemoved { channel_id, index }
                 if channel_id == self.selected_channel_id =>
             {
+                self.stop_player(Some(window), cx);
                 self.messages.splice(index..index + 1, 0);
                 self.messages
                     .remeasure_items(index.saturating_sub(1)..(index + 1).min(len));
@@ -491,6 +581,27 @@ impl DiscordApp {
         cx.notify();
     }
 
+    fn select_initial(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let saved = crate::settings::get(cx).last_channel;
+        let valid = saved.is_some_and(|saved| {
+            self.store.guilds.iter().any(|guild| {
+                guild.id == saved.guild_id
+                    && guild
+                        .channel(saved.channel_id)
+                        .is_some_and(|channel| channel.kind == ChannelKind::Text)
+            })
+        });
+        match saved.filter(|_| valid) {
+            Some(saved) => self.select_guild_channel(
+                saved.guild_id,
+                Some(saved.channel_id),
+                window,
+                cx,
+            ),
+            None => self.select_first_guild(window, cx),
+        }
+    }
+
     fn select_first_guild(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.store.guilds.first().map(|guild| guild.id) {
             Some(id) => self.select_guild(id, window, cx),
@@ -504,14 +615,26 @@ impl DiscordApp {
     }
 
     pub(crate) fn select_guild(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(channel_id) = self
-            .store
-            .guilds
-            .iter()
-            .find(|guild| guild.id == id)
-            .and_then(Guild::first_text_channel)
-            .map(|channel| channel.id)
-        else {
+        let saved = crate::settings::get(cx).guild_channels.get(&id).copied();
+        self.select_guild_channel(id, saved, window, cx);
+    }
+
+    fn select_guild_channel(
+        &mut self,
+        id: u64,
+        preferred: Option<u64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(guild) = self.store.guilds.iter().find(|guild| guild.id == id) else {
+            return;
+        };
+        let channel_id = preferred
+            .and_then(|channel_id| guild.channel(channel_id))
+            .filter(|channel| channel.kind == ChannelKind::Text)
+            .or_else(|| guild.first_text_channel())
+            .map(|channel| channel.id);
+        let Some(channel_id) = channel_id else {
             return;
         };
         if self.selected_guild_id != id {
@@ -560,14 +683,27 @@ impl DiscordApp {
             self.editing = None;
             self.confirm_delete = None;
             self.typing_sent = None;
+            self.stop_player(Some(window), cx);
+            self.close_lightbox(cx);
         }
         self.selected_channel_id = id;
         self.unread_since = self
             .store
             .channel_ack(id)
             .and_then(|_| self.store.last_read(id));
+        self.unread_bar = self.unread_since.is_some();
+        let unread_since = self.unread_since;
         if !self.live {
             self.store.mark_channel_read(self.selected_guild_id, id);
+        } else {
+            let guild_id = self.selected_guild_id;
+            crate::settings::update(cx, |settings| {
+                settings.last_channel = Some(crate::settings::SavedChannel {
+                    guild_id,
+                    channel_id: id,
+                });
+                settings.guild_channels.insert(guild_id, id);
+            });
         }
         self.reset_messages(count);
         if self.viewing() {
@@ -578,9 +714,298 @@ impl DiscordApp {
             set_text(input, restored, window, cx);
         });
         if needs_history {
-            self.fetch_history(id, cx);
+            self.fetch_history(id, unread_since.filter(|since| *since > 0), window, cx);
+        } else if self.live
+            && let Some(since) = unread_since.filter(|since| *since > 0)
+        {
+            let (oldest, inside) = self.channel().map_or((None, false), |channel| {
+                (
+                    channel.messages.first().map(|message| message.id),
+                    channel.messages.iter().any(|message| message.id > since),
+                )
+            });
+            if !inside || oldest.is_some_and(|oldest| since < oldest) {
+                self.fetch_history(id, Some(since), window, cx);
+            } else {
+                self.messages.set_follow_mode(FollowMode::Normal);
+                self.scroll_to_unread(since);
+            }
         }
         cx.notify();
+    }
+
+    pub(crate) fn record_emoji_use(&mut self, choice: &EmojiChoice, cx: &mut Context<Self>) {
+        let key = match choice {
+            EmojiChoice::Unicode { emoji, .. } => emoji.clone(),
+            EmojiChoice::Custom(emoji) => format!("custom:{}", emoji.id),
+        };
+        crate::settings::update(cx, |settings| {
+            settings.recent_emojis.retain(|recent| *recent != key);
+            settings.recent_emojis.insert(0, key);
+            settings.recent_emojis.truncate(40);
+        });
+    }
+
+    pub(crate) fn recent_emojis(&self, cx: &App) -> Vec<EmojiChoice> {
+        crate::settings::get(cx)
+            .recent_emojis
+            .iter()
+            .filter_map(|key| {
+                if let Some(id) = key.strip_prefix("custom:") {
+                    let id: u64 = id.parse().ok()?;
+                    let emoji = self
+                        .store
+                        .guilds
+                        .iter()
+                        .flat_map(|guild| &guild.emojis)
+                        .find(|emoji| emoji.id == id)?;
+                    return Some(EmojiChoice::Custom(emoji.clone()));
+                }
+                let shortcode = emoji::shortcode_for_emoji(key)?;
+                Some(EmojiChoice::Unicode {
+                    emoji: key.clone(),
+                    shortcode: shortcode.to_owned(),
+                })
+            })
+            .take(40)
+            .collect()
+    }
+
+    fn emoji_insert_text(&self, choice: &EmojiChoice) -> Option<String> {
+        match choice {
+            EmojiChoice::Unicode { emoji, .. } => Some(emoji.clone()),
+            EmojiChoice::Custom(custom) => (self
+                .store
+                .emoji_access(
+                    custom,
+                    self.selected_guild_id,
+                    self.selected_channel_id,
+                )
+                == EmojiAccess::Usable)
+                .then(|| format!(":{}:", custom.name)),
+        }
+    }
+
+    pub(crate) fn insert_emoji(
+        &mut self,
+        choice: &EmojiChoice,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(text) = self.emoji_insert_text(choice) else {
+            return;
+        };
+        let text = format!("{text} ");
+        self.composer.update(cx, |input, cx| {
+            input.insert(text, window, cx);
+            input.focus(window, cx);
+        });
+        self.record_emoji_use(choice, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn replace_emoji_query(
+        &mut self,
+        query_len: usize,
+        choice: &EmojiChoice,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(text) = self.emoji_insert_text(choice) else {
+            return;
+        };
+        let text = format!("{text} ");
+        let range = {
+            let input = self.composer.read(cx);
+            let value = input.text().to_string();
+            let cursor = input.cursor().min(value.len());
+            let start = if query_len == 0 {
+                cursor
+            } else {
+                value[..cursor]
+                    .char_indices()
+                    .rev()
+                    .nth(query_len - 1)
+                    .map_or(0, |(offset, _)| offset)
+            };
+            start..cursor
+        };
+        self.composer.update(cx, |input, cx| {
+            input.set_selected_range(range, cx);
+            input.replace(text, window, cx);
+            input.focus(window, cx);
+        });
+        self.record_emoji_use(choice, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn emoji_query(&self, cx: &App) -> Option<String> {
+        let input = self.composer.read(cx);
+        let value = input.text().to_string();
+        let cursor = input.cursor().min(value.len());
+        let prefix = &value[..cursor];
+        let mut start = cursor;
+        let mut count = 0;
+        for (offset, c) in prefix.char_indices().rev() {
+            if !emoji_query_char(c) {
+                break;
+            }
+            start = offset;
+            count += 1;
+        }
+        if count < 2 {
+            return None;
+        }
+        let (colon, _) = prefix[..start].char_indices().next_back()?;
+        if prefix[colon..].chars().next()? != ':' {
+            return None;
+        }
+        if colon > 0 {
+            let before = prefix[..colon].chars().next_back()?;
+            if !before.is_whitespace() {
+                return None;
+            }
+        }
+        Some(prefix[colon + 1..].to_owned())
+    }
+
+    fn encode_emoji_text(&self, content: &str) -> (String, Vec<EmojiChoice>) {
+        let guild_id = self.selected_guild_id;
+        let channel_id = self.selected_channel_id;
+        let used = RefCell::new(Vec::new());
+        let encoded = emoji::encode_emoji(content, |name| {
+            let current = self
+                .store
+                .guild_by_id(guild_id)
+                .and_then(|guild| guild.emojis.iter().find(|emoji| emoji.name == name))
+                .filter(|emoji| {
+                    self.store.emoji_access(emoji, guild_id, channel_id) == EmojiAccess::Usable
+                });
+            let custom = current.or_else(|| {
+                self.store
+                    .guilds
+                    .iter()
+                    .flat_map(|guild| &guild.emojis)
+                    .find(|emoji| {
+                        emoji.name == name
+                            && self.store.emoji_access(emoji, guild_id, channel_id)
+                                == EmojiAccess::Usable
+                    })
+            });
+            if let Some(custom) = custom {
+                used.borrow_mut().push(EmojiChoice::Custom(custom.clone()));
+                return Some(format!(
+                    "<{}:{}:{}>",
+                    if custom.animated { "a" } else { "" },
+                    custom.name,
+                    custom.id
+                ));
+            }
+            let value = emoji::shortcode(name)?;
+            used.borrow_mut().push(EmojiChoice::Unicode {
+                emoji: value.to_owned(),
+                shortcode: name.to_owned(),
+            });
+            Some(value.to_owned())
+        });
+        (encoded, used.into_inner())
+    }
+
+    pub(crate) fn toggle_reaction(
+        &mut self,
+        message_id: u64,
+        emoji: ReactionEmoji,
+        cx: &mut Context<Self>,
+    ) {
+        let channel_id = self.selected_channel_id;
+        let me = self
+            .store
+            .reaction_state(channel_id, message_id, &emoji)
+            .unwrap_or(false);
+        self.set_reaction(message_id, emoji, !me, cx);
+    }
+
+    pub(crate) fn react(
+        &mut self,
+        message_id: u64,
+        choice: &EmojiChoice,
+        cx: &mut Context<Self>,
+    ) {
+        let emoji = match choice {
+            EmojiChoice::Custom(custom) => {
+                if self.store.emoji_access(
+                    custom,
+                    self.selected_guild_id,
+                    self.selected_channel_id,
+                ) != EmojiAccess::Usable
+                {
+                    return;
+                }
+                ReactionEmoji {
+                    id: Some(custom.id),
+                    name: custom.name.clone(),
+                    animated: custom.animated,
+                }
+            }
+            EmojiChoice::Unicode { emoji, .. } => ReactionEmoji {
+                id: None,
+                name: emoji.clone(),
+                animated: false,
+            },
+        };
+        let channel_id = self.selected_channel_id;
+        let already = self
+            .store
+            .reaction_state(channel_id, message_id, &emoji)
+            .unwrap_or(false);
+        if !already {
+            self.set_reaction(message_id, emoji, true, cx);
+        }
+        self.record_emoji_use(choice, cx);
+    }
+
+    fn set_reaction(
+        &mut self,
+        message_id: u64,
+        emoji: ReactionEmoji,
+        add: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let channel_id = self.selected_channel_id;
+        if self.store.set_reaction(channel_id, message_id, &emoji, add) == Change::None {
+            return;
+        }
+        self.remeasure_message(message_id);
+        cx.notify();
+        let Some(session) = self.session.clone().filter(|_| self.live) else {
+            return;
+        };
+        let text = reaction_emoji_text(&emoji);
+        let guild_id = Some(self.selected_guild_id);
+        let request = Tokio::spawn(cx, async move {
+            if add {
+                session.add_reaction(guild_id, channel_id, message_id, &text).await
+            } else {
+                session.remove_reaction(guild_id, channel_id, message_id, &text).await
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Err(error)) = request.await {
+                log::warn!("Could not update reaction: {error}");
+                this.update(cx, |app, cx| {
+                    if app
+                        .store
+                        .set_reaction(channel_id, message_id, &emoji, !add)
+                        != Change::None
+                    {
+                        app.remeasure_message(message_id);
+                        cx.notify();
+                    }
+                })
+                .ok();
+            }
+        })
+        .detach();
     }
 
     fn reset_messages(&mut self, count: usize) {
@@ -588,38 +1013,77 @@ impl DiscordApp {
         self.messages.set_follow_mode(FollowMode::Tail);
     }
 
-    fn jump_to_present(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn jump_to_present(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !matches!(self.screen, Screen::Chat) {
             return;
         }
         smooth_scroll::cancel(cx);
+        self.unread_since = None;
+        self.unread_bar = false;
+        let channel_id = self.selected_channel_id;
+        let needs_present = self.live
+            && self
+                .channel()
+                .is_some_and(|channel| {
+                    !channel.messages_loaded || !self.store.at_present(channel.id)
+                });
         self.messages.set_follow_mode(FollowMode::Tail);
-        self.mark_channel_read(cx);
+        if needs_present {
+            self.pending_present.insert(channel_id);
+            self.fetch_history(channel_id, None, window, cx);
+        } else {
+            self.mark_channel_read(cx);
+        }
     }
 
     pub(crate) fn mark_channel_read(&mut self, cx: &mut Context<Self>) {
         self.unread_since = None;
+        self.unread_bar = false;
         self.ack_channel(cx);
         cx.notify();
+    }
+
+    fn scroll_to_unread(&self, since: u64) {
+        let Some(index) = self
+            .channel()
+            .and_then(|channel| {
+                channel
+                    .messages
+                    .iter()
+                    .position(|message| message.id > since)
+            })
+        else {
+            return;
+        };
+        self.messages.scroll_to(ListOffset {
+            item_ix: index.saturating_sub(1),
+            offset_in_item: px(0.),
+        });
     }
 
     pub(crate) fn jump_to_unread(&mut self, cx: &mut Context<Self>) {
         let Some(since) = self.unread_since else {
             return;
         };
-        let index = self.channel().map_or(0, |channel| {
-            channel
-                .messages
-                .iter()
-                .position(|message| message.id > since)
-                .unwrap_or(0)
-        });
         smooth_scroll::cancel(cx);
-        self.messages.scroll_to(ListOffset {
-            item_ix: index,
-            offset_in_item: px(0.),
-        });
+        self.scroll_to_unread(since);
         cx.notify();
+    }
+
+    pub(crate) fn jump_to_message(
+        &mut self,
+        message_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        smooth_scroll::cancel(cx);
+        if let Some(index) = self.message_index(message_id) {
+            self.messages.set_follow_mode(FollowMode::Normal);
+            self.messages.scroll_to_reveal_item(index);
+            cx.notify();
+        } else if self.live {
+            self.fetch_history(self.selected_channel_id, Some(message_id), window, cx);
+        }
     }
 
     fn schedule_ack(&mut self, cx: &mut Context<Self>) {
@@ -649,6 +1113,7 @@ impl DiscordApp {
             && self
                 .channel()
                 .is_some_and(|channel| channel.messages_loaded)
+            && self.store.at_present(self.selected_channel_id)
     }
 
     fn ack_channel(&mut self, cx: &mut Context<Self>) {
@@ -656,6 +1121,9 @@ impl DiscordApp {
             return;
         };
         let channel_id = self.selected_channel_id;
+        if !self.store.at_present(channel_id) {
+            return;
+        }
         let Some(message_id) = self.store.channel_ack(channel_id) else {
             return;
         };
@@ -688,6 +1156,7 @@ impl DiscordApp {
         }
         let guild_id = self.selected_guild_id;
         self.unread_since = None;
+        self.unread_bar = false;
         cx.notify();
         let acks = self.store.unread_acks(guild_id, now_snowflake());
         if acks.is_empty() {
@@ -711,7 +1180,13 @@ impl DiscordApp {
         .detach();
     }
 
-    fn fetch_history(&mut self, channel_id: u64, cx: &mut Context<Self>) {
+    fn fetch_history(
+        &mut self,
+        channel_id: u64,
+        around: Option<u64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(session) = self.session.clone() else {
             return;
         };
@@ -725,30 +1200,131 @@ impl DiscordApp {
             .find(|guild| guild.channel(channel_id).is_some())
             .map(|guild| guild.id);
         let request = Tokio::spawn(cx, async move {
+            match around {
+                Some(message_id) => {
+                    session
+                        .fetch_messages_around(guild_id, channel_id, message_id, MESSAGE_PAGE)
+                        .await
+                }
+                None => {
+                    session
+                        .fetch_messages(guild_id, channel_id, None, MESSAGE_PAGE)
+                        .await
+                }
+            }
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = request.await;
+            this.update_in(cx, |app, window, cx| {
+                app.loading.remove(&channel_id);
+                match result {
+                    Ok(Ok(messages)) => {
+                        app.history_complete.remove(&channel_id);
+                        match around {
+                            Some(_) => app.store.set_around_messages(channel_id, messages),
+                            None => {
+                                if messages.len() < MESSAGE_PAGE {
+                                    app.history_complete.insert(channel_id);
+                                }
+                                app.store.set_messages(channel_id, messages);
+                            }
+                        }
+                        app.request_missing_members(channel_id);
+                        if app.selected_channel_id == channel_id {
+                            let count = app.channel().map_or(0, |channel| channel.messages.len());
+                            app.reset_messages(count);
+                            if let Some(since) = around {
+                                app.messages.set_follow_mode(FollowMode::Normal);
+                                if let Some(index) = app.message_index(since) {
+                                    app.messages.scroll_to(ListOffset {
+                                        item_ix: index,
+                                        offset_in_item: px(0.),
+                                    });
+                                } else {
+                                    app.scroll_to_unread(since);
+                                }
+                            }
+                            if app.viewing() {
+                                app.ack_channel(cx);
+                            }
+                        }
+                        if around.is_none() {
+                            app.flush_pending_sends(channel_id, window, cx);
+                        }
+                    }
+                    Ok(Err(error)) => log::warn!("Could not load messages: {error}"),
+                    Err(error) => log::warn!("History task failed: {error}"),
+                }
+                if app.pending_present.remove(&channel_id) && around.is_some() {
+                    app.fetch_history(channel_id, None, window, cx);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn fetch_newer(&mut self, cx: &mut Context<Self>) {
+        if !self.live {
+            return;
+        }
+        let channel_id = self.selected_channel_id;
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let Some(newest) = self
+            .channel()
+            .filter(|channel| channel.messages_loaded)
+            .and_then(|channel| channel.messages.last())
+            .map(|message| message.id)
+        else {
+            return;
+        };
+        if self.store.at_present(channel_id) || !self.loading_newer.insert(channel_id) {
+            return;
+        }
+        let guild_id = Some(self.selected_guild_id);
+        let request = Tokio::spawn(cx, async move {
             session
-                .fetch_messages(guild_id, channel_id, None, MESSAGE_PAGE)
+                .fetch_messages_after(guild_id, channel_id, newest, MESSAGE_PAGE)
                 .await
         });
         cx.spawn(async move |this, cx| {
             let result = request.await;
             this.update(cx, |app, cx| {
-                app.loading.remove(&channel_id);
+                app.loading_newer.remove(&channel_id);
                 match result {
                     Ok(Ok(messages)) => {
-                        if messages.len() < MESSAGE_PAGE {
-                            app.history_complete.insert(channel_id);
+                        let current_newest = app
+                            .store
+                            .guilds
+                            .iter()
+                            .find(|guild| guild.channel(channel_id).is_some())
+                            .and_then(|guild| guild.channel(channel_id))
+                            .and_then(|channel| channel.messages.last())
+                            .map(|message| message.id);
+                        if current_newest != Some(newest) {
+                            cx.notify();
+                            return;
                         }
-                        app.store.set_messages(channel_id, messages);
-                        app.request_missing_members(channel_id);
-                        if app.selected_channel_id == channel_id {
-                            let count = app.channel().map_or(0, |channel| channel.messages.len());
-                            app.reset_messages(count);
-                            if app.viewing() {
-                                app.ack_channel(cx);
+                        let inserted = app
+                            .store
+                            .append_messages(channel_id, messages, MESSAGE_PAGE);
+                        if inserted > 0 {
+                            app.request_missing_members(channel_id);
+                            if app.selected_channel_id == channel_id {
+                                let len = app
+                                    .channel()
+                                    .map_or(0, |channel| channel.messages.len());
+                                let index = len - inserted;
+                                app.messages.splice(index..index, inserted);
+                                app.messages
+                                    .remeasure_items(index.saturating_sub(1)..(index + 1).min(len));
                             }
                         }
                     }
-                    Ok(Err(error)) => log::warn!("Could not load messages: {error}"),
+                    Ok(Err(error)) => log::warn!("Could not load newer messages: {error}"),
                     Err(error) => log::warn!("History task failed: {error}"),
                 }
                 cx.notify();
@@ -756,6 +1332,23 @@ impl DiscordApp {
             .ok();
         })
         .detach();
+    }
+
+    fn flush_pending_sends(
+        &mut self,
+        channel_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut index = 0;
+        while index < self.pending_sends.len() {
+            if self.pending_sends[index].0 == channel_id {
+                let (channel, content, reply) = self.pending_sends.remove(index);
+                self.dispatch_send(channel, content, reply, window, cx);
+            } else {
+                index += 1;
+            }
+        }
     }
 
     fn fetch_older(&mut self, cx: &mut Context<Self>) {
@@ -786,6 +1379,18 @@ impl DiscordApp {
                 app.loading_older.remove(&channel_id);
                 match result {
                     Ok(Ok(messages)) => {
+                        let current_oldest = app
+                            .store
+                            .guilds
+                            .iter()
+                            .find(|guild| guild.channel(channel_id).is_some())
+                            .and_then(|guild| guild.channel(channel_id))
+                            .and_then(|channel| channel.messages.first())
+                            .map(|message| message.id);
+                        if current_oldest != Some(oldest) {
+                            cx.notify();
+                            return;
+                        }
                         let complete = messages.len() < OLDER_PAGE;
                         if complete {
                             app.history_complete.insert(channel_id);
@@ -908,6 +1513,187 @@ impl DiscordApp {
         }
     }
 
+    pub(crate) fn set_add_reaction_hover(
+        &mut self,
+        message_id: u64,
+        hovered: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let next = if hovered {
+            Some(message_id)
+        } else if self.hovered_add_reaction == Some(message_id) {
+            None
+        } else {
+            return;
+        };
+        if self.hovered_add_reaction != next {
+            self.hovered_add_reaction = next;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn set_video_hover(&mut self, key: u64, hovered: bool, cx: &mut Context<Self>) {
+        let next = if hovered {
+            Some(key)
+        } else if self.hovered_video == Some(key) {
+            None
+        } else {
+            return;
+        };
+        if self.hovered_video != next {
+            self.hovered_video = next;
+            cx.notify();
+        }
+    }
+
+    fn stop_player(&mut self, mut window: Option<&mut Window>, cx: &mut App) {
+        self.hovered_video = None;
+        self.video_drag = None;
+        self.video_dragged_at = None;
+        self.video_volume_hover = [false; 2];
+        if let Some(player) = self.player.take() {
+            for image in player.take_frames() {
+                cx.drop_image(image, window.as_deref_mut());
+            }
+        }
+    }
+
+    pub(crate) fn start_video(
+        &mut self,
+        key: u64,
+        url: String,
+        width: f32,
+        height: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.stop_player(Some(window), cx);
+        let Some(mut player) = Player::start(
+            key,
+            url.clone(),
+            theme::image_px(width),
+            theme::image_px(height),
+        ) else {
+            cx.open_url(&url);
+            return;
+        };
+        player.attach(cx);
+        self.player = Some(player);
+        self.hovered_video = Some(key);
+        cx.notify();
+    }
+
+    pub(crate) fn video_click(&mut self, key: u64, cx: &mut Context<Self>) {
+        if self
+            .video_dragged_at
+            .take()
+            .is_some_and(|at| at.elapsed() < Duration::from_millis(250))
+        {
+            return;
+        }
+        self.toggle_video(key, cx);
+    }
+
+    pub(crate) fn toggle_video(&mut self, key: u64, cx: &mut Context<Self>) {
+        if let Some(player) = self.player.as_ref().filter(|player| player.key == key) {
+            player.toggle();
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_video_mute(&mut self, key: u64, cx: &mut Context<Self>) {
+        if let Some(player) = self.player.as_ref().filter(|player| player.key == key) {
+            player.toggle_muted();
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn set_video_volume_hover(
+        &mut self,
+        index: usize,
+        hovered: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.video_volume_hover[index] != hovered {
+            self.video_volume_hover[index] = hovered;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn video_volume_open(&self) -> bool {
+        self.video_volume_hover.contains(&true)
+            || matches!(self.video_drag, Some((_, VideoDrag::Volume)))
+    }
+
+    pub(crate) fn begin_video_drag(
+        &mut self,
+        key: u64,
+        drag: VideoDrag,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        self.video_drag = Some((key, drag));
+        self.apply_video_drag(key, drag, position, cx);
+    }
+
+    pub(crate) fn drag_video(&mut self, key: u64, position: Point<Pixels>, cx: &mut Context<Self>) {
+        if let Some((drag_key, drag)) = self.video_drag
+            && drag_key == key
+        {
+            self.video_dragged_at = Some(Instant::now());
+            self.apply_video_drag(key, drag, position, cx);
+        }
+    }
+
+    pub(crate) fn end_video_drag(&mut self, key: u64, cx: &mut Context<Self>) {
+        if self.video_drag.is_some_and(|(drag_key, _)| drag_key == key) {
+            self.video_drag = None;
+            cx.notify();
+        }
+    }
+
+    fn apply_video_drag(
+        &mut self,
+        key: u64,
+        drag: VideoDrag,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let bounds = match drag {
+            VideoDrag::Seek => &self.video_seek_bounds,
+            VideoDrag::Volume => &self.video_volume_bounds,
+        };
+        let Some(bounds) = bounds
+            .borrow()
+            .as_ref()
+            .filter(|(bound_key, _)| *bound_key == key)
+            .map(|(_, bounds)| *bounds)
+        else {
+            return;
+        };
+        let Some(player) = self.player.as_ref().filter(|player| player.key == key) else {
+            return;
+        };
+        match drag {
+            VideoDrag::Seek => {
+                let width = bounds.size.width.as_f32();
+                if width > 0. {
+                    let fraction = ((position.x - bounds.origin.x).as_f32() / width).clamp(0., 1.);
+                    player.seek(fraction as f64 * player.view().duration);
+                }
+            }
+            VideoDrag::Volume => {
+                let height = bounds.size.height.as_f32();
+                if height > 0. {
+                    let fraction =
+                        1. - ((position.y - bounds.origin.y).as_f32() / height).clamp(0., 1.);
+                    player.set_volume(fraction as f64);
+                }
+            }
+        }
+        cx.notify();
+    }
+
     pub(crate) fn toggle_members(&mut self, cx: &mut Context<Self>) {
         self.show_members = !self.show_members;
         cx.notify();
@@ -916,19 +1702,24 @@ impl DiscordApp {
     fn send_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let content = self.composer.read(cx).value().trim().to_owned();
         let channel_id = self.selected_channel_id;
-        if content.is_empty()
-            || content.chars().count() > MESSAGE_LIMIT
-            || !self.store.can_send(channel_id)
-        {
+        if content.is_empty() || !self.store.can_send(channel_id) {
             return;
+        }
+        let (content, used_emoji) = self.encode_emoji_text(&content);
+        if content.chars().count() > MESSAGE_LIMIT {
+            return;
+        }
+        for choice in &used_emoji {
+            self.record_emoji_use(choice, cx);
         }
         self.composer
             .update(cx, |input, cx| input.set_value("", window, cx));
         let reply = self.reply.take();
         self.typing_sent = None;
         self.unread_since = None;
-        self.messages.set_follow_mode(FollowMode::Tail);
+        self.unread_bar = false;
         if !self.live {
+            self.messages.set_follow_mode(FollowMode::Tail);
             if let Some(index) =
                 self.store
                     .append_message(self.selected_guild_id, channel_id, content)
@@ -940,6 +1731,12 @@ impl DiscordApp {
             cx.notify();
             return;
         }
+        if !self.store.at_present(channel_id) {
+            self.pending_sends.push((channel_id, content, reply));
+            self.jump_to_present(window, cx);
+            return;
+        }
+        self.messages.set_follow_mode(FollowMode::Tail);
         self.dispatch_send(channel_id, content, reply, window, cx);
     }
 
@@ -954,6 +1751,12 @@ impl DiscordApp {
         let Some(session) = self.session.clone() else {
             return;
         };
+        let guild_id = self
+            .store
+            .guilds
+            .iter()
+            .find(|guild| guild.channel(channel_id).is_some())
+            .map_or(self.selected_guild_id, |guild| guild.id);
         self.last_nonce = now_snowflake().max(self.last_nonce + 1);
         let nonce = self.last_nonce;
         let change = self.store.queue_message(
@@ -963,7 +1766,6 @@ impl DiscordApp {
             reply.map(|reply| reply.message_id),
         );
         self.apply_change(change, window, cx);
-        let guild_id = self.selected_guild_id;
         let outgoing = OutgoingMessage {
             content,
             nonce,
@@ -1025,6 +1827,11 @@ impl DiscordApp {
             .and_then(|failed| failed.reply);
         let change = self.store.discard_message(channel_id, nonce);
         self.apply_change(change, window, cx);
+        if self.live && !self.store.at_present(channel_id) {
+            self.pending_sends.push((channel_id, content, reply));
+            self.jump_to_present(window, cx);
+            return;
+        }
         self.dispatch_send(channel_id, content, reply, window, cx);
     }
 
@@ -1379,6 +2186,12 @@ impl DiscordApp {
     }
 
     fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dismiss_emoji_suggestions(cx) || self.close_emoji_picker(cx) {
+            return;
+        }
+        if self.close_lightbox(cx) {
+            return;
+        }
         if self.close_profile(cx) {
             return;
         }
@@ -1389,11 +2202,18 @@ impl DiscordApp {
         } else if self.reply.is_some() {
             self.cancel_reply(cx);
         } else {
-            self.jump_to_present(cx);
+            self.jump_to_present(window, cx);
         }
     }
 
+    fn composer_focused(&self, window: &Window, cx: &App) -> bool {
+        self.composer.read(cx).focus_handle(cx).is_focused(window)
+    }
+
     fn composer_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.composer_focused(window, cx) && self.move_emoji_suggestion(-1, cx) {
+            return;
+        }
         let composer = self.composer.read(cx);
         let last_own = self.channel().and_then(|channel| {
             channel
@@ -1444,6 +2264,17 @@ impl DiscordApp {
             *slot = next;
             cx.notify();
         }
+    }
+}
+
+fn emoji_query_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '-')
+}
+
+fn reaction_emoji_text(emoji: &ReactionEmoji) -> String {
+    match emoji.id {
+        Some(id) => format!("{}:{}", emoji.name, id),
+        None => emoji.name.clone(),
     }
 }
 
@@ -1523,6 +2354,18 @@ impl Render for DiscordApp {
             .on_action(cx.listener(|app, _: &JumpToPresent, window, cx| app.escape(window, cx)))
             .on_action(cx.listener(|app, _: &MarkGuildRead, _, cx| app.mark_guild_read(cx)))
             .on_action(cx.listener(|app, _: &ComposerUp, window, cx| app.composer_up(window, cx)))
+            .on_action(cx.listener(|app, _: &ComposerDown, window, cx| {
+                if !(app.composer_focused(window, cx) && app.move_emoji_suggestion(1, cx)) {
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|app, _: &ComposerTab, window, cx| {
+                if !(app.composer_focused(window, cx)
+                    && app.accept_emoji_suggestion(None, window, cx))
+                {
+                    cx.propagate();
+                }
+            }))
             .relative()
             .flex()
             .flex_col()
@@ -1549,6 +2392,8 @@ impl Render for DiscordApp {
             .child(body)
             .children(chat::delete_dialog(self, cx))
             .children(profile::render(self, window, cx))
+            .children(lightbox::render(self, window, cx))
+            .children(emoji_picker::render(self, cx))
     }
 }
 

@@ -541,13 +541,38 @@ impl Store {
             return None;
         }
         Some(match &info.referenced {
-            Some(Some(message)) => ReplyState::Loaded(Reply {
-                message_id: message.id,
-                author_id: message.author.id,
-                content: message.content.clone(),
-                attachments: !message.attachments.is_empty(),
-                embeds: !message.embeds.is_empty() || !message.components.is_empty(),
-            }),
+            Some(Some(message)) => {
+                let snapshot = message
+                    .message_snapshots
+                    .first()
+                    .map(|snapshot| &snapshot.message);
+                let (content, embeds, flags) = match snapshot.filter(|_| message.content.is_empty()) {
+                    Some(snapshot) => (&snapshot.content, &snapshot.embeds, snapshot.flags),
+                    None => (&message.content, &message.embeds, message.flags),
+                };
+                let embeds = mapping::map_embeds(embeds, flags);
+                ReplyState::Loaded(Reply {
+                    message_id: message.id,
+                    author_id: message.author.id,
+                    timestamp: message
+                        .timestamp
+                        .as_deref()
+                        .and_then(local_timestamp)
+                        .unwrap_or_else(|| timestamp_from_nonce(message.id)),
+                    content: if hides_embed_content(content, &embeds) {
+                        String::new()
+                    } else {
+                        content.clone()
+                    },
+                    attachments: !message.attachments.is_empty()
+                        || snapshot.is_some_and(|snapshot| !snapshot.attachments.is_empty()),
+                    embeds: !message.embeds.is_empty()
+                        || !message.components.is_empty()
+                        || snapshot.is_some_and(|snapshot| {
+                            !snapshot.embeds.is_empty() || !snapshot.components.is_empty()
+                        }),
+                })
+            }
             Some(None) => ReplyState::Deleted,
             None => ReplyState::Unavailable,
         })

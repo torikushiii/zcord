@@ -63,8 +63,15 @@ fn media(
     {
         return None;
     }
+
+    let source = nonempty(url)
+        .filter(|url| {
+            reqwest::Url::parse(url).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
+        })
+        .unwrap_or_else(|| raw.clone());
     Some(Media {
         url: raw.clone(),
+        source,
         width,
         height,
         animated,
@@ -91,6 +98,7 @@ pub(super) fn map_embed(embed: &model::Embed) -> Embed {
             Some("image") => EmbedKind::Image,
             Some("gifv") => EmbedKind::Gifv,
             Some("video") => EmbedKind::Video,
+            Some("components") => EmbedKind::Components,
             _ if embed.color.is_some() || !embed.fields.is_empty() => EmbedKind::Rich,
             _ => EmbedKind::Link,
         },
@@ -129,6 +137,7 @@ pub(super) fn map_embed(embed: &model::Embed) -> Embed {
                 inline: field.inline,
             })
             .collect(),
+        components: map_components(&embed.components),
         thumbnail: embed.thumbnail.as_ref().and_then(map_media),
         images: embed
             .image
@@ -155,41 +164,43 @@ pub(super) fn map_embeds(embeds: &[model::Embed], flags: u64) -> Vec<Embed> {
         return Vec::new();
     }
     let mut mapped: Vec<Embed> = Vec::new();
-    let mut previous_url = None;
+    let mut group_url = None;
     for embed in embeds {
         let url = nonempty(&embed.url);
-        let image_only = embed.image.is_some()
-            && embed.title.as_deref().is_none_or(str::is_empty)
-            && embed.description.as_deref().is_none_or(str::is_empty)
-            && embed
-                .author
+        if url.is_some()
+            && url == group_url
+            && embed.kind.as_deref() != Some("components")
+            && mapped
+                .last()
+                .is_some_and(|first| first.kind != EmbedKind::Components)
+        {
+            let Some(first) = mapped.last_mut() else {
+                continue;
+            };
+            // Keep a follower's video when the group has none, so it stays playable.
+            if first.video.is_none() {
+                first.video = embed.video.as_ref().and_then(map_media);
+            }
+            let media = embed
+                .image
                 .as_ref()
-                .is_none_or(|author| author.name.is_empty())
-            && embed
-                .provider
-                .as_ref()
-                .is_none_or(|provider| provider.name.is_empty())
-            && embed
-                .footer
-                .as_ref()
-                .is_none_or(|footer| footer.text.is_empty())
-            && embed.color.is_none()
-            && embed.fields.is_empty()
-            && embed.thumbnail.is_none()
-            && embed.video.is_none()
-            && embed.timestamp.as_deref().is_none_or(str::is_empty);
-        if image_only && url.is_some() && url == previous_url {
-            if let Some(first) = mapped.last_mut()
+                .or(embed.thumbnail.as_ref())
+                .and_then(map_media);
+            if let Some(media) = media
                 && first.images.len() < 4
+                && !first.images.iter().any(|image| image.url == media.url)
+                && !(first.images.is_empty()
+                    && first
+                        .thumbnail
+                        .as_ref()
+                        .is_some_and(|thumbnail| thumbnail.url == media.url))
             {
-                first
-                    .images
-                    .extend(embed.image.as_ref().and_then(map_media));
+                first.images.push(media);
             }
         } else {
             mapped.push(map_embed(embed));
+            group_url = url;
         }
-        previous_url = url;
     }
     mapped
 }
@@ -293,8 +304,39 @@ pub(super) fn map_message(message: &model::Message) -> Option<Message> {
         kind: message.kind,
         edited: message.edited_timestamp.is_some(),
         reply: None,
+        forward: map_forward(message),
         mentions_me: false,
     })
+}
+
+fn map_forward(message: &model::Message) -> Option<Forward> {
+    let reference = message
+        .message_reference
+        .as_ref()
+        .filter(|reference| reference.kind == 1)?;
+    let snapshot = message.message_snapshots.first()?;
+    Some(map_snapshot(
+        &snapshot.message,
+        reference.channel_id,
+        reference.guild_id,
+    ))
+}
+
+pub(super) fn map_snapshot(
+    snapshot: &model::SnapshotMessage,
+    channel_id: Option<u64>,
+    guild_id: Option<u64>,
+) -> Forward {
+    Forward {
+        content: snapshot.content.clone(),
+        embeds: map_embeds(&snapshot.embeds, snapshot.flags),
+        components: map_components(&snapshot.components),
+        attachments: snapshot.attachments.clone(),
+        timestamp: snapshot.timestamp.as_deref().and_then(local_timestamp),
+        edited: snapshot.edited_timestamp.is_some(),
+        channel_id,
+        guild_id,
+    }
 }
 
 fn guild_tag(primary: &Option<model::PrimaryGuild>) -> Option<GuildTag> {
@@ -455,5 +497,19 @@ pub(super) fn map_guild(
         categories: mapped,
         member_ids: members.iter().filter_map(|m| m.id()).collect(),
         icon: guild.icon(),
+        emojis: guild
+            .emojis
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|emoji| CustomEmoji {
+                id: emoji.id,
+                name: emoji.name.clone(),
+                animated: emoji.animated,
+                guild_id: guild.id,
+                available: emoji.available,
+                roles: emoji.roles.clone(),
+            })
+            .collect(),
     }
 }

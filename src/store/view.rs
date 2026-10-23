@@ -111,7 +111,7 @@ impl User {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Timestamp {
     pub year: u16,
     pub month: u8,
@@ -171,6 +171,8 @@ impl Timestamp {
 #[derive(Clone, PartialEq, Eq)]
 pub struct Media {
     pub url: String,
+    /// Page-facing original URL (pre-proxy) for opening in a browser.
+    pub source: String,
     pub width: u32,
     pub height: u32,
     pub animated: bool,
@@ -202,6 +204,7 @@ pub enum EmbedKind {
     Gifv,
     Video,
     Link,
+    Components,
 }
 
 #[derive(Clone)]
@@ -228,11 +231,20 @@ pub struct Embed {
     pub title: Option<EmbedText>,
     pub description: Option<String>,
     pub fields: Vec<EmbedField>,
+    pub components: Vec<Component>,
     pub thumbnail: Option<Media>,
     pub images: Vec<Media>,
     pub video: Option<Media>,
     pub footer: Option<EmbedText>,
     pub timestamp: Option<Timestamp>,
+}
+
+pub fn hides_embed_content(content: &str, embeds: &[Embed]) -> bool {
+    let [embed] = embeds else {
+        return false;
+    };
+    matches!(embed.kind, EmbedKind::Image | EmbedKind::Gifv)
+        && embed.url.as_deref() == Some(content.trim())
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -317,6 +329,7 @@ pub struct Message {
     pub kind: u8,
     pub edited: bool,
     pub reply: Option<ReplyState>,
+    pub forward: Option<Forward>,
     pub mentions_me: bool,
 }
 
@@ -333,6 +346,7 @@ pub struct Role {
 pub struct Reply {
     pub message_id: u64,
     pub author_id: u64,
+    pub timestamp: Timestamp,
     pub content: String,
     pub attachments: bool,
     pub embeds: bool,
@@ -343,6 +357,17 @@ pub enum ReplyState {
     Loaded(Reply),
     Deleted,
     Unavailable,
+}
+
+pub struct Forward {
+    pub content: String,
+    pub embeds: Vec<Embed>,
+    pub components: Vec<Component>,
+    pub attachments: Vec<Attachment>,
+    pub timestamp: Option<Timestamp>,
+    pub edited: bool,
+    pub channel_id: Option<u64>,
+    pub guild_id: Option<u64>,
 }
 
 const ATTACHMENT_IS_SPOILER: u64 = 1 << 3;
@@ -364,6 +389,46 @@ pub enum MemberRow {
 impl Attachment {
     pub fn spoiler(&self) -> bool {
         self.flags & ATTACHMENT_IS_SPOILER != 0 || self.filename.starts_with("SPOILER_")
+    }
+
+    pub fn is_video(&self) -> bool {
+        let video_type = self
+            .content_type
+            .as_deref()
+            .and_then(|mime| mime.split(';').next())
+            .is_some_and(|mime| mime.trim().to_ascii_lowercase().starts_with("video/"));
+        let extension = self
+            .filename
+            .rsplit_once('.')
+            .is_some_and(|(_, extension)| {
+                matches!(
+                    extension.to_ascii_lowercase().as_str(),
+                    "mp4" | "mov" | "webm" | "m4v"
+                )
+            });
+        (video_type || extension)
+            && self.width.is_some_and(|width| width > 0)
+            && self.height.is_some_and(|height| height > 0)
+    }
+
+    pub fn video_url(&self) -> Option<String> {
+        if !self.is_video() {
+            return None;
+        }
+        crate::images::trusted_video_url(&self.proxy_url)
+            .or_else(|| crate::images::trusted_video_url(&self.url))
+    }
+
+    pub fn video_poster_spec(&self) -> Option<ImageSpec> {
+        if !self.is_video() || self.proxy_url.is_empty() {
+            return None;
+        }
+        Some(ImageSpec::VideoPoster {
+            id: self.id,
+            url: self.proxy_url.clone(),
+            width: self.width?,
+            height: self.height?,
+        })
     }
 
     pub fn image_spec(&self) -> Option<ImageSpec> {
@@ -420,6 +485,31 @@ pub struct Category {
     pub channels: Vec<Channel>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CustomEmoji {
+    pub id: u64,
+    pub name: String,
+    pub animated: bool,
+    pub guild_id: u64,
+    pub available: bool,
+    pub roles: Vec<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EmojiAccess {
+    Usable,
+    NeedsNitro,
+    NeedsRole,
+    Unavailable,
+    NoExternalPermission,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EmojiChoice {
+    Unicode { emoji: String, shortcode: String },
+    Custom(CustomEmoji),
+}
+
 pub struct Guild {
     pub id: u64,
     pub name: String,
@@ -430,6 +520,7 @@ pub struct Guild {
     pub categories: Vec<Category>,
     pub member_ids: Vec<u64>,
     pub icon: Option<String>,
+    pub emojis: Vec<CustomEmoji>,
 }
 
 impl Guild {

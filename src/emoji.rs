@@ -9,6 +9,7 @@ use gpui::{Image, ImageFormat};
 
 static BUNDLE: &[u8] = include_bytes!("../assets/twemoji.bin");
 static SHORTCODES: &str = include_str!("../assets/emoji_shortcodes.tsv");
+static CATEGORY_DATA: &str = include_str!("../assets/emoji_categories.tsv");
 const MAX_SVG_SIZE: u64 = 1024 * 1024;
 
 struct Entry<'a> {
@@ -222,17 +223,188 @@ pub fn image(sequence: &str) -> Option<Arc<Image>> {
     bundle()?.entry(sequence)?.image().cloned()
 }
 
+pub struct EmojiCategory {
+    pub name: &'static str,
+    pub emojis: Vec<(&'static str, &'static str)>,
+}
+
+struct ShortcodeTable {
+    by_name: HashMap<&'static str, &'static str>,
+    entries: Vec<(&'static str, &'static str)>,
+    by_emoji: HashMap<String, &'static str>,
+}
+
+fn shortcode_table() -> &'static ShortcodeTable {
+    static TABLE: OnceLock<ShortcodeTable> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let entries: Vec<_> = SHORTCODES
+            .lines()
+            .filter_map(|line| line.split_once('\t'))
+            .collect();
+        let mut by_name = HashMap::with_capacity(entries.len());
+        let mut by_emoji = HashMap::with_capacity(entries.len());
+        for &(name, emoji) in &entries {
+            by_name.insert(name, emoji);
+            by_emoji
+                .entry(emoji.replace('\u{FE0F}', ""))
+                .or_insert(name);
+        }
+        ShortcodeTable {
+            by_name,
+            entries,
+            by_emoji,
+        }
+    })
+}
+
 pub fn shortcode(name: &str) -> Option<&'static str> {
-    static TABLE: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
-    TABLE
-        .get_or_init(|| {
-            SHORTCODES
-                .lines()
-                .filter_map(|line| line.split_once('\t'))
-                .collect()
-        })
-        .get(name)
+    shortcode_table().by_name.get(name).copied()
+}
+
+pub fn shortcodes() -> &'static [(&'static str, &'static str)] {
+    &shortcode_table().entries
+}
+
+pub fn shortcode_for_emoji(emoji: &str) -> Option<&'static str> {
+    shortcode_table()
+        .by_emoji
+        .get(&emoji.replace('\u{FE0F}', ""))
         .copied()
+}
+
+pub fn categories() -> &'static [EmojiCategory] {
+    static CATEGORIES: OnceLock<Vec<EmojiCategory>> = OnceLock::new();
+    const ORDER: [&str; 8] = [
+        "People",
+        "Nature",
+        "Food",
+        "Activities",
+        "Travel",
+        "Objects",
+        "Symbols",
+        "Flags",
+    ];
+    CATEGORIES.get_or_init(|| {
+        let mut categories: Vec<_> = ORDER
+            .iter()
+            .map(|&name| EmojiCategory {
+                name,
+                emojis: Vec::new(),
+            })
+            .collect();
+        for line in CATEGORY_DATA.lines() {
+            let Some((category, emoji)) = line.split_once('\t') else {
+                continue;
+            };
+            let Some(category) = categories
+                .iter_mut()
+                .find(|candidate| candidate.name == category)
+            else {
+                continue;
+            };
+            if bundle().is_none_or(|bundle| bundle.entry(emoji).is_none()) {
+                continue;
+            }
+            if let Some(shortcode) = shortcode_for_emoji(emoji) {
+                category.emojis.push((emoji, shortcode));
+            }
+        }
+        categories
+    })
+}
+
+fn is_emoji_name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '-')
+}
+
+fn url_end(chars: &[char], start: usize) -> Option<usize> {
+    if !chars[start].is_ascii_alphabetic() {
+        return None;
+    }
+    let boundary = start == 0
+        || chars[start - 1].is_whitespace()
+        || matches!(chars[start - 1], '(' | '[' | '{' | '"' | '\'');
+    if !boundary {
+        return None;
+    }
+    let mut at = start + 1;
+    while at < chars.len()
+        && (chars[at].is_ascii_alphanumeric() || matches!(chars[at], '+' | '-' | '.'))
+    {
+        at += 1;
+    }
+    if at + 2 >= chars.len() || chars[at] != ':' || chars[at + 1] != '/' || chars[at + 2] != '/' {
+        return None;
+    }
+    at += 3;
+    while at < chars.len() && !chars[at].is_whitespace() {
+        at += 1;
+    }
+    Some(at)
+}
+
+pub fn encode_emoji(content: &str, resolve: impl Fn(&str) -> Option<String>) -> String {
+    let chars: Vec<char> = content.chars().collect();
+    let mut output = String::with_capacity(content.len());
+    let mut inline_code = false;
+    let mut fence: Option<usize> = None;
+    let mut at = 0;
+    while at < chars.len() {
+        if chars[at] == '`' {
+            let mut end = at + 1;
+            while end < chars.len() && chars[end] == '`' {
+                end += 1;
+            }
+            output.extend(&chars[at..end]);
+            let run = end - at;
+            if run >= 3 {
+                match fence {
+                    None => fence = Some(run),
+                    Some(open) if run >= open => fence = None,
+                    Some(_) => {}
+                }
+            } else if fence.is_none() {
+                inline_code = !inline_code;
+            }
+            at = end;
+            continue;
+        }
+        if inline_code || fence.is_some() {
+            output.push(chars[at]);
+            at += 1;
+            continue;
+        }
+        if chars[at] == '<'
+            && let Some(end) = chars[at + 1..].iter().position(|&c| c == '>')
+        {
+            let end = at + 1 + end;
+            output.extend(&chars[at..=end]);
+            at = end + 1;
+            continue;
+        }
+        if let Some(end) = url_end(&chars, at) {
+            output.extend(&chars[at..end]);
+            at = end;
+            continue;
+        }
+        if chars[at] == ':' {
+            let mut end = at + 1;
+            while end < chars.len() && is_emoji_name_char(chars[end]) {
+                end += 1;
+            }
+            if end > at + 1 && chars.get(end) == Some(&':') {
+                let name: String = chars[at + 1..end].iter().collect();
+                if let Some(value) = resolve(&name) {
+                    output.push_str(&value);
+                    at = end + 1;
+                    continue;
+                }
+            }
+        }
+        output.push(chars[at]);
+        at += 1;
+    }
+    output
 }
 
 fn presented(chars: &[char]) -> bool {
@@ -518,5 +690,50 @@ mod tests {
             "1000 segmentations took {elapsed:?}"
         );
         println!("1000 segmentations of 4000 mixed characters took {elapsed:?}");
+    }
+
+    #[test]
+    fn emoji_api_categories_are_ordered_tone_free_and_shortcoded() {
+        let categories = categories();
+        assert_eq!(categories.first().map(|category| category.name), Some("People"));
+        assert!(categories.iter().all(|category| !category.emojis.is_empty()));
+        for category in categories {
+            for &(emoji, shortcode) in &category.emojis {
+                assert!(!shortcode.is_empty());
+                assert!(super::shortcode(shortcode).is_some(), "{shortcode}");
+                assert_eq!(super::shortcode_for_emoji(emoji), Some(shortcode));
+                assert!(
+                    emoji
+                        .chars()
+                        .all(|c| !(0x1F3FB..=0x1F3FF).contains(&(c as u32))),
+                    "{emoji:?}"
+                );
+            }
+        }
+        assert!(categories.iter().any(|category| category.name == "Flags"));
+    }
+
+    #[test]
+    fn emoji_api_encode_emoji_skips_locked_code_and_tokens() {
+        let resolve = |name: &str| match name {
+            "wave" => Some("<:wave:123>".to_owned()),
+            "smile" => Some("\u{1F604}".to_owned()),
+            _ => None,
+        };
+        assert_eq!(
+            encode_emoji("hi :wave: :smile:", &resolve),
+            "hi <:wave:123> \u{1F604}"
+        );
+        assert_eq!(encode_emoji(":locked:", &resolve), ":locked:");
+        assert_eq!(encode_emoji("` :wave: `", &resolve), "` :wave: `");
+        assert_eq!(
+            encode_emoji("```\n:wave:\n```", &resolve),
+            "```\n:wave:\n```"
+        );
+        assert_eq!(encode_emoji("<:a:1>", &resolve), "<:a:1>");
+        assert_eq!(
+            encode_emoji("https://example.test/:wave:", &resolve),
+            "https://example.test/:wave:"
+        );
     }
 }
