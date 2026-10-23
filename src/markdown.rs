@@ -1,3 +1,5 @@
+use crate::emoji;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Block {
     Paragraph(Vec<Span>),
@@ -710,6 +712,29 @@ fn syntax_pairs(text: &str) -> (Vec<Option<usize>>, Vec<Option<usize>>) {
     (ticks, pairs)
 }
 
+fn shortcode(rest: &str) -> Option<(&'static str, usize)> {
+    let close = rest[1..].find(':')? + 1;
+    let name = &rest[1..close];
+    if name.is_empty()
+        || name.len() > 64
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_+-".contains(&b))
+    {
+        return None;
+    }
+    let after = &rest[close + 1..];
+    if let Some(tone) = after
+        .strip_prefix(":skin-tone-")
+        .and_then(|tail| tail.get(..2)?.strip_suffix(':'))
+        .filter(|tone| matches!(*tone, "1" | "2" | "3" | "4" | "5"))
+        && let Some(emoji) = emoji::shortcode(&format!("{name}_tone{tone}"))
+    {
+        return Some((emoji, close + 1 + ":skin-tone-N:".len()));
+    }
+    emoji::shortcode(name).map(|emoji| (emoji, close + 1))
+}
+
 fn tokenize(text: &str, links: bool) -> Vec<Atom> {
     let (ticks, pairs) = syntax_pairs(text);
     let mut atoms = Vec::new();
@@ -788,6 +813,11 @@ fn tokenize(text: &str, links: bool) -> Vec<Atom> {
         {
             atoms.push(Atom::Value(kind));
             end = at + name.len();
+        } else if c == ':'
+            && let Some((emoji, size)) = shortcode(rest)
+        {
+            atom_text(&mut atoms, emoji);
+            end = at + size;
         } else if matches!(c, '*' | '_' | '~' | '|') {
             let count = rest.bytes().take_while(|&b| b == c as u8).count();
             end = at + count;
