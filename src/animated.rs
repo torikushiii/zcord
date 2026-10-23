@@ -1,6 +1,6 @@
 use crate::images::{self, ImageSpec};
 use anyhow::{Context, Result, ensure};
-use gpui::{App, Global, RenderImage};
+use gpui::{App, Global, ImageSource, Img, RenderImage, img};
 use gpui_tokio::Tokio;
 use image::{
     AnimationDecoder, Delay, DynamicImage, Frame, Frames, ImageDecoder, ImageFormat, ImageReader,
@@ -50,6 +50,16 @@ impl Global for AnimatedCache {}
 
 pub fn init(cx: &mut App) {
     cx.set_global(AnimatedCache(Rc::new(RefCell::new(Cache::default()))));
+}
+
+pub fn image(image: Arc<RenderImage>) -> Img {
+    img(ImageSource::Custom(Arc::new(move |window, _| {
+        window.with_global_id("animated-image-pin".into(), |id, window| {
+            // GPUI drops image sources after drawing; element state keeps visible frames pinned.
+            window.with_element_state(id, |_, _| ((), image.clone()));
+        });
+        Some(Ok(image.clone()))
+    })))
 }
 
 pub fn resolve(spec: &ImageSpec, size: u32, cx: &App) -> Option<Arc<RenderImage>> {

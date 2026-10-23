@@ -346,7 +346,7 @@ fn nameplate_image(asset: &str, user_id: u64, animate: bool, cx: &App) -> Option
         .then(|| animated::resolve(&spec(true), pixels, cx))
         .flatten()
     {
-        Some(image) => img(ImageSource::Render(image))
+        Some(image) => animated::image(image)
             .h(rpx(ROW_HEIGHT))
             .id(("nameplate", user_id))
             .into_any_element(),
