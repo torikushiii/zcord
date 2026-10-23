@@ -5,6 +5,21 @@ use gpui_component::ActiveTheme;
 
 use crate::theme;
 
+mod selection;
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+pub(super) mod metrics {
+    use std::cell::Cell;
+    thread_local! {
+        pub static SHAPES: Cell<usize> = const { Cell::new(0) };
+        pub static LAYOUTS: Cell<usize> = const { Cell::new(0) };
+        pub static PAINTS: Cell<usize> = const { Cell::new(0) };
+    }
+}
+
 #[derive(Clone)]
 pub enum Action {
     OpenUrl(SharedString),
@@ -37,7 +52,7 @@ pub struct PieceStyle {
 
 pub enum Content {
     Text(SharedString),
-    Emoji(Option<ImageSource>),
+    Emoji(Option<ImageSource>, SharedString),
 }
 
 pub struct Piece {
@@ -64,6 +79,7 @@ pub struct RichText {
     emoji_scale: f32,
     wrap: bool,
     truncate: bool,
+    selectable: bool,
     on_action: Option<ActionHandler>,
 }
 
@@ -76,11 +92,17 @@ pub fn rich_text(id: impl Into<ElementId>, pieces: Vec<Piece>) -> RichText {
         emoji_scale: 1.375,
         wrap: true,
         truncate: false,
+        selectable: false,
         on_action: None,
     }
 }
 
 impl RichText {
+    pub fn selectable(mut self) -> Self {
+        self.selectable = true;
+        self
+    }
+
     pub fn line_height(mut self, line_height: Rems) -> Self {
         self.line_height = Some(line_height);
         self
@@ -178,6 +200,8 @@ impl Fonts {
         hovered: bool,
         window: &mut Window,
     ) -> ShapedLine {
+        #[cfg(test)]
+        metrics::SHAPES.set(metrics::SHAPES.get() + 1);
         let run = self.run(style, text.len(), hovered);
         window.text_system().shape_line(
             SharedString::from(text.to_owned()),
@@ -213,6 +237,13 @@ struct Line {
     fragments: Vec<Fragment>,
 }
 
+impl Line {
+    fn visible(&self, origin: Point<Pixels>, mask: Bounds<Pixels>, overdraw: Pixels) -> bool {
+        let top = origin.y + self.y;
+        top < mask.bottom() + overdraw && top + self.height > mask.top() - overdraw
+    }
+}
+
 #[derive(Clone, Default)]
 struct Layout {
     wrap_width: Option<Pixels>,
@@ -221,6 +252,57 @@ struct Layout {
     size: Size<Pixels>,
 }
 
+struct LayoutCache {
+    wrap: bool,
+    truncate: bool,
+    atoms: Option<Vec<Atom>>,
+    layouts: Vec<Rc<Layout>>,
+}
+
+impl LayoutCache {
+    fn new(wrap: bool, truncate: bool) -> Self {
+        Self {
+            wrap,
+            truncate,
+            atoms: None,
+            layouts: Vec::new(),
+        }
+    }
+
+    fn get(
+        &mut self,
+        pieces: &[Piece],
+        fonts: &Fonts,
+        width: Option<Pixels>,
+        window: &mut Window,
+    ) -> Rc<Layout> {
+        let wrap_width = width.filter(|_| self.wrap);
+        let truncated_to = width.filter(|_| self.truncate);
+        if let Some(layout) = self
+            .layouts
+            .iter()
+            .find(|layout| layout.wrap_width == wrap_width && layout.truncated_to == truncated_to)
+        {
+            return layout.clone();
+        }
+        let atoms = self
+            .atoms
+            .get_or_insert_with(|| build_atoms(pieces, fonts, self.wrap, window));
+        let layout = Rc::new(layout_pieces(
+            pieces,
+            fonts,
+            atoms,
+            self.wrap,
+            self.truncate,
+            width,
+            window,
+        ));
+        self.layouts.push(layout.clone());
+        layout
+    }
+}
+
+#[derive(Clone)]
 struct Atom {
     piece: usize,
     range: Range<usize>,
@@ -287,7 +369,7 @@ fn build_atoms(pieces: &[Piece], fonts: &Fonts, wrap: bool, window: &mut Window)
         let padding = Fonts::padding(style, fonts.size(style));
         let first_atom = atoms.len();
         match &piece.content {
-            Content::Emoji(_) => {
+            Content::Emoji(..) => {
                 atoms.push(Atom {
                     piece: piece_index,
                     range: 0..0,
@@ -427,14 +509,17 @@ fn split_atom(
 fn layout_pieces(
     pieces: &[Piece],
     fonts: &Fonts,
+    atoms: &[Atom],
     wrap: bool,
     truncate: bool,
     width_limit: Option<Pixels>,
     window: &mut Window,
 ) -> Layout {
+    #[cfg(test)]
+    metrics::LAYOUTS.set(metrics::LAYOUTS.get() + 1);
     let wrap_width = width_limit.filter(|_| wrap);
     let truncated_to = width_limit.filter(|_| truncate);
-    let mut atoms = build_atoms(pieces, fonts, wrap, window);
+    let mut atoms = atoms.to_vec();
     atoms.reverse();
     let mut lines: Vec<Line> = vec![Line {
         y: Pixels::ZERO,
@@ -464,6 +549,9 @@ fn layout_pieces(
             continue;
         }
         if let Some(limit) = wrap_width
+            // Zero-width intrinsic probes measure whole words. Splitting every
+            // word into glyphs here repeatedly shapes thousands of unused tails.
+            && limit > Pixels::ZERO
             && x == Pixels::ZERO
             && atom.width - atom.trailing_space > limit
         {
@@ -585,11 +673,23 @@ fn truncate_line(
 
 pub struct RichTextState {
     fonts: Fonts,
-    layout: Rc<RefCell<Layout>>,
+    layout: Rc<RefCell<LayoutCache>>,
+    interaction: Option<Interaction>,
+}
+
+#[derive(Clone)]
+struct Interaction {
+    selection: Option<Rc<selection::Selection>>,
+    pressed: Rc<RefCell<Option<ActionPress>>>,
+}
+
+struct ActionPress {
+    piece: usize,
+    position: Point<Pixels>,
 }
 
 pub struct RichTextPrepaint {
-    layout: Layout,
+    layout: Rc<Layout>,
     emojis: Vec<AnyElement>,
     hitboxes: Vec<(Hitbox, usize)>,
 }
@@ -637,13 +737,13 @@ impl Element for RichText {
                 |size| size.to_pixels(rem_size),
             ),
         };
-        let layout = Rc::new(RefCell::new(Layout::default()));
+        // Taffy probes the same text at several widths during one layout pass.
+        // Share shaped words and completed layouts across those measurements.
+        let layout = Rc::new(RefCell::new(LayoutCache::new(self.wrap, self.truncate)));
         let measure = {
             let fonts = fonts.clone();
             let layout = layout.clone();
             let pieces = self.pieces.clone();
-            let wrap = self.wrap;
-            let truncate = self.truncate;
             move |known: Size<Option<Pixels>>,
                   available: Size<AvailableSpace>,
                   window: &mut Window,
@@ -652,52 +752,69 @@ impl Element for RichText {
                     AvailableSpace::Definite(width) => Some(width),
                     _ => None,
                 });
-                let computed = layout_pieces(&pieces, &fonts, wrap, truncate, wrap_width, window);
-                let size = computed.size;
-                *layout.borrow_mut() = computed;
-                size
+                layout
+                    .borrow_mut()
+                    .get(&pieces, &fonts, wrap_width, window)
+                    .size
             }
         };
         let mut style = Style::default();
-        if self.truncate {
+        if self.wrap || self.truncate {
             style.min_size.width = px(0.).into();
+        }
+        if self.truncate {
             style.max_size.width = relative(1.).into();
             style.flex_shrink = 1.;
         }
         let layout_id = window.request_measured_layout(style, measure);
-        (layout_id, RichTextState { fonts, layout })
+        (
+            layout_id,
+            RichTextState {
+                fonts,
+                layout,
+                interaction: None,
+            },
+        )
     }
 
     fn prepaint(
         &mut self,
-        _id: Option<&GlobalElementId>,
+        id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         state: &mut Self::RequestLayoutState,
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        let stale = {
-            let layout = state.layout.borrow();
-            (self.wrap && layout.wrap_width != Some(bounds.size.width))
-                || (self.truncate && layout.truncated_to != Some(bounds.size.width))
-        };
-        if stale {
-            let computed = layout_pieces(
-                &self.pieces,
-                &state.fonts,
-                self.wrap,
-                self.truncate,
-                Some(bounds.size.width),
-                window,
-            );
-            *state.layout.borrow_mut() = computed;
+        let layout = state.layout.borrow_mut().get(
+            &self.pieces,
+            &state.fonts,
+            Some(bounds.size.width),
+            window,
+        );
+        let interaction =
+            window.with_element_state(id.expect("rich text has a stable id"), |state, window| {
+                let state: Interaction = state.unwrap_or_else(|| Interaction {
+                    selection: self
+                        .selectable
+                        .then(|| Rc::new(selection::Selection::new(window, cx))),
+                    pressed: Rc::new(RefCell::new(None)),
+                });
+                (state.clone(), state)
+            });
+        if let Some(selection) = &interaction.selection {
+            selection.register(&self.pieces, &layout, bounds, window, cx);
         }
-        let layout = state.layout.borrow().clone();
+        state.interaction = Some(interaction);
         let mut emojis = Vec::new();
         let mut hitboxes = Vec::new();
         let emoji_size = state.fonts.emoji_size;
-        for line in &layout.lines {
+        let mask = window.content_mask().bounds;
+        for line in layout
+            .lines
+            .iter()
+            .filter(|line| line.visible(bounds.origin, mask, state.fonts.font_size))
+        {
             for fragment in &line.fragments {
                 let piece = &self.pieces[fragment.piece];
                 let origin = bounds.origin + point(fragment.x, line.y);
@@ -709,7 +826,7 @@ impl Element for RichText {
                     ));
                 }
                 let hidden = matches!(piece.style.chip, Some(Chip::Spoiler { revealed: false }));
-                if let Content::Emoji(Some(path)) = &piece.content
+                if let Content::Emoji(Some(path), _) = &piece.content
                     && !hidden
                 {
                     let mut element = img(path.clone())
@@ -750,6 +867,14 @@ impl Element for RichText {
         cx: &mut App,
     ) {
         let fonts = &state.fonts;
+        let interaction = state
+            .interaction
+            .as_ref()
+            .expect("rich text was prepainted");
+        let selection_range = interaction
+            .selection
+            .as_ref()
+            .and_then(|selection| selection.range());
         let hovered_piece = prepaint
             .hitboxes
             .iter()
@@ -764,7 +889,13 @@ impl Element for RichText {
             style.chip.map(|chip| (chip, style.group))
         };
 
-        for line in &prepaint.layout.lines {
+        let mask = window.content_mask().bounds;
+        for line in prepaint
+            .layout
+            .lines
+            .iter()
+            .filter(|line| line.visible(bounds.origin, mask, fonts.font_size))
+        {
             let chip_height = fonts.line_height.min(line.height);
             let chip_top = line.y + (line.height - chip_height) / 2.;
             let mut index = 0;
@@ -819,6 +950,9 @@ impl Element for RichText {
                 if matches!(piece.style.chip, Some(Chip::Spoiler { revealed: false })) {
                     continue;
                 }
+                if let (Some(selection), Some(range)) = (&interaction.selection, &selection_range) {
+                    selection.paint_fragment(fragment, line, bounds.origin, range, window, cx);
+                }
                 let Some(shaped) = &fragment.shaped else {
                     continue;
                 };
@@ -843,6 +977,8 @@ impl Element for RichText {
                 shaped
                     .paint(origin, text_height, TextAlign::Left, None, window, cx)
                     .ok();
+                #[cfg(test)]
+                metrics::PAINTS.set(metrics::PAINTS.get() + 1);
             }
         }
 
@@ -850,6 +986,9 @@ impl Element for RichText {
             element.paint(window, cx);
         }
 
+        if let Some(selection) = &interaction.selection {
+            selection.listen(window);
+        }
         if prepaint.hitboxes.is_empty() {
             return;
         }
@@ -870,13 +1009,48 @@ impl Element for RichText {
         let Some(handler) = self.on_action.clone() else {
             return;
         };
-        window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+        let pressed = interaction.pressed.clone();
+        let down = pressed.clone();
+        let down_targets = targets.clone();
+        window.on_mouse_event(move |event: &MouseDownEvent, phase, window, _| {
             if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
                 return;
             }
+            *down.borrow_mut() = (event.click_count == 1)
+                .then(|| {
+                    down_targets
+                        .iter()
+                        .find(|(hitbox, _)| hitbox.is_hovered(window))
+                        .map(|(_, piece)| ActionPress {
+                            piece: *piece,
+                            position: event.position,
+                        })
+                })
+                .flatten();
+        });
+        let moved = pressed.clone();
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, _| {
+            if phase == DispatchPhase::Bubble
+                && moved.borrow().as_ref().is_some_and(|press| {
+                    (event.position.x - press.position.x).abs() > px(3.)
+                        || (event.position.y - press.position.y).abs() > px(3.)
+                })
+            {
+                moved.borrow_mut().take();
+            }
+        });
+        window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+            if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
+                return;
+            }
+            let Some(press) = pressed.borrow_mut().take() else {
+                return;
+            };
             if let Some((_, piece)) = targets.iter().find(|(hitbox, _)| hitbox.is_hovered(window))
+                && *piece == press.piece
                 && let Some(action) = &pieces[*piece].style.action
             {
+                gpui_base::TextSelection::end(window, cx);
                 handler(action, window, cx);
                 cx.stop_propagation();
             }
