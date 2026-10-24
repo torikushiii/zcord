@@ -1,4 +1,11 @@
-use std::{cell::RefCell, ops::Range, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    ops::Range,
+    rc::Rc,
+    sync::Arc,
+};
 
 use gpui::{prelude::*, *};
 use gpui_component::ActiveTheme;
@@ -17,6 +24,7 @@ pub(super) mod metrics {
         pub static SHAPES: Cell<usize> = const { Cell::new(0) };
         pub static LAYOUTS: Cell<usize> = const { Cell::new(0) };
         pub static PAINTS: Cell<usize> = const { Cell::new(0) };
+        pub static EMOJIS: Cell<usize> = const { Cell::new(0) };
     }
 }
 
@@ -50,9 +58,14 @@ pub struct PieceStyle {
     pub action: Option<Action>,
 }
 
+pub enum EmojiSource {
+    Still(ImageSource),
+    Animated(Arc<RenderImage>),
+}
+
 pub enum Content {
     Text(SharedString),
-    Emoji(Option<ImageSource>, SharedString),
+    Emoji(Option<EmojiSource>, SharedString),
 }
 
 pub struct Piece {
@@ -210,11 +223,15 @@ impl Fonts {
         #[cfg(test)]
         metrics::SHAPES.set(metrics::SHAPES.get() + 1);
         let run = self.run(style, text.len(), hovered);
-        window.text_system().shape_line(
-            SharedString::from(text.to_owned()),
+        let mut hasher = DefaultHasher::new();
+        text.hash(&mut hasher);
+        window.text_system().shape_line_by_hash(
+            hasher.finish(),
+            text.len(),
             self.size(style),
             &[run],
             None,
+            || SharedString::from(text.to_owned()),
         )
     }
 
@@ -225,6 +242,63 @@ impl Fonts {
             _ => Pixels::ZERO,
         }
     }
+}
+
+fn hash_chip(chip: Option<Chip>, hasher: &mut impl Hasher) {
+    match chip {
+        None => 0u8.hash(hasher),
+        Some(Chip::Code) => 1u8.hash(hasher),
+        Some(Chip::Mention { color }) => {
+            2u8.hash(hasher);
+            color.hash(hasher);
+        }
+        Some(Chip::Spoiler { revealed }) => {
+            3u8.hash(hasher);
+            revealed.hash(hasher);
+        }
+        Some(Chip::Timestamp) => 4u8.hash(hasher),
+    }
+}
+
+/// Everything that can alter shaped atoms or their size. Shaped lines carry their decoration
+/// runs, so colours/underlines are included too; re-shaping on those rare changes is cheaper than
+/// recolouring every run at paint. Emoji image loading is paint-time, and `group` only affects
+/// chip painting, so neither belongs here.
+fn layout_fingerprint(pieces: &[Piece], fonts: &Fonts, wrap: bool, truncate: bool) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    wrap.hash(&mut hasher);
+    truncate.hash(&mut hasher);
+    fonts.base.hash(&mut hasher);
+    fonts.mono.hash(&mut hasher);
+    fonts.color.hash(&mut hasher);
+    fonts.font_size.hash(&mut hasher);
+    fonts.line_height.hash(&mut hasher);
+    fonts.emoji_size.hash(&mut hasher);
+    for piece in pieces {
+        match &piece.content {
+            Content::Text(text) => {
+                0u8.hash(&mut hasher);
+                text.hash(&mut hasher);
+            }
+            Content::Emoji(_, sequence) => {
+                1u8.hash(&mut hasher);
+                sequence.hash(&mut hasher);
+            }
+        }
+        let style = &piece.style;
+        style.weight.hash(&mut hasher);
+        style.italic.hash(&mut hasher);
+        style.underline.hash(&mut hasher);
+        style.strikethrough.hash(&mut hasher);
+        style.color.hash(&mut hasher);
+        style.scale.map(f32::to_bits).hash(&mut hasher);
+        style.mono.hash(&mut hasher);
+        hash_chip(style.chip, &mut hasher);
+        style.nowrap.hash(&mut hasher);
+        style.cell.hash(&mut hasher);
+        matches!(style.action, Some(Action::OpenUrl(_))).hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 #[derive(Clone)]
@@ -273,6 +347,14 @@ struct LayoutCache {
     layouts: Vec<Rc<Layout>>,
 }
 
+struct CachedLayout {
+    fingerprint: u64,
+    cache: Rc<RefCell<LayoutCache>>,
+    baseline: Pixels,
+}
+
+const MAX_LAYOUTS: usize = 4;
+
 impl LayoutCache {
     fn new(wrap: bool, truncate: bool) -> Self {
         Self {
@@ -292,12 +374,12 @@ impl LayoutCache {
     ) -> Rc<Layout> {
         let wrap_width = width.filter(|_| self.wrap);
         let truncated_to = width.filter(|_| self.truncate);
-        if let Some(layout) = self
-            .layouts
-            .iter()
-            .find(|layout| layout.wrap_width == wrap_width && layout.truncated_to == truncated_to)
-        {
-            return layout.clone();
+        if let Some(index) = self.layouts.iter().position(|layout| {
+            layout.wrap_width == wrap_width && layout.truncated_to == truncated_to
+        }) {
+            let layout = self.layouts.remove(index);
+            self.layouts.push(layout.clone());
+            return layout;
         }
         let atoms = self
             .atoms
@@ -311,6 +393,9 @@ impl LayoutCache {
             width,
             window,
         ));
+        if self.layouts.len() >= MAX_LAYOUTS {
+            self.layouts.remove(0);
+        }
         self.layouts.push(layout.clone());
         layout
     }
@@ -688,6 +773,7 @@ fn truncate_line(
 pub struct RichTextState {
     fonts: Fonts,
     layout: Rc<RefCell<LayoutCache>>,
+    baseline: Pixels,
     interaction: Option<Interaction>,
 }
 
@@ -730,7 +816,7 @@ impl Element for RichText {
 
     fn request_layout(
         &mut self,
-        _id: Option<&GlobalElementId>,
+        id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
@@ -751,9 +837,38 @@ impl Element for RichText {
                 |size| size.to_pixels(rem_size),
             ),
         };
-        // Taffy probes the same text at several widths during one layout pass.
-        // Share shaped words and completed layouts across those measurements.
-        let layout = Rc::new(RefCell::new(LayoutCache::new(self.wrap, self.truncate)));
+        let fingerprint = layout_fingerprint(&self.pieces, &fonts, self.wrap, self.truncate);
+        // Taffy probes the same text at several widths during one layout pass, and the element
+        // lives across frames. Share shaped words and completed layouts until content changes;
+        // GPUI drops this state in frames where the element is not drawn (virtualized rows).
+        let (layout, baseline) = match id {
+            Some(id) => window.with_element_state(id, |cached: Option<CachedLayout>, window| {
+                let (cache, baseline) = match cached {
+                    Some(cached) if cached.fingerprint == fingerprint => {
+                        (cached.cache, cached.baseline)
+                    }
+                    _ => {
+                        let cache =
+                            Rc::new(RefCell::new(LayoutCache::new(self.wrap, self.truncate)));
+                        let baseline = fonts.baseline(window);
+                        (cache, baseline)
+                    }
+                };
+                (
+                    (cache.clone(), baseline),
+                    CachedLayout {
+                        fingerprint,
+                        cache,
+                        baseline,
+                    },
+                )
+            }),
+            None => {
+                let cache = Rc::new(RefCell::new(LayoutCache::new(self.wrap, self.truncate)));
+                let baseline = fonts.baseline(window);
+                (cache, baseline)
+            }
+        };
         let measure = {
             let fonts = fonts.clone();
             let layout = layout.clone();
@@ -786,6 +901,7 @@ impl Element for RichText {
             RichTextState {
                 fonts,
                 layout,
+                baseline,
                 interaction: None,
             },
         )
@@ -840,14 +956,21 @@ impl Element for RichText {
                     ));
                 }
                 let hidden = matches!(piece.style.chip, Some(Chip::Spoiler { revealed: false }));
-                if let Content::Emoji(Some(path), _) = &piece.content
+                if let Content::Emoji(Some(source), _) = &piece.content
                     && !hidden
                 {
-                    let mut element = img(path.clone())
-                        .id(("emoji", fragment.piece))
-                        .size(emoji_size)
-                        .flex_none()
-                        .into_any_element();
+                    let mut element = match source {
+                        EmojiSource::Still(path) => img(path.clone())
+                            .id(("emoji", fragment.piece))
+                            .size(emoji_size)
+                            .flex_none()
+                            .into_any_element(),
+                        EmojiSource::Animated(image) => crate::animated::image(image.clone())
+                            .size(emoji_size)
+                            .flex_none()
+                            .id(("emoji", fragment.piece))
+                            .into_any_element(),
+                    };
                     let inset = (fragment.width - emoji_size) / 2.;
                     let top = (line.height - emoji_size) / 2.;
                     element.prepaint_as_root(
@@ -860,6 +983,8 @@ impl Element for RichText {
                         cx,
                     );
                     emojis.push(element);
+                    #[cfg(test)]
+                    metrics::EMOJIS.set(metrics::EMOJIS.get() + 1);
                 }
             }
         }
@@ -904,7 +1029,7 @@ impl Element for RichText {
         };
 
         let mask = window.content_mask().bounds;
-        let baseline = fonts.baseline(window);
+        let baseline = state.baseline;
         for line in prepaint
             .layout
             .lines

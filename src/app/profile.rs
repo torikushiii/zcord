@@ -42,6 +42,7 @@ const BACKDROP_HEIGHT: f32 = 280.;
 const EFFECT_TICK: Duration = Duration::from_millis(100);
 const ENTER: Duration = Duration::from_millis(180);
 const EFFECT_HEIGHT_RATIO: f32 = 880. / 450.;
+const EFFECT_MAX_PX: u32 = 1200;
 const THEME_OVERLAY: f32 = 0.6;
 const SURFACE_HIGHEST: u32 = 0x26262C;
 const MAX_VISIBLE_BADGES: usize = 6;
@@ -1912,7 +1913,7 @@ fn effect_layers(card: &ProfileCard, width: f32, cx: &App) -> Vec<AnyElement> {
             &ImageSpec::Collectible {
                 url: layer.src.clone(),
             },
-            theme::image_px(height),
+            theme::image_px(height).min(EFFECT_MAX_PX),
             cx,
         ) {
             animated::Load::Pending => EffectLoad::Pending,

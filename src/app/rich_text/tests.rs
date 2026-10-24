@@ -1,9 +1,14 @@
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
-use gpui::{App, Bounds, TestAppContext, Window, point, px, size};
+use gpui::{
+    App, Bounds, Context, Hsla, ImageSource, Pixels, Render, SharedString, TestAppContext, Window,
+    black, div, point, prelude::*, px, size, white,
+};
 use gpui_component::ActiveTheme;
 
-use super::{Content, Fonts, LayoutCache, Line, Piece, PieceStyle, metrics};
+use super::{
+    Content, EmojiSource, Fonts, LayoutCache, Line, Piece, PieceStyle, layout_fingerprint, metrics,
+};
 
 fn fonts(window: &Window, cx: &App) -> Fonts {
     let style = window.text_style();
@@ -130,4 +135,168 @@ fn visible_lines_follow_the_scrolled_origin_and_include_glyph_overhang() {
     assert!(!line.visible(point(px(0.), px(20.)), mask, px(14.)));
     assert!(line.visible(point(px(0.), px(-110.)), mask, px(14.)));
     assert!(!line.visible(point(px(0.), px(-140.)), mask, px(14.)));
+}
+
+struct TextCase {
+    text: SharedString,
+    color: Hsla,
+    width: Pixels,
+}
+
+impl Render for TextCase {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().w(self.width).child(super::rich_text(
+            "cached-text",
+            vec![Piece::text(
+                self.text.clone(),
+                PieceStyle {
+                    color: Some(self.color),
+                    ..Default::default()
+                },
+            )],
+        ))
+    }
+}
+
+fn reset_metrics() {
+    metrics::SHAPES.set(0);
+    metrics::LAYOUTS.set(0);
+    metrics::PAINTS.set(0);
+    metrics::EMOJIS.set(0);
+}
+
+fn draw(cx: &mut gpui::VisualTestContext) {
+    cx.update(|window, cx| {
+        window.refresh();
+        let _ = window.draw(cx);
+    });
+}
+
+#[gpui::test]
+fn unchanged_text_shapes_nothing_on_a_later_frame(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let (view, cx) = cx.add_window_view(|_, _| TextCase {
+        text: "one two three four five six".into(),
+        color: black(),
+        width: px(240.),
+    });
+    assert!(metrics::SHAPES.get() > 0);
+
+    view.update(cx, |_, cx| cx.notify());
+    reset_metrics();
+    draw(cx);
+    assert!(metrics::PAINTS.get() > 0);
+    assert_eq!(metrics::SHAPES.get(), 0);
+}
+
+#[gpui::test]
+fn edited_text_reshapes(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let (view, cx) = cx.add_window_view(|_, _| TextCase {
+        text: "one two three four five six".into(),
+        color: black(),
+        width: px(240.),
+    });
+    draw(cx);
+
+    reset_metrics();
+    view.update(cx, |view, cx| {
+        view.text = "different words entirely".into();
+        cx.notify();
+    });
+    draw(cx);
+    assert!(metrics::SHAPES.get() > 0);
+}
+
+#[gpui::test]
+fn width_changes_rewrap_without_reshaping(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let (view, cx) = cx.add_window_view(|_, _| TextCase {
+        text: "one two three four five six seven eight nine ten".into(),
+        color: black(),
+        width: px(240.),
+    });
+    draw(cx);
+
+    reset_metrics();
+    view.update(cx, |view, cx| {
+        view.width = px(120.);
+        cx.notify();
+    });
+    draw(cx);
+    assert!(metrics::PAINTS.get() > 0);
+    assert_eq!(metrics::SHAPES.get(), 0);
+    assert!(metrics::LAYOUTS.get() > 0);
+}
+
+#[gpui::test]
+fn colour_changes_reshape_because_runs_carry_decoration(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let (view, cx) = cx.add_window_view(|_, _| TextCase {
+        text: "one two three four five six".into(),
+        color: black(),
+        width: px(240.),
+    });
+    draw(cx);
+
+    reset_metrics();
+    view.update(cx, |view, cx| {
+        view.color = white();
+        cx.notify();
+    });
+    draw(cx);
+    assert!(metrics::SHAPES.get() > 0);
+}
+
+#[gpui::test]
+fn emoji_image_loading_does_not_invalidate_layout(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let cx = cx.add_empty_window();
+    cx.update(|window, cx| {
+        let fonts = fonts(window, cx);
+        let piece = |image: Option<ImageSource>| Piece {
+            content: Content::Emoji(image.map(EmojiSource::Still), "\u{1f600}".into()),
+            style: PieceStyle::default(),
+        };
+        let loading = layout_fingerprint(&[piece(None)], &fonts, true, false);
+        let loaded = layout_fingerprint(&[piece(Some("emoji.png".into()))], &fonts, true, false);
+        assert_eq!(loading, loaded);
+    });
+}
+
+struct EmojiCase {
+    image: Option<ImageSource>,
+}
+
+impl Render for EmojiCase {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().w(px(200.)).child(super::rich_text(
+            "cached-emoji",
+            vec![Piece {
+                content: Content::Emoji(
+                    self.image.clone().map(EmojiSource::Still),
+                    "\u{1f600}".into(),
+                ),
+                style: PieceStyle::default(),
+            }],
+        ))
+    }
+}
+
+#[gpui::test]
+fn loaded_emoji_paints_with_a_cached_layout(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let (view, cx) = cx.add_window_view(|_, _| EmojiCase { image: None });
+    draw(cx);
+
+    reset_metrics();
+    view.update(cx, |view, cx| {
+        view.image = Some(ImageSource::Custom(Arc::new(
+            |_: &mut Window, _: &mut App| None,
+        )));
+        cx.notify();
+    });
+    draw(cx);
+    assert!(metrics::EMOJIS.get() > 0);
+    assert_eq!(metrics::SHAPES.get(), 0);
 }

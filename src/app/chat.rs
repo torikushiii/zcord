@@ -1970,12 +1970,12 @@ fn render_sticker(app: &DiscordApp, message_id: u64, sticker: &Sticker, cx: &App
             2 | 4 => animated::resolve(&spec, pixels, cx)
                 .map(|image| {
                     animated::image(image)
+                        .size_full()
+                        .object_fit(ObjectFit::Contain)
                         .id((
                             ElementId::from(("sticker", message_id)),
                             sticker.id.to_string(),
                         ))
-                        .size_full()
-                        .object_fit(ObjectFit::Contain)
                         .into_any_element()
                 })
                 .or_else(still),
@@ -2078,9 +2078,28 @@ fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &App) -> Any
             .into_any_element();
     }
     let preview = theme::image_px(width.max(height));
-    let image = images::resolve(&spec, preview, cx);
+    let frames = animated_attachment(attachment)
+        .then(|| animated::resolve(&spec, preview, cx))
+        .flatten();
     let entity = app.entity.clone();
     let url = attachment.url.clone();
+    let child = match frames {
+        Some(image) => Some(
+            animated::image(image)
+                .size_full()
+                .object_fit(ObjectFit::Cover)
+                .rounded(rpx(8.))
+                .id(("animated", attachment.id))
+                .into_any_element(),
+        ),
+        None => images::resolve(&spec, preview, cx).map(|path| {
+            embeds::animated(path, &attachment.url)
+                .size_full()
+                .object_fit(ObjectFit::Cover)
+                .rounded(rpx(8.))
+                .into_any_element()
+        }),
+    };
     div()
         .id(("lightbox-open", attachment.id))
         .relative()
@@ -2104,13 +2123,21 @@ fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &App) -> Any
                 })
                 .ok();
         })
-        .children(image.map(|path| {
-            embeds::animated(path, &attachment.url)
-                .size_full()
-                .object_fit(ObjectFit::Cover)
-                .rounded(rpx(8.))
-        }))
+        .children(child)
         .into_any_element()
+}
+
+fn animated_attachment(attachment: &Attachment) -> bool {
+    let gif_type = attachment
+        .content_type
+        .as_deref()
+        .and_then(|mime| mime.split(';').next())
+        .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("image/gif"));
+    let gif_extension = attachment
+        .filename
+        .rsplit_once('.')
+        .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("gif"));
+    gif_type || gif_extension
 }
 
 fn file_card(attachment: &Attachment) -> impl IntoElement + use<> {

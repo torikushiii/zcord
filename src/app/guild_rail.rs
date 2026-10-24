@@ -71,6 +71,17 @@ impl Morphs {
             .get(&key)
             .filter(|morph| now.duration_since(morph.started) < MORPH)
     }
+
+    fn clock(&self) -> Option<Instant> {
+        if self.active.is_empty() {
+            return None;
+        }
+        let now = Instant::now();
+        self.active
+            .values()
+            .any(|morph| now.duration_since(morph.started) < MORPH)
+            .then_some(now)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -83,6 +94,7 @@ fn round<E: Styled + IntoElement + 'static>(
     element: E,
     corners: Corners,
     app: &DiscordApp,
+    morphs: Option<Instant>,
 ) -> AnyElement {
     let (key, selected) = match corners {
         Corners::Fixed(radius) => return element.rounded(rpx(radius)).into_any_element(),
@@ -91,7 +103,7 @@ fn round<E: Styled + IntoElement + 'static>(
     if selected {
         return element.rounded(rpx(SQUARE)).into_any_element();
     }
-    match app.rail_morphs.running(key, Instant::now()) {
+    match morphs.and_then(|now| app.rail_morphs.running(key, now)) {
         Some(morph) => {
             let (from, to) = (morph.from, morph.to);
             element
@@ -114,6 +126,7 @@ fn round<E: Styled + IntoElement + 'static>(
 }
 
 pub fn render(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
+    let morphs = app.rail_morphs.clock();
     div()
         .id("guild-rail")
         .flex()
@@ -126,27 +139,21 @@ pub fn render(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         .pb_3()
         .overflow_y_scroll()
         .child(
-            rail_item(
-                "home",
-                HOME_KEY,
-                "Direct Messages".into(),
-                false,
-                false,
-                app,
-            )
-            .child(round(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size(rpx(ICON))
-                    .bg(rgb(theme::ELEVATED))
-                    .group_hover("rail-item", |style| style.bg(rgb(theme::BLURPLE)))
-                    .child(theme::icon("discord", 28., theme::STRONG)),
-                Corners::Morph(HOME_KEY, false),
-                app,
-            ))
-            .children(corner_badge(app.store.dm_mentions)),
+            rail_item("home", HOME_KEY, "Direct Messages", false, false, app)
+                .child(round(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .size(rpx(ICON))
+                        .bg(rgb(theme::ELEVATED))
+                        .group_hover("rail-item", |style| style.bg(rgb(theme::BLURPLE)))
+                        .child(theme::icon("discord", 28., theme::STRONG)),
+                    Corners::Morph(HOME_KEY, false),
+                    app,
+                    morphs,
+                ))
+                .children(corner_badge(app.store.dm_mentions)),
         )
         .child(
             div()
@@ -160,8 +167,8 @@ pub fn render(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 RailEntry::Guild(id) => app
                     .store
                     .guild_by_id(*id)
-                    .map(|guild| guild_item(app, guild, cx).into_any_element()),
-                RailEntry::Folder(folder) => Some(folder_item(app, folder, cx)),
+                    .map(|guild| guild_item(app, guild, cx, morphs).into_any_element()),
+                RailEntry::Folder(folder) => Some(folder_item(app, folder, cx, morphs)),
             }
         }))
         .child(action_item(
@@ -170,6 +177,7 @@ pub fn render(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
             "plus",
             "Add a Server",
             app,
+            morphs,
         ))
         .child(action_item(
             "discover",
@@ -177,34 +185,29 @@ pub fn render(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
             "compass",
             "Discover",
             app,
+            morphs,
         ))
 }
 
-fn guild_item(app: &DiscordApp, guild: &Guild, cx: &App) -> Stateful<Div> {
+fn guild_item(app: &DiscordApp, guild: &Guild, cx: &App, morphs: Option<Instant>) -> Stateful<Div> {
     let id = guild.id;
     let selected = app.selected_guild_id == id;
     let entity = app.entity.clone();
-    rail_item(
-        ("guild", id),
-        id,
-        guild.name.clone().into(),
-        selected,
-        guild.unread,
-        app,
-    )
-    .on_click(move |_, window, cx| {
-        entity
-            .update(cx, |this, cx| this.select_guild(id, window, cx))
-            .ok();
-    })
-    .child(guild_icon(
-        guild,
-        ICON,
-        Corners::Morph(id, selected),
-        app,
-        cx,
-    ))
-    .children(corner_badge(guild.mentions))
+    rail_item(("guild", id), id, &guild.name, selected, guild.unread, app)
+        .on_click(move |_, window, cx| {
+            entity
+                .update(cx, |this, cx| this.select_guild(id, window, cx))
+                .ok();
+        })
+        .child(guild_icon(
+            guild,
+            ICON,
+            Corners::Morph(id, selected),
+            app,
+            cx,
+            morphs,
+        ))
+        .children(corner_badge(guild.mentions))
 }
 
 fn guild_icon(
@@ -213,6 +216,7 @@ fn guild_icon(
     corners: Corners,
     app: &DiscordApp,
     cx: &App,
+    morphs: Option<Instant>,
 ) -> AnyElement {
     let pixels = theme::image_px(ICON);
     let spec = guild.icon_spec();
@@ -230,11 +234,12 @@ fn guild_icon(
                 .id(("guild-icon-animated", guild.id)),
             corners,
             app,
+            morphs,
         );
     }
     let image = spec.and_then(|spec| images::resolve(&spec, pixels, cx));
     match image {
-        Some(path) => round(img(path).size(rpx(size)).flex_none(), corners, app),
+        Some(path) => round(img(path).size(rpx(size)).flex_none(), corners, app, morphs),
         None => round(
             div()
                 .flex()
@@ -249,11 +254,12 @@ fn guild_icon(
                 .child(guild.initials.clone()),
             corners,
             app,
+            morphs,
         ),
     }
 }
 
-fn folder_item(app: &DiscordApp, folder: &Folder, cx: &App) -> AnyElement {
+fn folder_item(app: &DiscordApp, folder: &Folder, cx: &App, morphs: Option<Instant>) -> AnyElement {
     let id = folder.id;
     let open = app.is_folder_open(id);
     let color = folder.color.unwrap_or(DEFAULT_FOLDER_COLOR);
@@ -282,7 +288,7 @@ fn folder_item(app: &DiscordApp, folder: &Folder, cx: &App) -> AnyElement {
     let header = rail_item(
         ("folder", id),
         id,
-        name,
+        &name,
         !open && contains_selected,
         !open && unread,
         app,
@@ -305,14 +311,11 @@ fn folder_item(app: &DiscordApp, folder: &Folder, cx: &App) -> AnyElement {
                 if open {
                     this.child(theme::icon("folder", 24., color))
                 } else {
-                    this.child(
-                        div().flex().flex_wrap().gap(rpx(4.)).w(rpx(36.)).children(
-                            guilds
-                                .iter()
-                                .take(4)
-                                .map(|guild| guild_icon(guild, 16., Corners::Fixed(8.), app, cx)),
-                        ),
-                    )
+                    this.child(div().flex().flex_wrap().gap(rpx(4.)).w(rpx(36.)).children(
+                        guilds.iter().take(4).map(|guild| {
+                            guild_icon(guild, 16., Corners::Fixed(8.), app, cx, morphs)
+                        }),
+                    ))
                 }
             }),
     )
@@ -340,14 +343,18 @@ fn folder_item(app: &DiscordApp, folder: &Folder, cx: &App) -> AnyElement {
                 .bg(tint),
         )
         .child(header)
-        .children(guilds.iter().map(|guild| guild_item(app, guild, cx)))
+        .children(
+            guilds
+                .iter()
+                .map(|guild| guild_item(app, guild, cx, morphs)),
+        )
         .into_any_element()
 }
 
 fn rail_item(
     id: impl Into<ElementId>,
     key: u64,
-    label: SharedString,
+    label: &str,
     selected: bool,
     unread: bool,
     app: &DiscordApp,
@@ -437,8 +444,9 @@ fn action_item(
     icon: &'static str,
     label: &'static str,
     app: &DiscordApp,
+    morphs: Option<Instant>,
 ) -> impl IntoElement {
-    rail_item(id, key, label.into(), false, false, app).child(round(
+    rail_item(id, key, label, false, false, app).child(round(
         div()
             .flex()
             .items_center()
@@ -448,5 +456,6 @@ fn action_item(
             .child(theme::icon(icon, 24., theme::TEXT)),
         Corners::Morph(key, false),
         app,
+        morphs,
     ))
 }

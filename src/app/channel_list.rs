@@ -248,7 +248,10 @@ fn banner_row(spec: Option<&ImageSpec>, cx: &App) -> impl IntoElement + use<> {
             .and_then(|animated| animated::resolve(&animated, pixels, cx))
         {
             return Some(
-                fill(animated::image(image))
+                animated::image(image)
+                    .size_full()
+                    .rounded_tl(rpx(8.))
+                    .object_fit(ObjectFit::Cover)
                     .id("guild-banner-animated")
                     .into_any_element(),
             );

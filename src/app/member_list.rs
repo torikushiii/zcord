@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use gpui::{prelude::*, *};
 
 use crate::{
@@ -25,7 +23,7 @@ mod tests;
 
 #[derive(Default)]
 pub(crate) struct Layout {
-    groups: BTreeSet<usize>,
+    groups: Vec<usize>,
 }
 
 impl Layout {
@@ -48,7 +46,21 @@ impl Layout {
 
         // Members and placeholders share a fixed height. Only becoming or ceasing to
         // be a group header changes an existing row's layout, not presence or SYNC data.
-        let groups = list
+        if count == old {
+            let mut same = true;
+            let mut positions = self.groups.iter().copied();
+            for (index, row) in list.into_iter().flat_map(|list| &list.rows).enumerate() {
+                if matches!(row, Some(MemberRow::Group { .. })) && positions.next() != Some(index) {
+                    same = false;
+                    break;
+                }
+            }
+            if same && positions.next().is_none() {
+                return;
+            }
+        }
+
+        let groups: Vec<usize> = list
             .into_iter()
             .flat_map(|list| &list.rows)
             .enumerate()
@@ -56,8 +68,13 @@ impl Layout {
                 matches!(row, Some(MemberRow::Group { .. })).then_some(index)
             })
             .collect();
-        for &index in self.groups.symmetric_difference(&groups) {
-            if index < count {
+        for &index in &self.groups {
+            if groups.binary_search(&index).is_err() && index < count {
+                state.remeasure_items(index..index + 1);
+            }
+        }
+        for &index in &groups {
+            if self.groups.binary_search(&index).is_err() && index < count {
                 state.remeasure_items(index..index + 1);
             }
         }

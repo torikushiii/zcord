@@ -480,10 +480,10 @@ fn emoji_grid_image(choice: &EmojiChoice, animate: bool, cx: &App) -> AnyElement
         };
         if let Some(image) = animated::resolve(&spec, theme::image_px(GRID_EMOJI), cx) {
             return animated::image(image)
-                .id(("picker-emoji", custom.id))
                 .size(rpx(GRID_EMOJI))
                 .flex_none()
                 .object_fit(ObjectFit::Contain)
+                .id(("picker-emoji", custom.id))
                 .into_any_element();
         }
     }
