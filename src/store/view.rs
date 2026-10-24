@@ -1,5 +1,6 @@
 pub use crate::discord::model::Attachment;
 use crate::images::ImageSpec;
+use std::time::SystemTime;
 
 const MONTHS: [&str; 12] = [
     "January",
@@ -48,6 +49,7 @@ impl GuildTag {
 
 pub struct User {
     pub id: u64,
+    pub username: String,
     pub name: String,
     pub initials: String,
     pub status: Status,
@@ -56,11 +58,35 @@ pub struct User {
     pub tag: Option<GuildTag>,
     pub playing: bool,
     pub activity: Option<String>,
+    pub custom_status: Option<CustomStatus>,
     pub avatar: Option<String>,
     pub discriminator: Option<String>,
     pub decoration: Option<Decoration>,
     pub nameplate: Option<Nameplate>,
     pub name_style: Option<NameStyle>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CustomStatus {
+    pub text: Option<String>,
+    pub emoji: Option<StatusEmoji>,
+    pub expires_at: Option<SystemTime>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StatusEmoji {
+    Unicode(String),
+    Custom {
+        id: u64,
+        name: String,
+        animated: bool,
+    },
+}
+
+impl CustomStatus {
+    pub fn is_expired(&self, now: SystemTime) -> bool {
+        self.expires_at.is_some_and(|expires_at| expires_at <= now)
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -111,7 +137,7 @@ impl User {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Timestamp {
     pub year: u16,
     pub month: u8,
@@ -493,14 +519,37 @@ impl Attachment {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ChannelKind {
     Text,
+    Announcement,
+    Forum,
     Voice,
+}
+
+impl ChannelKind {
+    pub fn is_text(self) -> bool {
+        matches!(self, Self::Text | Self::Announcement)
+    }
+
+    pub fn is_selectable(self) -> bool {
+        matches!(self, Self::Text | Self::Announcement | Self::Forum)
+    }
+
+    pub fn is_unreadable(self) -> bool {
+        matches!(self, Self::Text | Self::Announcement | Self::Forum)
+    }
+
+    pub fn is_forum(self) -> bool {
+        self == Self::Forum
+    }
 }
 
 pub struct Channel {
     pub id: u64,
     pub name: String,
     pub kind: ChannelKind,
+    pub parent_id: Option<u64>,
     pub unread: bool,
+    pub mentions: u32,
+    pub new_posts: u32,
     pub messages: Vec<Message>,
     pub messages_loaded: bool,
 }
@@ -509,6 +558,31 @@ pub struct Category {
     pub id: u64,
     pub name: String,
     pub channels: Vec<Channel>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ForumTag {
+    pub id: u64,
+    pub name: String,
+    pub emoji: Option<StatusEmoji>,
+    pub moderated: bool,
+}
+
+pub struct ForumPost {
+    pub id: u64,
+    pub forum_id: u64,
+    pub name: String,
+    pub owner_id: u64,
+    pub created_at: Timestamp,
+    pub last_activity: Timestamp,
+    pub message_count: u32,
+    pub tag_ids: Vec<u64>,
+    pub pinned: bool,
+    pub locked: bool,
+    pub archived: bool,
+    pub preview: Option<String>,
+    pub thumbnail: Option<ImageSpec>,
+    pub unread: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -544,6 +618,7 @@ pub struct Guild {
     pub unread: bool,
     pub mentions: u32,
     pub categories: Vec<Category>,
+    pub threads: Vec<Channel>,
     pub member_ids: Vec<u64>,
     pub icon: Option<String>,
     pub banner: Option<String>,
@@ -569,19 +644,27 @@ impl Guild {
             .flat_map(|category| &category.channels)
     }
 
+    pub fn all_channels(&self) -> impl Iterator<Item = &Channel> {
+        self.channels().chain(&self.threads)
+    }
+
     pub fn first_text_channel(&self) -> Option<&Channel> {
-        self.channels()
-            .find(|channel| channel.kind == ChannelKind::Text)
+        self.channels().find(|channel| channel.kind.is_text())
+    }
+
+    pub fn first_selectable_channel(&self) -> Option<&Channel> {
+        self.channels().find(|channel| channel.kind.is_selectable())
     }
 
     pub fn channel(&self, id: u64) -> Option<&Channel> {
-        self.channels().find(|channel| channel.id == id)
+        self.all_channels().find(|channel| channel.id == id)
     }
 
     pub(super) fn channel_mut(&mut self, id: u64) -> Option<&mut Channel> {
         self.categories
             .iter_mut()
             .flat_map(|category| &mut category.channels)
+            .chain(&mut self.threads)
             .find(|channel| channel.id == id)
     }
 }

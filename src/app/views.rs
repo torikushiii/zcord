@@ -6,7 +6,8 @@
 //! weak handle for rendering, so the ownership graph is acyclic.
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
+    rc::Rc,
     time::{Duration, Instant},
 };
 
@@ -77,6 +78,19 @@ pub(crate) fn member_list_style() -> StyleRefinement {
         .w(rpx(member_list::WIDTH))
         .h_full()
         .flex_none()
+}
+
+pub(crate) fn overlays_style() -> StyleRefinement {
+    StyleRefinement::default().absolute().inset_0()
+}
+
+pub(crate) fn composer_style(height: Option<Pixels>, hidden: bool) -> StyleRefinement {
+    let style = StyleRefinement::default().w_full().flex_none();
+    match (hidden, height) {
+        (true, _) => style.h(px(0.)),
+        (false, Some(height)) => style.h(height),
+        (false, None) => style.h(rpx(64.)),
+    }
 }
 
 fn observe_app<T: 'static>(app: &Entity<DiscordApp>, cx: &mut Context<T>) -> Subscription {
@@ -175,12 +189,13 @@ impl Render for MessagesView {
         let Some(app) = self.app.upgrade() else {
             return div().into_any_element();
         };
-        chat::messages(app.read(cx)).into_any_element()
+        chat::messages(app.read(cx), cx)
     }
 }
 
 pub(crate) struct ComposerView {
     app: WeakEntity<DiscordApp>,
+    height: Rc<Cell<Option<Pixels>>>,
     _observe: Subscription,
 }
 
@@ -188,8 +203,13 @@ impl ComposerView {
     fn new(app: &Entity<DiscordApp>, cx: &mut Context<Self>) -> Self {
         Self {
             app: app.downgrade(),
+            height: Rc::new(Cell::new(None)),
             _observe: observe_app(app, cx),
         }
+    }
+
+    pub(crate) fn height(&self) -> Option<Pixels> {
+        self.height.get()
     }
 }
 
@@ -199,7 +219,37 @@ impl Render for ComposerView {
         let Some(app) = self.app.upgrade() else {
             return div().into_any_element();
         };
-        chat::composer(app.read(cx), cx).into_any_element()
+        let app = app.read(cx);
+        if app.selected_forum().is_some() {
+            return div().into_any_element();
+        }
+        let measured = self.height.clone();
+        let view = cx.entity().entity_id();
+        div()
+            .w_full()
+            .child(chat::composer(app, cx))
+            .child(
+                canvas(
+                    move |bounds, window, _cx| {
+                        let height = bounds.size.height;
+                        // Sub-pixel churn between the style height and the measured
+                        // content must not schedule a frame every frame.
+                        let changed = measured
+                            .get()
+                            .is_none_or(|old| (f32::from(old) - f32::from(height)).abs() > 0.5);
+                        if changed {
+                            measured.set(Some(height));
+                            // The parent supplies next frame's cached height; ask for
+                            // that frame even though this one is already drawing.
+                            window.on_next_frame(move |_, cx| cx.notify(view));
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
+            .into_any_element()
     }
 }
 
@@ -255,6 +305,7 @@ impl Render for OverlaysView {
             .children(profile::render(app, window, cx))
             .children(lightbox::render(app, window, cx))
             .children(emoji_picker::render(app, cx))
+            .children(channel_list::account_menu(app))
             .children(crate::player::fullscreen(app, cx))
             .into_any_element()
     }
@@ -332,12 +383,15 @@ pub(crate) fn count_render(kind: ViewKind) {
 
 #[cfg(test)]
 mod tests {
+    use super::{composer_style, overlays_style};
+    use gpui_component::input::{Textarea, TextareaState};
     use std::cell::Cell;
     use std::rc::Rc;
 
     use gpui::{
-        AppContext, Context, Entity, Render, StyleRefinement, Subscription, TestAppContext,
-        WeakEntity, Window, div, prelude::*,
+        Anchor, AppContext, Context, Entity, Modifiers, Pixels, Render, StyleRefinement,
+        Subscription, TestAppContext, WeakEntity, Window, anchored, canvas, deferred, div, point,
+        prelude::*, px,
     };
 
     struct Panel {
@@ -452,5 +506,251 @@ mod tests {
         });
         assert_eq!(left_renders.get(), left_initial + 2);
         assert_eq!(right_renders.get(), right_initial + 1);
+    }
+    struct MeasuredContent {
+        measured: Rc<Cell<Option<Pixels>>>,
+        height: Rc<Cell<Pixels>>,
+    }
+
+    impl Render for MeasuredContent {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let measured = self.measured.clone();
+            div()
+                .w_full()
+                .child(div().w_full().h(self.height.get()))
+                .child(
+                    canvas(
+                        move |bounds, _, _| measured.set(Some(bounds.size.height)),
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .inset_0(),
+                )
+        }
+    }
+
+    struct MeasuredHost {
+        content: Entity<MeasuredContent>,
+        measured: Rc<Cell<Option<Pixels>>>,
+    }
+
+    impl Render for MeasuredHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let height = self.measured.get().unwrap_or(px(64.));
+            div().size_full().child(
+                self.content
+                    .clone()
+                    .cached(StyleRefinement::default().w_full().h(height)),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn a_cached_view_measures_its_intrinsic_height_for_the_next_frame(cx: &mut TestAppContext) {
+        let measured = Rc::new(Cell::new(None));
+        let content = measured.clone();
+        let host = measured.clone();
+        let height = Rc::new(Cell::new(px(100.)));
+        let content_height = height.clone();
+        let (host, cx) = cx.add_window_view(move |_, cx| MeasuredHost {
+            content: cx.new(|_| MeasuredContent {
+                measured: content,
+                height: content_height,
+            }),
+            measured: host,
+        });
+        let content = host.read_with(cx, |host, _| host.content.clone());
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert_eq!(measured.get(), Some(px(100.)));
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert_eq!(measured.get(), Some(px(100.)));
+
+        content.update(cx, |_, cx| {
+            height.set(px(40.));
+            cx.notify();
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert_eq!(measured.get(), Some(px(40.)));
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert_eq!(measured.get(), Some(px(40.)));
+    }
+
+    struct DeferredOverlay {
+        renders: Rc<Cell<usize>>,
+        clicks: Rc<Cell<usize>>,
+    }
+
+    impl Render for DeferredOverlay {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.renders.set(self.renders.get() + 1);
+            let clicks = self.clicks.clone();
+            div().absolute().inset_0().child(deferred(
+                anchored()
+                    .position(point(px(100.), px(80.)))
+                    .anchor(Anchor::TopLeft)
+                    .child(
+                        div()
+                            .id("cached-popup")
+                            .occlude()
+                            .w(px(120.))
+                            .h(px(60.))
+                            .on_click(move |_, _, _| clicks.set(clicks.get() + 1)),
+                    ),
+            ))
+        }
+    }
+
+    struct DeferredHost {
+        overlay: Entity<DeferredOverlay>,
+    }
+
+    impl Render for DeferredHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(self.overlay.clone().cached(overlays_style()))
+        }
+    }
+
+    #[gpui::test]
+    fn cached_views_replay_deferred_popups(cx: &mut TestAppContext) {
+        let renders = Rc::new(Cell::new(0));
+        let clicks = Rc::new(Cell::new(0));
+        let (made_renders, made_clicks) = (renders.clone(), clicks.clone());
+        let (_host, cx) = cx.add_window_view(move |_, cx| DeferredHost {
+            overlay: cx.new(|_| DeferredOverlay {
+                renders: made_renders,
+                clicks: made_clicks,
+            }),
+        });
+        let draw = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        };
+        draw(cx);
+        let initial = renders.get();
+        assert!(initial > 0);
+
+        // Only the root notified/drew: the cached overlay is reused, deferred draw and
+        // all. The click is dispatched against this reused frame's replayed hitboxes.
+        draw(cx);
+        assert_eq!(renders.get(), initial);
+        cx.simulate_click(point(px(160.), px(110.)), Modifiers::none());
+        assert_eq!(clicks.get(), 1);
+    }
+    struct OverflowPanel {
+        clicks: Rc<Cell<usize>>,
+    }
+
+    impl Render for OverflowPanel {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let clicks = self.clicks.clone();
+            div().relative().w_full().h_full().child(
+                div()
+                    .id("overflow-popup")
+                    .absolute()
+                    .left_0()
+                    .bottom_0()
+                    .w(px(100.))
+                    .h(px(80.))
+                    .on_click(move |_, _, _| clicks.set(clicks.get() + 1)),
+            )
+        }
+    }
+
+    struct OverflowHost {
+        panel: Entity<OverflowPanel>,
+    }
+
+    impl Render for OverflowHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().pt(px(100.)).child(
+                self.panel
+                    .clone()
+                    .cached(composer_style(Some(px(50.)), false)),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn a_cached_composer_does_not_clip_popups_that_overflow_upward(cx: &mut TestAppContext) {
+        let clicks = Rc::new(Cell::new(0));
+        let made_clicks = clicks.clone();
+        let (_host, cx) = cx.add_window_view(move |_, cx| OverflowHost {
+            panel: cx.new(|_| OverflowPanel {
+                clicks: made_clicks,
+            }),
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        // The 50px-tall view starts at y=100; its 80px popup is pinned to the bottom
+        // and must remain clickable above the view's own bounds.
+        cx.simulate_click(point(px(50.), px(110.)), Modifiers::none());
+        assert_eq!(clicks.get(), 1);
+    }
+    struct TypedPanel {
+        input: Entity<TextareaState>,
+        renders: Rc<Cell<usize>>,
+    }
+
+    impl Render for TypedPanel {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.renders.set(self.renders.get() + 1);
+            div().w_full().h(px(50.)).child(Textarea::new(&self.input))
+        }
+    }
+
+    struct TypedHost {
+        panel: Entity<TypedPanel>,
+    }
+
+    impl Render for TypedHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                self.panel
+                    .clone()
+                    .cached(composer_style(Some(px(64.)), false)),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn a_cached_composer_rerenders_when_the_textarea_changes(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let renders = Rc::new(Cell::new(0));
+        let counted = renders.clone();
+        let (host, cx) = cx.add_window_view(move |window, cx| {
+            let input = cx.new(|cx| TextareaState::new(window, cx).auto_grow(1, 15));
+            input.update(cx, |input, cx| input.focus(window, cx));
+            TypedHost {
+                panel: cx.new(|_| TypedPanel {
+                    input,
+                    renders: counted,
+                }),
+            }
+        });
+        let _panel = host.read_with(cx, |host, _| host.panel.clone());
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let initial = renders.get();
+        cx.simulate_input("hello");
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(
+            renders.get() > initial,
+            "typing in a cached composer must re-render its textarea"
+        );
     }
 }

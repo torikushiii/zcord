@@ -84,6 +84,26 @@ impl Rest {
             .await
     }
 
+    pub async fn fetch_forum_posts(
+        &self,
+        guild_id: Option<u64>,
+        forum_id: u64,
+        offset: usize,
+    ) -> Result<model::ForumSearch, Error> {
+        let referer = referer(guild_id, forum_id);
+        let url = format!("https://discord.com/api/v9/channels/{forum_id}/threads/search");
+        let query = forum_search_query(offset);
+        let response = self
+            .send(|| {
+                self.client
+                    .get(&url)
+                    .query(&query)
+                    .header(REFERER, &referer)
+            })
+            .await?;
+        response.json().await.map_err(|_| Error::Decode)
+    }
+
     async fn fetch_messages_anchor(
         &self,
         guild_id: Option<u64>,
@@ -421,7 +441,29 @@ fn history_query(anchor: Anchor, limit: usize) -> Vec<(&'static str, String)> {
     query
 }
 
+// `archived` is omitted on purpose: `true` restricts the search to archived posts only, and
+// leaving it out searches active and archived posts together.
+fn forum_search_query(offset: usize) -> Vec<(&'static str, String)> {
+    vec![
+        ("sort_by", "last_message_time".to_owned()),
+        ("sort_order", "desc".to_owned()),
+        ("limit", "25".to_owned()),
+        ("tag_setting", "match_some".to_owned()),
+        ("offset", offset.to_string()),
+    ]
+}
+
 impl super::Session {
+    pub async fn fetch_forum_posts(
+        &self,
+        guild_id: Option<u64>,
+        forum_id: u64,
+        offset: usize,
+    ) -> Result<model::ForumSearch, Error> {
+        self.rest(async |rest| rest.fetch_forum_posts(guild_id, forum_id, offset).await)
+            .await
+    }
+
     pub async fn fetch_messages_after(
         &self,
         guild_id: Option<u64>,
@@ -659,6 +701,19 @@ mod tests {
         assert_eq!(encode(Anchor::Before(61)), "before=61&limit=50");
         assert_eq!(encode(Anchor::After(61)), "after=61&limit=50");
         assert_eq!(encode(Anchor::Around(61)), "around=61&limit=50");
+    }
+
+    #[test]
+    fn forum_search_query_matches_the_user_client() {
+        let query = forum_search_query(25)
+            .into_iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join("&");
+        assert_eq!(
+            query,
+            "sort_by=last_message_time&sort_order=desc&limit=25&tag_setting=match_some&offset=25"
+        );
     }
 
     #[test]

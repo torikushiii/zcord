@@ -37,6 +37,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "inbox",
     "languages",
     "layout-grid",
+    "megaphone",
     "messages-square",
     "mic",
     "pencil",

@@ -1,11 +1,14 @@
+use std::time::{Duration, Instant, SystemTime};
+
 use gpui::{prelude::*, *};
 use gpui_component::tooltip::Tooltip;
 
 use crate::{
     animated,
     app::{DiscordApp, message_body::label, profile},
+    emoji,
     images::{self, ImageSpec},
-    store::{Channel, ChannelKind, Guild},
+    store::{Channel, ChannelKind, Guild, Status, StatusEmoji, User},
     theme::{self, WithoutTextSelection, rpx},
 };
 
@@ -31,6 +34,9 @@ pub(crate) struct Rows {
     rows: Vec<Row>,
     guild_id: Option<u64>,
     banner: Option<ImageSpec>,
+    account_menu: Option<Point<Pixels>>,
+    account_menu_closed_at: Option<Instant>,
+    subtitle_hovered_once: bool,
 }
 
 impl Rows {
@@ -40,6 +46,9 @@ impl Rows {
             rows: vec![Row::Shortcuts],
             guild_id: None,
             banner: None,
+            account_menu: None,
+            account_menu_closed_at: None,
+            subtitle_hovered_once: false,
         }
     }
 
@@ -135,7 +144,7 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> impl IntoElement +
                         .guild()
                         .and_then(|guild| guild.categories.get(category))
                         .and_then(|category| category.channels.get(channel))
-                        .filter(|channel| channel.kind == ChannelKind::Text)
+                        .filter(|channel| channel.kind.is_selectable())
                         .map(|channel| channel.id),
                     _ => None,
                 };
@@ -336,8 +345,57 @@ fn shortcut_row(id: &'static str, icon: &str, label: &'static str) -> impl IntoE
 
 fn channel_row(channel: &Channel, selected: bool) -> impl IntoElement + use<> {
     let id = channel.id;
-    let text = channel.kind == ChannelKind::Text;
-    let unread = channel.unread && !selected;
+    let mentions = channel.mentions;
+    let new_posts = channel.new_posts;
+    let unread = (channel.unread || mentions > 0 || new_posts > 0) && !selected;
+    let icon = match channel.kind {
+        ChannelKind::Text => "hash",
+        ChannelKind::Announcement => "megaphone",
+        ChannelKind::Forum => "messages-square",
+        ChannelKind::Voice => "volume-2",
+    };
+    let badge = (new_posts > 0)
+        .then(|| {
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .h(rpx(16.))
+                .min_w(rpx(16.))
+                .px(rpx(4.))
+                .rounded_full()
+                .bg(rgb(theme::BLURPLE))
+                .text_size(rpx(12.))
+                .line_height(rpx(16.))
+                .font_weight(FontWeight::BOLD)
+                .text_color(white())
+                .child(format!("{new_posts} NEW"))
+        })
+        .or_else(|| {
+            (mentions > 0).then(|| {
+                let count = if mentions >= 1000 {
+                    format!("{}K+", mentions / 1000)
+                } else {
+                    mentions.to_string()
+                };
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .h(rpx(16.))
+                    .min_w(rpx(16.))
+                    .px(rpx(4.))
+                    .rounded_full()
+                    .bg(rgb(theme::RED))
+                    .text_size(rpx(12.))
+                    .line_height(rpx(16.))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(white())
+                    .child(count)
+            })
+        });
     div()
         .id(("channel", id))
         .relative()
@@ -374,7 +432,7 @@ fn channel_row(channel: &Channel, selected: bool) -> impl IntoElement + use<> {
             )
         })
         .child(theme::icon(
-            if text { "hash" } else { "volume-2" },
+            icon,
             20.,
             if selected || unread {
                 theme::STRONG
@@ -389,10 +447,102 @@ fn channel_row(channel: &Channel, selected: bool) -> impl IntoElement + use<> {
                 .truncate()
                 .child(label(("channel-name", id), &channel.name)),
         )
+        .children(badge)
         .when(selected, |this| {
             this.child(theme::icon("user-plus", 14., theme::MUTED))
                 .child(theme::icon("settings", 14., theme::MUTED))
         })
+}
+
+const SUBTITLE_HEIGHT: f32 = 16.;
+
+/// The custom status (or the presence when there is none), which slides up to reveal the
+/// username while the panel is hovered, like Discord's.
+fn account_subtitle(app: &DiscordApp, user: &User, cx: &App) -> AnyElement {
+    let line = || {
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(rpx(4.))
+            .min_w_0()
+            .h(rpx(SUBTITLE_HEIGHT))
+    };
+    let status = user
+        .custom_status
+        .as_ref()
+        .filter(|status| !status.is_expired(SystemTime::now()));
+    let status_line = match status {
+        None => line().child(div().truncate().child(status_label(user.status))),
+        Some(status) => {
+            let emoji = status.emoji.as_ref().and_then(|emoji| {
+                let source: ImageSource = match emoji {
+                    StatusEmoji::Unicode(sequence) => emoji::image(sequence)?.into(),
+                    StatusEmoji::Custom { id, .. } => images::resolve(
+                        &ImageSpec::Emoji {
+                            id: *id,
+                            animated: false,
+                        },
+                        theme::image_px(SUBTITLE_HEIGHT),
+                        cx,
+                    )?
+                    .into(),
+                };
+                Some(img(source).size(rpx(SUBTITLE_HEIGHT)).flex_none())
+            });
+            line()
+                .children(emoji)
+                .children(status.text.as_ref().map(|text| {
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .child(label(("self-status", user.id), text))
+                }))
+        }
+    };
+    let hovered = app.hovered_account && !user.username.is_empty();
+    let lines = div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .flex()
+        .flex_col()
+        .child(status_line)
+        .child(line().child(div().truncate().child(user.username.clone())));
+    let lines = if app.channel_rows.subtitle_hovered_once {
+        let animation = Animation::new(Duration::from_millis(200)).with_easing(ease_out_quint());
+        lines
+            .with_animation(
+                ("account-subtitle", u64::from(hovered)),
+                animation,
+                move |this, delta| {
+                    let shown = if hovered { delta } else { 1. - delta };
+                    this.top(rpx(-SUBTITLE_HEIGHT * shown))
+                },
+            )
+            .into_any_element()
+    } else {
+        lines.top_0().into_any_element()
+    };
+    div()
+        .relative()
+        .h(rpx(SUBTITLE_HEIGHT))
+        .min_w_0()
+        .overflow_hidden()
+        .text_size(rpx(12.))
+        .line_height(rpx(SUBTITLE_HEIGHT))
+        .text_color(rgb(theme::MUTED))
+        .child(lines)
+        .into_any_element()
+}
+
+fn status_label(status: Status) -> &'static str {
+    match status {
+        Status::Online => "Online",
+        Status::Idle => "Idle",
+        Status::DoNotDisturb => "Do Not Disturb",
+        Status::Offline => "Invisible",
+    }
 }
 
 fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
@@ -427,6 +577,9 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                         entity
                             .update(cx, |app, cx| {
                                 app.hovered_account = *hovered;
+                                // Until the first hover the subtitle sits still, so it doesn't
+                                // play the slide-back animation when the panel first appears.
+                                app.channel_rows.subtitle_hovered_once = true;
                                 cx.notify();
                             })
                             .ok();
@@ -446,6 +599,7 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                     div()
                         .flex()
                         .flex_col()
+                        .flex_1()
                         .min_w_0()
                         .child(
                             div()
@@ -455,28 +609,98 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                                 .text_color(rgb(theme::STRONG))
                                 .child(label(("self-name", user.id), &user.name)),
                         )
-                        .child(
-                            div()
-                                .truncate()
-                                .text_size(rpx(12.))
-                                .text_color(rgb(theme::MUTED))
-                                .child(label(
-                                    ("self-activity", user.id),
-                                    user.activity.as_deref().unwrap_or("Online"),
-                                )),
-                        ),
+                        .child(account_subtitle(app, user, cx)),
                 )
         }))
         .child(theme::icon_button("mic", "mic", 20., theme::TEXT))
         .child(theme::icon_button("deafen", "headphones", 20., theme::TEXT))
         .child(
             theme::icon_button("user-settings", "settings", 20., theme::TEXT)
-                .tooltip(|window, cx| Tooltip::new("Log out").build(window, cx))
-                .on_click({
+                .tooltip(|window, cx| Tooltip::new("User Settings").build(window, cx))
+                .on_mouse_down(MouseButton::Left, {
                     let entity = app.entity.clone();
-                    move |_, window, cx| {
-                        entity.update(cx, |this, cx| this.log_out(window, cx)).ok();
+                    move |event, _, cx| {
+                        cx.stop_propagation();
+                        let position = event.position;
+                        entity
+                            .update(cx, |app, cx| {
+                                let rows = &mut app.channel_rows;
+                                // The press that closed the menu via mouse-down-outside must
+                                // not reopen it here.
+                                let just_closed = rows
+                                    .account_menu_closed_at
+                                    .is_some_and(|at| at.elapsed() < Duration::from_millis(150));
+                                if rows.account_menu.is_none() && !just_closed {
+                                    rows.account_menu = Some(position);
+                                } else {
+                                    rows.account_menu = None;
+                                }
+                                cx.notify();
+                            })
+                            .ok();
                     }
                 }),
         )
+}
+
+/// Settings menu above the user panel's gear button. Rendered from the overlay view because
+/// deferred popups can't live inside the cached channel list view.
+pub(crate) fn account_menu(app: &DiscordApp) -> Option<AnyElement> {
+    let position = app.channel_rows.account_menu?;
+    let close = app.entity.clone();
+    let log_out = app.entity.clone();
+    let item = div()
+        .id("log-out")
+        .flex()
+        .items_center()
+        .justify_between()
+        .h(rpx(32.))
+        .px(rpx(8.))
+        .rounded(rpx(4.))
+        .text_size(rpx(14.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(theme::RED))
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(theme::RED)).text_color(white()))
+        .child("Log Out")
+        .on_click(move |_, window, cx| {
+            log_out
+                .update(cx, |app, cx| {
+                    app.channel_rows.account_menu = None;
+                    app.log_out(window, cx);
+                })
+                .ok();
+        });
+    Some(
+        deferred(
+            anchored()
+                .position(position - point(px(0.), px(12.)))
+                .anchor(Anchor::BottomRight)
+                .snap_to_window_with_margin(px(8.))
+                .child(
+                    div()
+                        .id("account-menu")
+                        .occlude()
+                        .w(rpx(188.))
+                        .p(rpx(6.))
+                        .rounded(rpx(8.))
+                        .bg(rgb(theme::ELEVATED))
+                        .border_1()
+                        .border_color(rgb(theme::BORDER))
+                        .shadow_lg()
+                        .on_mouse_down_out(move |_, _, cx| {
+                            close
+                                .update(cx, |app, cx| {
+                                    app.channel_rows.account_menu = None;
+                                    app.channel_rows.account_menu_closed_at = Some(Instant::now());
+                                    cx.notify();
+                                })
+                                .ok();
+                        })
+                        .child(item),
+                ),
+        )
+        .with_priority(2)
+        .into_any_element(),
+    )
 }
