@@ -101,7 +101,7 @@ fn description_text(text: &str) -> Cow<'_, str> {
     )
 }
 
-fn embed_card(color: Option<u32>, media_width: Option<f32>) -> Div {
+fn embed_card(color: Option<u32>, content_width: Option<f32>) -> Div {
     div()
         .relative()
         .self_start()
@@ -110,7 +110,7 @@ fn embed_card(color: Option<u32>, media_width: Option<f32>) -> Div {
         .min_w_0()
         .gap(rpx(8.))
         .mt_1()
-        .map(|this| match media_width {
+        .map(|this| match content_width {
             // Resolve the card width before its percent-width text row is measured.
             Some(width) => this.w(rpx(width + EMBED_HORIZONTAL_INSET)).max_w_full(),
             None => this.max_w(rpx(EMBED_WIDTH)),
@@ -148,6 +148,19 @@ fn fit(media: &Media, max: (f32, f32)) -> (f32, f32) {
         (width * scale).round().max(1.),
         (height * scale).round().max(1.),
     )
+}
+
+fn card_content_width(embed: &Embed, media: (f32, f32)) -> f32 {
+    let has_text = embed.title.is_some()
+        || embed.description.is_some()
+        || embed.author.is_some()
+        || !embed.fields.is_empty();
+    // Portrait media must not squeeze a rich post into a narrow text column.
+    if has_text && media.0 < media.1 {
+        EMBED_WIDTH - EMBED_HORIZONTAL_INSET
+    } else {
+        media.0
+    }
 }
 
 pub(super) fn animated(source: impl Into<ImageSource>, key: &str) -> Stateful<Img> {
@@ -446,14 +459,14 @@ pub fn render_embed(
             .or(embed.video.as_ref())
             .map_or(EMBED_MEDIA, |media| fit(media, EMBED_MEDIA))
     });
-    let media_width = if side_thumbnail.is_none() {
+    let content_width = if side_thumbnail.is_none() {
         video_dimensions
-            .map(|dimensions| dimensions.0)
             .or_else(|| match big_media.as_slice() {
                 [] => None,
-                [single] => Some(fit(single, EMBED_MEDIA).0),
-                _ => Some(EMBED_MEDIA.0),
+                [single] => Some(fit(single, EMBED_MEDIA)),
+                _ => Some(EMBED_MEDIA),
             })
+            .map(|dimensions| card_content_width(embed, dimensions))
     } else {
         None
     };
@@ -608,7 +621,7 @@ pub fn render_embed(
         (text, stamp) => text.or(stamp),
     };
 
-    embed_card(embed.color, media_width)
+    embed_card(embed.color, content_width)
         .child(content)
         .children(media)
         .children(footer_text.map(|text| {

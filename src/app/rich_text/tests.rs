@@ -75,6 +75,49 @@ fn positive_widths_still_wrap_unbroken_unicode_without_losing_text(cx: &mut Test
     });
 }
 
+#[gpui::test]
+fn smaller_edited_labels_share_the_message_baseline(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let cx = cx.add_empty_window();
+    cx.update(|window, cx| {
+        for zoom in [1., 1.25, 1.5] {
+            let mut fonts = fonts(window, cx);
+            fonts.font_size = px(16. * zoom);
+            fonts.line_height = px(22. * zoom);
+            let normal = fonts.shape("message", &PieceStyle::default(), false, window);
+            let edited = fonts.shape(
+                " (edited)",
+                &PieceStyle {
+                    scale: Some(0.625),
+                    ..Default::default()
+                },
+                false,
+                window,
+            );
+            let baseline = fonts.baseline(window);
+            // Also cover lines enlarged by emoji and labels wrapped onto their own line.
+            for height in [fonts.line_height, fonts.line_height * 2.] {
+                let line = Line {
+                    y: px(22. * zoom),
+                    height,
+                    fragments: Vec::new(),
+                };
+                let text_height = fonts.line_height;
+                let painted_baseline = |shaped: &gpui::ShapedLine| {
+                    line.text_top(shaped, text_height, baseline)
+                        + (text_height - shaped.ascent - shaped.descent) / 2.
+                        + shaped.ascent
+                };
+                assert!((painted_baseline(&normal) - painted_baseline(&edited)).abs() < px(0.01));
+                assert!(
+                    line.text_top(&edited, text_height, baseline)
+                        > line.y + (height - text_height) / 2.
+                );
+            }
+        }
+    });
+}
+
 #[test]
 fn visible_lines_follow_the_scrolled_origin_and_include_glyph_overhang() {
     let mask = Bounds::new(point(px(0.), px(0.)), size(px(200.), px(100.)));
