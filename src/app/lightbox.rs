@@ -5,14 +5,17 @@ use gpui::{prelude::*, *};
 use crate::{
     app::{DiscordApp, embeds},
     images::{self, ImageSpec},
+    store::Media,
     theme::{self, WithoutTextSelection, rpx},
 };
 
 const MARGIN: f32 = 80.;
 const FADE: Duration = Duration::from_millis(200);
 
+#[derive(Clone)]
 pub(crate) struct Lightbox {
     spec: ImageSpec,
+    poster: Option<ImageSpec>,
     width: u32,
     height: u32,
     /// Pixel budget the chat thumbnail was requested at, for the loading fallback.
@@ -20,6 +23,83 @@ pub(crate) struct Lightbox {
     url: String,
     /// Key passed to `embeds::animated`; the source URL, as the chat thumbnail uses.
     key: String,
+}
+
+impl Lightbox {
+    fn gifv(still: &Media, video: Option<&Media>, preview: u32) -> Self {
+        let dimensions = video
+            .filter(|video| video.width > 0 && video.height > 0)
+            .unwrap_or(still);
+        Self {
+            spec: video.map_or_else(|| still.spec(), Media::video_spec),
+            poster: video.map(|_| still.spec()),
+            width: dimensions.width.max(1),
+            height: dimensions.height.max(1),
+            preview,
+            url: video.unwrap_or(still).source.clone(),
+            key: still.url.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Lightbox;
+    use crate::{images::ImageSpec, store::Media};
+
+    fn media(url: &str, width: u32, height: u32) -> Media {
+        Media {
+            url: url.into(),
+            source: url.into(),
+            width,
+            height,
+            animated: false,
+        }
+    }
+
+    #[test]
+    fn gifv_lightboxes_keep_the_video_and_a_loading_poster() {
+        let still = media("https://media.discordapp.net/preview.png", 400, 300);
+        let video = media("https://media.discordapp.net/clip.mp4", 720, 1280);
+        let lightbox = Lightbox::gifv(&still, Some(&video), 512);
+        assert_eq!(lightbox.spec, video.video_spec());
+        assert_eq!(lightbox.poster, Some(still.spec()));
+        assert_eq!((lightbox.width, lightbox.height), (720, 1280));
+        assert_eq!(lightbox.url, video.source);
+        assert_eq!(lightbox.preview, 512);
+    }
+
+    #[test]
+    fn gifv_lightboxes_support_image_only_and_unknown_video_dimensions() {
+        let still = media("https://media.discordapp.net/clip.gif", 400, 300);
+        let image = Lightbox::gifv(&still, None, 512);
+        assert_eq!(image.spec, still.spec());
+        assert_eq!(image.poster, None);
+        assert_eq!((image.width, image.height), (400, 300));
+
+        let video = media("https://media.discordapp.net/clip.mp4", 0, 0);
+        let fallback = Lightbox::gifv(&still, Some(&video), 512);
+        assert_eq!((fallback.width, fallback.height), (400, 300));
+        assert!(matches!(fallback.spec, ImageSpec::Video { .. }));
+    }
+}
+
+pub(super) fn gifv_opener(
+    app: &DiscordApp,
+    still: &Media,
+    video: Option<&Media>,
+    preview: u32,
+) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
+    let entity = app.entity.clone();
+    let lightbox = Lightbox::gifv(still, video, preview);
+    move |_, _, cx| {
+        entity
+            .update(cx, |app, cx| {
+                app.lightbox = Some(lightbox.clone());
+                cx.notify();
+            })
+            .ok();
+    }
 }
 
 impl DiscordApp {
@@ -33,6 +113,7 @@ impl DiscordApp {
     ) {
         self.lightbox = Some(Lightbox {
             spec,
+            poster: None,
             width: width.max(1),
             height: height.max(1),
             preview,
@@ -65,11 +146,35 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
         (original_width * scale).floor().max(1.),
         (original_height * scale).floor().max(1.),
     );
-    let image = images::resolve(&lightbox.spec, lightbox.width.max(lightbox.height), cx)
-        .or_else(|| images::resolve(&lightbox.spec, lightbox.preview, cx));
+    let frames = matches!(lightbox.spec, ImageSpec::Video { .. })
+        .then(|| {
+            crate::video::resolve(&lightbox.spec, theme::image_px(width.max(height)), cx)
+                .or_else(|| crate::video::resolve(&lightbox.spec, lightbox.preview, cx))
+        })
+        .flatten();
+    let image = frames
+        .map(|frames| {
+            crate::animated::image(frames)
+                .size_full()
+                .object_fit(ObjectFit::Contain)
+                .rounded(rpx(4.))
+                .id("lightbox-gifv")
+                .into_any_element()
+        })
+        .or_else(|| {
+            let spec = lightbox.poster.as_ref().unwrap_or(&lightbox.spec);
+            images::resolve(spec, lightbox.width.max(lightbox.height), cx)
+                .or_else(|| images::resolve(spec, lightbox.preview, cx))
+                .map(|path| {
+                    embeds::animated(path, &lightbox.key)
+                        .size_full()
+                        .object_fit(ObjectFit::Contain)
+                        .rounded(rpx(4.))
+                        .into_any_element()
+                })
+        });
     let close = app.entity.clone();
     let url = lightbox.url.clone();
-    let key = lightbox.key.clone();
     let animation = Animation::new(FADE).with_easing(ease_out_quint());
     Some(
         div()
@@ -101,12 +206,7 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
                             .bg(rgb(theme::ELEVATED))
                             .without_text_selection()
                             .on_click(|_, _, cx| cx.stop_propagation())
-                            .children(image.map(|path| {
-                                embeds::animated(path, &key)
-                                    .size_full()
-                                    .object_fit(ObjectFit::Contain)
-                                    .rounded(rpx(4.))
-                            })),
+                            .children(image),
                     )
                     .child(
                         div()

@@ -1453,6 +1453,55 @@ mod tests {
         renders: Rc<Cell<usize>>,
     }
 
+    struct ClickableAnimation {
+        image: Arc<RenderImage>,
+        clicks: Rc<Cell<usize>>,
+    }
+
+    impl Render for ClickableAnimation {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let clicks = self.clicks.clone();
+            div()
+                .id("animated-media-target")
+                .size(px(32.))
+                .on_click(move |_, _, _| clicks.set(clicks.get() + 1))
+                .child(
+                    image(self.image.clone())
+                        .size(px(32.))
+                        .id("clickable-animation"),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn animated_media_keeps_its_parent_clickable_after_repainting(cx: &mut TestAppContext) {
+        cx.update(init);
+        let clicks = Rc::new(Cell::new(0));
+        let clock = cx.clone();
+        let (view, cx) = cx.add_window_view(|_, _| ClickableAnimation {
+            image: Arc::new(delayed_image(&[100, 100])),
+            clicks: clicks.clone(),
+        });
+        for expected in 1..=3 {
+            clock.background_executor.advance_clock(Duration::from_millis(100));
+            view.update(cx, |_, cx| cx.notify());
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            cx.simulate_click(gpui::point(px(16.), px(16.)), gpui::Modifiers::none());
+            assert_eq!(clicks.get(), expected);
+        }
+        let position = gpui::point(px(16.), px(16.));
+        cx.simulate_mouse_down(position, gpui::MouseButton::Left, gpui::Modifiers::none());
+        clock.background_executor.advance_clock(Duration::from_millis(100));
+        view.update(cx, |_, cx| cx.notify());
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.simulate_mouse_up(position, gpui::MouseButton::Left, gpui::Modifiers::none());
+        assert_eq!(clicks.get(), 4);
+    }
+
     impl Render for StaticPanel {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             self.renders.set(self.renders.get() + 1);
