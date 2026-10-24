@@ -388,7 +388,28 @@ pub(super) fn spoiler_overlay(app: &DiscordApp, key: u64, radius: f32) -> Statef
         )
 }
 
-fn play_badge(element: Div) -> Div {
+/// A play button over a video thumbnail. Linked videos get Discord's pill with an extra
+/// open-in-browser icon.
+fn play_badge(element: Div, pill: bool) -> Div {
+    let badge = div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(rgba(0x000000A6));
+    let badge = if pill {
+        badge
+            .gap(rpx(12.))
+            .h(rpx(48.))
+            .px(rpx(14.))
+            .rounded(rpx(24.))
+            .child(theme::icon("play", 22., theme::STRONG))
+            .child(theme::icon("external-link", 22., theme::STRONG))
+    } else {
+        badge
+            .size(rpx(48.))
+            .rounded_full()
+            .child(theme::icon("play", 20., theme::STRONG))
+    };
     element.child(
         div()
             .absolute()
@@ -396,16 +417,7 @@ fn play_badge(element: Div) -> Div {
             .flex()
             .items_center()
             .justify_center()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size(rpx(48.))
-                    .rounded_full()
-                    .bg(rgba(0x000000A6))
-                    .child(theme::icon("play", 20., theme::STRONG)),
-            ),
+            .child(badge),
     )
 }
 
@@ -570,7 +582,12 @@ pub fn render_embed(
             .child(wrapped_label(("embed-title-text", key(62)), &title.text)),
         );
     }
-    if let Some(description) = &embed.description {
+    // Discord leaves the description off video embeds such as YouTube's.
+    if let Some(description) = embed
+        .description
+        .as_ref()
+        .filter(|_| embed.kind != EmbedKind::Video)
+    {
         let description = description_text(description);
         body = body.child(markdown(
             app,
@@ -629,8 +646,16 @@ pub fn render_embed(
         match big_media.as_slice() {
             [] => None,
             [single] if video => {
-                let (width, height) = fit(single, media_max);
-                Some(play_badge(image_box(single, width, height, 8., cx)).into_any_element())
+                // The thumbnail can be letterboxed (YouTube's hqdefault is 4:3 with bars), so
+                // size the box from the video and let the thumbnail cover it.
+                let shape = embed
+                    .video
+                    .as_ref()
+                    .filter(|video| video.width > 0 && video.height > 0)
+                    .unwrap_or(single);
+                let (width, height) = fit(shape, media_max);
+                let pill = embed.url.is_some();
+                Some(play_badge(image_box(single, width, height, 8., cx), pill).into_any_element())
             }
             [single] => {
                 Some(fitted(app, key(IMAGE_SLOT), single, media_max, cx).into_any_element())
