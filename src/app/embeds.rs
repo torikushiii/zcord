@@ -14,7 +14,7 @@ use crate::{
     },
     emoji, images,
     store::{Component, Embed, EmbedField, EmbedKind, GalleryItem, Media, Reaction, ReactionEmoji},
-    theme::{self, rpx},
+    theme::{self, WithoutTextSelection, rpx},
 };
 
 const EMBED_WIDTH: f32 = 516.;
@@ -232,7 +232,13 @@ fn image_box(media: &Media, width: f32, height: f32, radius: f32, cx: &App) -> D
         .children(child)
 }
 
-fn gifv_box(still: &Media, video: Option<&Media>, cx: &App) -> Div {
+fn gifv_box(
+    app: &DiscordApp,
+    key: u64,
+    still: &Media,
+    video: Option<&Media>,
+    cx: &App,
+) -> Stateful<Div> {
     let (width, height) = fit(
         video.filter(|video| video.width > 0).unwrap_or(still),
         PLAIN_MEDIA,
@@ -241,7 +247,7 @@ fn gifv_box(still: &Media, video: Option<&Media>, cx: &App) -> Div {
     let playing = video.and_then(|video| {
         crate::video::resolve(&video.video_spec(), pixels, cx).map(|frames| (video, frames))
     });
-    match playing {
+    let element = match playing {
         Some((video, frames)) => div()
             .flex_none()
             .w(rpx(width))
@@ -256,7 +262,12 @@ fn gifv_box(still: &Media, video: Option<&Media>, cx: &App) -> Div {
                     .id(animated_id(&video.url)),
             ),
         None => image_box(still, width, height, 8., cx),
-    }
+    };
+    element
+        .id(("lightbox-open", key))
+        .cursor_pointer()
+        .without_text_selection()
+        .on_click(super::lightbox::gifv_opener(app, still, video, pixels))
 }
 
 fn fitted(app: &DiscordApp, key: u64, media: &Media, max: (f32, f32), cx: &App) -> Stateful<Div> {
@@ -461,7 +472,7 @@ pub fn render_embed(
                 .flex()
                 .flex_col()
                 .mt_1()
-                .child(gifv_box(media, embed.video.as_ref(), cx))
+                .child(gifv_box(app, key(IMAGE_SLOT), media, embed.video.as_ref(), cx))
                 .child(
                     div()
                         .mt(rpx(4.))
