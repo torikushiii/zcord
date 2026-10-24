@@ -193,6 +193,13 @@ impl Fonts {
         self.font_size * style.scale.unwrap_or(1.)
     }
 
+    /// Where unscaled body text puts its baseline. Measured from a shaped run rather than the
+    /// font's reported metrics, which can differ from what shaping uses and push text low.
+    fn baseline(&self, window: &mut Window) -> Pixels {
+        let shaped = self.shape("x", &PieceStyle::default(), false, window);
+        (self.line_height - shaped.ascent - shaped.descent) / 2. + shaped.ascent
+    }
+
     fn shape(
         &self,
         text: &str,
@@ -238,6 +245,13 @@ struct Line {
 }
 
 impl Line {
+    fn text_top(&self, shaped: &ShapedLine, text_height: Pixels, baseline: Pixels) -> Pixels {
+        // GPUI centers each shaped run internally; compensate to share a baseline.
+        self.y + (self.height - text_height) / 2. + baseline
+            - (text_height - shaped.ascent - shaped.descent) / 2.
+            - shaped.ascent
+    }
+
     fn visible(&self, origin: Point<Pixels>, mask: Bounds<Pixels>, overdraw: Pixels) -> bool {
         let top = origin.y + self.y;
         top < mask.bottom() + overdraw && top + self.height > mask.top() - overdraw
@@ -890,6 +904,7 @@ impl Element for RichText {
         };
 
         let mask = window.content_mask().bounds;
+        let baseline = fonts.baseline(window);
         for line in prepaint
             .layout
             .lines
@@ -972,7 +987,7 @@ impl Element for RichText {
                 let origin = bounds.origin
                     + point(
                         fragment.x + fragment.pad_left,
-                        line.y + (line.height - text_height) / 2.,
+                        line.text_top(shaped, text_height, baseline),
                     );
                 shaped
                     .paint(origin, text_height, TextAlign::Left, None, window, cx)

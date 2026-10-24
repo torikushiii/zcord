@@ -7,12 +7,12 @@ use gpui::{
 use gpui_component::ElementExt;
 
 use super::{
-    EMBED_HORIZONTAL_INSET, EMBED_MEDIA, EMBED_WIDTH, component_container, description_text,
-    embed_card, fit, single_gallery_frame,
+    EMBED_HORIZONTAL_INSET, EMBED_MEDIA, EMBED_WIDTH, card_content_width, component_container,
+    description_text, embed_card, fit, single_gallery_frame,
 };
 use crate::{
     app::rich_text::{Piece, PieceStyle, rich_text},
-    store::Media,
+    store::{Embed, EmbedKind, Media},
     theme::rpx,
 };
 
@@ -50,6 +50,7 @@ fn media_dimensions_keep_their_existing_limits_and_aspect_ratio() {
 
 struct EmbedLayout {
     media_width: Option<f32>,
+    card_width: Option<f32>,
     description: String,
     side_thumbnail: bool,
     weight: Rc<RefCell<Option<FontWeight>>>,
@@ -94,7 +95,7 @@ impl Render for EmbedLayout {
                     )
                 });
         div().size_full().font_weight(FontWeight::BOLD).child(
-            embed_card(None, self.media_width)
+            embed_card(None, self.card_width.or(self.media_width))
                 .debug_selector(|| "card".into())
                 .child(content)
                 .children(self.media_width.map(|width| {
@@ -114,6 +115,7 @@ fn text_wraps_to_the_media_width_at_each_zoom(cx: &mut TestAppContext) {
     let weight = Rc::new(RefCell::new(None));
     let (_, cx) = cx.add_window_view(|_, _| EmbedLayout {
         media_width: Some(400.),
+        card_width: None,
         description: "Beach event is almost over... Don't forget to claim your free Lucy skin!"
             .into(),
         side_thumbnail: false,
@@ -142,6 +144,7 @@ fn text_only_and_side_thumbnail_cards_keep_the_existing_width_limit(cx: &mut Tes
     cx.update(gpui_component::init);
     let (view, cx) = cx.add_window_view(|_, _| EmbedLayout {
         media_width: None,
+        card_width: None,
         description: "Short description".into(),
         side_thumbnail: false,
         weight: Rc::new(RefCell::new(None)),
@@ -164,6 +167,57 @@ fn text_only_and_side_thumbnail_cards_keep_the_existing_width_limit(cx: &mut Tes
     assert!(card.size.width <= px(EMBED_WIDTH));
     assert_eq!(thumbnail.size.width, px(80.));
     assert!(thumbnail.right() < card.right());
+}
+
+#[gpui::test]
+fn portrait_posts_keep_readable_text_without_stretching_the_media(cx: &mut TestAppContext) {
+    let description = "Translated from Japanese. A portrait video should not force the entire post into a narrow column.";
+    let mut embed = Embed {
+        kind: EmbedKind::Video,
+        url: None,
+        color: None,
+        provider: None,
+        author: None,
+        title: None,
+        description: Some(description.into()),
+        fields: Vec::new(),
+        components: Vec::new(),
+        thumbnail: None,
+        images: Vec::new(),
+        video: None,
+        footer: None,
+        timestamp: None,
+    };
+    let portrait = (169., 300.);
+    let card_width = card_content_width(&embed, portrait);
+    assert_eq!(card_width + EMBED_HORIZONTAL_INSET, EMBED_WIDTH);
+    assert_eq!(card_content_width(&embed, (400., 225.)), 400.);
+    embed.description = None;
+    assert_eq!(card_content_width(&embed, portrait), portrait.0);
+
+    cx.update(gpui_component::init);
+    let (_, cx) = cx.add_window_view(|_, _| EmbedLayout {
+        media_width: Some(portrait.0),
+        card_width: Some(card_width),
+        description: description.into(),
+        side_thumbnail: false,
+        weight: Rc::new(RefCell::new(None)),
+    });
+    for zoom in [1., 1.25, 1.5] {
+        cx.update(|window, cx| {
+            window.set_rem_size(px(16. * zoom));
+            window.refresh();
+            let _ = window.draw(cx);
+        });
+        let card = cx.debug_bounds("card").unwrap();
+        let text = cx.debug_bounds("description").unwrap();
+        let media = cx.debug_bounds("media").unwrap();
+        assert!((card.size.width - px(EMBED_WIDTH * zoom)).abs() <= px(1.));
+        assert!((media.size.width - px(portrait.0 * zoom)).abs() <= px(1.));
+        assert!(text.size.width > media.size.width * 2.);
+        assert!(text.bottom() <= media.top());
+        assert!((text.left() - media.left()).abs() <= px(1.));
+    }
 }
 
 struct LongComponentEmbed {

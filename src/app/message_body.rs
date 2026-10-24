@@ -213,27 +213,40 @@ fn render_block(
             .flex_col()
             .w_full()
             .children(items.iter().enumerate().map(|(index, item)| {
-                let marker = match start {
-                    Some(start) => format!("{}.", start + index as u64),
-                    None => match depth {
-                        0 => "•",
-                        1 => "◦",
-                        _ => "▪",
-                    }
-                    .into(),
-                };
                 let last_item = index + 1 == items.len();
+                let marker = match start {
+                    Some(start) => {
+                        *counter += 1;
+                        let id = ("marker", (context.message_id << 8) ^ u64::from(*counter));
+                        // Numbers hang left of the text like Discord's outside markers. They
+                        // stay rich text so they share the item text's baseline.
+                        div()
+                            .absolute()
+                            .top_0()
+                            .right(rpx(LIST_MARKER_GAP))
+                            .child(
+                                rich_text(
+                                    id,
+                                    vec![Piece::text(
+                                        format!("{}.", start + index as u64),
+                                        PieceStyle::default(),
+                                    )],
+                                )
+                                .single_line(),
+                            )
+                            .into_any_element()
+                    }
+                    None => list_bullet(depth, theme::TEXT).into_any_element(),
+                };
                 div()
                     .flex()
                     .w_full()
                     .child(
                         div()
+                            .relative()
                             .flex_none()
-                            .w(rpx(24.))
-                            .pr(rpx(6.))
-                            .flex()
-                            .justify_end()
-                            .line_height(rpx(22.))
+                            .w(rpx(LIST_INDENT))
+                            .h(rpx(22.))
                             .child(marker),
                     )
                     .child(div().flex().flex_col().flex_1().min_w_0().children(
@@ -252,6 +265,28 @@ fn render_block(
                     ))
             }))
             .into_any_element(),
+    }
+}
+
+/// Discord indents list text 16px and hangs the marker in that gutter.
+const LIST_INDENT: f32 = 16.;
+const LIST_MARKER_GAP: f32 = 4.;
+
+/// Disc, ring, then square by nesting depth, centred on the first line's x-height.
+fn list_bullet(depth: usize, color: u32) -> Div {
+    let size = 5.;
+    let bullet = div()
+        .absolute()
+        .left(rpx(-1.))
+        .top(rpx(10.5))
+        .size(rpx(size));
+    match depth {
+        0 => bullet.rounded_full().bg(rgb(color)),
+        1 => bullet
+            .rounded_full()
+            .border(rpx(1.25))
+            .border_color(rgb(color)),
+        _ => bullet.bg(rgb(color)),
     }
 }
 
