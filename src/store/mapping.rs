@@ -290,6 +290,17 @@ fn map_component(component: &model::Component) -> Option<Component> {
     })
 }
 
+pub(super) fn map_stickers(stickers: &[model::Sticker]) -> Vec<Sticker> {
+    stickers
+        .iter()
+        .map(|sticker| Sticker {
+            id: sticker.id,
+            name: sticker.name.clone(),
+            format: sticker.format_type,
+        })
+        .collect()
+}
+
 pub(super) fn map_message(message: &model::Message) -> Option<Message> {
     Some(Message {
         id: message.id,
@@ -301,6 +312,7 @@ pub(super) fn map_message(message: &model::Message) -> Option<Message> {
         components: map_components(&message.components),
         reactions: map_reactions(&message.reactions),
         attachments: message.attachments.clone(),
+        stickers: map_stickers(&message.sticker_items),
         kind: message.kind,
         edited: message.edited_timestamp.is_some(),
         reply: None,
@@ -332,6 +344,7 @@ pub(super) fn map_snapshot(
         embeds: map_embeds(&snapshot.embeds, snapshot.flags),
         components: map_components(&snapshot.components),
         attachments: snapshot.attachments.clone(),
+        stickers: map_stickers(&snapshot.sticker_items),
         timestamp: snapshot.timestamp.as_deref().and_then(local_timestamp),
         edited: snapshot.edited_timestamp.is_some(),
         channel_id,
@@ -449,7 +462,15 @@ pub(super) fn map_guild(
                 && discord::can_view(guild, c, source.user.id)
         })
         .collect();
-    ordered.sort_by_key(|c| (c.position.unwrap_or(0), c.id));
+    // Discord lists voice and stage channels after text-like ones within each category,
+    // regardless of position.
+    ordered.sort_by_key(|c| {
+        (
+            matches!(c.kind, Some(2 | 13)),
+            c.position.unwrap_or(0),
+            c.id,
+        )
+    });
     let mut mentions = 0u64;
     for channel in ordered {
         let kind = if matches!(channel.kind, Some(2 | 13)) {
@@ -497,6 +518,7 @@ pub(super) fn map_guild(
         categories: mapped,
         member_ids: members.iter().filter_map(|m| m.id()).collect(),
         icon: guild.icon(),
+        banner: guild.banner(),
         emojis: guild
             .emojis
             .as_deref()

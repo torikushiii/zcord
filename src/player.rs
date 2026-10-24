@@ -153,7 +153,7 @@ impl Player {
             return;
         };
         let state = self.state.clone();
-        cx.spawn(async move |_, cx| {
+        cx.spawn(async move |this, cx| {
             while let Some(event) = events.recv().await {
                 let retired = match event {
                     PlayerEvent::Frame(image) => {
@@ -169,7 +169,13 @@ impl Player {
                     }
                     PlayerEvent::State => None,
                 };
-                cx.update(|cx| cx.refresh_windows());
+                // Videos play inline in messages or in the lightbox overlay; redraw only those
+                // views rather than refreshing every cached panel at the video's frame rate.
+                this.update(cx, |app, cx| {
+                    app.views.messages.update(cx, |_, cx| cx.notify());
+                    app.views.overlays.update(cx, |_, cx| cx.notify());
+                })
+                .ok();
                 if let Some(image) = retired {
                     cx.update(|cx| cx.drop_image(image, None));
                 }
@@ -212,6 +218,43 @@ pub(crate) struct Video<'a> {
     pub width: f32,
     pub height: f32,
     pub radius: f32,
+    pub fullscreen: bool,
+}
+
+/// The video shown in the full-window player, and whether entering it also switched the
+/// window to fullscreen, so leaving restores the window as the user had it.
+pub(crate) struct Fullscreen {
+    pub key: u64,
+    pub url: String,
+    pub poster: Option<ImageSpec>,
+    pub window: bool,
+}
+
+pub(crate) fn fullscreen(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
+    let fullscreen = app.video_fullscreen.as_ref()?;
+    let video = video_box(
+        app,
+        Video {
+            key: fullscreen.key,
+            url: &fullscreen.url,
+            poster: fullscreen.poster.clone(),
+            width: 0.,
+            height: 0.,
+            radius: 0.,
+            fullscreen: true,
+        },
+        cx,
+    );
+    Some(
+        div()
+            .id("video-fullscreen")
+            .absolute()
+            .inset_0()
+            .occlude()
+            .bg(rgb(0x000000))
+            .child(video)
+            .into_any_element(),
+    )
 }
 
 pub(crate) fn video_box(app: &DiscordApp, video: Video<'_>, cx: &App) -> AnyElement {
@@ -228,17 +271,29 @@ pub(crate) fn video_box(app: &DiscordApp, video: Video<'_>, cx: &App) -> AnyElem
         .and_then(|spec| images::resolve(spec, theme::image_px(video.width.max(video.height)), cx));
     let frame = state.as_ref().and_then(|state| state.frame.clone());
     let radius = video.radius;
+    let fullscreen = video.fullscreen;
+    // The full-window player owns the controls while it is open.
+    let covered = !fullscreen
+        && app
+            .video_fullscreen
+            .as_ref()
+            .is_some_and(|open| open.key == video.key);
+    let fit = if fullscreen {
+        ObjectFit::Contain
+    } else {
+        ObjectFit::Cover
+    };
 
     let visual: AnyElement = if let Some(frame) = frame {
         img(frame)
             .size_full()
-            .object_fit(ObjectFit::Cover)
+            .object_fit(fit)
             .rounded(rpx(radius))
             .into_any_element()
     } else if let Some(poster) = poster {
         img(poster)
             .size_full()
-            .object_fit(ObjectFit::Cover)
+            .object_fit(fit)
             .rounded(rpx(radius))
             .into_any_element()
     } else {
@@ -255,16 +310,27 @@ pub(crate) fn video_box(app: &DiscordApp, video: Video<'_>, cx: &App) -> AnyElem
     let width = video.width;
     let height = video.height;
     let url = video.url.to_owned();
+    let target = FullscreenTarget {
+        key,
+        url: url.clone(),
+        poster: video.poster.clone(),
+    };
 
     let mut body = div()
         .id(("video-box", key))
         .relative()
-        .flex_none()
-        .w(rpx(width))
-        .h(rpx(height))
-        .rounded(rpx(radius))
+        .map(|this| {
+            if fullscreen {
+                this.size_full().bg(rgb(0x000000))
+            } else {
+                this.flex_none()
+                    .w(rpx(width))
+                    .h(rpx(height))
+                    .rounded(rpx(radius))
+                    .bg(rgb(theme::ELEVATED))
+            }
+        })
         .overflow_hidden()
-        .bg(rgb(theme::ELEVATED))
         .cursor_pointer()
         .on_hover(move |hovered, _, cx| {
             hover_entity
@@ -314,8 +380,8 @@ pub(crate) fn video_box(app: &DiscordApp, video: Video<'_>, cx: &App) -> AnyElem
             if state.paused || state.ended {
                 body = body.child(center_play());
             }
-            if hovered || state.paused || state.ended || app.video_volume_open() {
-                body = body.child(control_bar(app, key, state));
+            if !covered && (hovered || state.paused || state.ended || app.video_volume_open()) {
+                body = body.child(control_bar(app, &target, fullscreen, state));
             }
         }
     }
@@ -404,7 +470,20 @@ fn error_overlay(error: &str, url: &str) -> AnyElement {
         .into_any_element()
 }
 
-fn control_bar(app: &DiscordApp, key: u64, state: &PlayerView) -> AnyElement {
+#[derive(Clone)]
+struct FullscreenTarget {
+    key: u64,
+    url: String,
+    poster: Option<ImageSpec>,
+}
+
+fn control_bar(
+    app: &DiscordApp,
+    target: &FullscreenTarget,
+    fullscreen: bool,
+    state: &PlayerView,
+) -> AnyElement {
+    let key = target.key;
     let play_entity = app.entity.clone();
     let seek_entity = app.entity.clone();
     let seek_bounds = app.video_seek_bounds.clone();
@@ -488,10 +567,47 @@ fn control_bar(app: &DiscordApp, key: u64, state: &PlayerView) -> AnyElement {
         .child(play)
         .child(seek)
         .child(volume_control(app, key, state))
+        .child(fullscreen_button(app, target, fullscreen))
         .into_any_element()
 }
 
-/// Mute button with a vertical volume slider that opens above it on hover.
+fn fullscreen_button(app: &DiscordApp, target: &FullscreenTarget, open: bool) -> impl IntoElement {
+    let entity = app.entity.clone();
+    let target = target.clone();
+    control_button(("video-fullscreen", target.key))
+        .child(theme::icon(
+            if open {
+                "video-exit-fullscreen"
+            } else {
+                "video-fullscreen"
+            },
+            20.,
+            theme::STRONG,
+        ))
+        .on_click(move |_, window, cx| {
+            cx.stop_propagation();
+            let target = target.clone();
+            entity
+                .update(cx, |app, cx| {
+                    if open {
+                        app.exit_video_fullscreen(window, cx);
+                    } else {
+                        app.enter_video_fullscreen(
+                            Fullscreen {
+                                key: target.key,
+                                url: target.url,
+                                poster: target.poster,
+                                window: false,
+                            },
+                            window,
+                            cx,
+                        );
+                    }
+                })
+                .ok();
+        })
+}
+
 fn volume_control(app: &DiscordApp, key: u64, state: &PlayerView) -> impl IntoElement {
     let mute_entity = app.entity.clone();
     let button_hover = app.entity.clone();

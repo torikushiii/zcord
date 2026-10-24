@@ -546,7 +546,8 @@ impl Store {
                     .message_snapshots
                     .first()
                     .map(|snapshot| &snapshot.message);
-                let (content, embeds, flags) = match snapshot.filter(|_| message.content.is_empty()) {
+                let (content, embeds, flags) = match snapshot.filter(|_| message.content.is_empty())
+                {
                     Some(snapshot) => (&snapshot.content, &snapshot.embeds, snapshot.flags),
                     None => (&message.content, &message.embeds, message.flags),
                 };
@@ -571,6 +572,17 @@ impl Store {
                         || snapshot.is_some_and(|snapshot| {
                             !snapshot.embeds.is_empty() || !snapshot.components.is_empty()
                         }),
+                    sticker: message
+                        .sticker_items
+                        .first()
+                        .or_else(|| {
+                            if message.content.is_empty() {
+                                snapshot.and_then(|snapshot| snapshot.sticker_items.first())
+                            } else {
+                                None
+                            }
+                        })
+                        .map(|sticker| sticker.name.clone()),
                 })
             }
             Some(None) => ReplyState::Deleted,

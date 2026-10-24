@@ -1,36 +1,44 @@
 use std::time::Duration;
 
 use gpui::{prelude::*, *};
-use gpui_component::{input::Textarea, tooltip::Tooltip};
+use gpui_component::{
+    input::{Textarea, TextareaState},
+    tooltip::Tooltip,
+};
 
 use crate::{
+    animated,
     app::{
-        DIALOG_EXIT, DISCORD_EPOCH_MS, DiscordApp, Editing, MESSAGE_LIMIT, ReplyTarget, embeds,
+        DIALOG_EXIT, DISCORD_EPOCH_MS, DiscordApp, Editing, JUMP_HIGHLIGHT, MESSAGE_LIMIT,
+        ReplyTarget, embeds,
         emoji_picker::{self, PickerTarget},
         member_list,
         message_body::{BodyContext, label, preview_pieces, render_body, wrapped_label},
         profile,
         rich_text::rich_text,
     },
-    images,
-    store::{Attachment, Delivery, Forward, Message, ReplyState},
-    theme::{self, rpx},
+    composer_tokens,
+    images::{self, ImageSpec},
+    store::{Attachment, Delivery, Forward, Message, ReplyState, Sticker},
+    theme::{self, WithoutTextSelection, rpx},
 };
 
 const GROUP_MINUTES: u32 = 7;
 const GUTTER: f32 = 72.;
 const BOTTOM_SPACER: f32 = 24.;
+const STICKER_SIZE: f32 = 160.;
 const LINK: u32 = 0x00A8FC;
 const DIALOG_ENTER: Duration = Duration::from_millis(200);
 
 #[cfg(test)]
 mod reply_tests;
 
-pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement + use<> {
-    let channel = app.channel();
-    let channel_name = channel.map_or("", |channel| &channel.name).to_owned();
+pub(crate) const HEADER_HEIGHT: f32 = 48.;
+
+pub fn header(app: &DiscordApp) -> impl IntoElement + use<> {
+    let channel_name = app.channel().map_or("", |channel| &channel.name).to_owned();
     let guild_name = app.guild().map_or("", |guild| &guild.name).to_owned();
-    let entity = cx.entity();
+    let entity = app.entity.clone();
     let search = div()
         .flex()
         .items_center()
@@ -54,97 +62,81 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .child(theme::icon("search", 16., theme::MUTED));
     div()
         .flex()
-        .flex_col()
-        .flex_1()
-        .min_w_0()
-        .h_full()
+        .items_center()
+        .gap_2()
+        .w_full()
+        .h(rpx(HEADER_HEIGHT))
+        .flex_none()
+        .pl_4()
+        .border_b_1()
+        .border_color(rgb(theme::BORDER))
+        .child(theme::icon("hash", 20., theme::FAINT))
         .child(
             div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .h(rpx(48.))
-                .flex_none()
-                .pl_4()
-                .border_b_1()
-                .border_color(rgb(theme::BORDER))
-                .child(theme::icon("hash", 20., theme::FAINT))
-                .child(
+                .min_w_0()
+                .truncate()
+                .text_size(rpx(16.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(theme::STRONG))
+                .child(label(
+                    ("header-channel", app.selected_channel_id),
+                    &channel_name,
+                )),
+        )
+        .child(div().flex_1())
+        .child(theme::icon_button(
+            "threads",
+            "messages-square",
+            20.,
+            theme::MUTED,
+        ))
+        .child(theme::icon_button(
+            "notifications",
+            "bell",
+            20.,
+            theme::MUTED,
+        ))
+        .child(theme::icon_button("pins", "pin", 20., theme::MUTED))
+        .child(
+            theme::icon_button(
+                "members",
+                "users",
+                20.,
+                if app.show_members {
+                    theme::STRONG
+                } else {
+                    theme::MUTED
+                },
+            )
+            .on_click(move |_, _, cx| {
+                entity.update(cx, |this, cx| this.toggle_members(cx)).ok();
+            }),
+        )
+        .map(|this| {
+            if app.show_members {
+                this.child(
                     div()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(rpx(16.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(theme::STRONG))
-                        .child(label(
-                            ("header-channel", app.selected_channel_id),
-                            &channel_name,
-                        )),
+                        .flex_none()
+                        .w(rpx(member_list::WIDTH))
+                        .px(rpx(8.))
+                        .child(search),
                 )
-                .child(div().flex_1())
-                .child(theme::icon_button(
-                    "threads",
-                    "messages-square",
-                    20.,
-                    theme::MUTED,
-                ))
-                .child(theme::icon_button(
-                    "notifications",
-                    "bell",
-                    20.,
-                    theme::MUTED,
-                ))
-                .child(theme::icon_button("pins", "pin", 20., theme::MUTED))
-                .child(
-                    theme::icon_button(
-                        "members",
-                        "users",
-                        20.,
-                        if app.show_members {
-                            theme::STRONG
-                        } else {
-                            theme::MUTED
-                        },
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_members(cx))),
-                )
-                .map(|this| {
-                    if app.show_members {
-                        this.child(
-                            div()
-                                .flex_none()
-                                .w(rpx(member_list::WIDTH))
-                                .px(rpx(8.))
-                                .child(search),
-                        )
-                    } else {
-                        this.child(div().flex_none().w(rpx(244.)).ml_2().mr_2().child(search))
-                    }
-                }),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_1()
-                .min_h_0()
-                .child(messages_column(app, entity, cx))
-                .when(app.show_members, |this| {
-                    this.child(member_list::render(app, cx))
-                }),
-        )
+            } else {
+                this.child(div().flex_none().w(rpx(244.)).ml_2().mr_2().child(search))
+            }
+        })
 }
 
-fn messages_column(
-    app: &DiscordApp,
-    entity: Entity<DiscordApp>,
-    cx: &App,
-) -> impl IntoElement + use<> {
+/// The composer and member list are separate sibling views.
+pub fn messages(app: &DiscordApp) -> impl IntoElement + use<> {
     let channel = app.channel();
+    let list_entity = app.entity.clone();
     div()
         .flex()
         .flex_col()
         .flex_1()
         .min_w_0()
+        .w_full()
         .h_full()
         .map(|this| {
             if channel.is_some_and(|channel| app.live && !channel.messages_loaded) {
@@ -178,9 +170,9 @@ fn messages_column(
                 let bar = if is_detached(app) {
                     None
                 } else {
-                    new_messages_bar(app, entity.clone())
+                    new_messages_bar(app, app.entity.clone())
                 };
-                let older = older_messages_bar(app, entity.clone());
+                let older = older_messages_bar(app, app.entity.clone());
                 this.child(
                     div()
                         .relative()
@@ -191,7 +183,10 @@ fn messages_column(
                         .w_full()
                         .child(
                             list(app.messages.clone(), move |index, _, cx| {
-                                render_row(entity.read(cx), index, cx)
+                                let Some(app) = list_entity.upgrade() else {
+                                    return div().into_any_element();
+                                };
+                                render_row(app.read(cx), index, cx)
                             })
                             .flex_1()
                             .min_h_0()
@@ -202,12 +197,17 @@ fn messages_column(
                 )
             }
         })
-        .child(composer(app, cx))
 }
 
-fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
+pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
     let can_send = app.store.can_send(app.selected_channel_id);
-    let length = app.composer.read(cx).value().chars().count();
+    // Discord counts the sent form, so tokens count as their `<:name:id>` markup.
+    let text = app.composer.read(cx).text();
+    let length = if text.chars().any(composer_tokens::is_token_char) {
+        composer_tokens::to_wire(&text.to_string()).chars().count()
+    } else {
+        text.len_chars()
+    };
     let remaining = MESSAGE_LIMIT as i64 - length as i64;
     div()
         .relative()
@@ -242,14 +242,20 @@ fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                     theme::MUTED,
                 )))
                 .child(
-                    div().flex_1().min_w_0().ml_4().child(
-                        flush_textarea(Textarea::new(&app.composer))
-                            .disabled(!can_send)
-                            .py(rpx(17.))
-                            .text_size(rpx(16.))
-                            .line_height(rpx(22.))
-                            .text_color(rgb(theme::TEXT)),
-                    ),
+                    div()
+                        .relative()
+                        .flex_1()
+                        .min_w_0()
+                        .ml_4()
+                        .child(
+                            flush_textarea(Textarea::new(&app.composer))
+                                .disabled(!can_send)
+                                .py(rpx(17.))
+                                .text_size(rpx(16.))
+                                .line_height(rpx(22.))
+                                .text_color(rgb(theme::TEXT)),
+                        )
+                        .child(emoji_token_overlay(&app.composer)),
                 )
                 .child(
                     div()
@@ -303,6 +309,70 @@ fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 }),
         )
         .children(typing_indicator(app))
+}
+
+/// Paints custom emoji over their invisible composer tokens (see `composer_tokens`).
+///
+/// Token positions come from the textarea's layout, which it records while painting, so this
+/// canvas must come after the textarea to read the current frame's layout instead of the last.
+fn emoji_token_overlay(input: &Entity<TextareaState>) -> impl IntoElement + use<> {
+    let input = input.clone();
+    canvas(
+        |_, _, _| {},
+        move |_, _, window, cx| {
+            let (tokens, clip, selected) = {
+                let state = input.read(cx);
+                // Paint runs every frame; skip the text copy unless a token can be present.
+                if !state.text().chars().any(composer_tokens::is_token_char) {
+                    return;
+                }
+                let tokens: Vec<_> = composer_tokens::tokens_in(&state.value())
+                    .into_iter()
+                    .filter_map(|(range, token)| {
+                        let bounds = state.range_to_bounds(&range)?;
+                        Some((range, bounds, token))
+                    })
+                    .collect();
+                (tokens, state.input_bounds(), state.selected_range())
+            };
+            if tokens.is_empty() {
+                return;
+            }
+            let size = rpx(18.).to_pixels(window.rem_size());
+            window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
+                for (range, bounds, token) in tokens {
+                    // The token's variation selectors have no glyph in the UI font and draw as
+                    // small boxes, so cover the whole token with the input background first.
+                    window.paint_quad(fill(bounds, rgb(theme::ELEVATED)));
+                    if range.start >= selected.start && range.end <= selected.end {
+                        window.paint_quad(fill(bounds, rgba(0x5865F24D)));
+                    }
+                    let spec = ImageSpec::Emoji {
+                        id: token.id,
+                        animated: false,
+                    };
+                    let Some(image) = animated::resolve(&spec, theme::image_px(22.), cx) else {
+                        continue;
+                    };
+                    // Centred on the whole token: the EM SPACE plus whatever width the
+                    // selector boxes take.
+                    let frame = image.size(0);
+                    let scale = size / px(frame.width.0.max(frame.height.0) as f32);
+                    let fitted = gpui::size(
+                        px(frame.width.0 as f32) * scale,
+                        px(frame.height.0 as f32) * scale,
+                    );
+                    let origin = bounds.center() - point(fitted.width / 2., fitted.height / 2.);
+                    let target = Bounds::new(origin, fitted);
+                    window
+                        .paint_image(target, Corners::default(), image, 0, false)
+                        .ok();
+                }
+            });
+        },
+    )
+    .absolute()
+    .inset_0()
 }
 
 const TEXTAREA_BUILTIN_INSET_X: f32 = 10.;
@@ -717,7 +787,7 @@ fn is_detached(app: &DiscordApp) -> bool {
         .is_some_and(|channel| channel.messages_loaded && !app.store.at_present(channel.id))
 }
 
-fn new_messages_bar(app: &DiscordApp, entity: Entity<DiscordApp>) -> Option<AnyElement> {
+fn new_messages_bar(app: &DiscordApp, entity: WeakEntity<DiscordApp>) -> Option<AnyElement> {
     if !app.unread_bar || is_detached(app) {
         return None;
     }
@@ -776,7 +846,7 @@ fn new_messages_bar(app: &DiscordApp, entity: Entity<DiscordApp>) -> Option<AnyE
                     .font_weight(FontWeight::MEDIUM)
                     .cursor_pointer()
                     .on_click(move |_, _, cx| {
-                        jump.update(cx, |app, cx| app.jump_to_unread(cx));
+                        jump.update(cx, |app, cx| app.jump_to_unread(cx)).ok();
                     })
                     .child(label),
             )
@@ -787,7 +857,9 @@ fn new_messages_bar(app: &DiscordApp, entity: Entity<DiscordApp>) -> Option<AnyE
                     .font_weight(FontWeight::SEMIBOLD)
                     .cursor_pointer()
                     .on_click(move |_, window, cx| {
-                        entity.update(cx, |app, cx| app.jump_to_present(window, cx));
+                        entity
+                            .update(cx, |app, cx| app.jump_to_present(window, cx))
+                            .ok();
                     })
                     .child("Mark As Read"),
             )
@@ -795,7 +867,7 @@ fn new_messages_bar(app: &DiscordApp, entity: Entity<DiscordApp>) -> Option<AnyE
     )
 }
 
-fn older_messages_bar(app: &DiscordApp, entity: Entity<DiscordApp>) -> Option<AnyElement> {
+fn older_messages_bar(app: &DiscordApp, entity: WeakEntity<DiscordApp>) -> Option<AnyElement> {
     if !app.live || !is_detached(app) {
         return None;
     }
@@ -848,7 +920,8 @@ fn older_messages_bar(app: &DiscordApp, entity: Entity<DiscordApp>) -> Option<An
                             .whitespace_nowrap()
                             .cursor_pointer()
                             .on_click(move |_, window, cx| {
-                                jump.update(cx, |app, cx| app.jump_to_present(window, cx));
+                                jump.update(cx, |app, cx| app.jump_to_present(window, cx))
+                                    .ok();
                             })
                             .child("Jump To Present"),
                     ),
@@ -1030,6 +1103,33 @@ fn attachment_reply_preview() -> Div {
         )
 }
 
+fn sticker_reply_preview(name: &str) -> Div {
+    let label = if name.is_empty() {
+        "Sticker".to_owned()
+    } else {
+        format!("Sticker: {name}")
+    };
+    div()
+        .flex()
+        .items_center()
+        .gap(rpx(4.))
+        .min_w_0()
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .italic()
+                .debug_selector(|| "reply-sticker-label".into())
+                .child(label),
+        )
+        .child(
+            div()
+                .flex_none()
+                .debug_selector(|| "reply-sticker-icon".into())
+                .child(theme::icon("sticker", 18., theme::MUTED)),
+        )
+}
+
 fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) -> AnyElement {
     let spine = div()
         .absolute()
@@ -1058,7 +1158,9 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
             let mut counter = 0;
             let pieces = preview_pieces(&parsed.blocks, &context, &mut counter, cx);
             let preview: AnyElement = if pieces.is_empty() {
-                if reply.attachments || reply.embeds {
+                if let Some(name) = &reply.sticker {
+                    sticker_reply_preview(name).into_any_element()
+                } else if reply.attachments || reply.embeds {
                     attachment_reply_preview().into_any_element()
                 } else {
                     div().into_any_element()
@@ -1074,6 +1176,7 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
             let entity = app.entity.clone();
             content
                 .id(("reply-preview", message.id))
+                .without_text_selection()
                 .cursor_pointer()
                 .on_click(move |_, window, cx| {
                     cx.stop_propagation();
@@ -1107,8 +1210,14 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
                         .text_color(author_color(app, reply.author_id))
                         .child(label(
                             ("reply-author", message.id),
-                            &author_name(app, reply.author_id),
+                            &format!("@{}", author_name(app, reply.author_id)),
                         )),
+                )
+                .children(
+                    app.store
+                        .user(reply.author_id)
+                        .and_then(|user| user.tag.as_ref())
+                        .map(|tag| theme::guild_tag(tag, cx)),
                 )
                 .child(div().flex_1().min_w_0().overflow_hidden().child(preview))
                 .into_any_element()
@@ -1131,12 +1240,7 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
         .into_any_element()
 }
 
-fn render_forward(
-    app: &DiscordApp,
-    message_id: u64,
-    forward: &Forward,
-    cx: &App,
-) -> AnyElement {
+fn render_forward(app: &DiscordApp, message_id: u64, forward: &Forward, cx: &App) -> AnyElement {
     let key = forward_key(message_id);
     let parsed = app.parsed(key, &forward.content);
     let context = body_context(app, key);
@@ -1149,7 +1253,9 @@ fn render_forward(
         let text = match (channel, forward.timestamp) {
             (Some(channel), Some(timestamp)) => format!("#{channel} • {}", timestamp.full()),
             (Some(channel), None) => format!("#{channel}"),
-            (None, timestamp) => timestamp.map(|timestamp| timestamp.full()).unwrap_or_default(),
+            (None, timestamp) => timestamp
+                .map(|timestamp| timestamp.full())
+                .unwrap_or_default(),
         };
         div()
             .mt(rpx(2.))
@@ -1203,6 +1309,12 @@ fn render_forward(
                 .attachments
                 .iter()
                 .map(|attachment| render_attachment(app, attachment, cx)),
+        )
+        .children(
+            forward
+                .stickers
+                .iter()
+                .map(|sticker| render_sticker(app, message_id, sticker, cx)),
         )
         .children(
             forward
@@ -1293,6 +1405,21 @@ fn render_message(
             }
         })
         .children(
+            app.jump_highlight
+                .filter(|(id, _)| *id == message.id && !preview)
+                .map(|(_, nonce)| {
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .bg(rgba(0x5865F233))
+                        .with_animation(
+                            ("jump-highlight", nonce),
+                            Animation::new(JUMP_HIGHLIGHT),
+                            |this, delta| this.opacity(1. - ((delta - 0.25) / 0.75).clamp(0., 1.)),
+                        )
+                }),
+        )
+        .children(
             message
                 .reply
                 .as_ref()
@@ -1324,11 +1451,13 @@ fn render_message(
                                     div()
                                         .id("author-avatar")
                                         .when(!preview, |this| {
-                                            this.cursor_pointer().on_click(profile::opener(
-                                                app,
-                                                message.author_id,
-                                                Anchor::TopLeft,
-                                            ))
+                                            this.cursor_pointer().without_text_selection().on_click(
+                                                profile::opener(
+                                                    app,
+                                                    message.author_id,
+                                                    Anchor::TopLeft,
+                                                ),
+                                            )
                                         })
                                         .child(theme::member_avatar(
                                             &app.store,
@@ -1355,6 +1484,8 @@ fn render_message(
                                     .flex()
                                     .items_center()
                                     .gap(rpx(6.))
+                                    .h(rpx(22.))
+                                    .line_height(rpx(22.))
                                     .child(
                                         div()
                                             .id("author-name")
@@ -1363,6 +1494,7 @@ fn render_message(
                                             .text_color(author_color(app, message.author_id))
                                             .when(!preview, |this| {
                                                 this.cursor_pointer()
+                                                    .without_text_selection()
                                                     .hover(|style| style.underline())
                                                     .on_click(profile::opener(
                                                         app,
@@ -1434,6 +1566,12 @@ fn render_message(
                                 .iter()
                                 .map(|attachment| render_attachment(app, attachment, cx)),
                         )
+                        .children(
+                            message
+                                .stickers
+                                .iter()
+                                .map(|sticker| render_sticker(app, message.id, sticker, cx)),
+                        )
                         .when(trailing_edited, |this| {
                             this.child(
                                 div()
@@ -1443,7 +1581,12 @@ fn render_message(
                                     .child("(edited)"),
                             )
                         })
-                        .children(embeds::render_reactions(app, message.id, &message.reactions, cx)),
+                        .children(embeds::render_reactions(
+                            app,
+                            message.id,
+                            &message.reactions,
+                            cx,
+                        )),
                 ),
         )
         .when(!preview && editing.is_none(), |this| {
@@ -1475,13 +1618,15 @@ fn message_editor(app: &DiscordApp, editing: &Editing) -> impl IntoElement {
                 .bg(rgb(theme::ELEVATED))
                 .border_1()
                 .border_color(rgb(theme::BORDER))
+                .relative()
                 .child(
                     flush_textarea(Textarea::new(&editing.input))
                         .py(rpx(11.))
                         .text_size(rpx(16.))
                         .line_height(rpx(22.))
                         .text_color(rgb(theme::TEXT)),
-                ),
+                )
+                .child(emoji_token_overlay(&editing.input)),
         )
         .child(
             div()
@@ -1776,6 +1921,98 @@ pub(super) fn delete_dialog(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
 
 const MEDIA_MAX: (f32, f32) = (550., 350.);
 
+fn sticker_placeholder(sticker: &Sticker) -> AnyElement {
+    let name = if sticker.name.is_empty() {
+        "Sticker".to_owned()
+    } else {
+        sticker.name.clone()
+    };
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(rpx(8.))
+        .size_full()
+        .rounded(rpx(8.))
+        .bg(rgb(theme::ELEVATED))
+        .border_1()
+        .border_color(rgb(theme::BORDER))
+        .child(theme::icon("sticker", 48., theme::MUTED))
+        .child(
+            div()
+                .max_w(rpx(STICKER_SIZE - 16.))
+                .truncate()
+                .text_size(rpx(12.))
+                .line_height(rpx(16.))
+                .text_color(rgb(theme::MUTED))
+                .child(name),
+        )
+        .into_any_element()
+}
+
+fn render_sticker(app: &DiscordApp, message_id: u64, sticker: &Sticker, cx: &App) -> AnyElement {
+    let pixels = theme::image_px(STICKER_SIZE);
+    let image = sticker.image_spec().and_then(|spec| {
+        let still = || {
+            images::resolve(&spec, pixels, cx).map(|path| {
+                img(path)
+                    .id((
+                        ElementId::from(("sticker-still", message_id)),
+                        sticker.id.to_string(),
+                    ))
+                    .size_full()
+                    .object_fit(ObjectFit::Contain)
+                    .into_any_element()
+            })
+        };
+        match sticker.format {
+            2 | 4 => animated::resolve(&spec, pixels, cx)
+                .map(|image| {
+                    animated::image(image)
+                        .id((
+                            ElementId::from(("sticker", message_id)),
+                            sticker.id.to_string(),
+                        ))
+                        .size_full()
+                        .object_fit(ObjectFit::Contain)
+                        .into_any_element()
+                })
+                .or_else(still),
+            1 => still(),
+            _ => None,
+        }
+    });
+    let tip_shown = app.hovered_sticker == Some((message_id, sticker.id));
+    let entity = app.entity.clone();
+    let sticker_id = sticker.id;
+    let tip = if sticker.name.is_empty() {
+        "Sticker".to_owned()
+    } else {
+        sticker.name.clone()
+    };
+    div()
+        .id((
+            ElementId::from(("sticker-hover", message_id)),
+            sticker.id.to_string(),
+        ))
+        .relative()
+        .flex_none()
+        .w(rpx(STICKER_SIZE))
+        .h(rpx(STICKER_SIZE))
+        .mt_1()
+        .on_hover(move |hovered, _, cx| {
+            entity
+                .update(cx, |app, cx| {
+                    app.set_sticker_hover(message_id, sticker_id, *hovered, cx)
+                })
+                .ok();
+        })
+        .child(image.unwrap_or_else(|| sticker_placeholder(sticker)))
+        .when(tip_shown, |this| this.child(theme::tooltip_above(tip)))
+        .into_any_element()
+}
+
 fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &App) -> AnyElement {
     if attachment.is_video() {
         let Some(url) = attachment.video_url() else {
@@ -1818,6 +2055,7 @@ fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &App) -> Any
                     width,
                     height,
                     radius: 8.,
+                    fullscreen: false,
                 },
                 cx,
             ))

@@ -487,6 +487,8 @@ pub struct GuildProperties {
     pub owner_id: Option<u64>,
     #[serde(default, deserialize_with = "nullable_string")]
     pub icon: Option<Option<String>>,
+    #[serde(default, deserialize_with = "nullable_string")]
+    pub banner: Option<Option<String>>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -530,6 +532,14 @@ impl Guild {
             .cloned()
             .flatten()
     }
+    pub fn banner(&self) -> Option<String> {
+        self.properties
+            .banner
+            .as_ref()
+            .or(self.legacy.banner.as_ref())
+            .cloned()
+            .flatten()
+    }
     pub fn merge(&mut self, update: &Self) {
         if let Some(name) = update
             .properties
@@ -549,6 +559,14 @@ impl Guild {
             .or(update.legacy.icon.as_ref())
         {
             self.properties.icon = Some(icon.clone());
+        }
+        if let Some(banner) = update
+            .properties
+            .banner
+            .as_ref()
+            .or(update.legacy.banner.as_ref())
+        {
+            self.properties.banner = Some(banner.clone());
         }
         if update.channels.is_some() {
             self.channels.clone_from(&update.channels);
@@ -914,6 +932,8 @@ pub struct Message {
     pub embeds: Vec<Embed>,
     #[serde(default, deserialize_with = "entries")]
     pub attachments: Vec<Attachment>,
+    #[serde(default, deserialize_with = "entries")]
+    pub sticker_items: Vec<Sticker>,
     #[serde(default, rename = "type")]
     pub kind: u8,
     #[serde(default)]
@@ -958,6 +978,8 @@ pub struct MessageUpdate {
     pub embeds: Option<Vec<Embed>>,
     #[serde(default, deserialize_with = "optional_entries")]
     pub attachments: Option<Vec<Attachment>>,
+    #[serde(default, deserialize_with = "optional_entries")]
+    pub sticker_items: Option<Vec<Sticker>>,
     #[serde(default, rename = "type")]
     pub kind: Option<u8>,
     #[serde(default, deserialize_with = "nullable")]
@@ -1050,6 +1072,8 @@ pub struct SnapshotMessage {
     #[serde(default, deserialize_with = "entries")]
     pub attachments: Vec<Attachment>,
     #[serde(default, deserialize_with = "entries")]
+    pub sticker_items: Vec<Sticker>,
+    #[serde(default, deserialize_with = "entries")]
     pub components: Vec<Component>,
     #[serde(default)]
     pub flags: u64,
@@ -1086,6 +1110,8 @@ pub struct ReferencedMessage {
     pub content: String,
     #[serde(default, deserialize_with = "entries")]
     pub attachments: Vec<Attachment>,
+    #[serde(default, deserialize_with = "entries")]
+    pub sticker_items: Vec<Sticker>,
     #[serde(default, deserialize_with = "entries")]
     pub embeds: Vec<Embed>,
     #[serde(default, deserialize_with = "entries")]
@@ -1230,6 +1256,16 @@ pub struct MemberItem {
     pub group: Option<MemberGroup>,
     #[serde(default)]
     pub member: Option<PartialMember>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+pub struct Sticker {
+    #[serde(default, deserialize_with = "snowflake")]
+    pub id: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub format_type: u8,
 }
 
 #[derive(Clone, Deserialize)]
@@ -1481,6 +1517,61 @@ mod tests {
     }
 
     #[test]
+    fn message_sticker_items_parse_and_default() {
+        let base = json!({"id":"1","channel_id":"2","author":{"id":"3"},"timestamp":"2026-10-22T00:00:00Z"});
+        let message: Message = serde_json::from_value(base.clone()).unwrap();
+        assert!(message.sticker_items.is_empty());
+
+        let message: Message = serde_json::from_value(json!({
+            "id": "1",
+            "channel_id": "2",
+            "author": {"id": "3"},
+            "timestamp": "2026-10-22T00:00:00Z",
+            "sticker_items": [
+                {"id": "99", "name": "wave", "format_type": 2},
+                {"name": "no-id", "format_type": 1},
+                {"id": "not-a-snowflake", "name": "skipped"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(message.sticker_items.len(), 2);
+        assert_eq!(
+            (
+                message.sticker_items[0].id,
+                message.sticker_items[0].name.as_str(),
+                message.sticker_items[0].format_type
+            ),
+            (99, "wave", 2)
+        );
+        assert_eq!(
+            (
+                message.sticker_items[1].id,
+                message.sticker_items[1].name.as_str(),
+                message.sticker_items[1].format_type
+            ),
+            (0, "no-id", 1)
+        );
+
+        let snapshot: SnapshotMessage = serde_json::from_value(json!({
+            "sticker_items": [{"id": "7", "name": "forwarded", "format_type": 4}]
+        }))
+        .unwrap();
+        assert_eq!(snapshot.sticker_items[0].name, "forwarded");
+        assert_eq!(snapshot.sticker_items[0].format_type, 4);
+
+        let update: MessageUpdate = serde_json::from_value(json!({
+            "id": "1",
+            "channel_id": "2",
+            "sticker_items": [{"id": "8", "name": "edited", "format_type": 3}]
+        }))
+        .unwrap();
+        assert_eq!(update.sticker_items.unwrap()[0].format_type, 3);
+        let plain: MessageUpdate =
+            serde_json::from_value(json!({"id": "1", "channel_id": "2"})).unwrap();
+        assert!(plain.sticker_items.is_none());
+    }
+
+    #[test]
     fn message_snapshots_are_lenient() {
         let message: Message = serde_json::from_value(json!({
             "id": "1",
@@ -1520,6 +1611,9 @@ mod tests {
             "message_snapshots": [{"message": {"content": "edited"}}]
         }))
         .unwrap();
-        assert_eq!(update.message_snapshots.unwrap()[0].message.content, "edited");
+        assert_eq!(
+            update.message_snapshots.unwrap()[0].message.content,
+            "edited"
+        );
     }
 }

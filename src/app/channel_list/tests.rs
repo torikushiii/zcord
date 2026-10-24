@@ -34,6 +34,7 @@ fn guild(id: u64, channels: usize) -> Guild {
         }],
         member_ids: Vec::new(),
         icon: None,
+        banner: None,
         emojis: Vec::new(),
     }
 }

@@ -5,7 +5,7 @@ use gpui::{prelude::*, *};
 use crate::{
     app::{DiscordApp, embeds},
     images::{self, ImageSpec},
-    theme::{self, rpx},
+    theme::{self, WithoutTextSelection, rpx},
 };
 
 const MARGIN: f32 = 80.;
@@ -17,7 +17,6 @@ pub(crate) struct Lightbox {
     height: u32,
     /// Pixel budget the chat thumbnail was requested at, for the loading fallback.
     preview: u32,
-    /// Original URL, opened by "Open in Browser".
     url: String,
     /// Key passed to `embeds::animated`; the source URL, as the chat thumbnail uses.
     key: String,
@@ -52,11 +51,7 @@ impl DiscordApp {
     }
 }
 
-pub(super) fn render(
-    app: &DiscordApp,
-    window: &Window,
-    cx: &mut Context<DiscordApp>,
-) -> Option<AnyElement> {
+pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyElement> {
     let lightbox = app.lightbox.as_ref()?;
     let css = |pixels: Pixels| pixels / window.rem_size() * theme::BASE_FONT_SIZE;
     let viewport = window.viewport_size();
@@ -104,6 +99,7 @@ pub(super) fn render(
                             .rounded(rpx(4.))
                             .overflow_hidden()
                             .bg(rgb(theme::ELEVATED))
+                            .without_text_selection()
                             .on_click(|_, _, cx| cx.stop_propagation())
                             .children(image.map(|path| {
                                 embeds::animated(path, &key)
@@ -124,6 +120,7 @@ pub(super) fn render(
                             .text_color(rgb(theme::MUTED))
                             .cursor_pointer()
                             .hover(|style| style.text_color(rgb(theme::STRONG)).underline())
+                            .without_text_selection()
                             .on_click(move |_, _, cx| {
                                 cx.stop_propagation();
                                 cx.open_url(&url);

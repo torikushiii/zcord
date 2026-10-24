@@ -577,6 +577,7 @@ pub fn render_embed(
                 width: dimensions.0,
                 height: dimensions.1,
                 radius: 8.,
+                fullscreen: false,
             },
             cx,
         ))

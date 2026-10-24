@@ -11,12 +11,13 @@ mod profile;
 mod rich_text;
 mod smooth_scroll;
 mod titlebar;
+mod views;
 
 use crate::discord::{self, Event, FatalError, OutgoingMessage, OutgoingReply, Session};
 use login::LoginForm;
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     hash::{DefaultHasher, Hash, Hasher},
     rc::Rc,
@@ -29,11 +30,11 @@ use gpui_component::input::{InputEvent, RopeExt, TextareaState};
 use gpui_tokio::Tokio;
 
 use crate::{
-    credentials, emoji, markdown,
-    player::{Player, VideoDrag},
+    composer_tokens, credentials, emoji, markdown,
+    player::{Fullscreen, Player, VideoDrag},
     store::{
-        Change, Channel, ChannelKind, EmojiAccess, EmojiChoice, Guild, ReactionEmoji,
-        ReplyState, Store,
+        Change, Channel, ChannelKind, EmojiAccess, EmojiChoice, Guild, ReactionEmoji, ReplyState,
+        Store,
     },
     theme::{self, rpx},
 };
@@ -55,6 +56,17 @@ const ACK_DELAY: Duration = Duration::from_secs(1);
 pub(crate) const MESSAGE_LIMIT: usize = 2000;
 const TYPING_RESEND: Duration = Duration::from_secs(9);
 const TYPING_DURATION: Duration = Duration::from_secs(10);
+/// Fraction of the remaining distance a reply jump covers per frame.
+const JUMP_EASE: f32 = 0.2;
+pub(crate) const JUMP_HIGHLIGHT: Duration = Duration::from_millis(2000);
+
+struct JumpScroll {
+    message_id: u64,
+    nonce: u64,
+    /// Offset this animation left the list at, to notice the user scrolling over it.
+    last_offset: Option<Pixels>,
+}
+
 pub(crate) const DIALOG_EXIT: Duration = Duration::from_millis(150);
 
 fn ms_since_discord_epoch() -> u64 {
@@ -74,7 +86,13 @@ fn days_since_discord_epoch() -> u32 {
 
 actions!(
     zcord,
-    [JumpToPresent, MarkGuildRead, ComposerUp, ComposerDown, ComposerTab]
+    [
+        JumpToPresent,
+        MarkGuildRead,
+        ComposerUp,
+        ComposerDown,
+        ComposerTab
+    ]
 );
 
 #[derive(Clone, Copy)]
@@ -120,6 +138,8 @@ pub struct DiscordApp {
     pub(crate) profile: Option<profile::ProfileCard>,
     pub(crate) lightbox: Option<lightbox::Lightbox>,
     pub(crate) emoji_picker: Option<emoji_picker::EmojiPicker>,
+    emoji_picker_closing: Option<Task<()>>,
+    emoji_picker_animation: u64,
     emoji_picker_closed_at: Option<Instant>,
     pub(crate) emoji_suggest: emoji_picker::Suggest,
     typing: HashMap<u64, Vec<(u64, Instant)>>,
@@ -147,9 +167,13 @@ pub struct DiscordApp {
     drafts: HashMap<u64, String>,
     pub(crate) revealed_spoilers: HashSet<(u64, u16)>,
     pub(crate) hovered_rail: Option<u64>,
-    /// Message whose "Add Reaction" button is hovered, for its tooltip.
     pub(crate) hovered_add_reaction: Option<u64>,
+    pub(crate) hovered_sticker: Option<(u64, u64)>,
     pub(crate) player: Option<Player>,
+    pub(crate) video_fullscreen: Option<Fullscreen>,
+    jump: Option<JumpScroll>,
+    /// Message flashed after a reply jump lands, with a per-jump id to replay the fade.
+    pub(crate) jump_highlight: Option<(u64, u64)>,
     pub(crate) hovered_video: Option<u64>,
     video_drag: Option<(u64, VideoDrag)>,
     video_dragged_at: Option<Instant>,
@@ -159,6 +183,7 @@ pub struct DiscordApp {
     video_volume_hover: [bool; 2],
     pub(crate) rail_morphs: guild_rail::Morphs,
     pub(crate) entity: WeakEntity<Self>,
+    pub(crate) views: views::PanelViews,
     focus_handle: FocusHandle,
     window_active: bool,
     pub(crate) unread_since: Option<u64>,
@@ -168,6 +193,7 @@ pub struct DiscordApp {
     parsed: RefCell<HashMap<u64, Rc<Parsed>>>,
     _events: Option<Task<()>>,
     _composer_subscription: Subscription,
+    _composer_cursor_subscription: Subscription,
 }
 
 impl DiscordApp {
@@ -178,6 +204,10 @@ impl DiscordApp {
                 .submit_on_enter(true)
         });
         let messages = ListState::new(0, ListAlignment::Bottom, px(800.));
+        let last_cursor = Rc::new(Cell::new(0));
+        let cursor_subscription = cx.observe(&composer, move |_this, input, cx| {
+            snap_composer_cursor(&input, &last_cursor, cx);
+        });
         let subscription =
             cx.subscribe_in(
                 &composer,
@@ -189,12 +219,15 @@ impl DiscordApp {
                         }
                     }
                     InputEvent::Change => {
+                        this.repair_composer(window, cx);
                         this.reset_emoji_suggest(cx);
                         this.send_typing(cx);
                     }
                     _ => {}
                 },
             );
+        let app_entity = cx.entity();
+        let views = views::PanelViews::new(&app_entity, cx);
         let mut app = Self {
             screen: Screen::Connecting,
             store: Store::seed(),
@@ -214,6 +247,8 @@ impl DiscordApp {
             profile: None,
             lightbox: None,
             emoji_picker: None,
+            emoji_picker_closing: None,
+            emoji_picker_animation: 0,
             emoji_picker_closed_at: None,
             emoji_suggest: Default::default(),
             typing: HashMap::new(),
@@ -241,7 +276,11 @@ impl DiscordApp {
             revealed_spoilers: HashSet::new(),
             hovered_rail: None,
             hovered_add_reaction: None,
+            hovered_sticker: None,
             player: None,
+            video_fullscreen: None,
+            jump: None,
+            jump_highlight: None,
             hovered_video: None,
             video_drag: None,
             video_dragged_at: None,
@@ -249,7 +288,8 @@ impl DiscordApp {
             video_volume_bounds: Rc::new(RefCell::new(None)),
             video_volume_hover: [false; 2],
             rail_morphs: guild_rail::Morphs::default(),
-            entity: cx.entity().downgrade(),
+            entity: app_entity.downgrade(),
+            views,
             focus_handle: cx.focus_handle(),
             window_active: window.is_window_active(),
             unread_since: None,
@@ -258,6 +298,7 @@ impl DiscordApp {
             parsed: RefCell::new(HashMap::new()),
             _events: None,
             _composer_subscription: subscription,
+            _composer_cursor_subscription: cursor_subscription,
         };
         cx.on_focus(&app.focus_handle, window, |app, window, cx| {
             if matches!(app.screen, Screen::Chat) {
@@ -314,7 +355,7 @@ impl DiscordApp {
                                 }
                                 if app.unread_bar {
                                     app.unread_bar = false;
-                                    cx.notify();
+                                    app.views.messages.update(cx, |_, cx| cx.notify());
                                 }
                                 app.schedule_ack(cx);
                             })
@@ -323,7 +364,7 @@ impl DiscordApp {
                 }
                 app.schedule_ack(cx);
                 if app.unread_since.is_some() {
-                    cx.notify();
+                    app.views.messages.update(cx, |_, cx| cx.notify());
                 }
             })
             .ok();
@@ -598,12 +639,9 @@ impl DiscordApp {
             })
         });
         match saved.filter(|_| valid) {
-            Some(saved) => self.select_guild_channel(
-                saved.guild_id,
-                Some(saved.channel_id),
-                window,
-                cx,
-            ),
+            Some(saved) => {
+                self.select_guild_channel(saved.guild_id, Some(saved.channel_id), window, cx)
+            }
             None => self.select_first_guild(window, cx),
         }
     }
@@ -783,16 +821,41 @@ impl DiscordApp {
     fn emoji_insert_text(&self, choice: &EmojiChoice) -> Option<String> {
         match choice {
             EmojiChoice::Unicode { emoji, .. } => Some(emoji.clone()),
-            EmojiChoice::Custom(custom) => (self
-                .store
-                .emoji_access(
-                    custom,
-                    self.selected_guild_id,
-                    self.selected_channel_id,
-                )
-                == EmojiAccess::Usable)
-                .then(|| format!(":{}:", custom.name)),
+            EmojiChoice::Custom(custom) => {
+                (self
+                    .store
+                    .emoji_access(custom, self.selected_guild_id, self.selected_channel_id)
+                    == EmojiAccess::Usable)
+                    .then(|| composer_tokens::token_for(custom.id, &custom.name, custom.animated))
+            }
         }
+    }
+
+    fn repair_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (text, cursor) = {
+            let input = self.composer.read(cx);
+            if !input.text().chars().any(composer_tokens::is_token_char) {
+                return;
+            }
+            (input.value(), input.cursor())
+        };
+        let Some((fixed, removed)) = composer_tokens::repair_with_removed(&text) else {
+            return;
+        };
+        let mut removed_before = 0;
+        for range in &removed {
+            if range.end <= cursor {
+                removed_before += range.len();
+            } else if range.start < cursor {
+                removed_before += cursor - range.start;
+            }
+        }
+        let cursor = cursor.saturating_sub(removed_before).min(fixed.len());
+        self.composer.update(cx, |input, cx| {
+            input.set_value(fixed, window, cx);
+            let position = input.text().offset_to_position(cursor);
+            input.set_cursor_position(position, window, cx);
+        });
     }
 
     pub(crate) fn insert_emoji(
@@ -882,7 +945,8 @@ impl DiscordApp {
         let guild_id = self.selected_guild_id;
         let channel_id = self.selected_channel_id;
         let used = RefCell::new(Vec::new());
-        let encoded = emoji::encode_emoji(content, |name| {
+        let content = composer_tokens::to_wire(content);
+        let encoded = emoji::encode_emoji(&content, |name| {
             let current = self
                 .store
                 .guild_by_id(guild_id)
@@ -934,19 +998,13 @@ impl DiscordApp {
         self.set_reaction(message_id, emoji, !me, cx);
     }
 
-    pub(crate) fn react(
-        &mut self,
-        message_id: u64,
-        choice: &EmojiChoice,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn react(&mut self, message_id: u64, choice: &EmojiChoice, cx: &mut Context<Self>) {
         let emoji = match choice {
             EmojiChoice::Custom(custom) => {
-                if self.store.emoji_access(
-                    custom,
-                    self.selected_guild_id,
-                    self.selected_channel_id,
-                ) != EmojiAccess::Usable
+                if self
+                    .store
+                    .emoji_access(custom, self.selected_guild_id, self.selected_channel_id)
+                    != EmojiAccess::Usable
                 {
                     return;
                 }
@@ -993,19 +1051,20 @@ impl DiscordApp {
         let guild_id = Some(self.selected_guild_id);
         let request = Tokio::spawn(cx, async move {
             if add {
-                session.add_reaction(guild_id, channel_id, message_id, &text).await
+                session
+                    .add_reaction(guild_id, channel_id, message_id, &text)
+                    .await
             } else {
-                session.remove_reaction(guild_id, channel_id, message_id, &text).await
+                session
+                    .remove_reaction(guild_id, channel_id, message_id, &text)
+                    .await
             }
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Err(error)) = request.await {
                 log::warn!("Could not update reaction: {error}");
                 this.update(cx, |app, cx| {
-                    if app
-                        .store
-                        .set_reaction(channel_id, message_id, &emoji, !add)
-                        != Change::None
+                    if app.store.set_reaction(channel_id, message_id, &emoji, !add) != Change::None
                     {
                         app.remeasure_message(message_id);
                         cx.notify();
@@ -1031,11 +1090,9 @@ impl DiscordApp {
         self.unread_bar = false;
         let channel_id = self.selected_channel_id;
         let needs_present = self.live
-            && self
-                .channel()
-                .is_some_and(|channel| {
-                    !channel.messages_loaded || !self.store.at_present(channel.id)
-                });
+            && self.channel().is_some_and(|channel| {
+                !channel.messages_loaded || !self.store.at_present(channel.id)
+            });
         self.messages.set_follow_mode(FollowMode::Tail);
         if needs_present {
             self.pending_present.insert(channel_id);
@@ -1053,15 +1110,12 @@ impl DiscordApp {
     }
 
     fn scroll_to_unread(&self, since: u64) {
-        let Some(index) = self
-            .channel()
-            .and_then(|channel| {
-                channel
-                    .messages
-                    .iter()
-                    .position(|message| message.id > since)
-            })
-        else {
+        let Some(index) = self.channel().and_then(|channel| {
+            channel
+                .messages
+                .iter()
+                .position(|message| message.id > since)
+        }) else {
             return;
         };
         self.messages.scroll_to(ListOffset {
@@ -1088,11 +1142,96 @@ impl DiscordApp {
         smooth_scroll::cancel(cx);
         if let Some(index) = self.message_index(message_id) {
             self.messages.set_follow_mode(FollowMode::Normal);
-            self.messages.scroll_to_reveal_item(index);
-            cx.notify();
+            if cx.reduce_motion() {
+                self.messages.scroll_to_reveal_item(index);
+                self.highlight_jump(message_id, cx);
+                cx.notify();
+                return;
+            }
+            let nonce = self.jump.as_ref().map_or(0, |jump| jump.nonce) + 1;
+            self.jump = Some(JumpScroll {
+                message_id,
+                nonce,
+                last_offset: None,
+            });
+            self.step_jump(nonce, window, cx);
         } else if self.live {
             self.fetch_history(self.selected_channel_id, Some(message_id), window, cx);
         }
+    }
+
+    fn list_offset(&self) -> Pixels {
+        let top = self.messages.logical_scroll_top();
+        self.messages.offset_for_item(top.item_ix) + top.offset_in_item
+    }
+
+    /// One frame of the eased scroll toward a jump target, centring it like Discord. The
+    /// target is recomputed every frame because rows measured on the way change its offset;
+    /// a far target is first approached by a jump to within a viewport.
+    fn step_jump(&mut self, nonce: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(jump) = self.jump.as_ref().filter(|jump| jump.nonce == nonce) else {
+            return;
+        };
+        let message_id = jump.message_id;
+        let Some(index) = self.message_index(message_id) else {
+            self.jump = None;
+            return;
+        };
+        let current = self.list_offset();
+        if jump
+            .last_offset
+            .is_some_and(|last| (current - last).abs() > px(1.))
+        {
+            // The user scrolled during the animation; let them have the list.
+            self.jump = None;
+            return;
+        }
+        let viewport = self.messages.viewport_bounds().size.height;
+        let top = self.messages.offset_for_item(index);
+        let height = self.messages.offset_for_item(index + 1) - top;
+        let target = (top - (viewport - height).max(px(0.)) / 2.).max(px(0.));
+        let distance = target - current;
+        let step = if distance.abs() > viewport * 1.5 {
+            distance - viewport * distance.signum()
+        } else if distance.abs() < px(1.) {
+            distance
+        } else {
+            distance * JUMP_EASE
+        };
+        self.messages.scroll_by(step);
+        self.views.messages.update(cx, |_, cx| cx.notify());
+        if distance.abs() < px(1.) {
+            self.jump = None;
+            self.highlight_jump(message_id, cx);
+            cx.notify();
+            return;
+        }
+        let offset = self.list_offset();
+        if let Some(jump) = &mut self.jump {
+            jump.last_offset = Some(offset);
+        }
+        let entity = self.entity.clone();
+        window.on_next_frame(move |window, cx| {
+            entity
+                .update(cx, |app, cx| app.step_jump(nonce, window, cx))
+                .ok();
+        });
+    }
+
+    fn highlight_jump(&mut self, message_id: u64, cx: &mut Context<Self>) {
+        let nonce = self.jump_highlight.map_or(0, |(_, nonce)| nonce) + 1;
+        self.jump_highlight = Some((message_id, nonce));
+        // Clear it once faded, so scrolling the row back into view doesn't replay the flash.
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(JUMP_HIGHLIGHT).await;
+            this.update(cx, |app, _| {
+                if app.jump_highlight.is_some_and(|(_, current)| current == nonce) {
+                    app.jump_highlight = None;
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn schedule_ack(&mut self, cx: &mut Context<Self>) {
@@ -1317,15 +1456,13 @@ impl DiscordApp {
                             cx.notify();
                             return;
                         }
-                        let inserted = app
-                            .store
-                            .append_messages(channel_id, messages, MESSAGE_PAGE);
+                        let inserted =
+                            app.store
+                                .append_messages(channel_id, messages, MESSAGE_PAGE);
                         if inserted > 0 {
                             app.request_missing_members(channel_id);
                             if app.selected_channel_id == channel_id {
-                                let len = app
-                                    .channel()
-                                    .map_or(0, |channel| channel.messages.len());
+                                let len = app.channel().map_or(0, |channel| channel.messages.len());
                                 let index = len - inserted;
                                 app.messages.splice(index..index, inserted);
                                 app.messages
@@ -1462,7 +1599,8 @@ impl DiscordApp {
             .guilds
             .iter()
             .find(|guild| guild.id == self.selected_guild_id);
-        self.channel_rows.sync(guild);
+        let banner = guild.and_then(|guild| self.store.guild_banner(guild.id));
+        self.channel_rows.sync_with_banner(guild, banner);
     }
 
     fn sync_member_rows(&mut self) {
@@ -1548,6 +1686,27 @@ impl DiscordApp {
         }
     }
 
+    pub(crate) fn set_sticker_hover(
+        &mut self,
+        message_id: u64,
+        sticker_id: u64,
+        hovered: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let key = (message_id, sticker_id);
+        let next = if hovered {
+            Some(key)
+        } else if self.hovered_sticker == Some(key) {
+            None
+        } else {
+            return;
+        };
+        if self.hovered_sticker != next {
+            self.hovered_sticker = next;
+            cx.notify();
+        }
+    }
+
     pub(crate) fn set_video_hover(&mut self, key: u64, hovered: bool, cx: &mut Context<Self>) {
         let next = if hovered {
             Some(key)
@@ -1563,6 +1722,13 @@ impl DiscordApp {
     }
 
     fn stop_player(&mut self, mut window: Option<&mut Window>, cx: &mut App) {
+        if let Some(fullscreen) = self.video_fullscreen.take()
+            && fullscreen.window
+            && let Some(window) = window.as_deref_mut()
+            && window.is_fullscreen()
+        {
+            window.toggle_fullscreen();
+        }
         self.hovered_video = None;
         self.video_drag = None;
         self.video_dragged_at = None;
@@ -1597,6 +1763,36 @@ impl DiscordApp {
         self.player = Some(player);
         self.hovered_video = Some(key);
         cx.notify();
+    }
+
+    pub(crate) fn enter_video_fullscreen(
+        &mut self,
+        mut fullscreen: Fullscreen,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        fullscreen.window = !window.is_fullscreen();
+        if fullscreen.window {
+            window.toggle_fullscreen();
+        }
+        self.video_fullscreen = Some(fullscreen);
+        cx.notify();
+    }
+
+    pub(crate) fn exit_video_fullscreen(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(fullscreen) = self.video_fullscreen.take() else {
+            return false;
+        };
+        if fullscreen.window && window.is_fullscreen() {
+            window.toggle_fullscreen();
+        }
+        self.video_volume_hover = [false; 2];
+        cx.notify();
+        true
     }
 
     pub(crate) fn video_click(&mut self, key: u64, cx: &mut Context<Self>) {
@@ -1716,7 +1912,9 @@ impl DiscordApp {
     }
 
     fn send_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let content = self.composer.read(cx).value().trim().to_owned();
+        // Convert first: EM SPACE (the start of a token) is whitespace to `trim`.
+        let content = composer_tokens::to_wire(&self.composer.read(cx).value());
+        let content = content.trim().to_owned();
         let channel_id = self.selected_channel_id;
         if content.is_empty() || !self.store.can_send(channel_id) {
             return;
@@ -2008,7 +2206,7 @@ impl DiscordApp {
             .message_index(message_id)
             .and_then(|index| self.channel()?.messages.get(index))
             .filter(|message| message.author_id == self.store.current_user_id)
-            .map(|message| message.content.clone())
+            .map(|message| composer_tokens::from_wire(&message.content))
         else {
             return;
         };
@@ -2053,7 +2251,11 @@ impl DiscordApp {
             return;
         };
         let message_id = editing.message_id;
-        let content = editing.input.read(cx).value().trim().to_owned();
+        // Convert first: EM SPACE (the start of a token) is whitespace to `trim`.
+        let raw = editing.input.read(cx).value().to_string();
+        let raw = composer_tokens::repair(&raw).unwrap_or(raw);
+        let content = composer_tokens::to_wire(&raw);
+        let content = content.trim().to_owned();
         if content.chars().count() > MESSAGE_LIMIT {
             self.editing = Some(editing);
             return;
@@ -2202,6 +2404,9 @@ impl DiscordApp {
     }
 
     fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.exit_video_fullscreen(window, cx) {
+            return;
+        }
         if self.dismiss_emoji_suggestions(cx) || self.close_emoji_picker(cx) {
             return;
         }
@@ -2305,6 +2510,42 @@ fn set_text(
     input.set_cursor_position(end, window, cx);
 }
 
+/// Keeps arrow-key movement from stopping between the invisible characters of a token.
+fn snap_composer_cursor(input: &Entity<TextareaState>, previous: &Cell<usize>, cx: &mut App) {
+    // Runs on every composer notify, cursor blink included; stay allocation-free unless the
+    // cursor moved and the text actually holds tokens.
+    let state = input.read(cx);
+    let cursor = state.cursor();
+    let previous = previous.replace(cursor);
+    if previous == cursor
+        || !state.selected_range().is_empty()
+        || !state.text().chars().any(composer_tokens::is_token_char)
+    {
+        return;
+    }
+    let text = state.value();
+    let Some((range, _)) = composer_tokens::tokens_in(&text)
+        .into_iter()
+        .find(|(range, _)| range.start < cursor && cursor < range.end)
+    else {
+        return;
+    };
+    let target = snap_target(&range, previous, cursor);
+    input.update(cx, |input, cx| input.set_selected_range(target..target, cx));
+}
+
+fn snap_target(range: &std::ops::Range<usize>, previous: usize, cursor: usize) -> usize {
+    if previous == range.start {
+        range.end
+    } else if previous == range.end {
+        range.start
+    } else if cursor - range.start <= range.end - cursor {
+        range.start
+    } else {
+        range.end
+    }
+}
+
 fn send_error_text(error: &discord::Error) -> String {
     match error {
         discord::Error::Captcha => {
@@ -2339,6 +2580,7 @@ fn collect_mentions(blocks: &[markdown::Block], ids: &mut Vec<u64>) {
 
 impl Render for DiscordApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        views::count_render(views::ViewKind::Root);
         if matches!(self.screen, Screen::Chat) {
             self.update_member_subscription();
         }
@@ -2349,7 +2591,12 @@ impl Render for DiscordApp {
                 .flex()
                 .flex_1()
                 .min_h_0()
-                .child(guild_rail::render(self, cx))
+                .child(
+                    self.views
+                        .guild_rail
+                        .clone()
+                        .cached(views::guild_rail_style()),
+                )
                 .child(
                     div()
                         .flex()
@@ -2360,8 +2607,57 @@ impl Render for DiscordApp {
                         .border_t_1()
                         .border_l_1()
                         .border_color(rgb(theme::BORDER))
-                        .child(channel_list::render(self, cx))
-                        .child(chat::render(self, cx)),
+                        .child(
+                            self.views
+                                .channel_list
+                                .clone()
+                                .cached(views::channel_list_style()),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_w_0()
+                                .h_full()
+                                .child(
+                                    self.views
+                                        .chat_header
+                                        .clone()
+                                        .cached(views::chat_header_style()),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .flex_col()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .h_full()
+                                                .child(
+                                                    self.views
+                                                        .messages
+                                                        .clone()
+                                                        .cached(views::messages_style()),
+                                                )
+                                                .child(
+                                                    self.views.composer.clone().into_any_element(),
+                                                ),
+                                        )
+                                        .when(self.show_members, |this| {
+                                            this.child(
+                                                self.views
+                                                    .members
+                                                    .clone()
+                                                    .cached(views::member_list_style()),
+                                            )
+                                        }),
+                                ),
+                        ),
                 )
                 .into_any_element(),
         };
@@ -2406,10 +2702,7 @@ impl Render for DiscordApp {
                 )
             })
             .child(body)
-            .children(chat::delete_dialog(self, cx))
-            .children(profile::render(self, window, cx))
-            .children(lightbox::render(self, window, cx))
-            .children(emoji_picker::render(self, cx))
+            .child(self.views.overlays.clone().into_any_element())
     }
 }
 
@@ -2428,4 +2721,78 @@ fn connecting() -> impl IntoElement {
                 .text_color(rgb(theme::MUTED))
                 .child("Connecting to Discord…"),
         )
+}
+
+#[cfg(test)]
+mod composer_cursor_tests {
+    use super::{snap_composer_cursor, snap_target};
+    use crate::composer_tokens;
+    use gpui::{
+        AppContext, Context, Entity, IntoElement, Render, Subscription, TestAppContext, Window,
+    };
+    use gpui_component::input::{Textarea, TextareaState};
+    use std::{cell::Cell, rc::Rc};
+
+    struct SnapComposer {
+        input: Entity<TextareaState>,
+        previous: Rc<Cell<usize>>,
+        _subscription: Subscription,
+    }
+
+    impl Render for SnapComposer {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            Textarea::new(&self.input)
+        }
+    }
+
+    #[gpui::test]
+    fn snapping_skips_over_whole_composer_tokens(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let token = composer_tokens::token_for(901, "snap", false);
+        let text = format!("a{token}b");
+        let before = 1;
+        let after = before + token.len();
+        let (composer, cx) = cx.add_window_view(move |window, cx| {
+            let input = cx.new(|cx| TextareaState::new(window, cx).auto_grow(1, 15));
+            input.update(cx, |input, cx| {
+                input.set_value(text.clone(), window, cx);
+                input.set_selected_range(after..after, cx);
+                input.focus(window, cx);
+            });
+            let previous = Rc::new(Cell::new(after));
+            let tracked = previous.clone();
+            let subscription = cx.observe(&input, move |_this, input, cx| {
+                snap_composer_cursor(&input, &tracked, cx);
+            });
+            SnapComposer {
+                input,
+                previous,
+                _subscription: subscription,
+            }
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        cx.simulate_keystrokes("left");
+        cx.update(|_, cx| {
+            assert_eq!(composer.read(cx).input.read(cx).cursor(), before);
+            assert_eq!(composer.read(cx).previous.get(), before);
+        });
+
+        cx.simulate_keystrokes("right");
+        cx.update(|_, cx| {
+            assert_eq!(composer.read(cx).input.read(cx).cursor(), after);
+            assert_eq!(composer.read(cx).previous.get(), after);
+        });
+    }
+
+    #[test]
+    fn snap_target_uses_travel_direction_then_nearest_edge() {
+        let range = 1..12;
+        assert_eq!(snap_target(&range, 1, 8), 12);
+        assert_eq!(snap_target(&range, 12, 8), 1);
+        assert_eq!(snap_target(&range, 0, 4), 1);
+        assert_eq!(snap_target(&range, 0, 8), 12);
+    }
 }

@@ -7,7 +7,7 @@ use crate::{
     app::{DiscordApp, message_body::label},
     images::{self, ImageSpec},
     store::{MemberList, MemberRow, NameStyle, Nameplate, User},
-    theme::{self, rpx},
+    theme::{self, WithoutTextSelection, rpx},
 };
 
 pub const WIDTH: f32 = 264.;
@@ -65,8 +65,8 @@ impl Layout {
     }
 }
 
-pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement + use<> {
-    let entity = cx.entity();
+pub fn render(app: &DiscordApp) -> impl IntoElement + use<> {
+    let entity = app.entity.clone();
     div()
         .id("members")
         .w(rpx(WIDTH))
@@ -76,7 +76,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .border_color(rgb(theme::BORDER))
         .child(
             list(app.member_rows.clone(), move |index, _, cx| {
-                render_row(entity.read(cx), index, cx)
+                let Some(app) = entity.upgrade() else {
+                    return div().into_any_element();
+                };
+                render_row(app.read(cx), index, cx)
             })
             .size_full(),
         )
@@ -195,6 +198,7 @@ fn member_row(app: &DiscordApp, guild_id: u64, user: &User, cx: &App) -> impl In
                 })
                 .ok();
         })
+        .without_text_selection()
         .on_click({
             let entity = app.entity.clone();
             move |event, window, cx| {

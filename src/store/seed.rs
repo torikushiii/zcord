@@ -216,6 +216,7 @@ impl Store {
                         ],
                         member_ids: users.iter().map(|user| user.id).collect(),
                         icon: None,
+                        banner: None,
                         emojis: Vec::new(),
                     }
                 },
@@ -402,6 +403,7 @@ fn seed_messages(
             components: Vec::new(),
             reactions: Vec::new(),
             attachments: Vec::new(),
+            stickers: Vec::new(),
             kind: if index == 5 { 7 } else { 0 },
             edited: index == 3,
             reply: if index == 4 {
@@ -417,6 +419,7 @@ fn seed_messages(
                         },
                         attachments: false,
                         embeds: !message.embeds.is_empty() || !message.components.is_empty(),
+                        sticker: None,
                     })
                 })
             } else {

@@ -7,6 +7,7 @@ use gpui::{prelude::*, *};
 use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::{
+    animated,
     app::DiscordApp,
     emoji, images,
     store::{EmojiAccess, EmojiChoice},
@@ -14,11 +15,15 @@ use crate::{
 };
 
 const COLUMNS: usize = 9;
-const CELL: f32 = 40.;
-const ROW: f32 = 40.;
+const CELL: f32 = 48.;
+const ROW: f32 = 48.;
 const SIDEBAR: f32 = 48.;
-const HEIGHT: f32 = 440.;
+const HEIGHT: f32 = 488.;
 const SUGGESTIONS: usize = 10;
+const GRID_EMOJI: f32 = 40.;
+const PICKER_RISE: f32 = 8.;
+const PICKER_ENTER: Duration = Duration::from_millis(150);
+const PICKER_EXIT: Duration = Duration::from_millis(100);
 /// A press that closed the picker via mouse-down-outside must not reopen it from
 /// the toggle button handling the same press.
 const REOPEN_GUARD: Duration = Duration::from_millis(150);
@@ -41,6 +46,25 @@ pub(crate) enum PickerTarget {
 }
 
 type Entry = (EmojiChoice, EmojiAccess);
+
+#[derive(Clone, Copy)]
+enum HoverUpdate<'a> {
+    Enter(&'a Entry),
+    Leave,
+    Reset,
+}
+
+/// The footer keeps the last emoji the pointer entered. In particular, moving
+/// from cell A to cell B can deliver B's enter before A's leave, and leaving
+/// the grid entirely matches Discord by keeping the preview. Only rebuilding
+/// the rows (a search change) resets it.
+fn next_hovered(current: Option<&Entry>, update: HoverUpdate<'_>) -> Option<Entry> {
+    match update {
+        HoverUpdate::Enter(entry) => Some(entry.clone()),
+        HoverUpdate::Leave => current.cloned(),
+        HoverUpdate::Reset => None,
+    }
+}
 
 enum Row {
     Header(SharedString),
@@ -66,6 +90,9 @@ pub(crate) struct EmojiPicker {
     sections: Vec<Section>,
     scroll: UniformListScrollHandle,
     hovered: Option<Entry>,
+    closing: bool,
+    /// Unique per open, so reopening replays the entry animation.
+    animation: u64,
     _search_events: Subscription,
 }
 
@@ -89,17 +116,34 @@ impl DiscordApp {
         if self
             .emoji_picker
             .as_ref()
-            .is_some_and(|picker| picker.target == target)
+            .is_some_and(|picker| picker.target == target && !picker.closing)
         {
             self.close_emoji_picker(cx);
             return;
         }
+        // A closing picker reaches the guard below: it keeps the press that
+        // started the close from reopening the picker. If the close task is
+        // late and the guard has expired, opening drops the task instead.
         if self
             .emoji_picker_closed_at
             .is_some_and(|at| at.elapsed() < REOPEN_GUARD)
         {
             return;
         }
+        self.open_emoji_picker(target, position, window, cx);
+    }
+
+    fn open_emoji_picker(
+        &mut self,
+        target: PickerTarget,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A pending close must never remove the picker opened in its place.
+        self.emoji_picker_closing = None;
+        self.emoji_picker_animation = self.emoji_picker_animation.wrapping_add(1);
+        let animation = self.emoji_picker_animation;
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Find the perfect emoji"));
         let events = cx.subscribe_in(&search, window, |app, _, event, window, cx| match event {
             InputEvent::Change => {
@@ -133,8 +177,11 @@ impl DiscordApp {
             sections: Vec::new(),
             scroll: UniformListScrollHandle::new(),
             hovered: None,
+            closing: false,
+            animation,
             _search_events: events,
         });
+        self.emoji_picker_closed_at = None;
         self.rebuild_emoji_rows(cx);
     }
 
@@ -145,12 +192,40 @@ impl DiscordApp {
     }
 
     pub(crate) fn close_emoji_picker(&mut self, cx: &mut Context<Self>) -> bool {
-        let open = self.emoji_picker.take().is_some();
-        if open {
-            self.emoji_picker_closed_at = Some(Instant::now());
-            cx.notify();
+        let Some(picker) = &mut self.emoji_picker else {
+            return false;
+        };
+        if picker.closing {
+            return false;
         }
-        open
+        picker.closing = true;
+        let animation = picker.animation;
+        self.emoji_picker_closed_at = Some(Instant::now());
+        if cx.reduce_motion() {
+            self.emoji_picker = None;
+            self.emoji_picker_closing = None;
+            cx.notify();
+            return true;
+        }
+        self.emoji_picker_closing = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(PICKER_EXIT).await;
+            this.update(cx, |app, cx| {
+                // A newer open replaces the picker and cancels this task; if the
+                // task still runs, only remove the exact picker it started with.
+                let still_closing = app
+                    .emoji_picker
+                    .as_ref()
+                    .is_some_and(|picker| picker.closing && picker.animation == animation);
+                if still_closing {
+                    app.emoji_picker = None;
+                    app.emoji_picker_closing = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+        cx.notify();
+        true
     }
 
     fn rebuild_emoji_rows(&mut self, cx: &mut Context<Self>) {
@@ -162,7 +237,8 @@ impl DiscordApp {
         if let Some(picker) = &mut self.emoji_picker {
             picker.rows = Rc::new(rows);
             picker.sections = sections;
-            picker.hovered = None;
+            let hovered = next_hovered(picker.hovered.as_ref(), HoverUpdate::Reset);
+            picker.hovered = hovered;
         }
         cx.notify();
     }
@@ -187,16 +263,17 @@ impl DiscordApp {
         }
     }
 
-    fn hover_emoji(&mut self, entry: Option<Entry>, cx: &mut Context<Self>) {
-        if let Some(picker) = &mut self.emoji_picker
-            && picker.hovered != entry
-        {
-            picker.hovered = entry;
+    fn hover_emoji(&mut self, update: HoverUpdate, cx: &mut Context<Self>) {
+        let Some(picker) = &mut self.emoji_picker else {
+            return;
+        };
+        let hovered = next_hovered(picker.hovered.as_ref(), update);
+        if picker.hovered != hovered {
+            picker.hovered = hovered;
             cx.notify();
         }
     }
 
-    /// Suggestions for the `:query` before the composer cursor; locked emoji are left out.
     pub(crate) fn emoji_suggestions(&self, cx: &App) -> Option<(String, Vec<EmojiChoice>)> {
         let query = self.emoji_query(cx)?;
         if self.emoji_suggest.dismissed.as_deref() == Some(query.as_str()) {
@@ -218,7 +295,6 @@ impl DiscordApp {
         (!choices.is_empty()).then_some((query, choices))
     }
 
-    /// Called on every composer edit: a new query starts at the top again.
     pub(crate) fn reset_emoji_suggest(&mut self, cx: &App) {
         self.emoji_suggest.index = 0;
         if self.emoji_suggest.dismissed.is_some()
@@ -368,7 +444,8 @@ fn choice_name(choice: &EmojiChoice) -> &str {
     }
 }
 
-/// Custom emoji animate only where `animate` is set (hover preview), like Discord's picker.
+/// Resolves an emoji through the image service. The footer uses this path for
+/// its single animated preview; the grid uses [`emoji_grid_image`] instead.
 fn emoji_image(choice: &EmojiChoice, size: f32, animate: bool, cx: &App) -> AnyElement {
     let image: Option<ImageSource> = match choice {
         EmojiChoice::Custom(custom) => images::resolve(
@@ -389,6 +466,30 @@ fn emoji_image(choice: &EmojiChoice, size: f32, animate: bool, cx: &App) -> AnyE
         .into_any_element()
 }
 
+/// A grid-size emoji. Animated custom emoji use the decoded cache so every
+/// visible cell can play, falling back to the still image until the frames are
+/// decoded.
+fn emoji_grid_image(choice: &EmojiChoice, animate: bool, cx: &App) -> AnyElement {
+    if animate
+        && let EmojiChoice::Custom(custom) = choice
+        && custom.animated
+    {
+        let spec = images::ImageSpec::Emoji {
+            id: custom.id,
+            animated: true,
+        };
+        if let Some(image) = animated::resolve(&spec, theme::image_px(GRID_EMOJI), cx) {
+            return animated::image(image)
+                .id(("picker-emoji", custom.id))
+                .size(rpx(GRID_EMOJI))
+                .flex_none()
+                .object_fit(ObjectFit::Contain)
+                .into_any_element();
+        }
+    }
+    emoji_image(choice, GRID_EMOJI, false, cx)
+}
+
 fn access_note(access: EmojiAccess) -> Option<&'static str> {
     match access {
         EmojiAccess::Usable => None,
@@ -399,12 +500,20 @@ fn access_note(access: EmojiAccess) -> Option<&'static str> {
     }
 }
 
-pub(super) fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Option<AnyElement> {
+pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
     let picker = app.emoji_picker.as_ref()?;
+    let closing = picker.closing;
     let close = app.entity.clone();
+    let key = if closing {
+        "emoji-picker-out"
+    } else {
+        "emoji-picker-in"
+    };
+    let animation = Animation::new(if closing { PICKER_EXIT } else { PICKER_ENTER })
+        .with_easing(ease_out_quint());
+    let animate_grid = !closing && !cx.reduce_motion();
     let panel = div()
         .id("emoji-picker")
-        .occlude()
         .flex()
         .flex_col()
         .w(rpx(SIDEBAR + COLUMNS as f32 * CELL + 24.))
@@ -415,23 +524,39 @@ pub(super) fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Option<A
         .bg(rgb(theme::ELEVATED))
         .shadow_lg()
         .overflow_hidden()
-        .on_mouse_down_out(move |_, _, cx| {
-            close.update(cx, |app, cx| app.close_emoji_picker(cx)).ok();
+        .when(!closing, |this| {
+            // Closing panels do not occlude and detach the grid/sidebar
+            // handlers, so clicks fall through until the close task removes it.
+            this.occlude().on_mouse_down_out(move |_, _, cx| {
+                close.update(cx, |app, cx| app.close_emoji_picker(cx)).ok();
+            })
         })
         .child(
             div()
                 .flex_none()
-                .p(rpx(8.))
+                .p(rpx(12.))
                 .border_b_1()
                 .border_color(rgb(theme::BORDER))
                 .child(
-                    div().px(rpx(8.)).rounded(rpx(6.)).bg(rgb(theme::BG)).child(
-                        Input::new(&picker.search)
-                            .appearance(false)
-                            .h(rpx(32.))
-                            .px_0()
-                            .text_size(rpx(14.)),
-                    ),
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(rpx(8.))
+                        .px(rpx(12.))
+                        .rounded(rpx(8.))
+                        .bg(rgb(theme::BG))
+                        .border_1()
+                        .border_color(rgb(theme::BORDER))
+                        .child(theme::icon("search", 18., theme::MUTED))
+                        .child(
+                            div().flex_1().min_w_0().child(
+                                Input::new(&picker.search)
+                                    .appearance(false)
+                                    .h(rpx(40.))
+                                    .px_0()
+                                    .text_size(rpx(16.)),
+                            ),
+                        ),
                 ),
         )
         .child(
@@ -439,10 +564,16 @@ pub(super) fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Option<A
                 .flex()
                 .flex_1()
                 .min_h_0()
-                .child(sidebar(picker, cx))
-                .child(grid(app, picker)),
+                .child(sidebar(picker, cx, !closing))
+                .child(grid(app, picker, animate_grid, !closing)),
         )
-        .child(footer(app, picker, cx));
+        .child(footer(app, picker, cx))
+        .with_animation((key, picker.animation), animation, move |this, delta| {
+            let progress = if closing { 1. - delta } else { delta };
+            this.relative()
+                .top(px((1. - progress) * PICKER_RISE))
+                .opacity(progress)
+        });
     Some(
         deferred(
             anchored()
@@ -456,7 +587,7 @@ pub(super) fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Option<A
     )
 }
 
-fn sidebar(picker: &EmojiPicker, cx: &App) -> impl IntoElement {
+fn sidebar(picker: &EmojiPicker, cx: &App, interactive: bool) -> impl IntoElement {
     div()
         .id("emoji-picker-sidebar")
         .flex()
@@ -512,14 +643,21 @@ fn sidebar(picker: &EmojiPicker, cx: &App) -> impl IntoElement {
                 .justify_center()
                 .size(rpx(32.))
                 .rounded(rpx(6.))
-                .cursor_pointer()
-                .hover(|style| style.bg(rgb(theme::SELECTED)))
-                .on_click(move |_, _, _| scroll.scroll_to_item(row, ScrollStrategy::Top))
+                .when(interactive, |this| {
+                    this.cursor_pointer()
+                        .hover(|style| style.bg(rgb(theme::SELECTED)))
+                        .on_click(move |_, _, _| scroll.scroll_to_item(row, ScrollStrategy::Top))
+                })
                 .child(icon)
         }))
 }
 
-fn grid(app: &DiscordApp, picker: &EmojiPicker) -> impl IntoElement {
+fn grid(
+    app: &DiscordApp,
+    picker: &EmojiPicker,
+    animate: bool,
+    interactive: bool,
+) -> impl IntoElement {
     let rows = picker.rows.clone();
     let entity = app.entity.clone();
     let hovered = picker.hovered.clone();
@@ -542,12 +680,12 @@ fn grid(app: &DiscordApp, picker: &EmojiPicker) -> impl IntoElement {
                     .items_end()
                     .h(rpx(ROW))
                     .px(rpx(4.))
-                    .pb(rpx(6.))
-                    .text_size(rpx(12.))
+                    .pb(rpx(8.))
+                    .text_size(rpx(14.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(theme::MUTED))
+                    .text_color(rgb(theme::TEXT))
                     .truncate()
-                    .child(name.to_uppercase())
+                    .child(name.clone())
                     .into_any_element(),
                 Row::Emojis(entries) => div()
                     .flex()
@@ -567,26 +705,34 @@ fn grid(app: &DiscordApp, picker: &EmojiPicker) -> impl IntoElement {
                             .size(rpx(CELL))
                             .rounded(rpx(6.))
                             .when(selected, |this| this.bg(rgb(theme::SELECTED)))
-                            .when(usable, |this| this.cursor_pointer())
-                            .on_hover(move |hovered, _, cx| {
-                                let entry = hovered.then(|| hovered_entry.clone());
-                                hover.update(cx, |app, cx| app.hover_emoji(entry, cx)).ok();
-                            })
-                            .on_click(move |event, window, cx| {
-                                if !usable {
-                                    return;
-                                }
-                                let keep_open = event.modifiers().shift;
-                                click
-                                    .update(cx, |app, cx| {
-                                        app.pick_emoji(&choice, keep_open, window, cx)
-                                    })
-                                    .ok();
+                            .when(usable && interactive, |this| this.cursor_pointer())
+                            .when(interactive, move |this| {
+                                this.on_hover(move |hovered, _, cx| {
+                                    let update = if *hovered {
+                                        HoverUpdate::Enter(&hovered_entry)
+                                    } else {
+                                        HoverUpdate::Leave
+                                    };
+                                    hover.update(cx, |app, cx| app.hover_emoji(update, cx)).ok();
+                                })
+                                .on_click(
+                                    move |event, window, cx| {
+                                        if !usable {
+                                            return;
+                                        }
+                                        let keep_open = event.modifiers().shift;
+                                        click
+                                            .update(cx, |app, cx| {
+                                                app.pick_emoji(&choice, keep_open, window, cx)
+                                            })
+                                            .ok();
+                                    },
+                                )
                             })
                             .child(
                                 div()
                                     .when(!usable, |this| this.opacity(0.3))
-                                    .child(emoji_image(&entry.0, 32., false, cx)),
+                                    .child(emoji_grid_image(&entry.0, animate, cx)),
                             )
                     }))
                     .into_any_element(),
@@ -618,7 +764,7 @@ fn footer(app: &DiscordApp, picker: &EmojiPicker, cx: &App) -> impl IntoElement 
                 .items_center()
                 .gap(rpx(10.))
                 .min_w_0()
-                .child(emoji_image(choice, 28., true, cx))
+                .child(emoji_image(choice, 32., true, cx))
                 .child(
                     div()
                         .flex()
@@ -656,7 +802,7 @@ fn footer(app: &DiscordApp, picker: &EmojiPicker, cx: &App) -> impl IntoElement 
         .flex()
         .flex_none()
         .items_center()
-        .h(rpx(52.))
+        .h(rpx(56.))
         .px(rpx(12.))
         .border_t_1()
         .border_color(rgb(theme::BORDER))
@@ -664,7 +810,6 @@ fn footer(app: &DiscordApp, picker: &EmojiPicker, cx: &App) -> impl IntoElement 
         .child(content)
 }
 
-/// The `:query` autocomplete list, drawn above the composer box.
 pub(super) fn suggestions(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
     let (query, choices) = app.emoji_suggestions(cx)?;
     let selected = app.emoji_suggest.index.min(choices.len() - 1);
@@ -753,4 +898,48 @@ pub(super) fn suggestions(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
             }))
             .into_any_element(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Entry, HoverUpdate, next_hovered};
+    use crate::store::{EmojiAccess, EmojiChoice};
+
+    fn entry(shortcode: &str) -> Entry {
+        (
+            EmojiChoice::Unicode {
+                emoji: "🙂".to_owned(),
+                shortcode: shortcode.to_owned(),
+            },
+            EmojiAccess::Usable,
+        )
+    }
+
+    #[test]
+    fn hover_keeps_the_latest_cell_despite_stale_leave_events() {
+        let first = entry("first");
+        let second = entry("second");
+
+        let hovered = next_hovered(None, HoverUpdate::Enter(&first));
+        assert_eq!(hovered.as_ref(), Some(&first));
+
+        // Cell B's enter can arrive before cell A's leave; the stale leave must
+        // not blank the footer.
+        let hovered = next_hovered(hovered.as_ref(), HoverUpdate::Enter(&second));
+        let hovered = next_hovered(hovered.as_ref(), HoverUpdate::Leave);
+        assert_eq!(hovered.as_ref(), Some(&second));
+
+        // Leaving the grid keeps the last preview until the rows rebuild.
+        let hovered = next_hovered(hovered.as_ref(), HoverUpdate::Leave);
+        assert_eq!(hovered.as_ref(), Some(&second));
+    }
+
+    #[test]
+    fn hover_resets_when_the_rows_rebuild() {
+        let first = entry("first");
+        let hovered = next_hovered(None, HoverUpdate::Enter(&first));
+        assert!(hovered.is_some());
+        assert_eq!(next_hovered(hovered.as_ref(), HoverUpdate::Reset), None);
+        assert_eq!(next_hovered(None, HoverUpdate::Reset), None);
+    }
 }
