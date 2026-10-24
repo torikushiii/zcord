@@ -5,9 +5,10 @@ use gpui::{prelude::*, *};
 use gpui_component::ActiveTheme;
 
 use crate::{
+    animated,
     app::{
         DiscordApp,
-        rich_text::{Action, Chip, Content, Piece, PieceStyle, rich_text},
+        rich_text::{Action, Chip, Content, EmojiSource, Piece, PieceStyle, rich_text},
     },
     emoji::{self, Segment},
     images::{self, ImageSpec},
@@ -361,7 +362,10 @@ pub fn emoji_pieces(text: &str, style: &PieceStyle) -> Vec<Piece> {
         .map(|segment| match segment {
             Segment::Emoji(sequence) => match emoji::image(sequence) {
                 Some(image) => Piece {
-                    content: Content::Emoji(Some(image.into()), sequence.to_owned().into()),
+                    content: Content::Emoji(
+                        Some(EmojiSource::Still(image.into())),
+                        sequence.to_owned().into(),
+                    ),
                     style: style.clone(),
                 },
                 None => Piece::text(sequence.to_owned(), style.clone()),
@@ -407,6 +411,9 @@ fn cell_pieces(text: &str, style: &PieceStyle) -> Vec<Piece> {
 }
 
 fn has_emoji(text: &str) -> bool {
+    if text.is_ascii() {
+        return false;
+    }
     text.chars().any(box_drawing)
         || emoji::segments(text)
             .iter()
@@ -503,18 +510,47 @@ fn span_pieces(
             chip(Chip::Timestamp, &mut style);
             format_timestamp(*unix, *kind)
         }
-        SpanKind::Emoji { id, animated, name } => {
-            let size = if jumbo { 48. } else { 22. };
-            let image = images::resolve(
-                &ImageSpec::Emoji {
-                    id: *id,
-                    animated: *animated,
-                },
-                theme::image_px(size),
-                cx,
-            );
+        SpanKind::Emoji {
+            id,
+            animated: is_animated,
+            name,
+        } => {
+            let size = theme::image_px(if jumbo { 48. } else { 22. });
+            let source = if *is_animated {
+                animated::resolve(
+                    &ImageSpec::Emoji {
+                        id: *id,
+                        animated: true,
+                    },
+                    size,
+                    cx,
+                )
+                .map(EmojiSource::Animated)
+                .or_else(|| {
+                    // The still keeps the emoji visible while the animation decodes.
+                    images::resolve(
+                        &ImageSpec::Emoji {
+                            id: *id,
+                            animated: false,
+                        },
+                        size,
+                        cx,
+                    )
+                    .map(|path| EmojiSource::Still(path.into()))
+                })
+            } else {
+                images::resolve(
+                    &ImageSpec::Emoji {
+                        id: *id,
+                        animated: false,
+                    },
+                    size,
+                    cx,
+                )
+                .map(|path| EmojiSource::Still(path.into()))
+            };
             return vec![Piece {
-                content: Content::Emoji(image.map(Into::into), format!(":{name}:").into()),
+                content: Content::Emoji(source, format!(":{name}:").into()),
                 style,
             }];
         }
@@ -603,6 +639,18 @@ fn collect_inline(blocks: &[Block], spans: &mut Vec<Span>) {
                 style: Style::default(),
                 link: None,
             }),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_emoji;
+
+    #[test]
+    fn ascii_keycap_bases_and_digits_are_not_emoji() {
+        for value in ["#1 * 0123456789", "#staff", "*star*", "general"] {
+            assert!(!has_emoji(value), "{value:?}");
         }
     }
 }

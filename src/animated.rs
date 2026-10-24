@@ -1,6 +1,11 @@
 use crate::images::{self, ImageSpec};
 use anyhow::{Context, Result, ensure};
-use gpui::{App, Global, ImageSource, Img, RenderImage, img};
+use gpui::{
+    App, DefiniteLength, Element, ElementId, EntityId, Global, GlobalElementId, Hitbox,
+    InspectorElementId, InteractiveElement, Interactivity, IntoElement, LayoutId, Length,
+    ObjectFit, Pixels, RenderImage, StatefulInteractiveElement, StyleRefinement, Styled, Task,
+    Window, px,
+};
 use gpui_tokio::Tokio;
 use image::{
     AnimationDecoder, Delay, DynamicImage, Frame, Frames, ImageDecoder, ImageFormat, ImageReader,
@@ -75,16 +80,422 @@ impl Global for AnimatedCache {}
 
 pub fn init(cx: &mut App) {
     cx.set_global(AnimatedCache(Rc::new(RefCell::new(Cache::default()))));
+    cx.set_global(AnimatedWakeups(Rc::new(RefCell::new(Wakeups::default()))));
 }
 
-pub fn image(image: Arc<RenderImage>) -> Img {
-    img(ImageSource::Custom(Arc::new(move |window, _| {
-        window.with_global_id("animated-image-pin".into(), |id, window| {
-            // GPUI drops image sources after drawing; element state keeps visible frames pinned.
-            window.with_element_state(id, |_, _| ((), image.clone()));
-        });
-        Some(Ok(image.clone()))
-    })))
+/// A frame change this close is worth waiting for the compositor instead of a timer.
+const FRAME_LEAD: Duration = Duration::from_millis(8);
+
+pub struct AnimatedImage {
+    image: Arc<RenderImage>,
+    object_fit: Fit,
+    interactivity: Interactivity,
+}
+
+#[derive(Clone, Copy)]
+enum Fit {
+    Fill,
+    Contain,
+    Cover,
+    ScaleDown,
+    None,
+}
+
+impl Fit {
+    fn of(fit: ObjectFit) -> Self {
+        match fit {
+            ObjectFit::Fill => Fit::Fill,
+            ObjectFit::Contain => Fit::Contain,
+            ObjectFit::Cover => Fit::Cover,
+            ObjectFit::ScaleDown => Fit::ScaleDown,
+            ObjectFit::None => Fit::None,
+        }
+    }
+
+    fn bounds(
+        self,
+        bounds: gpui::Bounds<Pixels>,
+        size: gpui::Size<gpui::DevicePixels>,
+    ) -> gpui::Bounds<Pixels> {
+        let fit = match self {
+            Fit::Fill => ObjectFit::Fill,
+            Fit::Contain => ObjectFit::Contain,
+            Fit::Cover => ObjectFit::Cover,
+            Fit::ScaleDown => ObjectFit::ScaleDown,
+            Fit::None => ObjectFit::None,
+        };
+        fit.get_bounds(bounds, size)
+    }
+}
+
+/// An animated [`RenderImage`] that wakes only when its current frame is due.
+///
+/// `Img` requests an animation frame on every frame while its image has more than one
+/// frame, which redraws the whole view at monitor refresh for a 30-100ms GIF. This
+/// element picks the frame from elapsed time and schedules one timer per view for the
+/// next change.
+pub fn image(image: Arc<RenderImage>) -> AnimatedImage {
+    AnimatedImage {
+        image,
+        object_fit: Fit::Contain,
+        interactivity: Interactivity::new(),
+    }
+}
+
+impl AnimatedImage {
+    pub fn object_fit(mut self, object_fit: ObjectFit) -> Self {
+        self.object_fit = Fit::of(object_fit);
+        self
+    }
+}
+
+impl Styled for AnimatedImage {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.interactivity.base_style
+    }
+}
+
+impl InteractiveElement for AnimatedImage {
+    fn interactivity(&mut self) -> &mut Interactivity {
+        &mut self.interactivity
+    }
+}
+
+impl StatefulInteractiveElement for AnimatedImage {}
+
+impl IntoElement for AnimatedImage {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for AnimatedImage {
+    type RequestLayoutState = ();
+    type PrepaintState = Option<Hitbox>;
+
+    fn id(&self) -> Option<ElementId> {
+        self.interactivity.element_id.clone()
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        self.interactivity.source_location()
+    }
+
+    fn request_layout(
+        &mut self,
+        global_id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let layout_id = self.interactivity.request_layout(
+            global_id,
+            inspector_id,
+            window,
+            cx,
+            |mut style, window, cx| {
+                let size = self.image.size(0);
+                let image_size = gpui::size(px(size.width.0 as f32), px(size.height.0 as f32));
+                // Match `Img`: intrinsic aspect only when a dimension is auto, otherwise
+                // an explicit size wins (Cover crops, it must not resize the element).
+                if matches!(style.size.width, Length::Auto)
+                    || matches!(style.size.height, Length::Auto)
+                {
+                    let ratio = if image_size.height > px(0.) {
+                        image_size.width / image_size.height
+                    } else {
+                        1.
+                    };
+                    style.aspect_ratio = Some(ratio);
+                }
+                if let Length::Auto = style.size.width {
+                    style.size.width = match style.size.height {
+                        Length::Definite(DefiniteLength::Absolute(height)) => {
+                            let height = height.to_pixels(window.rem_size());
+                            Length::Definite(
+                                px(f32::from(image_size.width) * f32::from(height)
+                                    / f32::from(image_size.height))
+                                .into(),
+                            )
+                        }
+                        _ => Length::Definite(image_size.width.into()),
+                    };
+                }
+                if let Length::Auto = style.size.height {
+                    style.size.height = match style.size.width {
+                        Length::Definite(DefiniteLength::Absolute(width)) => {
+                            let width = width.to_pixels(window.rem_size());
+                            Length::Definite(
+                                px(f32::from(image_size.height) * f32::from(width)
+                                    / f32::from(image_size.width))
+                                .into(),
+                            )
+                        }
+                        _ => Length::Definite(image_size.height.into()),
+                    };
+                }
+                window.request_layout(style, None::<LayoutId>, cx)
+            },
+        );
+        (layout_id, ())
+    }
+
+    fn prepaint(
+        &mut self,
+        global_id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        bounds: gpui::Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        self.interactivity.prepaint(
+            global_id,
+            inspector_id,
+            bounds,
+            bounds.size,
+            window,
+            cx,
+            |_, _, hitbox, _, _| hitbox,
+        )
+    }
+
+    fn paint(
+        &mut self,
+        global_id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        bounds: gpui::Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        hitbox: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let image = self.image.clone();
+        let object_fit = self.object_fit;
+        self.interactivity.paint(
+            global_id,
+            inspector_id,
+            bounds,
+            hitbox.as_ref(),
+            window,
+            cx,
+            |style, window, cx| {
+                let (frame, wake) = match global_id {
+                    Some(global_id) => window.with_element_state(global_id, |state, window| {
+                        let mut state = state.unwrap_or_else(|| AnimatedState {
+                            image: image.clone(),
+                            started: cx.background_executor().now(),
+                            paused_at: None,
+                            frame: 0,
+                        });
+                        if state.image.id != image.id {
+                            state = AnimatedState {
+                                image: image.clone(),
+                                started: cx.background_executor().now(),
+                                paused_at: None,
+                                frame: 0,
+                            };
+                        }
+                        let wake = state.advance(&image, window, cx);
+                        ((state.frame, wake), state)
+                    }),
+                    // Without an id there is nowhere to keep the clock; frame 0 is the
+                    // only stable choice, matching `Img`'s stateless path.
+                    None => (0, Wake::None),
+                };
+                if image.frame_count() == 0 {
+                    return;
+                }
+                let frame = frame.min(image.frame_count() - 1);
+                match wake {
+                    Wake::AnimationFrame => window.request_animation_frame(),
+                    Wake::Timer(remaining) => {
+                        let view = window.current_view();
+                        schedule_wakeup(view, cx, remaining, window);
+                    }
+                    Wake::None => {}
+                }
+                let fitted = object_fit.bounds(bounds, image.size(frame));
+                let visible = bounds.intersect(&fitted);
+                let corner_radii = style
+                    .corner_radii
+                    .to_pixels(window.rem_size())
+                    .clamp_radii_for_quad_size(visible.size);
+                window
+                    .paint_image_fitted(visible, fitted, corner_radii, image, frame, false)
+                    .ok();
+            },
+        );
+    }
+}
+
+struct AnimatedState {
+    image: Arc<RenderImage>,
+    started: Instant,
+    paused_at: Option<Instant>,
+    frame: usize,
+}
+
+// GPUI's test platform always reports its window inactive, so render-count tests
+// have to opt in to the active path explicitly.
+#[cfg(test)]
+thread_local! {
+    static FORCE_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn window_active(window: &Window) -> bool {
+    #[cfg(test)]
+    if FORCE_ACTIVE.with(|active| active.get()) {
+        return true;
+    }
+    window.is_window_active()
+}
+
+impl AnimatedState {
+    fn advance(&mut self, image: &RenderImage, window: &Window, cx: &App) -> Wake {
+        let now = cx.background_executor().now();
+        let animated = image.frame_count() > 1;
+        let reduced = cx.reduce_motion();
+        let active = window_active(window);
+        let elapsed = if reduced {
+            self.started = now;
+            self.paused_at = None;
+            Duration::ZERO
+        } else if !active {
+            let paused = *self.paused_at.get_or_insert(now);
+            paused.saturating_duration_since(self.started)
+        } else {
+            if let Some(paused) = self.paused_at.take() {
+                self.started += now.saturating_duration_since(paused);
+            }
+            now.saturating_duration_since(self.started)
+        };
+        let (frame, remaining) = frame_at(image, elapsed);
+        self.frame = frame;
+        wake(remaining, animated, reduced, active)
+    }
+}
+
+/// The frame visible at `elapsed` and how long until the next one.
+fn frame_at(image: &RenderImage, elapsed: Duration) -> (usize, Duration) {
+    let count = image.frame_count();
+    if count == 0 {
+        return (0, Duration::ZERO);
+    }
+    if count == 1 {
+        return (0, Duration::MAX);
+    }
+    let total: Duration = (0..count)
+        .map(|index| Duration::from(image.delay(index)))
+        .sum();
+    let total = total.max(Duration::from_nanos(1));
+    let mut rest = Duration::from_nanos((elapsed.as_nanos() % total.as_nanos()) as u64);
+    for index in 0..count {
+        let delay = Duration::from(image.delay(index));
+        if rest < delay {
+            return (index, delay - rest);
+        }
+        rest -= delay;
+    }
+    (0, Duration::from(image.delay(0)))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Wake {
+    AnimationFrame,
+    Timer(Duration),
+    None,
+}
+
+fn wake(remaining: Duration, animated: bool, reduced: bool, active: bool) -> Wake {
+    if !animated || reduced || !active {
+        Wake::None
+    } else if remaining <= FRAME_LEAD {
+        Wake::AnimationFrame
+    } else {
+        Wake::Timer(remaining)
+    }
+}
+
+struct Wakeup {
+    deadline: Instant,
+    task: Option<Task<()>>,
+}
+
+#[derive(Default)]
+struct Wakeups {
+    pending: HashMap<EntityId, Wakeup>,
+    /// A fired task must not drop its own handle while it is still running; park it
+    /// here and drop it from a later paint, where the executor is not inside it.
+    retired: Vec<Task<()>>,
+}
+
+struct AnimatedWakeups(Rc<RefCell<Wakeups>>);
+impl Global for AnimatedWakeups {}
+
+impl Wakeups {
+    fn claim(&mut self, view: EntityId, deadline: Instant) -> bool {
+        self.retired.clear();
+        if self
+            .pending
+            .get(&view)
+            .is_some_and(|wakeup| wakeup.deadline <= deadline)
+        {
+            return false;
+        }
+        self.pending.insert(
+            view,
+            Wakeup {
+                deadline,
+                task: None,
+            },
+        );
+        true
+    }
+
+    fn attach(&mut self, view: EntityId, deadline: Instant, task: Task<()>) {
+        if let Some(wakeup) = self.pending.get_mut(&view)
+            && wakeup.deadline == deadline
+        {
+            wakeup.task = Some(task);
+        }
+    }
+
+    fn release(&mut self, view: EntityId, deadline: Instant) -> bool {
+        let fired = self
+            .pending
+            .get(&view)
+            .is_some_and(|wakeup| wakeup.deadline == deadline);
+        if fired
+            && let Some(wakeup) = self.pending.remove(&view)
+            && let Some(task) = wakeup.task
+        {
+            self.retired.push(task);
+        }
+        fired
+    }
+}
+
+fn schedule_wakeup(view: EntityId, cx: &mut App, remaining: Duration, window: &Window) {
+    let Some(clocks) = cx.try_global::<AnimatedWakeups>().map(|c| c.0.clone()) else {
+        return;
+    };
+    let deadline = cx.background_executor().now() + remaining;
+    if !clocks.borrow_mut().claim(view, deadline) {
+        return;
+    }
+    let task = {
+        let clocks = clocks.clone();
+        window.spawn(cx, async move |cx| {
+            cx.background_executor().timer(remaining).await;
+            if clocks.borrow_mut().release(view, deadline) {
+                cx.update(move |_, cx| cx.notify(view)).ok();
+            }
+        })
+    };
+    clocks.borrow_mut().attach(view, deadline, task);
 }
 
 pub fn resolve(spec: &ImageSpec, size: u32, cx: &App) -> Option<Arc<RenderImage>> {
@@ -528,8 +939,13 @@ fn decode_streaming(bytes: &[u8], size: u32) -> Result<(Arc<RenderImage>, usize)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::{
+        Context, Entity, Render, StyleRefinement, TestAppContext, VisualTestContext, Window, div,
+        prelude::*,
+    };
     use image::{Rgba, RgbaImage};
     use png::{BitDepth, BlendOp, ColorType, DisposeOp, Encoder};
+    use std::cell::Cell;
 
     fn apng(width: u32, height: u32, delays: &[u16]) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -557,6 +973,88 @@ mod tests {
 
     fn blank_image() -> Arc<RenderImage> {
         Arc::new(RenderImage::new(vec![Frame::new(RgbaImage::new(1, 1))]))
+    }
+
+    fn delayed_image(delays: &[u64]) -> RenderImage {
+        RenderImage::new(
+            delays
+                .iter()
+                .map(|delay| {
+                    Frame::from_parts(
+                        RgbaImage::new(1, 1),
+                        0,
+                        0,
+                        Delay::from_numer_denom_ms(*delay as u32, 1),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    #[test]
+    fn frame_selection_follows_delays_and_wraps() {
+        let image = delayed_image(&[50, 100, 120]);
+        let ms = Duration::from_millis;
+        for (elapsed, frame, remaining) in [
+            (0, 0, 50),
+            (49, 0, 1),
+            (50, 1, 100),
+            (149, 1, 1),
+            (150, 2, 120),
+            (269, 2, 1),
+            (270, 0, 50),
+            (305, 0, 15),
+            (1000, 2, 80),
+        ] {
+            assert_eq!(
+                frame_at(&image, ms(elapsed)),
+                (frame, ms(remaining)),
+                "elapsed {elapsed}ms"
+            );
+        }
+        assert_eq!(
+            frame_at(&delayed_image(&[100]), ms(999)),
+            (0, Duration::MAX)
+        );
+        assert_eq!(
+            frame_at(&RenderImage::new(Vec::new()), ms(1)),
+            (0, Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn scheduling_waits_for_the_deadline_unless_it_is_imminent() {
+        let ms = Duration::from_millis;
+        assert_eq!(wake(ms(0), true, false, true), Wake::AnimationFrame);
+        assert_eq!(wake(ms(8), true, false, true), Wake::AnimationFrame);
+        assert_eq!(wake(ms(9), true, false, true), Wake::Timer(ms(9)));
+        assert_eq!(wake(ms(100), true, false, true), Wake::Timer(ms(100)));
+        assert_eq!(wake(ms(100), false, false, true), Wake::None);
+        assert_eq!(wake(ms(100), true, true, true), Wake::None);
+        assert_eq!(wake(ms(100), true, false, false), Wake::None);
+    }
+
+    #[test]
+    fn one_wakeup_per_view_keeps_the_earliest_deadline() {
+        let mut wakeups = Wakeups::default();
+        let view = EntityId::from(1);
+        let other = EntityId::from(2);
+        let base = Instant::now();
+        let at = |ms| base + Duration::from_millis(ms);
+        assert!(wakeups.claim(view, at(100)));
+        assert!(!wakeups.claim(view, at(100)));
+        assert!(!wakeups.claim(view, at(200)));
+        assert_eq!(wakeups.pending[&view].deadline, at(100));
+        assert!(wakeups.claim(view, at(50)));
+        assert_eq!(wakeups.pending[&view].deadline, at(50));
+        assert!(wakeups.claim(other, at(75)));
+        assert_eq!(wakeups.pending[&other].deadline, at(75));
+        assert!(!wakeups.release(view, at(100)));
+        assert!(wakeups.release(view, at(50)));
+        assert!(!wakeups.pending.contains_key(&view));
+        assert!(wakeups.pending.contains_key(&other));
+        assert!(wakeups.claim(view, at(25)));
+        assert_eq!(wakeups.pending[&view].deadline, at(25));
     }
 
     fn put_ready(
@@ -935,5 +1433,106 @@ mod tests {
                 .and_then(|sizes| sizes.get(&stale.1)),
             Some(Entry::Failed)
         ));
+    }
+
+    struct AnimationCounter {
+        image: Arc<RenderImage>,
+        renders: Rc<Cell<usize>>,
+    }
+
+    impl Render for AnimationCounter {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.renders.set(self.renders.get() + 1);
+            div()
+                .size(px(32.))
+                .child(image(self.image.clone()).size(px(32.)).id("test-animation"))
+        }
+    }
+
+    struct StaticPanel {
+        renders: Rc<Cell<usize>>,
+    }
+
+    impl Render for StaticPanel {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.renders.set(self.renders.get() + 1);
+            div().size(px(32.))
+        }
+    }
+
+    struct AnimationHost {
+        panel: Entity<AnimationCounter>,
+        sibling: Entity<StaticPanel>,
+    }
+
+    impl Render for AnimationHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(
+                    self.panel
+                        .clone()
+                        .cached(StyleRefinement::default().size(px(32.))),
+                )
+                .child(
+                    self.sibling
+                        .clone()
+                        .cached(StyleRefinement::default().size(px(32.))),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn hundred_millisecond_frames_render_about_ten_times_per_second(cx: &mut TestAppContext) {
+        cx.update(init);
+        let image = Arc::new(delayed_image(&[100, 100]));
+        let renders = Rc::new(Cell::new(0));
+        let counted = renders.clone();
+        let sibling_renders = Rc::new(Cell::new(0));
+        let counted_sibling = sibling_renders.clone();
+        FORCE_ACTIVE.set(true);
+        let clock = cx.clone();
+        let (_host, cx) = cx.add_window_view(move |_, cx| {
+            let panel = cx.new(|_| AnimationCounter {
+                image,
+                renders: counted,
+            });
+            let sibling = cx.new(|_| StaticPanel {
+                renders: counted_sibling,
+            });
+            AnimationHost { panel, sibling }
+        });
+        let draw = |cx: &mut VisualTestContext| {
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        };
+        draw(cx);
+        let initial = renders.get();
+        let sibling_initial = sibling_renders.get();
+        assert_eq!(initial, 1);
+
+        // 165 draws per simulated second; only the animation's own wakeups may
+        // dirty the cached panel.
+        let step = Duration::from_nanos(1_000_000_000 / 165);
+        for _ in 0..165 {
+            clock.background_executor.advance_clock(step);
+            draw(cx);
+            cx.update(|window, cx| {
+                window.simulate_next_frame(cx);
+            });
+        }
+        let counted = renders.get() - initial;
+        println!(
+            "100ms animation renders per simulated second: {counted}; \
+             sibling panel renders: {}",
+            sibling_renders.get() - sibling_initial
+        );
+        assert_eq!(sibling_renders.get(), sibling_initial);
+        assert!(
+            (8..=12).contains(&counted),
+            "a 100ms animation should repaint its view ~10 times per second, got {counted}"
+        );
+        FORCE_ACTIVE.set(false);
     }
 }

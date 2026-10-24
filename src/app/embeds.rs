@@ -163,14 +163,64 @@ fn card_content_width(embed: &Embed, media: (f32, f32)) -> f32 {
     }
 }
 
-pub(super) fn animated(source: impl Into<ImageSource>, key: &str) -> Stateful<Img> {
+fn animated_id(key: &str) -> (&'static str, u64) {
     let mut hasher = std::hash::DefaultHasher::new();
     std::hash::Hash::hash(key, &mut hasher);
-    img(source).id(("animated", std::hash::Hasher::finish(&hasher)))
+    ("animated", std::hash::Hasher::finish(&hasher))
+}
+
+pub(super) fn animated(source: impl Into<ImageSource>, key: &str) -> Stateful<Img> {
+    img(source).id(animated_id(key))
+}
+
+/// Animated media is served as GIF/WebP/APNG files; the spec's `animated` flag is
+/// only set for some embed providers, so the extension is the fallback signal.
+fn animated_media(media: &Media) -> bool {
+    media.animated
+        || media
+            .url
+            .split('?')
+            .next()
+            .is_some_and(|path| path.to_ascii_lowercase().ends_with(".gif"))
 }
 
 fn image_box(media: &Media, width: f32, height: f32, radius: f32, cx: &App) -> Div {
-    let image = images::resolve(&media.spec(), theme::image_px(width.max(height)), cx);
+    let pixels = theme::image_px(width.max(height));
+    let spec = media.spec();
+    let frames = animated_media(media)
+        .then(|| crate::animated::resolve(&spec, pixels, cx))
+        .flatten();
+    let still_spec = if media.animated {
+        images::ImageSpec::Media {
+            url: media.url.clone(),
+            width: media.width,
+            height: media.height,
+            animated: false,
+        }
+    } else {
+        spec
+    };
+    let child = match frames {
+        Some(image) => Some(
+            crate::animated::image(image)
+                .absolute()
+                .inset_0()
+                .size_full()
+                .object_fit(ObjectFit::Cover)
+                .rounded(rpx(radius))
+                .id(animated_id(&media.url))
+                .into_any_element(),
+        ),
+        None => images::resolve(&still_spec, pixels, cx).map(|path| {
+            animated(path, &media.url)
+                .absolute()
+                .inset_0()
+                .size_full()
+                .object_fit(ObjectFit::Cover)
+                .rounded(rpx(radius))
+                .into_any_element()
+        }),
+    };
     div()
         .relative()
         .flex_none()
@@ -178,15 +228,8 @@ fn image_box(media: &Media, width: f32, height: f32, radius: f32, cx: &App) -> D
         .h(rpx(height))
         .rounded(rpx(radius))
         .overflow_hidden()
-        .when(image.is_none(), |this| this.bg(rgb(theme::BORDER)))
-        .children(image.map(|path| {
-            animated(path, &media.url)
-                .absolute()
-                .inset_0()
-                .size_full()
-                .object_fit(ObjectFit::Cover)
-                .rounded(rpx(radius))
-        }))
+        .when(child.is_none(), |this| this.bg(rgb(theme::BORDER)))
+        .children(child)
 }
 
 fn gifv_box(still: &Media, video: Option<&Media>, cx: &App) -> Div {
@@ -206,10 +249,11 @@ fn gifv_box(still: &Media, video: Option<&Media>, cx: &App) -> Div {
             .rounded(rpx(8.))
             .overflow_hidden()
             .child(
-                animated(frames, &video.url)
+                crate::animated::image(frames)
                     .size_full()
                     .object_fit(ObjectFit::Cover)
-                    .rounded(rpx(8.)),
+                    .rounded(rpx(8.))
+                    .id(animated_id(&video.url)),
             ),
         None => image_box(still, width, height, 8., cx),
     }
@@ -1066,16 +1110,35 @@ fn emoji_element(emoji: &ReactionEmoji, size: f32, cx: &App) -> AnyElement {
                 id,
                 animated: emoji.animated,
             };
-            let image = images::resolve(&spec, theme::image_px(size), cx);
-            div()
-                .size(rpx(size))
-                .flex_none()
-                .children(image.map(|path| {
+            let pixels = theme::image_px(size);
+            let frames = emoji
+                .animated
+                .then(|| crate::animated::resolve(&spec, pixels, cx))
+                .flatten();
+            let still_spec = images::ImageSpec::Emoji {
+                id,
+                animated: false,
+            };
+            let child = match frames {
+                Some(image) => Some(
+                    crate::animated::image(image)
+                        .size_full()
+                        .object_fit(ObjectFit::Contain)
+                        .id(("emoji", id))
+                        .into_any_element(),
+                ),
+                None => images::resolve(&still_spec, pixels, cx).map(|path| {
                     img(path)
                         .id(("emoji", id))
                         .size_full()
                         .object_fit(ObjectFit::Contain)
-                }))
+                        .into_any_element()
+                }),
+            };
+            div()
+                .size(rpx(size))
+                .flex_none()
+                .children(child)
                 .into_any_element()
         }
         None => match emoji::image(&emoji.name) {

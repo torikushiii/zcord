@@ -2,7 +2,7 @@ use gpui::{App, Global};
 use gpui_tokio::Tokio;
 use std::{
     cell::RefCell,
-    collections::{HashMap, hash_map::DefaultHasher},
+    collections::{HashMap, VecDeque, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
     path::{Path, PathBuf},
     rc::Rc,
@@ -515,6 +515,14 @@ pub fn resolve(spec: &ImageSpec, size: u32, cx: &App) -> Option<Arc<Path>> {
 
 const BLUR_SOURCE: u32 = 64;
 const BLUR_SIGMA: f32 = 5.;
+const BLUR_CACHE_LIMIT: usize = 64;
+type BlurKey = (Arc<Path>, u32, u32);
+
+#[derive(Default)]
+struct BlurCache {
+    entries: HashMap<BlurKey, Option<Arc<gpui::RenderImage>>>,
+    order: VecDeque<BlurKey>,
+}
 
 pub fn blurred(spec: &ImageSpec, cx: &App) -> Option<Arc<gpui::RenderImage>> {
     blurred_with(spec, BLUR_SOURCE, BLUR_SIGMA, 1., cx)
@@ -527,18 +535,27 @@ pub fn blurred_with(
     saturation: f32,
     cx: &App,
 ) -> Option<Arc<gpui::RenderImage>> {
-    type Key = (Arc<Path>, u32, u32);
     thread_local! {
-        static BLURRED: RefCell<HashMap<Key, Option<Arc<gpui::RenderImage>>>> =
-            RefCell::new(HashMap::new());
+        static BLURRED: RefCell<BlurCache> = RefCell::new(BlurCache::default());
     }
     let path = resolve(spec, source, cx)?;
+    let key = (path, sigma.to_bits(), saturation.to_bits());
     BLURRED.with(|cache| {
-        cache
-            .borrow_mut()
-            .entry((path.clone(), sigma.to_bits(), saturation.to_bits()))
-            .or_insert_with(|| blur_file(&path, sigma, saturation))
-            .clone()
+        let mut cache = cache.borrow_mut();
+        if let Some(image) = cache.entries.get(&key) {
+            return image.clone();
+        }
+        // Live render elements keep their own Arc, so evicting here only drops the cache's
+        // reference; dropping the atlas tiles of a still-painted image would force re-uploads.
+        if cache.entries.len() >= BLUR_CACHE_LIMIT
+            && let Some(oldest) = cache.order.pop_front()
+        {
+            cache.entries.remove(&oldest);
+        }
+        let image = blur_file(&key.0, sigma, saturation);
+        cache.order.push_back(key.clone());
+        cache.entries.insert(key, image.clone());
+        image
     })
 }
 

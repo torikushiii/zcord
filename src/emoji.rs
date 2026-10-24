@@ -157,6 +157,10 @@ fn segment_with_bundle<'a>(text: &'a str, bundle: Option<&Bundle<'_>>) -> Vec<Se
     if text.is_empty() {
         return Vec::new();
     }
+    // ASCII has no emoji bases; keycaps also need non-ASCII selectors or combining marks.
+    if text.is_ascii() {
+        return vec![Segment::Text(text)];
+    }
     let Some(bundle) = bundle else {
         return vec![Segment::Text(text)];
     };
@@ -497,6 +501,13 @@ mod tests {
             "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}",
         ] {
             assert_eq!(segments(value), vec![Segment::Emoji(value)], "{value:?}");
+        }
+    }
+
+    #[test]
+    fn ascii_text_is_never_emoji() {
+        for value in ["#1 * 0123456789", "hello # world * 42", "#*0123 general"] {
+            assert_eq!(segments(value), vec![Segment::Text(value)], "{value:?}");
         }
     }
 
