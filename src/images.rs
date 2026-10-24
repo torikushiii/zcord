@@ -6,7 +6,10 @@ use std::{
     hash::{Hash, Hasher},
     path::{Path, PathBuf},
     rc::Rc,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime},
 };
 use tokio::{
@@ -16,8 +19,14 @@ use tokio::{
 
 const MAX_DOWNLOAD: u64 = 25 * 1024 * 1024;
 const MAX_CACHE: u64 = 512 * 1024 * 1024;
+const MAX_VIDEO_CACHE: u64 = 256 * 1024 * 1024;
+const PRUNE_THRESHOLD: u64 = 64 * 1024 * 1024;
+/// Cache hits older than this get their mtime refreshed so pruning stays LRU.
+const TOUCH_INTERVAL: Duration = Duration::from_secs(60 * 60);
+/// Leave freshly written files alone; a reader may be about to open them.
+const PRUNE_MIN_AGE: Duration = Duration::from_secs(60);
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ImageSpec {
     GuildIcon {
         guild_id: u64,
@@ -363,29 +372,44 @@ impl Global for ImageCache {}
 pub(crate) struct Service {
     client: reqwest::Client,
     directory: PathBuf,
+    video_directory: PathBuf,
     permits: Semaphore,
+    video_permits: Semaphore,
     initialized: OnceCell<bool>,
+    image_written: AtomicU64,
+    video_written: AtomicU64,
+    pruning: Arc<AtomicBool>,
 }
 
 pub fn init(cx: &mut App) {
     if cx.try_global::<ImageCache>().is_some() {
         return;
     }
-    let directory = dirs::cache_dir().map(|dir| dir.join("zcord").join("images"));
+    let directories = dirs::cache_dir().map(|dir| {
+        let root = dir.join("zcord");
+        (root.join("images"), root.join("videos"))
+    });
     let client = reqwest::Client::builder()
         .user_agent(crate::discord::USER_AGENT)
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(45))
         .build()
         .ok();
-    let service = directory.zip(client).map(|(directory, client)| {
-        Arc::new(Service {
-            client,
-            directory,
-            permits: Semaphore::new(6),
-            initialized: OnceCell::new(),
-        })
-    });
+    let service = directories
+        .zip(client)
+        .map(|((directory, video_directory), client)| {
+            Arc::new(Service {
+                client,
+                directory,
+                video_directory,
+                permits: Semaphore::new(6),
+                video_permits: Semaphore::new(2),
+                initialized: OnceCell::new(),
+                image_written: AtomicU64::new(0),
+                video_written: AtomicU64::new(0),
+                pruning: Arc::new(AtomicBool::new(false)),
+            })
+        });
     if let Some(service) = service.clone() {
         Tokio::spawn(cx, async move {
             service.initialize().await;
@@ -502,20 +526,47 @@ fn blur_file(path: &Path, sigma: f32, saturation: f32) -> Option<Arc<gpui::Rende
     )])))
 }
 
+fn cache_directory<'a>(images: &'a Path, videos: &'a Path, spec: &ImageSpec) -> &'a Path {
+    if matches!(spec, ImageSpec::Video { .. }) {
+        videos
+    } else {
+        images
+    }
+}
+
+fn touch_due(modified: SystemTime, now: SystemTime) -> bool {
+    now.duration_since(modified)
+        .is_ok_and(|age| age >= TOUCH_INTERVAL)
+}
+
+fn touch_modified(path: &Path) -> std::io::Result<()> {
+    std::fs::File::options()
+        .write(true)
+        .open(path)?
+        .set_modified(SystemTime::now())
+}
+
 impl Service {
     async fn initialize(&self) -> bool {
         *self
             .initialized
             .get_or_init(|| async {
                 let directory = self.directory.clone();
+                let video_directory = self.video_directory.clone();
                 let success = tokio::task::spawn_blocking(move || {
                     std::fs::create_dir_all(&directory)?;
-                    prune(&directory, MAX_CACHE)
+                    std::fs::create_dir_all(&video_directory)?;
+                    // Run both even if the first fails, so neither directory
+                    // can grow unbounded because the other one errored.
+                    let images = prune(&directory, MAX_CACHE);
+                    let videos = prune(&video_directory, MAX_VIDEO_CACHE);
+                    images?;
+                    videos
                 })
                 .await
                 .is_ok_and(|result| result.is_ok());
                 if !success {
-                    log::warn!("Image cache directory could not be prepared");
+                    log::warn!("Image cache directories could not be prepared");
                 }
                 success
             })
@@ -527,13 +578,20 @@ impl Service {
         if !self.initialize().await {
             return None;
         }
-        let _permit = self.permits.acquire().await.ok()?;
-        let path = self.directory.join(file_name(spec, size));
-        if tokio::fs::metadata(&path)
-            .await
-            .is_ok_and(|m| m.is_file() && m.len() > 0 && m.len() <= MAX_DOWNLOAD)
+        let video = matches!(spec, ImageSpec::Video { .. });
+        let _permit = if video {
+            self.video_permits.acquire().await.ok()?
+        } else {
+            self.permits.acquire().await.ok()?
+        };
+        let directory = cache_directory(&self.directory, &self.video_directory, spec);
+        let path = directory.join(file_name(spec, size));
+        if let Ok(metadata) = tokio::fs::metadata(&path).await
+            && metadata.is_file()
+            && metadata.len() > 0
+            && metadata.len() <= MAX_DOWNLOAD
         {
-            if matches!(spec, ImageSpec::Video { .. }) {
+            if video {
                 use tokio::io::AsyncReadExt;
                 let mut file = tokio::fs::File::open(&path).await.ok()?;
                 let mut header = [0; 8];
@@ -541,6 +599,12 @@ impl Service {
                 if !download_bytes(spec, &header) {
                     return None;
                 }
+            }
+            if let Ok(modified) = metadata.modified()
+                && touch_due(modified, SystemTime::now())
+            {
+                let path = path.clone();
+                let _ = tokio::task::spawn_blocking(move || touch_modified(&path)).await;
             }
             return Some(path);
         }
@@ -563,7 +627,34 @@ impl Service {
             return None;
         }
         atomic_write(&path, &bytes).await.ok()?;
+        self.record_write(spec, bytes.len() as u64);
         Some(path)
+    }
+
+    fn record_write(&self, spec: &ImageSpec, bytes: u64) {
+        let (counter, directory, limit) = if matches!(spec, ImageSpec::Video { .. }) {
+            (&self.video_written, &self.video_directory, MAX_VIDEO_CACHE)
+        } else {
+            (&self.image_written, &self.directory, MAX_CACHE)
+        };
+        let total = counter
+            .fetch_add(bytes, Ordering::Relaxed)
+            .saturating_add(bytes);
+        if total < PRUNE_THRESHOLD || self.pruning.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        counter.store(0, Ordering::Relaxed);
+        let directory = directory.clone();
+        let pruning = self.pruning.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Err(error) = prune(&directory, limit) {
+                log::warn!(
+                    "Image cache could not be pruned at {}: {error}",
+                    directory.display()
+                );
+            }
+            pruning.store(false, Ordering::Release);
+        });
     }
 }
 
@@ -608,14 +699,27 @@ async fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 fn prune(directory: &Path, limit: u64) -> std::io::Result<()> {
+    prune_with(directory, limit, |path| std::fs::remove_file(path))
+}
+
+fn prune_with(
+    directory: &Path,
+    limit: u64,
+    mut remove: impl FnMut(&Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     let mut files = Vec::new();
     let mut total = 0u64;
     for entry in std::fs::read_dir(directory)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() {
+        let Ok(entry) = entry else { continue };
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_file() {
             continue;
         }
-        let metadata = entry.metadata()?;
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
         total = total.saturating_add(metadata.len());
         files.push((
             metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
@@ -624,11 +728,24 @@ fn prune(directory: &Path, limit: u64) -> std::io::Result<()> {
         ));
     }
     files.sort_by_key(|(modified, _, _)| *modified);
-    for (_, length, path) in files {
+    let now = SystemTime::now();
+    for (modified, length, path) in files {
         if total <= limit {
             break;
         }
-        std::fs::remove_file(path)?;
+        // A file modified just now may still be opened by the UI that requested
+        // it; leave it for a later prune.
+        if now
+            .duration_since(modified)
+            .map_or(true, |age| age < PRUNE_MIN_AGE)
+        {
+            continue;
+        }
+        // A reader (or the platform) can prevent removal. Skip it and keep
+        // pruning the rest instead of abandoning the whole pass.
+        if remove(&path).is_err() {
+            continue;
+        }
         total = total.saturating_sub(length);
     }
     Ok(())
@@ -637,6 +754,132 @@ fn prune(directory: &Path, limit: u64) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_directory(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "zcord-image-{name}-test-{:016x}",
+            rand::random::<u64>()
+        ))
+    }
+
+    fn set_age(path: &Path, age: Duration) {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(SystemTime::now() - age)
+            .unwrap();
+    }
+
+    #[test]
+    fn video_specs_resolve_into_videos_dir() {
+        let images = Path::new("images");
+        let videos = Path::new("videos");
+        let video = ImageSpec::Video {
+            url: "https://cdn.discordapp.com/attachments/1/2/video.mp4".into(),
+            width: 640,
+            height: 360,
+        };
+        assert_eq!(cache_directory(images, videos, &video), videos);
+        let poster = ImageSpec::VideoPoster {
+            id: 1,
+            url: "https://cdn.discordapp.com/attachments/1/2/poster.jpg".into(),
+            width: 640,
+            height: 360,
+        };
+        assert_eq!(cache_directory(images, videos, &poster), images);
+    }
+
+    #[tokio::test]
+    async fn video_cache_hit_uses_videos_dir_and_refreshes_mtime() {
+        let root = temp_directory("video-hit");
+        let videos = root.join("videos");
+        std::fs::create_dir_all(&videos).unwrap();
+        let video = ImageSpec::Video {
+            url: "https://cdn.discordapp.com/attachments/1/2/video.mp4".into(),
+            width: 640,
+            height: 360,
+        };
+        let path = videos.join(file_name(&video, 64));
+        std::fs::write(&path, b"\0\0\0\x18ftypisom\0\0\0\0").unwrap();
+        set_age(&path, Duration::from_secs(2 * 60 * 60));
+
+        let service = Service {
+            client: reqwest::Client::new(),
+            directory: root.join("images"),
+            video_directory: videos,
+            permits: tokio::sync::Semaphore::new(6),
+            video_permits: tokio::sync::Semaphore::new(2),
+            initialized: tokio::sync::OnceCell::new(),
+            image_written: AtomicU64::new(0),
+            video_written: AtomicU64::new(0),
+            pruning: Arc::new(AtomicBool::new(false)),
+        };
+        let loaded = service.load(&video, 64).await.unwrap();
+        assert_eq!(&loaded, &path);
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert!(
+            modified
+                .elapsed()
+                .is_ok_and(|age| age < Duration::from_secs(5))
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn prune_skips_unremovable_and_recent_files_and_continues() {
+        let directory = temp_directory("skip");
+        std::fs::create_dir_all(&directory).unwrap();
+        let locked = directory.join("locked.img");
+        let removable = directory.join("removable.img");
+        let recent = directory.join("recent.img");
+        for path in [&locked, &removable, &recent] {
+            std::fs::write(path, b"12345").unwrap();
+        }
+        set_age(&locked, Duration::from_secs(3 * 60 * 60));
+        set_age(&removable, Duration::from_secs(2 * 60 * 60));
+        set_age(&recent, Duration::from_secs(30));
+
+        prune_with(&directory, 0, |path| {
+            if path == locked.as_path() {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "in use",
+                ))
+            } else {
+                std::fs::remove_file(path)
+            }
+        })
+        .unwrap();
+
+        assert!(locked.exists());
+        assert!(!removable.exists());
+        assert!(recent.exists());
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn lru_touch_protects_a_cache_hit_from_pruning() {
+        let directory = temp_directory("lru");
+        std::fs::create_dir_all(&directory).unwrap();
+        let touched = directory.join("touched.img");
+        let untouched = directory.join("untouched.img");
+        std::fs::write(&touched, b"12345").unwrap();
+        std::fs::write(&untouched, b"12345").unwrap();
+        set_age(&touched, Duration::from_secs(2 * 60 * 60));
+        set_age(&untouched, Duration::from_secs(60 * 60));
+
+        let now = SystemTime::now();
+        assert!(touch_due(now - Duration::from_secs(2 * 60 * 60), now));
+        assert!(!touch_due(now - Duration::from_secs(30 * 60), now));
+        touch_modified(&touched).unwrap();
+
+        prune(&directory, 8).unwrap();
+
+        assert!(touched.exists());
+        assert!(!untouched.exists());
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
 
     #[test]
     fn profile_cosmetic_urls() {
@@ -1123,13 +1366,13 @@ mod tests {
 
     #[tokio::test]
     async fn atomic_files_and_pruning() {
-        let directory =
-            std::env::temp_dir().join(format!("zcord-image-test-{:016x}", rand::random::<u64>()));
+        let directory = temp_directory("atomic");
         tokio::fs::create_dir(&directory).await.unwrap();
         let path = directory.join("test.img");
         atomic_write(&path, b"image fixture").await.unwrap();
         assert_eq!(tokio::fs::read(&path).await.unwrap(), b"image fixture");
         assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        set_age(&path, Duration::from_secs(2 * 60));
         prune(&directory, 0).unwrap();
         assert!(!path.exists());
         tokio::fs::remove_dir(directory).await.unwrap();
