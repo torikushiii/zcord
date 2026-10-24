@@ -1,7 +1,8 @@
-use std::time::Duration;
+use std::{cell::Cell, rc::Rc, time::Duration};
 
 use gpui::{prelude::*, *};
 use gpui_component::{
+    ElementExt,
     input::{Textarea, TextareaState},
     tooltip::Tooltip,
 };
@@ -261,11 +262,20 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         text.len_chars()
     };
     let remaining = MESSAGE_LIMIT as i64 - length as i64;
+    let picker_anchor = Rc::new(Cell::new(None));
     div()
         .relative()
         .px_2()
         .pb_2()
         .flex_none()
+        .on_prepaint({
+            let anchor = picker_anchor.clone();
+            move |bounds, window, _| {
+                let gap = rpx(8.).to_pixels(window.rem_size());
+                let right_inset = rpx(24.).to_pixels(window.rem_size());
+                anchor.set(Some(point(bounds.right() - right_inset, bounds.top() - gap)));
+            }
+        })
         .children(app.reply.map(|reply| reply_banner(app, reply)))
         .child(
             div()
@@ -327,8 +337,10 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                             let entity = app.entity.clone();
                             theme::icon_button("emoji", "smile", 24., theme::MUTED).on_mouse_down(
                                 MouseButton::Left,
-                                move |event, window, cx| {
-                                    let position = event.position - point(px(0.), px(16.));
+                                move |_, window, cx| {
+                                    let Some(position) = picker_anchor.get() else {
+                                        return;
+                                    };
                                     entity
                                         .update(cx, |app, cx| {
                                             app.toggle_emoji_picker(
