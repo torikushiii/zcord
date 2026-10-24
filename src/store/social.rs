@@ -1,6 +1,9 @@
 use super::*;
 use crate::images::ImageSpec;
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    time::{Duration, UNIX_EPOCH},
+};
 
 #[derive(Default)]
 pub(super) struct Social {
@@ -59,6 +62,55 @@ fn custom_text(text: &str, emoji: Option<&str>) -> Option<String> {
         None => text.to_owned(),
     };
     (!text.is_empty()).then_some(text)
+}
+
+fn status_emoji(id: u64, name: &str, animated: bool) -> Option<StatusEmoji> {
+    if id != 0 {
+        Some(StatusEmoji::Custom {
+            id,
+            name: name.to_owned(),
+            animated,
+        })
+    } else if !name.is_empty() {
+        Some(StatusEmoji::Unicode(name.to_owned()))
+    } else {
+        None
+    }
+}
+
+fn custom_status_from_settings(status: &settings_proto::CustomStatus) -> CustomStatus {
+    CustomStatus {
+        text: (!status.text.is_empty()).then(|| status.text.clone()),
+        emoji: status_emoji(status.emoji_id, &status.emoji_name, false),
+        expires_at: (status.expires_at_ms != 0)
+            .then(|| UNIX_EPOCH.checked_add(Duration::from_millis(status.expires_at_ms)))
+            .flatten(),
+    }
+}
+
+fn custom_status_from_presence(activities: &[model::Activity]) -> Option<CustomStatus> {
+    activities
+        .iter()
+        .filter(|activity| activity.kind == 4)
+        .find_map(|activity| {
+            let text = activity
+                .state
+                .as_deref()
+                .filter(|text| !text.is_empty())
+                .map(str::to_owned);
+            let emoji = activity.emoji.as_ref().and_then(|emoji| {
+                status_emoji(
+                    emoji.id.unwrap_or(0),
+                    emoji.name.as_deref().unwrap_or_default(),
+                    emoji.animated,
+                )
+            });
+            (text.is_some() || emoji.is_some()).then_some(CustomStatus {
+                text,
+                emoji,
+                expires_at: None,
+            })
+        })
 }
 
 pub(super) fn activity(activities: &[model::Activity]) -> Option<(String, bool)> {
@@ -507,6 +559,7 @@ impl Store {
             let current = activity(activities);
             user.playing = current.as_ref().is_some_and(|(_, playing)| *playing);
             user.activity = current.map(|(text, _)| text);
+            user.custom_status = custom_status_from_presence(activities);
         }
     }
 
@@ -527,12 +580,12 @@ impl Store {
             };
         }
         if !partial || settings.is_some_and(|s| s.custom_status_present) {
+            let custom = settings.and_then(|s| s.custom_status.as_ref());
             user.playing = false;
-            user.activity = settings
-                .and_then(|s| s.custom_status.as_ref())
-                .and_then(|s| {
-                    custom_text(&s.text, (s.emoji_id == 0).then_some(s.emoji_name.as_str()))
-                });
+            user.activity = custom.and_then(|s| {
+                custom_text(&s.text, (s.emoji_id == 0).then_some(s.emoji_name.as_str()))
+            });
+            user.custom_status = custom.map(custom_status_from_settings);
         }
     }
 
@@ -598,6 +651,16 @@ impl Store {
                 .and_then(|id| self.social.guilds.get(&id))
                 .and_then(|g| g.members.get(&self.current_user_id))
                 .is_some_and(|member| info.roles.iter().any(|id| member.roles.contains(id)))
+    }
+
+    pub(super) fn message_mentions_me(&self, message: &model::Message) -> bool {
+        self.mentioned(&MessageInfo {
+            guild_id: self.message_guild(message.channel_id, message.guild_id),
+            mentions: message.mentions.iter().map(|user| user.id).collect(),
+            roles: message.mention_roles.clone(),
+            everyone: message.mention_everyone,
+            ..Default::default()
+        })
     }
 
     pub(super) fn clear_message_info(&mut self, channel_id: u64) {

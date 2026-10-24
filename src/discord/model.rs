@@ -132,6 +132,30 @@ pub struct User {
 }
 
 #[derive(Clone, Deserialize)]
+pub struct UserUpdate {
+    #[serde(deserialize_with = "snowflake")]
+    pub id: u64,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default, deserialize_with = "nullable_string")]
+    pub global_name: Option<Option<String>>,
+    #[serde(default, deserialize_with = "nullable_string")]
+    pub avatar: Option<Option<String>>,
+    #[serde(default, deserialize_with = "nullable_string")]
+    pub discriminator: Option<Option<String>>,
+    #[serde(default)]
+    pub bot: Option<bool>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub primary_guild: Option<Option<PrimaryGuild>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub avatar_decoration_data: Option<Option<AvatarDecoration>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub collectibles: Option<Option<Collectibles>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub display_name_styles: Option<Option<DisplayNameStyles>>,
+}
+
+#[derive(Clone, Deserialize)]
 pub struct AvatarDecoration {
     pub asset: String,
     #[serde(default, deserialize_with = "optional_id")]
@@ -434,6 +458,28 @@ pub struct Overwrite {
     pub deny: u64,
 }
 
+#[derive(Clone, Default, Deserialize)]
+pub struct ThreadMetadata {
+    #[serde(default)]
+    pub archived: bool,
+    #[serde(default)]
+    pub locked: bool,
+    #[serde(default)]
+    pub create_timestamp: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct ForumTag {
+    #[serde(deserialize_with = "snowflake")]
+    pub id: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub moderated: bool,
+    #[serde(default)]
+    pub emoji: Option<Emoji>,
+}
+
 #[derive(Clone, Deserialize)]
 pub struct Channel {
     #[serde(deserialize_with = "snowflake")]
@@ -452,6 +498,20 @@ pub struct Channel {
     pub last_message_id: Option<Option<u64>>,
     #[serde(default)]
     pub permission_overwrites: Option<Vec<Overwrite>>,
+    #[serde(default, deserialize_with = "optional_id")]
+    pub owner_id: Option<u64>,
+    #[serde(default)]
+    pub thread_metadata: Option<ThreadMetadata>,
+    #[serde(default)]
+    pub message_count: Option<u32>,
+    #[serde(default, deserialize_with = "optional_ids")]
+    pub applied_tags: Option<Vec<u64>>,
+    #[serde(default)]
+    pub flags: Option<u64>,
+    #[serde(default, deserialize_with = "optional_entries")]
+    pub available_tags: Option<Vec<ForumTag>>,
+    #[serde(default)]
+    pub default_sort_order: Option<u8>,
     #[serde(default, deserialize_with = "ids")]
     pub recipient_ids: Vec<u64>,
     #[serde(default, deserialize_with = "entries")]
@@ -468,7 +528,14 @@ impl Channel {
             position,
             parent_id,
             last_message_id,
-            permission_overwrites
+            permission_overwrites,
+            owner_id,
+            thread_metadata,
+            message_count,
+            applied_tags,
+            flags,
+            available_tags,
+            default_sort_order
         );
         if !update.recipient_ids.is_empty() {
             self.recipient_ids.clone_from(&update.recipient_ids);
@@ -611,6 +678,24 @@ pub struct GuildEmojisUpdate {
     pub guild_id: u64,
     #[serde(default, deserialize_with = "entries")]
     pub emojis: Vec<GuildEmoji>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+pub struct ForumSearch {
+    #[serde(default, deserialize_with = "entries")]
+    pub threads: Vec<Channel>,
+    #[serde(default, deserialize_with = "entries")]
+    pub first_messages: Vec<Message>,
+    #[serde(default)]
+    pub has_more: bool,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct ThreadListSync {
+    #[serde(deserialize_with = "snowflake")]
+    pub guild_id: u64,
+    #[serde(default, deserialize_with = "entries")]
+    pub threads: Vec<Channel>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -1152,6 +1237,8 @@ pub struct ActivityEmoji {
     pub id: Option<u64>,
     #[serde(default)]
     pub name: Option<String>,
+    #[serde(default)]
+    pub animated: bool,
 }
 
 fn entry_groups<'de, D: Deserializer<'de>, T: DeserializeOwned>(

@@ -62,6 +62,7 @@ impl Store {
         .map(
             |(index, (name, initials, status, bot, role_color, tag, activity))| User {
                 id: index as u64 + 1,
+                username: name.into(),
                 name: name.into(),
                 initials: initials.into(),
                 status,
@@ -74,6 +75,7 @@ impl Store {
                 }),
                 playing: false,
                 activity: activity.map(Into::into),
+                custom_status: None,
                 avatar: None,
                 discriminator: None,
                 decoration: None,
@@ -175,7 +177,10 @@ impl Store {
                                 id: guild_id * 100 + channel_index as u64,
                                 name: (*channel_name).into(),
                                 kind: ChannelKind::Text,
+                                parent_id: Some(guild_id * 10),
                                 unread: unread && channel_index % 2 == 1,
+                                mentions: if channel_index == 0 { mentions } else { 0 },
+                                new_posts: 0,
                                 messages,
                                 messages_loaded: true,
                             }
@@ -189,7 +194,10 @@ impl Store {
                             id: guild_id * 100 + 50 + index as u64,
                             name: name.into(),
                             kind: ChannelKind::Voice,
+                            parent_id: Some(guild_id * 10 + 1),
                             unread: false,
+                            mentions: 0,
+                            new_posts: 0,
                             messages: Vec::new(),
                             messages_loaded: false,
                         })
@@ -214,6 +222,7 @@ impl Store {
                                 channels: voice_channels,
                             },
                         ],
+                        threads: Vec::new(),
                         member_ids: users.iter().map(|user| user.id).collect(),
                         icon: None,
                         banner: None,
@@ -235,6 +244,8 @@ impl Store {
             read_states: HashMap::new(),
             source_channels: HashMap::new(),
             channel_locations: HashMap::new(),
+            thread_locations: HashMap::new(),
+            forum_posts: HashMap::new(),
             guild_badges: Vec::new(),
             dm_badges: 77,
             guild_indices: HashMap::new(),
@@ -260,6 +271,7 @@ impl Store {
             ]),
             rail_order: vec![1, 2, 3, 4, 5, 6],
             social: social::Social::default(),
+            permission_cache: RefCell::new(HashMap::new()),
         };
         for guild in &mut store.guilds {
             let moderator = guild.id * 1000 + 1;

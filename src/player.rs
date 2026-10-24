@@ -221,13 +221,11 @@ pub(crate) struct Video<'a> {
     pub fullscreen: bool,
 }
 
-/// The video shown in the full-window player, and whether entering it also switched the
-/// window to fullscreen, so leaving restores the window as the user had it.
 pub(crate) struct Fullscreen {
     pub key: u64,
     pub url: String,
     pub poster: Option<ImageSpec>,
-    pub window: bool,
+    pub entered_window_fullscreen: bool,
 }
 
 pub(crate) fn fullscreen(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
@@ -597,7 +595,7 @@ fn fullscreen_button(app: &DiscordApp, target: &FullscreenTarget, open: bool) ->
                                 key: target.key,
                                 url: target.url,
                                 poster: target.poster,
-                                window: false,
+                                entered_window_fullscreen: false,
                             },
                             window,
                             cx,

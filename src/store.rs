@@ -8,12 +8,12 @@ mod view;
 use crate::discord::{self, model, settings_proto};
 use crate::images::ImageSpec;
 use mapping::{
-    channel_unread, local_timestamp, map_components, map_decoration, map_guild, map_message,
-    map_name_style, map_nameplate, map_reactions, map_snapshot, map_stickers, map_user, read_state,
-    timestamp_from_nonce,
+    channel_unread, forum_new_posts, local_timestamp, map_components, map_decoration, map_guild,
+    map_message, map_name_style, map_nameplate, map_reactions, map_snapshot, map_stickers,
+    map_user, read_state, timestamp_from_nonce,
 };
 use seed::SEED_START;
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap};
 pub use view::*;
 
 pub struct Store {
@@ -28,12 +28,15 @@ pub struct Store {
     read_states: HashMap<u64, usize>,
     source_channels: HashMap<u64, SourceChannel>,
     channel_locations: HashMap<u64, ChannelLocation>,
+    thread_locations: HashMap<u64, ThreadLocation>,
+    forum_posts: HashMap<u64, ForumPost>,
     guild_badges: Vec<GuildBadges>,
     dm_badges: u64,
     guild_indices: HashMap<u64, usize>,
     folder_layout: Option<Vec<settings_proto::GuildFolder>>,
     rail_order: Vec<u64>,
     social: social::Social,
+    permission_cache: RefCell<HashMap<u64, u64>>,
 }
 
 #[derive(Clone, Copy)]
@@ -83,9 +86,72 @@ struct ChannelLocation {
     at_present: bool,
 }
 
+#[derive(Clone, Copy)]
+struct ThreadLocation {
+    guild: usize,
+    thread: usize,
+    at_present: bool,
+}
+
 struct GuildBadges {
     unread_channels: usize,
     mentions: u64,
+}
+
+fn forum_thread_created(thread: &model::Channel) -> Timestamp {
+    thread
+        .thread_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.create_timestamp.as_deref())
+        .and_then(local_timestamp)
+        .unwrap_or_else(|| timestamp_from_nonce(thread.id))
+}
+
+fn forum_post_from_thread(thread: &model::Channel, forum_id: u64) -> ForumPost {
+    let created_at = forum_thread_created(thread);
+    ForumPost {
+        id: thread.id,
+        forum_id,
+        name: thread.name.clone().unwrap_or_default(),
+        owner_id: thread.owner_id.unwrap_or(0),
+        created_at,
+        last_activity: thread
+            .last_message_id
+            .flatten()
+            .map(timestamp_from_nonce)
+            .unwrap_or(created_at),
+        message_count: thread.message_count.unwrap_or(0),
+        tag_ids: thread.applied_tags.clone().unwrap_or_default(),
+        pinned: thread.flags.unwrap_or(0) & 2 != 0,
+        locked: thread
+            .thread_metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.locked),
+        archived: thread
+            .thread_metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.archived),
+        preview: None,
+        thumbnail: None,
+        unread: false,
+    }
+}
+
+fn forum_post_thumbnail(message: &model::Message) -> Option<ImageSpec> {
+    message
+        .attachments
+        .iter()
+        .find_map(Attachment::image_spec)
+        .or_else(|| {
+            let embeds = mapping::map_embeds(&message.embeds, message.flags);
+            embeds.iter().find_map(|embed| {
+                embed
+                    .images
+                    .first()
+                    .or(embed.thumbnail.as_ref())
+                    .map(Media::spec)
+            })
+        })
 }
 
 impl Store {
@@ -175,12 +241,8 @@ impl Store {
                 return EmojiAccess::NeedsNitro;
             }
             let external = self
-                .source_channel_guild(channel_id)
-                .is_some_and(|(guild, channel)| {
-                    discord::channel_permissions(guild, channel, self.current_user_id)
-                        & discord::USE_EXTERNAL_EMOJIS
-                        != 0
-                });
+                .permissions(channel_id)
+                .is_some_and(|permissions| permissions & discord::USE_EXTERNAL_EMOJIS != 0);
             if !external {
                 return EmojiAccess::NoExternalPermission;
             }
@@ -363,30 +425,40 @@ impl Store {
     }
 
     pub fn mark_guild_read(&mut self, guild_id: u64) {
-        if let Some(guild) = self.guilds.iter_mut().find(|guild| guild.id == guild_id) {
-            guild.unread = false;
-            guild.mentions = 0;
+        let Some(index) = self.guilds.iter().position(|guild| guild.id == guild_id) else {
+            return;
+        };
+        let guild = &mut self.guilds[index];
+        guild.unread = false;
+        guild.mentions = 0;
+        for channel in guild
+            .categories
+            .iter_mut()
+            .flat_map(|category| &mut category.channels)
+        {
+            channel.mentions = 0;
+            channel.new_posts = 0;
         }
+        self.guild_badges[index].mentions = 0;
     }
 
     pub fn mark_channel_read(&mut self, guild_id: u64, channel_id: u64) {
         if let Some(location) = self.channel_locations.get(&channel_id).copied() {
-            let channel = &self.guilds[location.guild].categories[location.category].channels
-                [location.channel];
-            if self.guilds[location.guild].id == guild_id && channel.unread {
-                self.guild_badges[location.guild].unread_channels = self.guild_badges
-                    [location.guild]
-                    .unread_channels
-                    .saturating_sub(1);
+            let guild = &mut self.guilds[location.guild];
+            let channel = &mut guild.categories[location.category].channels[location.channel];
+            if guild.id == guild_id {
+                let badges = &mut self.guild_badges[location.guild];
+                if channel.unread {
+                    badges.unread_channels = badges.unread_channels.saturating_sub(1);
+                }
+                if channel.mentions > 0 {
+                    badges.mentions = badges.mentions.saturating_sub(u64::from(channel.mentions));
+                    channel.mentions = 0;
+                }
+                channel.new_posts = 0;
+                channel.unread = false;
+                guild.mentions = badges.mentions.min(u64::from(u32::MAX)) as u32;
             }
-        }
-        if let Some(channel) = self
-            .guilds
-            .iter_mut()
-            .find(|guild| guild.id == guild_id)
-            .and_then(|guild| guild.channel_mut(channel_id))
-        {
-            channel.unread = false;
         }
     }
 
@@ -398,12 +470,20 @@ impl Store {
     pub fn channel_ack(&self, channel_id: u64) -> Option<u64> {
         let source = self.source.as_ref()?;
         let channel = self.source_channels.get(&channel_id)?.get(source)?;
-        channel_unread(channel, read_state(source, &self.read_states, channel_id))
-            .then(|| channel.last_message_id.flatten())
-            .flatten()
+        let unread = channel_unread(channel, read_state(source, &self.read_states, channel_id))
+            || (matches!(channel.kind, Some(15 | 16)) && self.forum_new_post_count(channel_id) > 0);
+        if !unread {
+            return None;
+        }
+        if matches!(channel.kind, Some(15 | 16)) {
+            self.latest_forum_post_id(channel_id)
+                .or_else(|| channel.last_message_id.flatten())
+        } else {
+            channel.last_message_id.flatten()
+        }
     }
 
-    pub fn unread_acks(&self, guild_id: u64, now_snowflake: u64) -> Vec<(u64, u64)> {
+    pub fn unread_acks(&self, guild_id: u64, _now_snowflake: u64) -> Vec<(u64, u64)> {
         let Some(source) = &self.source else {
             return Vec::new();
         };
@@ -421,12 +501,15 @@ impl Store {
             .filter_map(|channel| {
                 let message_id = match channel.kind {
                     Some(0 | 5) => channel.last_message_id.flatten()?,
-                    Some(15 | 16) => now_snowflake,
+                    Some(15 | 16) => self.latest_forum_post_id(channel.id)?,
                     _ => return None,
                 };
-                (discord::can_view(guild, channel, source.user.id)
-                    && channel_unread(channel, read_state(source, &self.read_states, channel.id)))
-                .then_some((channel.id, message_id))
+                let unread =
+                    channel_unread(channel, read_state(source, &self.read_states, channel.id))
+                        || (matches!(channel.kind, Some(15 | 16))
+                            && self.forum_new_post_count(channel.id) > 0);
+                (discord::can_view(guild, channel, source.user.id) && unread)
+                    .then_some((channel.id, message_id))
             })
             .collect()
     }
@@ -442,7 +525,7 @@ impl Store {
             .iter_mut()
             .find(|guild| guild.id == guild_id)?
             .channel_mut(channel_id)
-            .filter(|channel| channel.kind == ChannelKind::Text)?;
+            .filter(|channel| channel.kind.is_text())?;
         let timestamp = channel
             .messages
             .last()
@@ -470,22 +553,33 @@ impl Store {
     }
 
     fn network_channel(&self, channel_id: u64) -> Option<&Channel> {
-        let location = *self.channel_locations.get(&channel_id)?;
+        if let Some(location) = self.channel_locations.get(&channel_id).copied() {
+            return self
+                .guilds
+                .get(location.guild)?
+                .categories
+                .get(location.category)?
+                .channels
+                .get(location.channel);
+        }
+        let location = *self.thread_locations.get(&channel_id)?;
         self.guilds
             .get(location.guild)?
-            .categories
-            .get(location.category)?
-            .channels
-            .get(location.channel)
+            .threads
+            .get(location.thread)
     }
 
     pub fn at_present(&self, channel_id: u64) -> bool {
         self.network_channel(channel_id)
             .is_some_and(|channel| channel.messages_loaded)
-            && self
+            && (self
                 .channel_locations
                 .get(&channel_id)
                 .is_some_and(|location| location.at_present)
+                || self
+                    .thread_locations
+                    .get(&channel_id)
+                    .is_some_and(|location| location.at_present))
     }
 
     pub fn queue_message(
@@ -641,9 +735,27 @@ impl Store {
         Some((source.guilds.get(guild)?, entry.get(source)?))
     }
 
+    fn permissions(&self, channel_id: u64) -> Option<u64> {
+        if let Some(permissions) = self.permission_cache.borrow().get(&channel_id) {
+            return Some(*permissions);
+        }
+        let (guild, channel) = self.source_channel_guild(channel_id)?;
+        let permissions = discord::channel_permissions(guild, channel, self.current_user_id);
+        self.permission_cache
+            .borrow_mut()
+            .insert(channel_id, permissions);
+        Some(permissions)
+    }
+
     pub fn can_send(&self, channel_id: u64) -> bool {
         if self.source.is_none() {
             return true;
+        }
+        if self
+            .source_channel_guild(channel_id)
+            .is_some_and(|(_, channel)| matches!(channel.kind, Some(15 | 16)))
+        {
+            return false;
         }
         if matches!(
             self.source_channels.get(&channel_id),
@@ -651,25 +763,18 @@ impl Store {
         ) {
             return true;
         }
-        self.source_channel_guild(channel_id)
-            .is_some_and(|(guild, channel)| {
-                let permissions =
-                    discord::channel_permissions(guild, channel, self.current_user_id);
-                permissions & (discord::VIEW_CHANNEL | discord::SEND_MESSAGES)
-                    == discord::VIEW_CHANNEL | discord::SEND_MESSAGES
-            })
+        self.permissions(channel_id).is_some_and(|permissions| {
+            permissions & (discord::VIEW_CHANNEL | discord::SEND_MESSAGES)
+                == discord::VIEW_CHANNEL | discord::SEND_MESSAGES
+        })
     }
 
     pub fn can_manage_messages(&self, channel_id: u64) -> bool {
         if self.source.is_none() {
             return true;
         }
-        self.source_channel_guild(channel_id)
-            .is_some_and(|(guild, channel)| {
-                discord::channel_permissions(guild, channel, self.current_user_id)
-                    & discord::MANAGE_MESSAGES
-                    != 0
-            })
+        self.permissions(channel_id)
+            .is_some_and(|permissions| permissions & discord::MANAGE_MESSAGES != 0)
     }
 }
 
@@ -753,12 +858,15 @@ impl Store {
             read_states,
             source_channels: HashMap::new(),
             channel_locations: HashMap::new(),
+            thread_locations: HashMap::new(),
+            forum_posts: HashMap::new(),
             guild_badges: Vec::new(),
             dm_badges: 0,
             guild_indices: HashMap::new(),
             folder_layout,
             rail_order,
             social: social::Social::default(),
+            permission_cache: RefCell::new(HashMap::new()),
         };
         store.init_social();
         store.apply_own_status(settings.status.as_ref(), false);
@@ -768,13 +876,20 @@ impl Store {
 
     fn index_channels(&mut self) {
         self.index_names();
+        self.index_forum_posts();
         let present: HashMap<u64, bool> = self
             .channel_locations
             .iter()
             .map(|(id, location)| (*id, location.at_present))
+            .chain(
+                self.thread_locations
+                    .iter()
+                    .map(|(id, location)| (*id, location.at_present)),
+            )
             .collect();
         self.source_channels.clear();
         self.channel_locations.clear();
+        self.thread_locations.clear();
         self.guild_badges.clear();
         self.guild_indices.clear();
         if let Some(source) = &self.source {
@@ -804,14 +919,14 @@ impl Store {
                 .sum();
             self.dm_mentions = self.dm_badges.min(u64::from(u32::MAX)) as u32;
         }
-        for (guild_index, guild) in self.guilds.iter().enumerate() {
+        for (guild_index, guild) in self.guilds.iter_mut().enumerate() {
             self.guild_indices.insert(guild.id, guild_index);
             let mut badges = GuildBadges {
                 unread_channels: 0,
                 mentions: 0,
             };
-            for (category_index, category) in guild.categories.iter().enumerate() {
-                for (channel_index, channel) in category.channels.iter().enumerate() {
+            for (category_index, category) in guild.categories.iter_mut().enumerate() {
+                for (channel_index, channel) in category.channels.iter_mut().enumerate() {
                     self.channel_locations.insert(
                         channel.id,
                         ChannelLocation {
@@ -824,22 +939,299 @@ impl Store {
                                 .unwrap_or(channel.messages_loaded),
                         },
                     );
-                    badges.unread_channels +=
-                        usize::from(channel.kind == ChannelKind::Text && channel.unread);
                     if let Some(source) = &self.source {
-                        badges.mentions += u64::from(
-                            read_state(source, &self.read_states, channel.id)
-                                .map_or(0, |s| s.mention_count),
-                        );
+                        channel.mentions = read_state(source, &self.read_states, channel.id)
+                            .map_or(0, |state| state.mention_count);
+                        if channel.kind.is_forum() {
+                            channel.new_posts = source.guilds.get(guild_index).map_or(0, |guild| {
+                                forum_new_posts(
+                                    guild,
+                                    channel.id,
+                                    read_state(source, &self.read_states, channel.id),
+                                )
+                            });
+                        }
                     }
+                    if channel.kind.is_unreadable() {
+                        channel.unread |= channel.new_posts > 0;
+                    } else {
+                        channel.unread = false;
+                    }
+                    badges.unread_channels +=
+                        usize::from(channel.kind.is_unreadable() && channel.unread);
+                    badges.mentions += u64::from(channel.mentions);
                 }
             }
-            if self.source.is_none() {
-                badges.mentions = u64::from(guild.mentions);
+            for (thread_index, thread) in guild.threads.iter_mut().enumerate() {
+                self.thread_locations.insert(
+                    thread.id,
+                    ThreadLocation {
+                        guild: guild_index,
+                        thread: thread_index,
+                        at_present: present
+                            .get(&thread.id)
+                            .copied()
+                            .unwrap_or(thread.messages_loaded),
+                    },
+                );
+                if let Some(source) = &self.source {
+                    thread.mentions = read_state(source, &self.read_states, thread.id)
+                        .map_or(0, |state| state.mention_count);
+                }
             }
+            guild.mentions = badges.mentions.min(u64::from(u32::MAX)) as u32;
             self.guild_badges.push(badges);
         }
         self.rebuild_rail();
+    }
+
+    fn index_forum_posts(&mut self) {
+        let Some(source) = &self.source else {
+            self.forum_posts.clear();
+            return;
+        };
+        let mut next = HashMap::new();
+        for guild in &source.guilds {
+            let forums: std::collections::HashSet<u64> = guild
+                .channels
+                .iter()
+                .flatten()
+                .filter(|channel| matches!(channel.kind, Some(15 | 16)))
+                .map(|channel| channel.id)
+                .collect();
+            for thread in guild.threads.iter().flatten() {
+                let Some(forum_id) = thread.parent_id.flatten() else {
+                    continue;
+                };
+                if !forums.contains(&forum_id) {
+                    continue;
+                }
+                let mut post = self
+                    .forum_posts
+                    .remove(&thread.id)
+                    .unwrap_or_else(|| forum_post_from_thread(thread, forum_id));
+                Self::merge_forum_thread(
+                    &mut post,
+                    thread,
+                    forum_id,
+                    read_state(source, &self.read_states, thread.id),
+                );
+                next.insert(thread.id, post);
+            }
+        }
+        self.forum_posts = next;
+
+        if let Some(source) = &mut self.source {
+            for guild in &mut source.guilds {
+                let latest: HashMap<u64, u64> = guild
+                    .threads
+                    .iter()
+                    .flatten()
+                    .filter_map(|thread| Some((thread.parent_id.flatten()?, thread.id)))
+                    .fold(HashMap::new(), |mut latest, (forum_id, thread_id)| {
+                        latest
+                            .entry(forum_id)
+                            .and_modify(|id| *id = (*id).max(thread_id))
+                            .or_insert(thread_id);
+                        latest
+                    });
+                for channel in guild.channels.iter_mut().flatten() {
+                    if matches!(channel.kind, Some(15 | 16)) {
+                        channel.last_message_id = Some(latest.get(&channel.id).copied());
+                    }
+                }
+            }
+        }
+    }
+
+    fn merge_forum_thread(
+        post: &mut ForumPost,
+        thread: &model::Channel,
+        forum_id: u64,
+        state: Option<&model::ReadState>,
+    ) {
+        post.forum_id = forum_id;
+        post.name = thread.name.clone().unwrap_or_default();
+        if let Some(owner_id) = thread.owner_id {
+            post.owner_id = owner_id;
+        }
+        post.created_at = forum_thread_created(thread);
+        post.last_activity = thread
+            .last_message_id
+            .flatten()
+            .map(timestamp_from_nonce)
+            .unwrap_or(post.created_at);
+        if let Some(message_count) = thread.message_count {
+            post.message_count = message_count;
+        }
+        post.tag_ids = thread.applied_tags.clone().unwrap_or_default();
+        post.pinned = thread.flags.unwrap_or(0) & 2 != 0;
+        if let Some(metadata) = &thread.thread_metadata {
+            post.locked = metadata.locked;
+            post.archived = metadata.archived;
+        }
+        post.unread = channel_unread(thread, state);
+    }
+
+    fn forum_new_post_count(&self, forum_id: u64) -> u32 {
+        let Some(source) = &self.source else {
+            return 0;
+        };
+        let Some(guild) = source.guilds.iter().find(|guild| {
+            guild
+                .channels
+                .iter()
+                .flatten()
+                .any(|channel| channel.id == forum_id && matches!(channel.kind, Some(15 | 16)))
+        }) else {
+            return 0;
+        };
+        forum_new_posts(
+            guild,
+            forum_id,
+            read_state(source, &self.read_states, forum_id),
+        )
+    }
+
+    fn latest_forum_post_id(&self, forum_id: u64) -> Option<u64> {
+        let source = self.source.as_ref()?;
+        source.guilds.iter().find_map(|guild| {
+            guild
+                .threads
+                .iter()
+                .flatten()
+                .filter(|thread| thread.parent_id.flatten() == Some(forum_id))
+                .map(|thread| thread.id)
+                .max()
+        })
+    }
+
+    pub fn forum_tags(&self, forum_id: u64) -> Vec<ForumTag> {
+        let Some((_, channel)) = self.source_channel_guild(forum_id) else {
+            return Vec::new();
+        };
+        channel
+            .available_tags
+            .iter()
+            .flatten()
+            .map(|tag| ForumTag {
+                id: tag.id,
+                name: tag.name.clone(),
+                emoji: tag.emoji.as_ref().and_then(|emoji| {
+                    if let Some(id) = emoji.id {
+                        Some(StatusEmoji::Custom {
+                            id,
+                            name: emoji.name.clone().unwrap_or_default(),
+                            animated: emoji.animated,
+                        })
+                    } else {
+                        emoji
+                            .name
+                            .clone()
+                            .filter(|name| !name.is_empty())
+                            .map(StatusEmoji::Unicode)
+                    }
+                }),
+                moderated: tag.moderated,
+            })
+            .collect()
+    }
+
+    pub fn forum_posts(&self, forum_id: u64) -> Vec<&ForumPost> {
+        let creation_sort = self
+            .source_channel_guild(forum_id)
+            .is_some_and(|(_, channel)| channel.default_sort_order == Some(1));
+        let mut posts: Vec<_> = self
+            .forum_posts
+            .values()
+            .filter(|post| post.forum_id == forum_id)
+            .collect();
+        if creation_sort {
+            posts.sort_by(|a, b| {
+                b.pinned
+                    .cmp(&a.pinned)
+                    .then_with(|| b.created_at.cmp(&a.created_at))
+                    .then_with(|| b.id.cmp(&a.id))
+            });
+        } else {
+            posts.sort_by(|a, b| {
+                b.pinned
+                    .cmp(&a.pinned)
+                    .then_with(|| b.last_activity.cmp(&a.last_activity))
+                    .then_with(|| b.id.cmp(&a.id))
+            });
+        }
+        posts
+    }
+
+    pub fn apply_forum_search(&mut self, forum_id: u64, search: model::ForumSearch) -> Change {
+        let Some(SourceChannel::Guild { guild, .. }) = self.source_channels.get(&forum_id).copied()
+        else {
+            return Change::None;
+        };
+        let Some(source) = self.source.as_mut() else {
+            return Change::None;
+        };
+        let metadata = &mut source.guilds[guild];
+        let guild_id = metadata.id;
+        let threads = metadata.threads.get_or_insert_with(Vec::new);
+        for mut thread in search.threads {
+            if thread.guild_id.is_none() {
+                thread.guild_id = Some(guild_id);
+            }
+            if thread.kind.is_none() {
+                thread.kind = Some(11);
+            }
+            if thread.parent_id.flatten().is_none() {
+                thread.parent_id = Some(Some(forum_id));
+            }
+            if let Some(existing) = threads.iter_mut().find(|existing| existing.id == thread.id) {
+                existing.merge(&thread);
+            } else {
+                threads.push(thread);
+            }
+        }
+        self.rebuild_structure(Some(guild_id));
+        for message in &search.first_messages {
+            self.apply_forum_first_message(message);
+        }
+        Change::Structure
+    }
+
+    fn apply_forum_first_message(&mut self, message: &model::Message) {
+        let Some(post) = self.forum_posts.get_mut(&message.channel_id) else {
+            return;
+        };
+        if post.preview.is_none() {
+            post.preview = Some(message.content.clone());
+        }
+        if post.thumbnail.is_none() {
+            post.thumbnail = forum_post_thumbnail(message);
+        }
+    }
+
+    fn update_forum_post_message(&mut self, message: &model::Message) {
+        let read_last = self
+            .source
+            .as_ref()
+            .and_then(|source| read_state(source, &self.read_states, message.channel_id))
+            .and_then(|state| state.last_message_id)
+            .unwrap_or(0);
+        let timestamp =
+            local_timestamp(&message.timestamp).unwrap_or_else(|| timestamp_from_nonce(message.id));
+        let thumbnail = forum_post_thumbnail(message);
+        let Some(post) = self.forum_posts.get_mut(&message.channel_id) else {
+            return;
+        };
+        post.message_count = post.message_count.saturating_add(1);
+        post.last_activity = timestamp;
+        post.unread = message.id > read_last;
+        if post.preview.is_none() {
+            post.preview = Some(message.content.clone());
+        }
+        if post.thumbnail.is_none() {
+            post.thumbnail = thumbnail;
+        }
     }
 
     fn rebuild_rail(&mut self) {
@@ -880,6 +1272,14 @@ impl Store {
         self.register_author(user);
     }
 
+    fn apply_user_update(&mut self, update: &model::UserUpdate) -> bool {
+        let Some(user) = self.users.get_mut(&update.id) else {
+            return false;
+        };
+        mapping::apply_user_update(user, update);
+        true
+    }
+
     fn register_author(&mut self, user: &model::User) {
         if user.username.is_empty() {
             if let Some(existing) = self.users.get_mut(&user.id) {
@@ -901,6 +1301,7 @@ impl Store {
         if let Some(existing) = self.users.get(&user.id) {
             mapped.status = existing.status;
             mapped.activity.clone_from(&existing.activity);
+            mapped.custom_status.clone_from(&existing.custom_status);
             mapped.playing = existing.playing;
             mapped.role_color = existing.role_color;
             if user.primary_guild.is_none() {
@@ -920,13 +1321,20 @@ impl Store {
     }
 
     fn network_channel_mut(&mut self, channel_id: u64) -> Option<&mut Channel> {
-        let location = self.channel_locations.get(&channel_id)?;
+        if let Some(location) = self.channel_locations.get(&channel_id).copied() {
+            return self
+                .guilds
+                .get_mut(location.guild)?
+                .categories
+                .get_mut(location.category)?
+                .channels
+                .get_mut(location.channel);
+        }
+        let location = *self.thread_locations.get(&channel_id)?;
         self.guilds
             .get_mut(location.guild)?
-            .categories
-            .get_mut(location.category)?
-            .channels
-            .get_mut(location.channel)
+            .threads
+            .get_mut(location.thread)
     }
 
     fn replace_messages(&mut self, channel_id: u64, mut messages: Vec<model::Message>) {
@@ -959,6 +1367,8 @@ impl Store {
 
     fn set_at_present(&mut self, channel_id: u64, present: bool) {
         if let Some(location) = self.channel_locations.get_mut(&channel_id) {
+            location.at_present = present;
+        } else if let Some(location) = self.thread_locations.get_mut(&channel_id) {
             location.at_present = present;
         }
     }
@@ -1039,13 +1449,20 @@ impl Store {
                     if let Some(social) = self.social.guilds.get(&guild_id) {
                         rebuilt.member_ids = social.members.keys().copied().collect();
                     }
-                    let mut histories: HashMap<_, _> = self.guilds[position]
+                    let old = &mut self.guilds[position];
+                    let mut histories: HashMap<_, _> = old
                         .categories
                         .iter_mut()
                         .flat_map(|c| &mut c.channels)
+                        .chain(old.threads.iter_mut())
                         .map(|c| (c.id, (c.messages_loaded, std::mem::take(&mut c.messages))))
                         .collect();
-                    for channel in rebuilt.categories.iter_mut().flat_map(|c| &mut c.channels) {
+                    for channel in rebuilt
+                        .categories
+                        .iter_mut()
+                        .flat_map(|c| &mut c.channels)
+                        .chain(rebuilt.threads.iter_mut())
+                    {
                         if let Some((loaded, messages)) = histories.remove(&channel.id) {
                             channel.messages_loaded = loaded;
                             channel.messages = messages;
@@ -1096,23 +1513,32 @@ impl Store {
         source.read_state.entries.get_mut(index)
     }
 
+    fn increment_mentions(&mut self, channel_id: u64, message_id: u64) {
+        if let Some(state) = self.read_state_mut(channel_id, message_id) {
+            state.mention_count = state.mention_count.saturating_add(1);
+        }
+    }
+
     fn refresh_badges(&mut self, channel_id: u64, previous_mentions: u32) {
         let mentions = self.mention_count(channel_id);
+        let new_posts = self.forum_new_post_count(channel_id);
+        let unread = if let Some(source) = &self.source {
+            self.source_channels
+                .get(&channel_id)
+                .and_then(|index| index.get(source))
+                .is_some_and(|c| {
+                    channel_unread(c, read_state(source, &self.read_states, channel_id))
+                })
+        } else {
+            true
+        };
         if let Some(location) = self.channel_locations.get(&channel_id).copied() {
-            let unread = if let Some(source) = &self.source {
-                self.source_channels
-                    .get(&channel_id)
-                    .and_then(|index| index.get(source))
-                    .is_some_and(|c| {
-                        channel_unread(c, read_state(source, &self.read_states, channel_id))
-                    })
-            } else {
-                true
-            };
             let guild = &mut self.guilds[location.guild];
             let channel = &mut guild.categories[location.category].channels[location.channel];
-            let was_unread = channel.kind == ChannelKind::Text && channel.unread;
-            channel.unread = channel.kind == ChannelKind::Text && unread;
+            let was_unread = channel.kind.is_unreadable() && channel.unread;
+            channel.unread = channel.kind.is_unreadable() && (unread || new_posts > 0);
+            channel.mentions = mentions;
+            channel.new_posts = new_posts;
             let badges = &mut self.guild_badges[location.guild];
             badges.unread_channels = badges
                 .unread_channels
@@ -1122,6 +1548,10 @@ impl Store {
                 badges.mentions.saturating_sub(u64::from(previous_mentions)) + u64::from(mentions);
             guild.unread = badges.unread_channels > 0;
             guild.mentions = badges.mentions.min(u64::from(u32::MAX)) as u32;
+        } else if let Some(location) = self.thread_locations.get(&channel_id).copied() {
+            let thread = &mut self.guilds[location.guild].threads[location.thread];
+            thread.unread = unread;
+            thread.mentions = mentions;
         } else if self
             .source
             .as_ref()
@@ -1144,16 +1574,29 @@ impl Store {
             }
         }
         self.refresh_badges(channel_id, mentions);
+        let read_last = self
+            .source
+            .as_ref()
+            .and_then(|source| read_state(source, &self.read_states, channel_id))
+            .and_then(|state| state.last_message_id)
+            .unwrap_or(0);
+        if let Some(post) = self.forum_posts.get_mut(&channel_id) {
+            post.unread = latest > read_last;
+        }
     }
 
     pub fn apply(&mut self, event: discord::Event) -> Change {
         let revision = self.social.revision;
         let change = self.apply_inner(event);
-        if revision != self.social.revision {
+        let change = if revision != self.social.revision {
             Change::Structure
         } else {
             change
+        };
+        if matches!(change, Change::Structure) {
+            self.permission_cache.get_mut().clear();
         }
+        change
     }
 
     fn apply_inner(&mut self, event: discord::Event) -> Change {
@@ -1216,6 +1659,7 @@ impl Store {
                     }
                 }
                 let mapped = self.map_network_message(&message, loaded);
+                let mentions_me = self.message_mentions_me(&message);
                 let previous = self.latest_message_id(message.channel_id);
                 let mentions = self.mention_count(message.channel_id);
                 if message.id > previous {
@@ -1230,9 +1674,13 @@ impl Store {
                         channel.last_message_id = Some(Some(previous.max(message.id)));
                     }
                 }
-                self.refresh_badges(message.channel_id, mentions);
+                self.update_forum_post_message(&message);
                 let current_user_id = self.current_user_id;
                 let own = message.author.id == current_user_id;
+                if mentions_me && !own {
+                    self.increment_mentions(message.channel_id, message.id);
+                }
+                self.refresh_badges(message.channel_id, mentions);
                 if own
                     && self
                         .last_read(message.channel_id)
@@ -1477,6 +1925,26 @@ impl Store {
                 self.rebuild_structure(Some(id));
                 Change::Structure
             }
+            Event::ThreadListSync(sync) => {
+                let sync = *sync;
+                let guild_id = sync.guild_id;
+                if let Some(source) = &mut self.source {
+                    if let Some(guild) = source.guilds.iter_mut().find(|g| g.id == guild_id) {
+                        let threads = guild.threads.get_or_insert_with(Vec::new);
+                        for thread in sync.threads {
+                            if let Some(existing) =
+                                threads.iter_mut().find(|existing| existing.id == thread.id)
+                            {
+                                existing.merge(&thread);
+                            } else {
+                                threads.push(thread);
+                            }
+                        }
+                    }
+                }
+                self.rebuild_structure(Some(guild_id));
+                Change::Structure
+            }
             Event::ChannelUpsert(update) => {
                 let mut guild_id = None;
                 if let Some(source) = &mut self.source {
@@ -1542,6 +2010,13 @@ impl Store {
                 }
                 self.rebuild_structure(guild_id);
                 Change::Structure
+            }
+            Event::UserUpdate(update) => {
+                if self.apply_user_update(&update) {
+                    Change::Members { guild_id: None }
+                } else {
+                    Change::None
+                }
             }
             _ => Change::None,
         }

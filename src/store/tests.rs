@@ -14,6 +14,65 @@ fn messages() -> Vec<model::Message> {
     )
 }
 
+fn forum_thread(
+    id: u64,
+    forum_id: u64,
+    name: &str,
+    last_message: Option<u64>,
+    created: &str,
+    flags: u64,
+    message_count: u32,
+) -> serde_json::Value {
+    json!({
+        "id": id.to_string(),
+        "type": 11,
+        "guild_id": "200",
+        "parent_id": forum_id.to_string(),
+        "name": name,
+        "owner_id": "1",
+        "last_message_id": last_message.map(|id| id.to_string()),
+        "message_count": message_count,
+        "thread_metadata": {
+            "archived": false,
+            "locked": false,
+            "create_timestamp": created
+        },
+        "flags": flags
+    })
+}
+
+fn forum_ready(
+    threads: Vec<serde_json::Value>,
+    read_last: Option<u64>,
+    sort: Option<u8>,
+) -> model::Ready {
+    let mut payload: serde_json::Value =
+        serde_json::from_str(include_str!("../discord/fixtures/ready.json")).unwrap();
+    let guild = &mut payload["guilds"][0];
+    guild["roles"][1]["permissions"] = json!("3072");
+    let channels = guild["channels"].as_array_mut().unwrap();
+    let forum = channels
+        .iter_mut()
+        .find(|channel| channel["id"] == "2007")
+        .unwrap();
+    forum["available_tags"] = json!([
+        {"id":"4001","name":"Help","moderated":false,"emoji":{"name":"\u{1F9E0}"}},
+        {"id":"4002","name":"Showcase","moderated":true,"emoji":{"id":"555","name":"party","animated":false}}
+    ]);
+    forum["default_sort_order"] = sort.map_or(serde_json::Value::Null, |sort| json!(sort));
+    channels.push(json!({
+        "id":"2009","type":16,"name":"media","position":3,"parent_id":"210"
+    }));
+    guild["threads"] = json!(threads);
+    if let Some(read_last) = read_last {
+        payload["read_state"]["entries"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id":"2007","last_message_id":read_last.to_string(),"mention_count":0}));
+    }
+    serde_json::from_value(payload).unwrap()
+}
+
 #[test]
 fn component_and_formatting_fixtures_map_to_view() {
     let source: model::Message =
@@ -861,6 +920,8 @@ fn voice_channels_follow_text_channels_within_a_category() {
         {"id": "902", "type": 0, "name": "text-second", "position": 1, "parent_id": "900"},
         {"id": "903", "type": 13, "name": "stage", "position": 2, "parent_id": "900"},
         {"id": "904", "type": 5, "name": "news-last", "position": 3, "parent_id": "900"},
+        {"id": "905", "type": 15, "name": "forum", "position": 0, "parent_id": "900"},
+        {"id": "906", "type": 16, "name": "media-last", "position": 4, "parent_id": "900"},
     ]);
     payload["user"]["id"] = owner;
     let ready: model::Ready = serde_json::from_value(payload).unwrap();
@@ -872,7 +933,19 @@ fn voice_channels_follow_text_channels_within_a_category() {
         .iter()
         .flat_map(|category| category.channels.iter().map(|c| c.name.as_str()))
         .collect();
-    assert_eq!(names, ["text-second", "news-last", "voice-first", "stage"]);
+    assert_eq!(
+        names,
+        [
+            "forum",
+            "text-second",
+            "news-last",
+            "media-last",
+            "voice-first",
+            "stage"
+        ]
+    );
+    assert!(guild.channel(905).unwrap().kind.is_forum());
+    assert!(guild.channel(906).unwrap().kind.is_forum());
 }
 
 #[test]
@@ -948,9 +1021,21 @@ fn ready_mapping_order_permissions_and_badges() {
     assert!(guild.channel(2002).unwrap().unread);
     assert!(!guild.channel(2003).unwrap().unread);
     assert!(!guild.channel(2004).unwrap().unread);
-    assert!(guild.channel(2007).is_none());
+    assert!(guild.channel(2007).is_some());
+    assert!(guild.channel(2007).unwrap().kind.is_forum());
     assert!(guild.channel(2008).is_none());
+    assert_eq!(guild.channel(2002).unwrap().mentions, 2);
+    assert_eq!(guild.channel(2003).unwrap().mentions, 1);
+    assert_eq!(guild.channel(2004).unwrap().mentions, 0);
+    assert!(guild.channel(2006).unwrap().kind == ChannelKind::Announcement);
     assert_eq!(guild.mentions, 3);
+    assert_eq!(
+        guild
+            .channels()
+            .map(|channel| channel.mentions)
+            .sum::<u32>(),
+        guild.mentions
+    );
     assert!(guild.unread);
     assert_eq!(store.dm_mentions, 4);
     assert_eq!(guild.initials, "SGN");
@@ -961,6 +1046,418 @@ fn ready_mapping_order_permissions_and_badges() {
         store.user(2).unwrap().avatar.as_deref(),
         Some("avatar-hash")
     );
+}
+
+#[test]
+fn mentioning_message_increments_channel_and_guild_mentions() {
+    let mut store = Store::from_ready(ready());
+    let message: model::Message = serde_json::from_value(json!({
+        "id":"100", "channel_id":"2004", "guild_id":"200",
+        "author":{"id":"2","username":"writer"},
+        "timestamp":"2026-10-22T12:00:00Z", "content":"ping",
+        "mentions":[{"id":"1"}]
+    }))
+    .unwrap();
+    store.apply(Event::MessageCreate(Box::new(message)));
+    let guild = &store.guilds[0];
+    assert_eq!(guild.channel(2004).unwrap().mentions, 1);
+    assert_eq!(guild.mentions, 4);
+    assert_eq!(
+        guild
+            .channels()
+            .map(|channel| channel.mentions)
+            .sum::<u32>(),
+        guild.mentions
+    );
+}
+
+#[test]
+fn own_message_does_not_increment_channel_mentions() {
+    let mut store = Store::from_ready(ready());
+    // Older than the channel's read state so the own-message ack cannot mask the count.
+    let message: model::Message = serde_json::from_value(json!({
+        "id":"45", "channel_id":"2002", "guild_id":"200",
+        "author":{"id":"1","username":"owner"},
+        "timestamp":"2026-10-22T12:00:00Z", "content":"self ping",
+        "mentions":[{"id":"1"}]
+    }))
+    .unwrap();
+    store.apply(Event::MessageCreate(Box::new(message)));
+    assert_eq!(store.guilds[0].channel(2002).unwrap().mentions, 2);
+    assert_eq!(store.guilds[0].mentions, 3);
+}
+
+#[test]
+fn ack_resets_channel_and_guild_mentions() {
+    let mut store = Store::from_ready(ready());
+    store.apply(Event::MessageAck {
+        channel_id: 2002,
+        message_id: 60,
+    });
+    let guild = &store.guilds[0];
+    assert_eq!(guild.channel(2002).unwrap().mentions, 0);
+    assert_eq!(guild.channel(2003).unwrap().mentions, 1);
+    assert_eq!(guild.mentions, 1);
+}
+
+#[test]
+fn structure_rebuild_preserves_channel_mentions() {
+    let mut store = Store::from_ready(ready());
+    let update = serde_json::from_value(json!({
+        "id":"2002", "guild_id":"200", "name":"renamed"
+    }))
+    .unwrap();
+    store.apply(Event::ChannelUpsert(Box::new(update)));
+    let guild = &store.guilds[0];
+    assert_eq!(guild.channel(2002).unwrap().name, "renamed");
+    assert_eq!(guild.channel(2002).unwrap().mentions, 2);
+    assert_eq!(guild.channel(2003).unwrap().mentions, 1);
+    assert_eq!(guild.mentions, 3);
+}
+
+#[test]
+fn forum_channels_map_tags_posts_and_new_post_counts() {
+    let threads = vec![
+        forum_thread(
+            3001,
+            2007,
+            "First post",
+            Some(3001),
+            "2026-10-20T12:00:00Z",
+            0,
+            2,
+        ),
+        forum_thread(
+            3002,
+            2007,
+            "Second post",
+            Some(3002),
+            "2026-10-21T12:00:00Z",
+            0,
+            4,
+        ),
+    ];
+    let store = Store::from_ready(forum_ready(threads, Some(3000), None));
+    let guild = store.guild_by_id(200).unwrap();
+    let forum = guild.channel(2007).unwrap();
+    assert!(forum.kind.is_forum());
+    assert_eq!(forum.new_posts, 2);
+    assert!(forum.unread);
+    assert!(guild.channel(2009).unwrap().kind.is_forum());
+
+    let tags = store.forum_tags(2007);
+    assert_eq!(tags.len(), 2);
+    assert_eq!(tags[0].name, "Help");
+    assert_eq!(
+        tags[0].emoji,
+        Some(StatusEmoji::Unicode("\u{1F9E0}".into()))
+    );
+    assert!(tags[1].moderated);
+    assert!(matches!(
+        tags[1].emoji,
+        Some(StatusEmoji::Custom { id: 555, .. })
+    ));
+
+    let posts = store.forum_posts(2007);
+    assert_eq!(
+        posts
+            .iter()
+            .map(|post| post.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Second post", "First post"]
+    );
+    assert!(guild.channel(3001).is_some());
+    assert!(store.can_send(3001));
+    assert!(!store.can_send(2007));
+}
+
+#[test]
+fn forum_new_posts_track_thread_create_and_ack() {
+    let threads = vec![forum_thread(
+        3001,
+        2007,
+        "Existing",
+        Some(3001),
+        "2026-10-20T12:00:00Z",
+        0,
+        1,
+    )];
+    let mut store = Store::from_ready(forum_ready(threads, Some(3000), None));
+    assert_eq!(
+        store
+            .guild_by_id(200)
+            .unwrap()
+            .channel(2007)
+            .unwrap()
+            .new_posts,
+        1
+    );
+
+    let thread: model::Channel = serde_json::from_value(forum_thread(
+        3002,
+        2007,
+        "Live post",
+        Some(3002),
+        "2026-10-22T12:00:00Z",
+        0,
+        0,
+    ))
+    .unwrap();
+    store.apply(Event::ChannelUpsert(Box::new(thread)));
+    let forum = store.guild_by_id(200).unwrap().channel(2007).unwrap();
+    assert_eq!(forum.new_posts, 2);
+    assert!(forum.unread);
+
+    store.apply(Event::MessageAck {
+        channel_id: 2007,
+        message_id: 3002,
+    });
+    let forum = store.guild_by_id(200).unwrap().channel(2007).unwrap();
+    assert_eq!(forum.new_posts, 0);
+    assert!(!forum.unread);
+}
+
+#[test]
+fn forum_posts_order_by_pinned_activity_and_creation() {
+    let threads = vec![
+        forum_thread(
+            3001,
+            2007,
+            "older",
+            Some(1_200_000_000_000_000_000),
+            "2026-10-20T12:00:00Z",
+            0,
+            3,
+        ),
+        forum_thread(
+            3002,
+            2007,
+            "pinned",
+            Some(1_100_000_000_000_000_000),
+            "2026-10-21T12:00:00Z",
+            2,
+            2,
+        ),
+        forum_thread(
+            3003,
+            2007,
+            "newest",
+            Some(1_000_000_000_000_000_000),
+            "2026-10-22T12:00:00Z",
+            0,
+            1,
+        ),
+    ];
+    let store = Store::from_ready(forum_ready(threads.clone(), Some(3000), None));
+    assert_eq!(
+        store
+            .forum_posts(2007)
+            .iter()
+            .map(|post| post.name.as_str())
+            .collect::<Vec<_>>(),
+        ["pinned", "older", "newest"]
+    );
+
+    let store = Store::from_ready(forum_ready(threads, Some(3000), Some(1)));
+    assert_eq!(
+        store
+            .forum_posts(2007)
+            .iter()
+            .map(|post| post.name.as_str())
+            .collect::<Vec<_>>(),
+        ["pinned", "newest", "older"]
+    );
+}
+
+#[test]
+fn forum_posts_merge_ready_search_and_thread_events() {
+    let threads = vec![forum_thread(
+        3001,
+        2007,
+        "Ready post",
+        Some(3001),
+        "2026-10-20T12:00:00Z",
+        0,
+        1,
+    )];
+    let mut store = Store::from_ready(forum_ready(threads, Some(3000), None));
+    let search: model::ForumSearch = serde_json::from_value(json!({
+        "threads": [forum_thread(
+            3002, 2007, "Search post", Some(3400), "2026-10-21T12:00:00Z", 0, 5
+        )],
+        "first_messages": [{
+            "id": "3401",
+            "channel_id": "3002",
+            "author": {"id": "2", "username": "writer"},
+            "timestamp": "2026-10-21T12:00:00Z",
+            "content": "first **body**",
+            "attachments": [{
+                "id": "77",
+                "filename": "image.png",
+                "url": "https://cdn.discordapp.com/attachments/1/77/image.png",
+                "proxy_url": "https://media.discordapp.net/attachments/1/77/image.png",
+                "width": 400,
+                "height": 200,
+                "content_type": "image/png"
+            }]
+        }],
+        "has_more": true
+    }))
+    .unwrap();
+    store.apply_forum_search(2007, search);
+    let post = store
+        .forum_posts(2007)
+        .into_iter()
+        .find(|post| post.id == 3002)
+        .unwrap();
+    assert_eq!(post.name, "Search post");
+    assert_eq!(post.preview.as_deref(), Some("first **body**"));
+    assert!(matches!(
+        post.thumbnail,
+        Some(ImageSpec::Attachment {
+            id: 77,
+            width: 400,
+            height: 200,
+            ..
+        })
+    ));
+
+    let search: model::ForumSearch = serde_json::from_value(json!({
+        "threads": [forum_thread(
+            3002, 2007, "Renamed", Some(3400), "2026-10-21T12:00:00Z", 0, 5
+        )],
+        "has_more": false
+    }))
+    .unwrap();
+    store.apply_forum_search(2007, search);
+    let posts = store.forum_posts(2007);
+    assert_eq!(posts.len(), 2);
+    assert_eq!(
+        posts
+            .iter()
+            .find(|post| post.id == 3002)
+            .unwrap()
+            .preview
+            .as_deref(),
+        Some("first **body**")
+    );
+
+    let update: model::Channel = serde_json::from_value(json!({
+        "id": "3002", "type": 11, "guild_id": "200", "parent_id": "2007",
+        "name": "Edited", "flags": 2, "message_count": 9, "applied_tags": ["4002"],
+        "last_message_id": "3500",
+        "thread_metadata": {
+            "archived": true, "locked": true,
+            "create_timestamp": "2026-10-21T12:00:00Z"
+        }
+    }))
+    .unwrap();
+    store.apply(Event::ChannelUpsert(Box::new(update)));
+    let post = store
+        .forum_posts(2007)
+        .into_iter()
+        .find(|post| post.id == 3002)
+        .unwrap();
+    assert_eq!(post.name, "Edited");
+    assert!(post.pinned && post.locked && post.archived);
+    assert_eq!(post.tag_ids, [4002]);
+    assert_eq!(post.message_count, 9);
+
+    let sync: model::ThreadListSync = serde_json::from_value(json!({
+        "guild_id": "200",
+        "threads": [forum_thread(
+            3003, 2007, "Synced", Some(3003), "2026-10-22T12:00:00Z", 0, 0
+        )]
+    }))
+    .unwrap();
+    store.apply(Event::ThreadListSync(Box::new(sync)));
+    assert!(store.forum_posts(2007).iter().any(|post| post.id == 3003));
+
+    store.apply(Event::ChannelDelete { id: 3002 });
+    assert!(!store.forum_posts(2007).iter().any(|post| post.id == 3002));
+}
+
+#[test]
+fn thread_message_create_bumps_forum_post_and_thread_channel_loads() {
+    let threads = vec![forum_thread(
+        3001,
+        2007,
+        "Body",
+        Some(3001),
+        "2026-10-20T12:00:00Z",
+        0,
+        2,
+    )];
+    let mut ready = forum_ready(threads, Some(3000), None);
+    ready.read_state.entries.push(model::ReadState {
+        id: 3001,
+        last_message_id: Some(3000),
+        mention_count: 1,
+        kind: 0,
+    });
+    let mut store = Store::from_ready(ready);
+    let thread = store.guild_by_id(200).unwrap().channel(3001).unwrap();
+    assert!(thread.unread);
+    assert_eq!(thread.mentions, 1);
+    let message: model::Message = serde_json::from_value(json!({
+        "id": "3100",
+        "channel_id": "3001",
+        "guild_id": "200",
+        "author": {"id": "2", "username": "writer"},
+        "timestamp": "2026-10-22T12:00:00Z",
+        "content": "the post body",
+        "attachments": [{
+            "id": "88",
+            "filename": "photo.jpg",
+            "url": "https://cdn.discordapp.com/attachments/1/88/photo.jpg",
+            "proxy_url": "https://media.discordapp.net/attachments/1/88/photo.jpg",
+            "width": 300,
+            "height": 500,
+            "content_type": "image/jpeg"
+        }]
+    }))
+    .unwrap();
+    store.apply(Event::MessageCreate(Box::new(message.clone())));
+    let post = store
+        .forum_posts(2007)
+        .into_iter()
+        .find(|post| post.id == 3001)
+        .unwrap();
+    assert_eq!(post.message_count, 3);
+    assert_eq!(
+        post.last_activity,
+        local_timestamp("2026-10-22T12:00:00Z").unwrap()
+    );
+    assert_eq!(post.preview.as_deref(), Some("the post body"));
+    assert!(matches!(
+        post.thumbnail,
+        Some(ImageSpec::Attachment { id: 88, .. })
+    ));
+    assert!(post.unread);
+    assert!(
+        store
+            .guild_by_id(200)
+            .unwrap()
+            .channel(3001)
+            .unwrap()
+            .unread
+    );
+
+    store.set_messages(3001, vec![message]);
+    let thread = store.guild_by_id(200).unwrap().channel(3001).unwrap();
+    assert!(thread.messages_loaded);
+    assert_eq!(thread.messages.len(), 1);
+    assert!(store.at_present(3001));
+    assert!(store.can_send(3001));
+
+    store.apply(Event::MessageAck {
+        channel_id: 3001,
+        message_id: 3100,
+    });
+    let thread = store.guild_by_id(200).unwrap().channel(3001).unwrap();
+    assert!(!thread.unread);
+    assert_eq!(thread.mentions, 0);
+    assert!(!store.forum_posts(2007)[0].unread);
 }
 
 #[test]
@@ -1735,6 +2232,115 @@ fn settings_own_status_partial_updates_do_not_reorder_folders() {
     })));
     assert!(store.user(1).unwrap().activity.is_none());
     assert!(store.user(1).unwrap().status == Status::Idle);
+}
+
+#[test]
+fn settings_custom_status_maps_custom_and_unicode_emoji() {
+    let mut store = Store::from_ready(ready());
+    let proto = settings_fixtures::status_fixture(Some("online"), Some(("", 42, "party", 0)));
+    assert_eq!(
+        store.apply(Event::SettingsUpdate(Box::new(model::SettingsUpdate {
+            settings: model::SettingsProto { kind: 1, proto },
+            partial: true,
+        }))),
+        Change::Members { guild_id: None }
+    );
+    let status = store.user(1).unwrap().custom_status.as_ref().unwrap();
+    assert!(status.text.is_none());
+    assert!(matches!(
+        &status.emoji,
+        Some(StatusEmoji::Custom {
+            id: 42,
+            name,
+            animated: false
+        }) if name == "party"
+    ));
+    assert!(status.expires_at.is_none());
+
+    let proto =
+        settings_fixtures::status_fixture(Some("online"), Some(("gaming", 0, "\u{1f3ae}", 0)));
+    store.apply(Event::SettingsUpdate(Box::new(model::SettingsUpdate {
+        settings: model::SettingsProto { kind: 1, proto },
+        partial: true,
+    })));
+    let status = store.user(1).unwrap().custom_status.as_ref().unwrap();
+    assert_eq!(status.text.as_deref(), Some("gaming"));
+    assert!(matches!(
+        &status.emoji,
+        Some(StatusEmoji::Unicode(emoji)) if emoji == "\u{1f3ae}"
+    ));
+
+    use std::time::{Duration, UNIX_EPOCH};
+    let status = CustomStatus {
+        text: Some("later".into()),
+        emoji: None,
+        expires_at: Some(UNIX_EPOCH + Duration::from_secs(1)),
+    };
+    assert!(!status.is_expired(UNIX_EPOCH));
+    assert!(status.is_expired(UNIX_EPOCH + Duration::from_secs(2)));
+}
+
+#[test]
+fn presence_custom_status_keeps_custom_emoji_without_text() {
+    let mut store = Store::from_ready(ready());
+    let presence: model::Presence = serde_json::from_value(json!({
+        "user_id":"2",
+        "activities":[{"type":4,"emoji":{"id":"42","name":"party","animated":true}}]
+    }))
+    .unwrap();
+    assert_eq!(
+        store.apply(Event::PresenceUpdate(Box::new(presence))),
+        Change::Members { guild_id: None }
+    );
+    let status = store.user(2).unwrap().custom_status.as_ref().unwrap();
+    assert!(status.text.is_none());
+    assert!(matches!(
+        &status.emoji,
+        Some(StatusEmoji::Custom {
+            id: 42,
+            name,
+            animated: true
+        }) if name == "party"
+    ));
+}
+
+#[test]
+fn user_update_merges_partial_payload_and_returns_members_change() {
+    let mut store = Store::from_ready(ready());
+    let avatar = store.user(1).unwrap().avatar.clone();
+    let update: model::UserUpdate = serde_json::from_value(json!({
+        "id":"1",
+        "global_name":"Renamed",
+        "avatar_decoration_data":{"asset":"a_new"}
+    }))
+    .unwrap();
+    assert_eq!(
+        store.apply(Event::UserUpdate(Box::new(update))),
+        Change::Members { guild_id: None }
+    );
+    let user = store.user(1).unwrap();
+    assert_eq!(user.username, "owner");
+    assert_eq!(user.name, "Renamed");
+    assert_eq!(
+        user.decoration
+            .as_ref()
+            .map(|decoration| decoration.asset.as_str()),
+        Some("a_new")
+    );
+    assert_eq!(user.avatar, avatar);
+
+    let update: model::UserUpdate = serde_json::from_value(json!({
+        "id":"1",
+        "username":"new_owner",
+        "global_name":null,
+        "avatar_decoration_data":null
+    }))
+    .unwrap();
+    store.apply(Event::UserUpdate(Box::new(update)));
+    let user = store.user(1).unwrap();
+    assert_eq!(user.username, "new_owner");
+    assert_eq!(user.name, "new_owner");
+    assert!(user.decoration.is_none());
 }
 
 #[test]
@@ -2684,6 +3290,42 @@ fn channel_permissions_gate_sending_and_managing() {
     let demo = Store::seed();
     assert!(demo.can_send(0));
     assert!(demo.can_manage_messages(0));
+}
+
+#[test]
+fn channel_permission_memo_is_reused_and_invalidated_by_role_updates() {
+    let mut store = Store::from_ready(ready());
+    assert!(!store.can_send(2002));
+    assert_eq!(
+        store.permission_cache.borrow().get(&2002),
+        Some(&crate::discord::VIEW_CHANNEL)
+    );
+    assert!(!store.can_send(2002));
+    assert_eq!(
+        store.permission_cache.borrow().get(&2002),
+        Some(&crate::discord::VIEW_CHANNEL)
+    );
+
+    assert_eq!(
+        role_event(
+            &mut store,
+            json!({"guild_id":"200","role":{"id":"201","name":"Members","permissions":"2048","position":1}})
+        ),
+        Change::Structure
+    );
+    assert!(store.permission_cache.borrow().is_empty());
+    assert!(store.can_send(2002));
+    assert!(store.can_send(2004));
+
+    assert_eq!(
+        member_event(
+            &mut store,
+            json!({"guild_id":"200","user":{"id":"1"},"roles":[]})
+        ),
+        Change::Structure
+    );
+    assert!(store.permission_cache.borrow().is_empty());
+    assert!(!store.can_send(2004));
 }
 
 #[test]

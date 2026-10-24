@@ -12,7 +12,7 @@ use crate::{
         DIALOG_EXIT, DISCORD_EPOCH_MS, DiscordApp, Editing, JUMP_HIGHLIGHT, MESSAGE_LIMIT,
         ReplyTarget, embeds,
         emoji_picker::{self, PickerTarget},
-        member_list,
+        forum, member_list,
         message_body::{BodyContext, label, preview_pieces, render_body, wrapped_label},
         profile,
         rich_text::rich_text,
@@ -70,7 +70,8 @@ pub fn header(app: &DiscordApp) -> impl IntoElement + use<> {
         .pl_4()
         .border_b_1()
         .border_color(rgb(theme::BORDER))
-        .child(theme::icon("hash", 20., theme::FAINT))
+        .child(theme::icon(header_icon(app), 20., theme::FAINT))
+        .children(forum_crumb(app))
         .child(
             div()
                 .min_w_0()
@@ -127,8 +128,58 @@ pub fn header(app: &DiscordApp) -> impl IntoElement + use<> {
         })
 }
 
+fn header_icon(app: &DiscordApp) -> &'static str {
+    if app.thread_parent().is_some() || app.selected_forum().is_some() {
+        return "messages-square";
+    }
+    match app.channel().map(|channel| channel.kind) {
+        Some(crate::store::ChannelKind::Announcement) => "megaphone",
+        _ => "hash",
+    }
+}
+
+fn forum_crumb(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
+    let forum_id = app.thread_parent()?;
+    let name = app
+        .guild()
+        .and_then(|guild| guild.channel(forum_id))
+        .map(|forum| forum.name.clone())?;
+    let entity = app.entity.clone();
+    Some(
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .id("forum-crumb")
+                    .text_size(rpx(16.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(theme::MUTED))
+                    .cursor_pointer()
+                    .hover(|style| style.text_color(rgb(theme::TEXT)).underline())
+                    .child(label(("forum-crumb", forum_id), &name))
+                    .on_click(move |_, window, cx| {
+                        entity
+                            .update(cx, |app, cx| app.back_to_forum(window, cx))
+                            .ok();
+                    }),
+            )
+            .child(
+                div()
+                    .text_size(rpx(18.))
+                    .text_color(rgb(theme::FAINT))
+                    .child("›"),
+            ),
+    )
+}
+
 /// The composer and member list are separate sibling views.
-pub fn messages(app: &DiscordApp) -> impl IntoElement + use<> {
+pub fn messages(app: &DiscordApp, cx: &App) -> AnyElement {
+    if let Some(forum_id) = app.selected_forum() {
+        return forum::render(app, forum_id, cx).into_any_element();
+    }
     let channel = app.channel();
     let list_entity = app.entity.clone();
     div()
@@ -197,6 +248,7 @@ pub fn messages(app: &DiscordApp) -> impl IntoElement + use<> {
                 )
             }
         })
+        .into_any_element()
 }
 
 pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
@@ -930,7 +982,7 @@ fn older_messages_bar(app: &DiscordApp, entity: WeakEntity<DiscordApp>) -> Optio
     )
 }
 
-fn body_context<'a>(app: &'a DiscordApp, message_id: u64) -> BodyContext<'a> {
+pub(super) fn body_context<'a>(app: &'a DiscordApp, message_id: u64) -> BodyContext<'a> {
     BodyContext {
         store: &app.store,
         guild_id: app.selected_guild_id,
@@ -945,7 +997,7 @@ fn forward_key(message_id: u64) -> u64 {
     embeds::part_key(message_id, embeds::FORWARD_SLOT)
 }
 
-fn author_name(app: &DiscordApp, user_id: u64) -> String {
+pub(super) fn author_name(app: &DiscordApp, user_id: u64) -> String {
     app.store
         .member_name(app.selected_guild_id, user_id)
         .unwrap_or("Unknown user")

@@ -574,6 +574,9 @@ fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) -> Option<E
             "GUILD_ROLE_DELETE" => id(&value, "guild_id")
                 .zip(id(&value, "role_id"))
                 .map(|(guild_id, role_id)| Event::RoleDelete { guild_id, role_id }),
+            "USER_UPDATE" => serde_json::from_value(value)
+                .ok()
+                .map(|user| Event::UserUpdate(Box::new(user))),
             "USER_SETTINGS_PROTO_UPDATE" => serde_json::from_value(value)
                 .ok()
                 .map(|settings| Event::SettingsUpdate(Box::new(settings))),
@@ -612,6 +615,9 @@ fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) -> Option<E
             "CHANNEL_DELETE" | "THREAD_DELETE" => {
                 id(&value, "id").map(|id| Event::ChannelDelete { id })
             }
+            "THREAD_LIST_SYNC" => serde_json::from_value(value)
+                .ok()
+                .map(|sync| Event::ThreadListSync(Box::new(sync))),
             "GUILD_CREATE" | "GUILD_UPDATE" => serde_json::from_value::<model::Guild>(value)
                 .ok()
                 .map(|mut guild| {
@@ -672,6 +678,25 @@ mod tests {
                     && typing.guild_id == Some(3)
                     && typing.user_id == 4
                     && typing.member.as_ref().and_then(|m| m.user.as_ref()).is_some_and(|u| u.id == 4)
+        ));
+        assert!(ignored.is_empty());
+    }
+
+    #[test]
+    fn user_update_dispatches_nullable_user_fields() {
+        let mut ignored = HashSet::new();
+        let event = dispatch(
+            "USER_UPDATE",
+            json!({"id":"1","username":"new_handle","global_name":"New Name","avatar":null}),
+            &mut ignored,
+        );
+        assert!(matches!(
+            event,
+            Some(Event::UserUpdate(user))
+                if user.id == 1
+                    && user.username == "new_handle"
+                    && matches!(&user.global_name, Some(Some(name)) if name == "New Name")
+                    && matches!(user.avatar, Some(None))
         ));
         assert!(ignored.is_empty());
     }

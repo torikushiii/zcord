@@ -392,6 +392,7 @@ pub(super) fn map_user(user: &model::User) -> User {
     let name = user.global_name.as_ref().unwrap_or(&user.username).clone();
     User {
         id: user.id,
+        username: user.username.clone(),
         initials: initials(&name),
         name,
         status: Status::Offline,
@@ -400,6 +401,7 @@ pub(super) fn map_user(user: &model::User) -> User {
         tag: user.primary_guild.as_ref().and_then(guild_tag),
         playing: false,
         activity: None,
+        custom_status: None,
         avatar: user.avatar.clone(),
         discriminator: user.discriminator.clone(),
         decoration: user
@@ -420,6 +422,45 @@ pub(super) fn map_user(user: &model::User) -> User {
     }
 }
 
+pub(super) fn apply_user_update(user: &mut User, update: &model::UserUpdate) {
+    let old_username = user.username.clone();
+    let username_changed = !update.username.is_empty() && update.username != user.username;
+    if username_changed {
+        user.username.clone_from(&update.username);
+    }
+    match &update.global_name {
+        Some(name) => user.name = name.clone().unwrap_or_else(|| user.username.clone()),
+        None if username_changed && user.name == old_username => {
+            user.name.clone_from(&user.username);
+        }
+        None => {}
+    }
+    if username_changed || update.global_name.is_some() {
+        user.initials = initials(&user.name);
+    }
+    if let Some(avatar) = &update.avatar {
+        user.avatar.clone_from(avatar);
+    }
+    if let Some(discriminator) = &update.discriminator {
+        user.discriminator.clone_from(discriminator);
+    }
+    if let Some(bot) = update.bot {
+        user.bot = bot;
+    }
+    if let Some(decoration) = &update.avatar_decoration_data {
+        user.decoration = decoration.as_ref().map(map_decoration);
+    }
+    if let Some(collectibles) = &update.collectibles {
+        user.nameplate = collectibles.as_ref().and_then(map_nameplate);
+    }
+    if let Some(styles) = &update.display_name_styles {
+        user.name_style = styles.as_ref().map(map_name_style);
+    }
+    if let Some(primary) = &update.primary_guild {
+        user.tag = guild_tag(primary);
+    }
+}
+
 pub(super) fn read_state<'a>(
     source: &'a model::Ready,
     index: &HashMap<u64, usize>,
@@ -432,6 +473,28 @@ pub(super) fn channel_unread(channel: &model::Channel, state: Option<&model::Rea
     state.is_some_and(|state| {
         channel.last_message_id.flatten().unwrap_or(0) > state.last_message_id.unwrap_or(0)
     })
+}
+
+pub(super) fn forum_new_posts(
+    guild: &model::Guild,
+    forum_id: u64,
+    state: Option<&model::ReadState>,
+) -> u32 {
+    let last_read = state.and_then(|state| state.last_message_id).unwrap_or(0);
+    let count = guild
+        .threads
+        .iter()
+        .flatten()
+        .filter(|thread| {
+            thread.parent_id.flatten() == Some(forum_id)
+                && thread.id > last_read
+                && !thread
+                    .thread_metadata
+                    .as_ref()
+                    .is_some_and(|metadata| metadata.archived)
+        })
+        .count();
+    count.min(u32::MAX as usize) as u32
 }
 
 pub(super) fn map_guild(
@@ -457,7 +520,7 @@ pub(super) fn map_guild(
     let mut ordered: Vec<_> = channels
         .iter()
         .filter(|c| {
-            matches!(c.kind, Some(0 | 5 | 2 | 13))
+            matches!(c.kind, Some(0 | 5 | 15 | 16 | 2 | 13))
                 && guild.unavailable != Some(true)
                 && discord::can_view(guild, c, source.user.id)
         })
@@ -471,15 +534,20 @@ pub(super) fn map_guild(
             c.id,
         )
     });
-    let mut mentions = 0u64;
     for channel in ordered {
-        let kind = if matches!(channel.kind, Some(2 | 13)) {
-            ChannelKind::Voice
-        } else {
-            ChannelKind::Text
+        let kind = match channel.kind {
+            Some(2 | 13) => ChannelKind::Voice,
+            Some(5) => ChannelKind::Announcement,
+            Some(15 | 16) => ChannelKind::Forum,
+            _ => ChannelKind::Text,
         };
         let state = read_state(source, read_states, channel.id);
-        mentions += u64::from(state.map_or(0, |s| s.mention_count));
+        let mention_count = state.map_or(0, |s| s.mention_count);
+        let new_posts = if kind.is_forum() {
+            forum_new_posts(guild, channel.id, state)
+        } else {
+            0
+        };
         let index = channel
             .parent_id
             .flatten()
@@ -490,11 +558,39 @@ pub(super) fn map_guild(
             id: channel.id,
             name: channel.name.clone().unwrap_or_default(),
             kind,
-            unread: kind == ChannelKind::Text && channel_unread(channel, state),
+            parent_id: channel.parent_id.flatten(),
+            unread: kind.is_unreadable() && (channel_unread(channel, state) || new_posts > 0),
+            mentions: mention_count,
+            new_posts,
             messages: Vec::new(),
             messages_loaded: false,
         });
     }
+    let threads = guild
+        .threads
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter(|thread| {
+            matches!(thread.kind, Some(10..=12))
+                && guild.unavailable != Some(true)
+                && discord::can_view(guild, thread, source.user.id)
+        })
+        .map(|thread| {
+            let state = read_state(source, read_states, thread.id);
+            Channel {
+                id: thread.id,
+                name: thread.name.clone().unwrap_or_default(),
+                kind: ChannelKind::Text,
+                parent_id: thread.parent_id.flatten(),
+                unread: channel_unread(thread, state),
+                mentions: state.map_or(0, |s| s.mention_count),
+                new_posts: 0,
+                messages: Vec::new(),
+                messages_loaded: false,
+            }
+        })
+        .collect();
     let visible_categories: std::collections::HashSet<_> = categories
         .iter()
         .filter(|c| discord::can_view(guild, c, source.user.id))
@@ -513,9 +609,15 @@ pub(super) fn map_guild(
         unread: mapped
             .iter()
             .flat_map(|c| &c.channels)
-            .any(|c| c.kind == ChannelKind::Text && c.unread),
-        mentions: mentions.min(u64::from(u32::MAX)) as u32,
+            .any(|c| c.kind.is_unreadable() && c.unread),
+        mentions: mapped
+            .iter()
+            .flat_map(|c| &c.channels)
+            .map(|c| u64::from(c.mentions))
+            .sum::<u64>()
+            .min(u64::from(u32::MAX)) as u32,
         categories: mapped,
+        threads,
         member_ids: members.iter().filter_map(|m| m.id()).collect(),
         icon: guild.icon(),
         banner: guild.banner(),
