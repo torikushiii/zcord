@@ -6,17 +6,18 @@ use std::{
 use gpui::{prelude::*, *};
 
 use crate::{
+    animated,
     app::{
         DiscordApp,
         message_body::emoji_pieces,
         rich_text::{PieceStyle, rich_text},
     },
-    images,
+    images::{self, ImageSpec},
     store::{Folder, Guild, RailEntry},
     theme::{self, rpx},
 };
 
-const WIDTH: f32 = 72.;
+pub(crate) const WIDTH: f32 = 72.;
 pub const ICON: f32 = 48.;
 const DEFAULT_FOLDER_COLOR: u32 = 0x5865F2;
 const HOME_KEY: u64 = 1;
@@ -112,7 +113,7 @@ fn round<E: Styled + IntoElement + 'static>(
     }
 }
 
-pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement + use<> {
+pub fn render(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
     div()
         .id("guild-rail")
         .flex()
@@ -132,7 +133,6 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 false,
                 false,
                 app,
-                cx,
             )
             .child(round(
                 div()
@@ -170,7 +170,6 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
             "plus",
             "Add a Server",
             app,
-            cx,
         ))
         .child(action_item(
             "discover",
@@ -178,13 +177,13 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
             "compass",
             "Discover",
             app,
-            cx,
         ))
 }
 
-fn guild_item(app: &DiscordApp, guild: &Guild, cx: &mut Context<DiscordApp>) -> Stateful<Div> {
+fn guild_item(app: &DiscordApp, guild: &Guild, cx: &App) -> Stateful<Div> {
     let id = guild.id;
     let selected = app.selected_guild_id == id;
+    let entity = app.entity.clone();
     rail_item(
         ("guild", id),
         id,
@@ -192,9 +191,12 @@ fn guild_item(app: &DiscordApp, guild: &Guild, cx: &mut Context<DiscordApp>) -> 
         selected,
         guild.unread,
         app,
-        cx,
     )
-    .on_click(cx.listener(move |this, _, window, cx| this.select_guild(id, window, cx)))
+    .on_click(move |_, window, cx| {
+        entity
+            .update(cx, |this, cx| this.select_guild(id, window, cx))
+            .ok();
+    })
     .child(guild_icon(
         guild,
         ICON,
@@ -212,9 +214,25 @@ fn guild_icon(
     app: &DiscordApp,
     cx: &App,
 ) -> AnyElement {
-    let image = guild
-        .icon_spec()
-        .and_then(|spec| images::resolve(&spec, theme::image_px(ICON), cx));
+    let pixels = theme::image_px(ICON);
+    let spec = guild.icon_spec();
+    // Like Discord, animated icons only play while their rail item is hovered.
+    let animated = spec
+        .as_ref()
+        .filter(|_| app.hovered_rail == Some(guild.id))
+        .and_then(ImageSpec::animated)
+        .and_then(|animated| animated::resolve(&animated, pixels, cx));
+    if let Some(image) = animated {
+        return round(
+            animated::image(image)
+                .size(rpx(size))
+                .flex_none()
+                .id(("guild-icon-animated", guild.id)),
+            corners,
+            app,
+        );
+    }
+    let image = spec.and_then(|spec| images::resolve(&spec, pixels, cx));
     match image {
         Some(path) => round(img(path).size(rpx(size)).flex_none(), corners, app),
         None => round(
@@ -235,7 +253,7 @@ fn guild_icon(
     }
 }
 
-fn folder_item(app: &DiscordApp, folder: &Folder, cx: &mut Context<DiscordApp>) -> AnyElement {
+fn folder_item(app: &DiscordApp, folder: &Folder, cx: &App) -> AnyElement {
     let id = folder.id;
     let open = app.is_folder_open(id);
     let color = folder.color.unwrap_or(DEFAULT_FOLDER_COLOR);
@@ -260,6 +278,7 @@ fn folder_item(app: &DiscordApp, folder: &Folder, cx: &mut Context<DiscordApp>) 
     let mentions = guilds.iter().map(|guild| guild.mentions).sum::<u32>();
     let tint = rgba((color << 8) | 0x40);
 
+    let entity = app.entity.clone();
     let header = rail_item(
         ("folder", id),
         id,
@@ -267,9 +286,12 @@ fn folder_item(app: &DiscordApp, folder: &Folder, cx: &mut Context<DiscordApp>) 
         !open && contains_selected,
         !open && unread,
         app,
-        cx,
     )
-    .on_click(cx.listener(move |this, _, _, cx| this.toggle_folder(id, cx)))
+    .on_click(move |_, _, cx| {
+        entity
+            .update(cx, |this, cx| this.toggle_folder(id, cx))
+            .ok();
+    })
     .child(
         div()
             .flex()
@@ -329,14 +351,16 @@ fn rail_item(
     selected: bool,
     unread: bool,
     app: &DiscordApp,
-    cx: &mut Context<DiscordApp>,
 ) -> Stateful<Div> {
     let hovered = app.hovered_rail == Some(key);
+    let entity = app.entity.clone();
     div()
         .id(id)
-        .on_hover(
-            cx.listener(move |app, hovered: &bool, _, cx| app.set_rail_hover(key, *hovered, cx)),
-        )
+        .on_hover(move |hovered, _, cx| {
+            entity
+                .update(cx, |app, cx| app.set_rail_hover(key, *hovered, cx))
+                .ok();
+        })
         .when(hovered, |this| this.child(tooltip(key, &label)))
         .group("rail-item")
         .relative()
@@ -413,9 +437,8 @@ fn action_item(
     icon: &'static str,
     label: &'static str,
     app: &DiscordApp,
-    cx: &mut Context<DiscordApp>,
 ) -> impl IntoElement {
-    rail_item(id, key, label.into(), false, false, app, cx).child(round(
+    rail_item(id, key, label.into(), false, false, app).child(round(
         div()
             .flex()
             .items_center()

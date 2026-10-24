@@ -54,6 +54,11 @@ pub enum ImageSpec {
         id: u64,
         animated: bool,
     },
+    Sticker {
+        id: u64,
+        /// Discord's `format_type`: 1 = PNG, 2 = APNG, 3 = Lottie, 4 = GIF.
+        format: u8,
+    },
     GuildTagBadge {
         guild_id: u64,
         hash: String,
@@ -89,6 +94,10 @@ pub enum ImageSpec {
     },
     GuildBanner {
         guild_id: u64,
+        hash: String,
+    },
+    GuildMemberBanner {
+        guild_id: u64,
         user_id: u64,
         hash: String,
     },
@@ -106,10 +115,12 @@ pub enum ImageSpec {
 impl ImageSpec {
     pub fn animated(&self) -> Option<ImageSpec> {
         let hash = match self {
-            ImageSpec::Avatar { hash, .. }
+            ImageSpec::GuildIcon { hash, .. }
+            | ImageSpec::Avatar { hash, .. }
             | ImageSpec::GuildAvatar { hash, .. }
             | ImageSpec::Banner { hash, .. }
-            | ImageSpec::GuildBanner { hash, .. } => hash,
+            | ImageSpec::GuildBanner { hash, .. }
+            | ImageSpec::GuildMemberBanner { hash, .. } => hash,
             _ => return None,
         };
         hash.starts_with("a_").then(|| ImageSpec::Animated {
@@ -189,7 +200,11 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
     if let ImageSpec::Animated { still } = spec {
         still.animated()?;
         let mut url = image_url(still, size)?;
-        let path = url.path().strip_suffix(".png")?.to_owned();
+        let path = url
+            .path()
+            .strip_suffix(".webp")
+            .or_else(|| url.path().strip_suffix(".png"))?
+            .to_owned();
         url.set_path(&format!("{path}.webp"));
         url.query_pairs_mut().append_pair("animated", "true");
         return Some(url);
@@ -211,6 +226,16 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
         // WebP also covers uploaded AVIF/WebP emoji. https://docs.discord.food/resources/emoji#emoji-formats
         ImageSpec::Emoji { id, animated } => {
             format!("https://cdn.discordapp.com/emojis/{id}.webp?size={size}&animated={animated}")
+        }
+        ImageSpec::Sticker { id, format } => {
+            // APNG stickers are served from the same `.png` URL as static PNGs;
+            // the full file animates once decoded.
+            let extension = match format {
+                1 | 2 => "png",
+                4 => "gif",
+                _ => return None,
+            };
+            format!("https://media.discordapp.net/stickers/{id}.{extension}?size={size}")
         }
         ImageSpec::GuildIcon { guild_id, hash }
         | ImageSpec::GuildTagBadge { guild_id, hash }
@@ -258,7 +283,13 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
             }
             format!("https://cdn.discordapp.com/banners/{user_id}/{hash}.png?size={size}")
         }
-        ImageSpec::GuildBanner {
+        ImageSpec::GuildBanner { guild_id, hash } => {
+            if !valid_hash(hash) {
+                return None;
+            }
+            format!("https://cdn.discordapp.com/banners/{guild_id}/{hash}.webp?size={size}")
+        }
+        ImageSpec::GuildMemberBanner {
             guild_id,
             user_id,
             hash,
@@ -932,7 +963,7 @@ mod tests {
         );
         assert_eq!(
             url(
-                ImageSpec::GuildBanner {
+                ImageSpec::GuildMemberBanner {
                     guild_id: 2,
                     user_id: 1,
                     hash: "ff".into()
@@ -941,6 +972,41 @@ mod tests {
             )
             .as_deref(),
             Some("https://cdn.discordapp.com/guilds/2/users/1/banners/ff.png?size=512")
+        );
+        assert_eq!(
+            url(
+                ImageSpec::GuildBanner {
+                    guild_id: 2,
+                    hash: "ff".into()
+                },
+                300
+            )
+            .as_deref(),
+            Some("https://cdn.discordapp.com/banners/2/ff.webp?size=512")
+        );
+        let guild_icon = ImageSpec::GuildIcon {
+            guild_id: 2,
+            hash: "a_ff".into(),
+        };
+        assert_eq!(
+            url(guild_icon.animated().unwrap(), 48).as_deref(),
+            Some("https://cdn.discordapp.com/icons/2/a_ff.webp?size=64&animated=true")
+        );
+        let guild_banner = ImageSpec::GuildBanner {
+            guild_id: 2,
+            hash: "a_ff".into(),
+        };
+        assert_eq!(
+            url(guild_banner.animated().unwrap(), 300).as_deref(),
+            Some("https://cdn.discordapp.com/banners/2/a_ff.webp?size=512&animated=true")
+        );
+        assert!(
+            ImageSpec::GuildBanner {
+                guild_id: 2,
+                hash: "not/a/hash".into()
+            }
+            .animated()
+            .is_none()
         );
         assert_eq!(
             url(
@@ -1041,6 +1107,28 @@ mod tests {
             let spec = ImageSpec::Collectible { url: url.into() };
             assert!(image_url(&spec, 0).is_none(), "{url}");
         }
+    }
+
+    #[test]
+    fn sticker_urls_follow_format_and_size_buckets() {
+        let url = |format, size| {
+            image_url(&ImageSpec::Sticker { id: 123, format }, size).map(String::from)
+        };
+        assert_eq!(
+            url(1, 160).as_deref(),
+            Some("https://media.discordapp.net/stickers/123.png?size=256")
+        );
+        assert_eq!(
+            url(2, 160).as_deref(),
+            Some("https://media.discordapp.net/stickers/123.png?size=256")
+        );
+        assert_eq!(
+            url(4, 160).as_deref(),
+            Some("https://media.discordapp.net/stickers/123.gif?size=256")
+        );
+        assert!(url(3, 160).is_none());
+        assert!(url(0, 160).is_none());
+        assert!(url(5, 160).is_none());
     }
 
     #[test]

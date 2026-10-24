@@ -21,7 +21,9 @@ cargo run
 
 For scroll timing diagnostics, set `$env:RUST_LOG = "zcord=info,zcord::perf=debug"` before
 launching. While smooth scrolling, the console reports callback gaps and scroll-event
-dispatch times, summarized once per second and when scrolling settles. These are CPU-side
+dispatch times, summarized once per second and when scrolling settles. The same target also
+reports per-view render rates (`renders/s`) for root, rail, channels, header, messages,
+composer, members and overlays, once per second while views render. These are CPU-side
 timings, not GPU timings; large gaps with short dispatch times need further frame profiling.
 
 Paste your account token on the login screen. It is stored in Windows Credential Manager

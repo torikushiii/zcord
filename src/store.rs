@@ -6,14 +6,14 @@ mod tests;
 mod view;
 
 use crate::discord::{self, model, settings_proto};
+use crate::images::ImageSpec;
 use mapping::{
     channel_unread, local_timestamp, map_components, map_decoration, map_guild, map_message,
-    map_name_style, map_nameplate, map_reactions, map_snapshot, map_user, read_state,
+    map_name_style, map_nameplate, map_reactions, map_snapshot, map_stickers, map_user, read_state,
     timestamp_from_nonce,
 };
 use seed::SEED_START;
 use std::collections::HashMap;
-use crate::images::ImageSpec;
 pub use view::*;
 
 pub struct Store {
@@ -80,7 +80,6 @@ struct ChannelLocation {
     guild: usize,
     category: usize,
     channel: usize,
-    /// Whether the loaded message window reaches the newest message.
     at_present: bool,
 }
 
@@ -147,16 +146,16 @@ impl Store {
         self.guilds.get(*self.guild_indices.get(&id)?)
     }
 
-    pub fn has_nitro(&self) -> bool {
-        self.premium_type.is_some_and(|premium_type| premium_type != 0)
+    pub fn guild_banner(&self, guild_id: u64) -> Option<ImageSpec> {
+        self.guild_by_id(guild_id)?.banner_spec()
     }
 
-    pub fn emoji_access(
-        &self,
-        emoji: &CustomEmoji,
-        guild_id: u64,
-        channel_id: u64,
-    ) -> EmojiAccess {
+    pub fn has_nitro(&self) -> bool {
+        self.premium_type
+            .is_some_and(|premium_type| premium_type != 0)
+    }
+
+    pub fn emoji_access(&self, emoji: &CustomEmoji, guild_id: u64, channel_id: u64) -> EmojiAccess {
         if !emoji.available {
             return EmojiAccess::Unavailable;
         }
@@ -175,11 +174,13 @@ impl Store {
             if !self.has_nitro() {
                 return EmojiAccess::NeedsNitro;
             }
-            let external = self.source_channel_guild(channel_id).is_some_and(|(guild, channel)| {
-                discord::channel_permissions(guild, channel, self.current_user_id)
-                    & discord::USE_EXTERNAL_EMOJIS
-                    != 0
-            });
+            let external = self
+                .source_channel_guild(channel_id)
+                .is_some_and(|(guild, channel)| {
+                    discord::channel_permissions(guild, channel, self.current_user_id)
+                        & discord::USE_EXTERNAL_EMOJIS
+                        != 0
+                });
             if !external {
                 return EmojiAccess::NoExternalPermission;
             }
@@ -262,9 +263,7 @@ impl Store {
         output
     }
 
-    pub fn emoji_guilds(
-        &self,
-    ) -> Vec<(u64, String, Option<ImageSpec>, Vec<CustomEmoji>)> {
+    pub fn emoji_guilds(&self) -> Vec<(u64, String, Option<ImageSpec>, Vec<CustomEmoji>)> {
         self.rail
             .iter()
             .flat_map(|entry| match entry {
@@ -459,6 +458,7 @@ impl Store {
             components: Vec::new(),
             reactions: Vec::new(),
             attachments: Vec::new(),
+            stickers: Vec::new(),
             kind: 0,
             edited: false,
             reply: None,
@@ -479,7 +479,6 @@ impl Store {
             .get(location.channel)
     }
 
-    /// Whether the loaded message window reaches the newest message.
     pub fn at_present(&self, channel_id: u64) -> bool {
         self.network_channel(channel_id)
             .is_some_and(|channel| channel.messages_loaded)
@@ -527,6 +526,17 @@ impl Store {
                             || forward.is_some_and(|forward| {
                                 !forward.embeds.is_empty() || !forward.components.is_empty()
                             }),
+                        sticker: message
+                            .stickers
+                            .first()
+                            .or_else(|| {
+                                if message.content.is_empty() {
+                                    forward.and_then(|forward| forward.stickers.first())
+                                } else {
+                                    None
+                                }
+                            })
+                            .map(|sticker| sticker.name.clone()),
                     }
                 }) {
                 Some(reply) => ReplyState::Loaded(reply),
@@ -555,6 +565,7 @@ impl Store {
                 components: Vec::new(),
                 reactions: Vec::new(),
                 attachments: Vec::new(),
+                stickers: Vec::new(),
                 kind: 0,
                 edited: false,
                 reply,
@@ -933,13 +944,11 @@ impl Store {
         }
     }
 
-    /// Replace the window with a page fetched without an anchor, which reaches the present.
     pub fn set_messages(&mut self, channel_id: u64, messages: Vec<model::Message>) {
         self.replace_messages(channel_id, messages);
         self.set_at_present(channel_id, true);
     }
 
-    /// Replace the window with a page fetched around `last_read`.
     pub fn set_around_messages(&mut self, channel_id: u64, mut messages: Vec<model::Message>) {
         messages.retain(|m| m.channel_id == channel_id);
         let newest = messages.iter().map(|message| message.id).max().unwrap_or(0);
@@ -1309,11 +1318,11 @@ impl Store {
                 if let Some(attachments) = update.attachments {
                     message.attachments = attachments;
                 }
+                if let Some(stickers) = update.sticker_items {
+                    message.stickers = map_stickers(&stickers);
+                }
                 if let Some(snapshots) = &update.message_snapshots {
-                    let reference = update
-                        .message_reference
-                        .as_ref()
-                        .and_then(Option::as_ref);
+                    let reference = update.message_reference.as_ref().and_then(Option::as_ref);
                     let previous = message.forward.as_ref();
                     let channel_id = reference
                         .and_then(|reference| reference.channel_id)
@@ -1336,9 +1345,9 @@ impl Store {
                 self.change_reactions(event.channel_id, event.message_id, |reactions| {
                     // Our optimistic toggle already added it; the echo must not double count.
                     if own
-                        && reactions
-                            .iter()
-                            .any(|reaction| reaction.me && Self::same_emoji(&reaction.emoji, &event.emoji))
+                        && reactions.iter().any(|reaction| {
+                            reaction.me && Self::same_emoji(&reaction.emoji, &event.emoji)
+                        })
                     {
                         return;
                     }
@@ -1383,9 +1392,9 @@ impl Store {
                         let own = reaction.users.contains(&current_user_id);
                         let mut count = reaction.users.len().try_into().unwrap_or(u32::MAX);
                         if own
-                            && reactions.iter().any(|r| {
-                                r.me && Self::same_emoji(&r.emoji, &reaction.emoji)
-                            })
+                            && reactions
+                                .iter()
+                                .any(|r| r.me && Self::same_emoji(&r.emoji, &reaction.emoji))
                         {
                             count = count.saturating_sub(1);
                         }

@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -17,12 +18,12 @@ use crate::{
     discord::{ProfileKind, model},
     images::{self, ImageSpec, profile_frame_layer_url},
     store::User,
-    theme::{self, rpx},
+    theme::{self, WithoutTextSelection, rpx},
 };
 
-mod avatar_colors;
 #[cfg(test)]
 mod activity_tests;
+mod avatar_colors;
 
 const POPOUT_WIDTH: f32 = 300.;
 const MODAL_WIDTH: f32 = 962.;
@@ -89,6 +90,8 @@ pub(crate) struct ProfileCard {
     effect: Option<Arc<model::CollectibleProduct>>,
     frame: Option<Arc<model::CollectibleProduct>>,
     opened: Instant,
+    /// Set when every effect layer has decoded; all layers share this clock.
+    effect_started: RefCell<Option<Instant>>,
     tab: Tab,
     /// Index into `STATUS_PROMPTS`, rolled once per popout.
     status_prompt: usize,
@@ -179,6 +182,7 @@ impl DiscordApp {
             effect: None,
             frame: None,
             opened: Instant::now(),
+            effect_started: RefCell::new(None),
             tab: Tab::Activity,
             status_prompt: rand::random::<usize>() % STATUS_PROMPTS.len(),
             activity_prompt: rand::random::<usize>() % ACTIVITY_PROMPTS.len(),
@@ -194,6 +198,7 @@ impl DiscordApp {
         };
         card.modal = true;
         card.opened = Instant::now();
+        card.effect_started.replace(None);
         card.tab = Tab::Activity;
         self.load_profile(ProfileKind::Modal, cx);
         cx.notify();
@@ -321,7 +326,7 @@ impl DiscordApp {
                         .update(cx, |app, cx| {
                             let open = app.profile.as_ref().is_some_and(|c| c.user_id == user_id);
                             if open {
-                                cx.notify();
+                                app.views.overlays.update(cx, |_, cx| cx.notify());
                             }
                             open
                         })
@@ -417,11 +422,7 @@ pub fn opener(
     }
 }
 
-pub fn render(
-    app: &DiscordApp,
-    window: &Window,
-    cx: &mut Context<DiscordApp>,
-) -> Option<AnyElement> {
+pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyElement> {
     let card = app.profile.as_ref()?;
     if card.modal {
         Some(modal(app, card, window, cx))
@@ -582,14 +583,14 @@ impl ProfilePalette {
     }
 }
 
-fn popout(app: &DiscordApp, card: &ProfileCard, cx: &mut Context<DiscordApp>) -> AnyElement {
+fn popout(app: &DiscordApp, card: &ProfileCard, cx: &App) -> AnyElement {
     let theme = card.theme();
     let palette = card.palette();
     let layout = Layout::popout(theme.is_some());
     let surface = theme.map_or(theme::ELEVATED, ProfileTheme::surface);
-    let entity = cx.entity();
+    let entity = app.entity.clone();
     let open_full = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-        entity.update(cx, |app, cx| app.open_full_profile(cx));
+        entity.update(cx, |app, cx| app.open_full_profile(cx)).ok();
     };
     let inner = div()
         .relative()
@@ -629,7 +630,7 @@ fn popout(app: &DiscordApp, card: &ProfileCard, cx: &mut Context<DiscordApp>) ->
         .child(inner)
         .into_any_element();
     let framed = framed(card, outer_width, outer, false, cx);
-    let close = cx.entity();
+    let close = app.entity.clone();
     let margin = if card.frame.is_some() { 80. } else { 12. };
     deferred(
         anchored()
@@ -647,7 +648,7 @@ fn popout(app: &DiscordApp, card: &ProfileCard, cx: &mut Context<DiscordApp>) ->
                     .relative()
                     .occlude()
                     .on_mouse_down_out(move |_, _, cx| {
-                        close.update(cx, |app, cx| app.close_profile(cx));
+                        close.update(cx, |app, cx| app.close_profile(cx)).ok();
                     })
                     .child(framed)
                     .with_animation(
@@ -669,7 +670,7 @@ fn header(
     layout: &Layout,
     surface: u32,
     on_avatar: Option<ClickHandler>,
-    cx: &mut Context<DiscordApp>,
+    cx: &App,
 ) -> AnyElement {
     let user = app.store.user(card.user_id);
     let palette = card.palette();
@@ -730,7 +731,7 @@ fn banner(card: &ProfileCard, layout: &Layout, cx: &App) -> impl IntoElement {
     let spec = profile.and_then(|p| {
         let member_banner = p.guild_member.as_ref().and_then(|m| m.banner.clone());
         match (member_banner, card.guild_id) {
-            (Some(hash), Some(guild_id)) => Some(ImageSpec::GuildBanner {
+            (Some(hash), Some(guild_id)) => Some(ImageSpec::GuildMemberBanner {
                 guild_id,
                 user_id: card.user_id,
                 hash,
@@ -1064,11 +1065,11 @@ fn popout_body(
     app: &DiscordApp,
     card: &ProfileCard,
     layout: &Layout,
-    cx: &mut Context<DiscordApp>,
+    cx: &App,
 ) -> impl IntoElement {
     let user = app.store.user(card.user_id);
     let palette = card.palette();
-    let entity = cx.entity();
+    let entity = app.entity.clone();
     div()
         .flex()
         .flex_col()
@@ -1081,7 +1082,7 @@ fn popout_body(
             card,
             false,
             Some(Box::new(move |_, _, cx| {
-                entity.update(cx, |app, cx| app.open_full_profile(cx));
+                entity.update(cx, |app, cx| app.open_full_profile(cx)).ok();
             })),
             cx,
         ))
@@ -1368,12 +1369,7 @@ fn modal_backdrop_corners(rem_size: Pixels) -> Corners<Pixels> {
     }
 }
 
-fn modal(
-    app: &DiscordApp,
-    card: &ProfileCard,
-    window: &Window,
-    cx: &mut Context<DiscordApp>,
-) -> AnyElement {
+fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &App) -> AnyElement {
     let theme = card.theme();
     let palette = card.palette();
     let css = |pixels: Pixels| pixels / window.rem_size() * theme::BASE_FONT_SIZE;
@@ -1515,8 +1511,8 @@ fn modal(
                     .size_full(),
                 )
         });
-    let close = cx.entity();
-    let dismiss = cx.entity();
+    let close = app.entity.clone();
+    let dismiss = app.entity.clone();
     let dialog = div()
         .id("profile-modal")
         .relative()
@@ -1525,6 +1521,7 @@ fn modal(
         .rounded(rpx(MODAL_RADIUS))
         .text_color(rgb(palette.text))
         .occlude()
+        .without_text_selection()
         .on_click(|_, _, cx| cx.stop_propagation())
         // Clip the dialog surface, not the frame layers that extend beyond it.
         .child(
@@ -1538,7 +1535,7 @@ fn modal(
         )
         .child(div().absolute().top(rpx(8.)).right(rpx(8.)).child(
             profile_close_button(palette).on_click(move |_, _, cx| {
-                close.update(cx, |app, cx| app.close_profile(cx));
+                close.update(cx, |app, cx| app.close_profile(cx)).ok();
             }),
         ))
         .child(
@@ -1560,7 +1557,7 @@ fn modal(
         .justify_center()
         .occlude()
         .on_click(move |_, _, cx| {
-            dismiss.update(cx, |app, cx| app.close_profile(cx));
+            dismiss.update(cx, |app, cx| app.close_profile(cx)).ok();
         })
         .with_animation(
             ("profile-modal-backdrop", card.user_id),
@@ -1575,7 +1572,7 @@ fn modal(
         .into_any_element()
 }
 
-fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &mut Context<DiscordApp>) -> AnyElement {
+fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &App) -> AnyElement {
     let profile = card.profile.as_deref();
     let palette = card.palette();
     let mutual_guilds: Vec<&model::MutualGuild> = profile
@@ -1585,7 +1582,7 @@ fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &mut Context<DiscordApp>
         .collect();
     let friends = profile.and_then(|p| p.mutual_friends_count);
     let tab = |id: Tab, title: String| {
-        let entity = cx.entity();
+        let entity = app.entity.clone();
         let selected = card.tab == id;
         div()
             .id(SharedString::from(format!("profile-tab-{}", id as u8)))
@@ -1606,7 +1603,9 @@ fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &mut Context<DiscordApp>
             }))
             .hover(move |style| style.text_color(rgb(palette.strong)))
             .on_click(move |_, _, cx| {
-                entity.update(cx, |app, cx| app.select_profile_tab(id, cx));
+                entity
+                    .update(cx, |app, cx| app.select_profile_tab(id, cx))
+                    .ok();
             })
             .child(title)
     };
@@ -1875,6 +1874,30 @@ fn plural(count: usize, noun: &str) -> String {
     }
 }
 
+fn effect_start(started: &mut Option<Instant>, now: Instant) -> Instant {
+    *started.get_or_insert(now)
+}
+
+enum EffectLoad<T> {
+    Pending,
+    Ready(T),
+    Failed,
+}
+
+/// Waits only for pending layers; failed layers are skipped once nothing is pending.
+fn settle_effect_layers<T>(layers: impl IntoIterator<Item = EffectLoad<T>>) -> Option<Vec<T>> {
+    let mut pending = false;
+    let mut ready = Vec::new();
+    for layer in layers {
+        match layer {
+            EffectLoad::Pending => pending = true,
+            EffectLoad::Ready(image) => ready.push(image),
+            EffectLoad::Failed => {}
+        }
+    }
+    (!pending).then_some(ready)
+}
+
 fn effect_layers(card: &ProfileCard, width: f32, cx: &App) -> Vec<AnyElement> {
     let Some(item) = card
         .effect
@@ -1883,12 +1906,30 @@ fn effect_layers(card: &ProfileCard, width: f32, cx: &App) -> Vec<AnyElement> {
     else {
         return Vec::new();
     };
-    let elapsed = card.opened.elapsed().as_millis() as u64;
-    let mut layers: Vec<_> = item
-        .effects
-        .iter()
-        .enumerate()
-        .filter_map(|(index, layer)| {
+    let height = width * EFFECT_HEIGHT_RATIO;
+    let states = item.effects.iter().enumerate().map(|(index, layer)| {
+        match animated::state(
+            &ImageSpec::Collectible {
+                url: layer.src.clone(),
+            },
+            theme::image_px(height),
+            cx,
+        ) {
+            animated::Load::Pending => EffectLoad::Pending,
+            animated::Load::Ready(image) => EffectLoad::Ready((index, image)),
+            animated::Load::Failed => EffectLoad::Failed,
+        }
+    });
+    // Showing a subset while another layer decodes makes intro layers pop in out of step.
+    let Some(images) = settle_effect_layers(states) else {
+        return Vec::new();
+    };
+    let started = effect_start(&mut card.effect_started.borrow_mut(), Instant::now());
+    let elapsed = started.elapsed().as_millis() as u64;
+    let mut layers: Vec<_> = images
+        .into_iter()
+        .filter_map(|(index, image)| {
+            let layer = &item.effects[index];
             let start = u64::from(layer.start);
             let duration = u64::from(layer.duration).max(1);
             let since = elapsed.checked_sub(start)?;
@@ -1898,31 +1939,26 @@ fn effect_layers(card: &ProfileCard, width: f32, cx: &App) -> Vec<AnyElement> {
             } else {
                 (since < duration).then_some(0)?
             };
-            Some((layer.z_index, index, replay, &layer.src))
+            Some((layer.z_index, index, replay, image))
         })
         .collect();
     layers.sort_by_key(|(z, ..)| *z);
-    let height = width * EFFECT_HEIGHT_RATIO;
     layers
         .into_iter()
-        .filter_map(|(_, index, replay, src)| {
-            let spec = ImageSpec::Collectible { url: src.clone() };
-            let image = animated::resolve(&spec, theme::image_px(height), cx)?;
-            Some(
-                div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .w_full()
-                    .child(
-                        animated::image(image)
-                            .id(SharedString::from(format!(
-                                "profile-effect-{index}-{replay}"
-                            )))
-                            .w(rpx(width)),
-                    )
-                    .into_any_element(),
-            )
+        .map(|(_, index, replay, image)| {
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .w_full()
+                .child(
+                    animated::image(image)
+                        .id(SharedString::from(format!(
+                            "profile-effect-{index}-{replay}"
+                        )))
+                        .w(rpx(width)),
+                )
+                .into_any_element()
         })
         .collect()
 }
@@ -1930,11 +1966,34 @@ fn effect_layers(card: &ProfileCard, width: f32, cx: &App) -> Vec<AnyElement> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ProfilePalette, ProfileTheme, THEME_OVERLAY, blend, contrast, modal_backdrop_corners,
-        profile_close_button,
+        EffectLoad, ProfilePalette, ProfileTheme, THEME_OVERLAY, blend, contrast, effect_start,
+        modal_backdrop_corners, profile_close_button, settle_effect_layers,
     };
     use crate::discord::model;
     use gpui::{px, rgb};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn effect_layers_wait_for_pending_and_skip_failed() {
+        use EffectLoad::{Failed, Pending, Ready};
+        assert_eq!(settle_effect_layers([Ready(1), Pending]), None);
+        assert_eq!(
+            settle_effect_layers([Ready(1), Failed, Ready(2)]),
+            Some(vec![1, 2])
+        );
+        assert_eq!(
+            settle_effect_layers([Failed, Failed]),
+            Some(Vec::<u8>::new())
+        );
+
+        let now = Instant::now();
+        let mut started = None;
+        assert_eq!(effect_start(&mut started, now), now);
+        assert_eq!(
+            effect_start(&mut started, now + Duration::from_secs(1)),
+            now
+        );
+    }
 
     fn profile() -> model::Profile {
         serde_json::from_str(include_str!("../discord/fixtures/profile_modal.json")).unwrap()

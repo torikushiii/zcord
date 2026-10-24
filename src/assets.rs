@@ -54,6 +54,8 @@ const ICONS: &[(&str, &[u8])] = icons![
     "trash-2",
     "user-plus",
     "users",
+    "video-exit-fullscreen",
+    "video-fullscreen",
     "video-muted",
     "video-pause",
     "video-play",

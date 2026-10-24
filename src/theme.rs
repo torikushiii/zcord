@@ -403,6 +403,19 @@ pub fn guild_tag(tag: &GuildTag, cx: &App) -> Div {
         .child(tag.text.clone())
 }
 
+/// For clickable elements that stop their click from propagating: the click's mouse-up then
+/// never reaches the window's text selection, which would keep extending a selection begun
+/// by the same press. Suppressing selection on mouse-down avoids starting one at all.
+pub trait WithoutTextSelection: InteractiveElement + Sized {
+    fn without_text_selection(self) -> Self {
+        self.on_mouse_down(MouseButton::Left, |_, _, cx| {
+            gpui_base::GlobalState::suppress_text_selection(cx)
+        })
+    }
+}
+
+impl<E: InteractiveElement> WithoutTextSelection for E {}
+
 pub fn icon_button(id: impl Into<ElementId>, name: &str, size: f32, color: u32) -> Stateful<Div> {
     icon_button_with_hover(id, name, size, color, rgb(SELECTED).into())
 }

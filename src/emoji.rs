@@ -695,8 +695,15 @@ mod tests {
     #[test]
     fn emoji_api_categories_are_ordered_tone_free_and_shortcoded() {
         let categories = categories();
-        assert_eq!(categories.first().map(|category| category.name), Some("People"));
-        assert!(categories.iter().all(|category| !category.emojis.is_empty()));
+        assert_eq!(
+            categories.first().map(|category| category.name),
+            Some("People")
+        );
+        assert!(
+            categories
+                .iter()
+                .all(|category| !category.emojis.is_empty())
+        );
         for category in categories {
             for &(emoji, shortcode) in &category.emojis {
                 assert!(!shortcode.is_empty());

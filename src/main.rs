@@ -3,6 +3,7 @@
 mod animated;
 mod app;
 mod assets;
+mod composer_tokens;
 mod credentials;
 mod discord;
 mod emoji;

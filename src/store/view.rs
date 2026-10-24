@@ -316,6 +316,29 @@ pub enum Delivery {
     Failed,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sticker {
+    pub id: u64,
+    pub name: String,
+    /// Discord's `format_type`: 1 = PNG, 2 = APNG, 3 = Lottie, 4 = GIF.
+    pub format: u8,
+}
+
+impl Sticker {
+    pub fn image_spec(&self) -> Option<ImageSpec> {
+        if self.id == 0 {
+            return None;
+        }
+        match self.format {
+            1 | 2 | 4 => Some(ImageSpec::Sticker {
+                id: self.id,
+                format: self.format,
+            }),
+            _ => None,
+        }
+    }
+}
+
 pub struct Message {
     pub id: u64,
     pub author_id: u64,
@@ -326,6 +349,7 @@ pub struct Message {
     pub components: Vec<Component>,
     pub reactions: Vec<Reaction>,
     pub attachments: Vec<Attachment>,
+    pub stickers: Vec<Sticker>,
     pub kind: u8,
     pub edited: bool,
     pub reply: Option<ReplyState>,
@@ -350,6 +374,7 @@ pub struct Reply {
     pub content: String,
     pub attachments: bool,
     pub embeds: bool,
+    pub sticker: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -364,6 +389,7 @@ pub struct Forward {
     pub embeds: Vec<Embed>,
     pub components: Vec<Component>,
     pub attachments: Vec<Attachment>,
+    pub stickers: Vec<Sticker>,
     pub timestamp: Option<Timestamp>,
     pub edited: bool,
     pub channel_id: Option<u64>,
@@ -520,12 +546,19 @@ pub struct Guild {
     pub categories: Vec<Category>,
     pub member_ids: Vec<u64>,
     pub icon: Option<String>,
+    pub banner: Option<String>,
     pub emojis: Vec<CustomEmoji>,
 }
 
 impl Guild {
     pub fn icon_spec(&self) -> Option<ImageSpec> {
         self.icon.as_ref().map(|hash| ImageSpec::GuildIcon {
+            guild_id: self.id,
+            hash: hash.clone(),
+        })
+    }
+    pub fn banner_spec(&self) -> Option<ImageSpec> {
+        self.banner.as_ref().map(|hash| ImageSpec::GuildBanner {
             guild_id: self.id,
             hash: hash.clone(),
         })

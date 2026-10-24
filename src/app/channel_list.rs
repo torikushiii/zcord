@@ -2,18 +2,24 @@ use gpui::{prelude::*, *};
 use gpui_component::tooltip::Tooltip;
 
 use crate::{
+    animated,
     app::{DiscordApp, message_body::label, profile},
+    images::{self, ImageSpec},
     store::{Channel, ChannelKind, Guild},
-    theme::{self, rpx},
+    theme::{self, WithoutTextSelection, rpx},
 };
 
 pub const WIDTH: f32 = 303.;
+const HEADER_HEIGHT: f32 = 48.;
+/// Discord's banner is 135px tall in its 240px sidebar; keep the height and crop wider.
+const BANNER_HEIGHT: f32 = 135.;
 
 #[cfg(test)]
 mod tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Row {
+    Banner,
     Shortcuts,
     Category(usize),
     Channel { category: usize, channel: usize },
@@ -24,6 +30,7 @@ pub(crate) struct Rows {
     state: ListState,
     rows: Vec<Row>,
     guild_id: Option<u64>,
+    banner: Option<ImageSpec>,
 }
 
 impl Rows {
@@ -32,11 +39,21 @@ impl Rows {
             state: ListState::new(1, ListAlignment::Top, px(200.)),
             rows: vec![Row::Shortcuts],
             guild_id: None,
+            banner: None,
         }
     }
 
+    #[cfg(test)]
     pub fn sync(&mut self, guild: Option<&Guild>) {
-        let mut rows = vec![Row::Shortcuts];
+        self.sync_with_banner(guild, None);
+    }
+
+    pub fn sync_with_banner(&mut self, guild: Option<&Guild>, banner: Option<ImageSpec>) {
+        let mut rows = Vec::new();
+        if banner.is_some() {
+            rows.push(Row::Banner);
+        }
+        rows.push(Row::Shortcuts);
         for (category, group) in guild
             .into_iter()
             .flat_map(|guild| &guild.categories)
@@ -70,53 +87,46 @@ impl Rows {
         }
         self.guild_id = guild_id;
         self.rows = rows;
+        self.banner = banner;
+    }
+
+    /// How solid the header should be: 0 with the banner fully shown, rising to 1 as the
+    /// banner scrolls up under the header. None when the server has no banner.
+    fn header_solidity(&self, rem_size: Pixels) -> Option<f32> {
+        self.banner.as_ref()?;
+        let top = self.state.logical_scroll_top();
+        if top.item_ix > 0 {
+            return Some(1.);
+        }
+        let range = rpx(BANNER_HEIGHT - HEADER_HEIGHT).to_pixels(rem_size);
+        Some((top.offset_in_item / range).clamp(0., 1.))
     }
 }
 
-pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement + use<> {
+pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> impl IntoElement + use<> {
     let guild = app.guild();
-    let entity = cx.entity();
+    let entity = app.entity.clone();
+    let banner = app.channel_rows.banner.is_some();
+    let solidity = app
+        .channel_rows
+        .header_solidity(window.rem_size())
+        .unwrap_or(1.);
     div()
         .flex()
         .flex_col()
+        .relative()
         .w(rpx(WIDTH))
         .h_full()
         .flex_none()
         .border_r_1()
         .border_color(rgb(theme::BORDER))
-        .child(
-            div()
-                .id("guild-header")
-                .flex()
-                .items_center()
-                .gap_1()
-                .h(rpx(48.))
-                .flex_none()
-                .pl_4()
-                .pr_2()
-                .border_b_1()
-                .border_color(rgb(theme::BORDER))
-                .cursor_pointer()
-                .hover(|style| style.bg(rgb(theme::HOVER)))
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(rpx(16.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(theme::STRONG))
-                        .child(label(
-                            ("guild-header", guild.map_or(0, |guild| guild.id)),
-                            guild.map_or("No server", |guild| &guild.name),
-                        )),
-                )
-                .child(theme::icon("chevron-down", 16., theme::STRONG))
-                .child(div().flex_1())
-                .child(theme::icon_button("invite", "user-plus", 18., theme::MUTED)),
-        )
+        .when(!banner, |this| this.child(guild_header(guild, 1.)))
         .child(
             list(app.channel_rows.state.clone(), move |index, _, cx| {
-                let app = entity.read(cx);
+                let Some(app_entity) = entity.upgrade() else {
+                    return div().into_any_element();
+                };
+                let app = app_entity.read(cx);
                 let Some(row) = app.channel_rows.rows.get(index).copied() else {
                     return div().into_any_element();
                 };
@@ -129,6 +139,9 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         .map(|channel| channel.id),
                     _ => None,
                 };
+                if row == Row::Banner {
+                    return banner_row(app.channel_rows.banner.as_ref(), cx).into_any_element();
+                }
                 let entity = app.entity.clone();
                 row_content(app.guild(), row, app.selected_channel_id)
                     .id(("channel-list-row", index))
@@ -145,13 +158,115 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
             .flex_1()
             .min_h_0()
             .w_full()
-            .py_2(),
+            .when(!banner, |this| this.py_2())
+            .when(banner, |this| this.pb_2()),
         )
+        .when(banner, |this| {
+            this.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .child(guild_header(guild, solidity)),
+            )
+        })
         .child(user_panel(app, cx))
+}
+
+fn guild_header(guild: Option<&Guild>, solidity: f32) -> impl IntoElement + use<> {
+    let solid = solidity >= 1.;
+    let fade = |color: u32, alpha: f32| Hsla::from(rgb(color)).opacity(alpha);
+    div()
+        .id("guild-header")
+        .relative()
+        .rounded_tl(rpx(8.))
+        .flex()
+        .items_center()
+        .gap_1()
+        .h(rpx(HEADER_HEIGHT))
+        .flex_none()
+        .pl_4()
+        .pr_2()
+        .cursor_pointer()
+        .bg(fade(theme::BG, solidity))
+        .border_b_1()
+        .border_color(fade(theme::BORDER, solidity))
+        .hover(move |style| {
+            if solid {
+                style.bg(rgb(theme::HOVER))
+            } else {
+                style.bg(rgba(0x202226A6))
+            }
+        })
+        .when(!solid, |this| {
+            this.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .opacity(1. - solidity)
+                    .bg(linear_gradient(
+                        180.,
+                        linear_color_stop(rgba(0x00000099), 0.),
+                        linear_color_stop(rgba(0x00000000), 1.),
+                    )),
+            )
+        })
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(rpx(16.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(theme::STRONG))
+                .child(label(
+                    ("guild-header", guild.map_or(0, |guild| guild.id)),
+                    guild.map_or("No server", |guild| &guild.name),
+                )),
+        )
+        .child(theme::icon("chevron-down", 16., theme::STRONG))
+        .child(div().flex_1())
+        .child(theme::icon_button(
+            "invite",
+            "user-plus",
+            18.,
+            if solid { theme::MUTED } else { theme::STRONG },
+        ))
+}
+
+fn banner_row(spec: Option<&ImageSpec>, cx: &App) -> impl IntoElement + use<> {
+    let pixels = theme::image_px(WIDTH);
+    let fill = |image: Img| {
+        image
+            .size_full()
+            .rounded_tl(rpx(8.))
+            .object_fit(ObjectFit::Cover)
+    };
+    let image = spec.and_then(|spec| {
+        if let Some(image) = spec
+            .animated()
+            .and_then(|animated| animated::resolve(&animated, pixels, cx))
+        {
+            return Some(
+                fill(animated::image(image))
+                    .id("guild-banner-animated")
+                    .into_any_element(),
+            );
+        }
+        images::resolve(spec, pixels, cx).map(|path| fill(img(path)).into_any_element())
+    });
+    div()
+        .w_full()
+        .h(rpx(BANNER_HEIGHT))
+        .mb_2()
+        .bg(rgb(theme::ELEVATED))
+        .rounded_tl(rpx(8.))
+        .children(image)
 }
 
 fn row_content(guild: Option<&Guild>, row: Row, selected: u64) -> Div {
     let content = match row {
+        Row::Banner => div().into_any_element(),
         Row::Shortcuts => div()
             .child(shortcut_row("events", "calendar", "Events"))
             .child(shortcut_row("boosts", "gem", "Server Boosts"))
@@ -277,7 +392,7 @@ fn channel_row(channel: &Channel, selected: bool) -> impl IntoElement + use<> {
         })
 }
 
-fn user_panel(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement + use<> {
+fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
     let user = app.store.user(app.store.current_user_id);
     div()
         .flex()
@@ -303,10 +418,18 @@ fn user_panel(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .rounded(rpx(6.))
                 .cursor_pointer()
                 .hover(|style| style.bg(rgb(theme::SELECTED)))
-                .on_hover(cx.listener(|app, hovered: &bool, _, cx| {
-                    app.hovered_account = *hovered;
-                    cx.notify();
-                }))
+                .on_hover({
+                    let entity = app.entity.clone();
+                    move |hovered: &bool, _, cx| {
+                        entity
+                            .update(cx, |app, cx| {
+                                app.hovered_account = *hovered;
+                                cx.notify();
+                            })
+                            .ok();
+                    }
+                })
+                .without_text_selection()
                 .on_click(profile::opener(app, user.id, Anchor::BottomLeft))
                 .child(theme::user_avatar(
                     Some(user),
@@ -346,6 +469,11 @@ fn user_panel(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .child(
             theme::icon_button("user-settings", "settings", 20., theme::TEXT)
                 .tooltip(|window, cx| Tooltip::new("Log out").build(window, cx))
-                .on_click(cx.listener(|this, _, window, cx| this.log_out(window, cx))),
+                .on_click({
+                    let entity = app.entity.clone();
+                    move |_, window, cx| {
+                        entity.update(cx, |this, cx| this.log_out(window, cx)).ok();
+                    }
+                }),
         )
 }
