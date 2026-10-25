@@ -325,8 +325,22 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                         .flex()
                         .gap_1()
                         .my(rpx(12.))
-                        .child(theme::icon_button("gif", "image-play", 24., theme::MUTED))
-                        .child(theme::icon_button("stickers", "sticker", 24., theme::MUTED))
+                        .child({
+                            let entity = app.entity.clone();
+                            let picker_anchor = picker_anchor.clone();
+                            theme::icon_button("gif", "image-play", 24., theme::MUTED)
+                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                    let Some(position) = picker_anchor.get() else {
+                                        return;
+                                    };
+                                    entity
+                                        .update(cx, |app, cx| {
+                                            app.toggle_gif_picker(position, window, cx)
+                                        })
+                                        .ok();
+                                })
+                        })
+                        // .child(theme::icon_button("stickers", "sticker", 24., theme::MUTED))
                         .child({
                             let entity = app.entity.clone();
                             theme::icon_button("emoji", "smile", 24., theme::MUTED).on_mouse_down(

@@ -215,11 +215,30 @@ fn spotify_image_url(url: &reqwest::Url) -> bool {
         && url.port().is_none()
 }
 
+/// GIF picker media is served by the providers' CDNs, outside Discord's proxy.
+fn gif_provider_media_url(url: &reqwest::Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str().is_some_and(|host| {
+            matches!(
+                host,
+                "static.klipy.com"
+                    | "media.tenor.com"
+                    | "media.giphy.com"
+                    | "i.giphy.com"
+                    | "media0.giphy.com"
+                    | "media1.giphy.com"
+                    | "media2.giphy.com"
+                    | "media3.giphy.com"
+                    | "media4.giphy.com"
+            )
+        })
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+}
+
 pub(crate) fn trusted_video_url(raw: &str) -> Option<String> {
     let mut url = reqwest::Url::parse(raw).ok()?;
-    if !allowed_url(&url) {
-        return None;
-    }
     let extension = url
         .path()
         .rsplit('/')
@@ -232,7 +251,11 @@ pub(crate) fn trusted_video_url(raw: &str) -> Option<String> {
     let proxied = url
         .host_str()
         .is_some_and(|host| host.starts_with("images-ext-"));
-    if !video_file && !proxied {
+    let discord = allowed_url(&url) && (video_file || proxied);
+    // Official-client favorite GIFs can be videos on the providers' CDNs.
+    let provider =
+        matches!(extension.as_deref(), Some("mp4" | "webm")) && gif_provider_media_url(&url);
+    if !discord && !provider {
         return None;
     }
     url.set_fragment(None);
@@ -407,7 +430,7 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
         ImageSpec::Animated { .. } => return None,
     };
     let mut url = reqwest::Url::parse(&raw).ok()?;
-    if !allowed_url(&url) && !spotify_image_url(&url) {
+    if !allowed_url(&url) && !spotify_image_url(&url) && !gif_provider_media_url(&url) {
         return None;
     }
     if matches!(spec, ImageSpec::Collectible { .. })
@@ -1278,8 +1301,8 @@ mod tests {
             }
         }
         for url in [
-            "https://media.tenor.com/a.mp4",
-            "https://i.giphy.com/a.mp4",
+            "https://media.tenor.com.evil.test/a.mp4",
+            "https://i.giphy.com.evil.test/a.mp4",
             "http://cdn.discordapp.com/a.mp4",
             "https://user:pass@cdn.discordapp.com/a.mp4",
             "https://media.discordapp.net:444/a.mp4",
@@ -1336,7 +1359,7 @@ mod tests {
         let redirect = "https://images-ext-1.discordapp.net/external/abc/%3Furl%3Dhttps%253A%252F%252Fvideo.twimg.com%252Fa.mp4/https/api.fxtwitter.com/2/go";
         assert_eq!(trusted_video_url(redirect).as_deref(), Some(redirect));
         for url in [
-            "https://media.tenor.com/a.mp4",
+            "https://media.tenor.com.evil.test/a.mp4",
             "https://cdn.discordapp.com/a.m3u8",
             "https://media.discordapp.net/external/abc/https/example.com/go",
             "http://cdn.discordapp.com/a.mp4",
@@ -1547,6 +1570,128 @@ mod tests {
                 .is_none(),
                 "{url}"
             );
+        }
+    }
+
+    #[test]
+    fn gif_picker_media_loads_from_provider_hosts_only() {
+        for host in [
+            "static.klipy.com",
+            "media.tenor.com",
+            "media.giphy.com",
+            "i.giphy.com",
+            "media0.giphy.com",
+            "media1.giphy.com",
+            "media2.giphy.com",
+            "media3.giphy.com",
+            "media4.giphy.com",
+        ] {
+            let url = format!("https://{host}/gif.webp");
+            assert_eq!(
+                image_url(
+                    &ImageSpec::Media {
+                        url: url.clone(),
+                        width: 200,
+                        height: 200,
+                        animated: true,
+                    },
+                    128
+                )
+                .unwrap()
+                .as_str(),
+                format!("https://{host}/gif.webp?width=128&height=128&animated=true")
+            );
+            assert!(!allowed_url(&reqwest::Url::parse(&url).unwrap()), "{url}");
+        }
+        for url in [
+            "https://media.tenor.com/clip.mp4",
+            "https://media4.giphy.com/clip.mp4",
+        ] {
+            assert!(
+                image_url(
+                    &ImageSpec::Video {
+                        url: url.into(),
+                        width: 200,
+                        height: 200,
+                    },
+                    64
+                )
+                .is_some(),
+                "{url}"
+            );
+        }
+        for url in [
+            "http://static.klipy.com/gif.webp",
+            "https://static.klipy.com.evil.test/gif.webp",
+            "https://media.tenor.com.evil.test/gif.webp",
+            "https://media1.giphy.com.evil.test/gif.webp",
+            "https://static.klipy.com:8443/gif.webp",
+            "https://user:pass@static.klipy.com/gif.webp",
+            "https://media.gfycat.com/gif.webp",
+        ] {
+            assert!(
+                image_url(
+                    &ImageSpec::Media {
+                        url: url.into(),
+                        width: 0,
+                        height: 0,
+                        animated: false,
+                    },
+                    64
+                )
+                .is_none(),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn gif_provider_videos_are_trusted_only_for_mp4_and_webm() {
+        for (url, trusted) in [
+            (
+                "https://media.tenor.com/abc/clip.mp4",
+                "https://media.tenor.com/abc/clip.mp4",
+            ),
+            (
+                "https://media.tenor.com/abc/clip.webm",
+                "https://media.tenor.com/abc/clip.webm",
+            ),
+            (
+                "https://media.tenor.com/abc/clip.mp4?ex=1&size=2#fragment",
+                "https://media.tenor.com/abc/clip.mp4?ex=1&size=2",
+            ),
+            (
+                "https://static.klipy.com/ii/aa/bb/mp4/1.mp4",
+                "https://static.klipy.com/ii/aa/bb/mp4/1.mp4",
+            ),
+            (
+                "https://media1.giphy.com/media/x/clip.MP4",
+                "https://media1.giphy.com/media/x/clip.MP4",
+            ),
+            (
+                "https://media.giphy.com/media/x/clip.webm",
+                "https://media.giphy.com/media/x/clip.webm",
+            ),
+            (
+                "https://i.giphy.com/clip.mp4",
+                "https://i.giphy.com/clip.mp4",
+            ),
+        ] {
+            assert_eq!(trusted_video_url(url).as_deref(), Some(trusted), "{url}");
+        }
+        for url in [
+            "http://media.tenor.com/clip.mp4",
+            "https://media.tenor.com.evil.test/clip.mp4",
+            "https://media.tenor.com:8443/clip.mp4",
+            "https://user:pass@media.tenor.com/clip.mp4",
+            "https://static.klipy.com/clip.mov",
+            "https://static.klipy.com/clip.m4v",
+            "https://static.klipy.com/clip.gif",
+            "https://static.klipy.com/clip",
+            "https://static.klipy.com/clip?file=1.mp4",
+            "https://media.gfycat.com/clip.mp4",
+        ] {
+            assert!(trusted_video_url(url).is_none(), "{url}");
         }
     }
 
