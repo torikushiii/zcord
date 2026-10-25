@@ -171,6 +171,7 @@ impl ProfileCard {
             return;
         }
         let (user_id, guild_id) = (self.user_id, self.guild_id);
+        let metadata_session = session.clone();
         let request = Tokio::spawn(cx, async move {
             session.public_applications(&application_ids).await
         });
@@ -186,6 +187,9 @@ impl ProfileCard {
                     return;
                 }
             };
+            if applications.is_empty() {
+                return;
+            }
             this.update(cx, |app, cx| {
                 let Some(card) = app
                     .profile
@@ -197,6 +201,7 @@ impl ProfileCard {
                 for application in applications {
                     card.applications.insert(application.id, application);
                 }
+                card.load_linked_metadata(metadata_session, cx);
                 app.prefetch_profile_images(cx);
                 cx.notify();
             })
@@ -215,6 +220,7 @@ impl ProfileCard {
             return;
         }
         let (user_id, guild_id) = (self.user_id, self.guild_id);
+        let metadata_session = session.clone();
         let request = Tokio::spawn(cx, async move { session.games(&game_ids).await });
         self._tasks.push(cx.spawn(async move |this, cx| {
             let games = match request.await {
@@ -228,6 +234,9 @@ impl ProfileCard {
                     return;
                 }
             };
+            if games.is_empty() {
+                return;
+            }
             this.update(cx, |app, cx| {
                 let Some(card) = app
                     .profile
@@ -239,11 +248,36 @@ impl ProfileCard {
                 for game in games {
                     card.games.insert(game.id, game);
                 }
+                card.load_linked_metadata(metadata_session, cx);
                 app.prefetch_profile_images(cx);
                 cx.notify();
             })
             .ok();
         }));
+    }
+
+    /// Partner applications and their games can have different IDs; follow both directions.
+    fn load_linked_metadata(&mut self, session: Session, cx: &mut Context<DiscordApp>) {
+        let game_ids = self
+            .applications
+            .values()
+            .flat_map(|application| application.linked_games.iter().map(|game| game.id))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        let application_ids = self
+            .games
+            .values()
+            .flat_map(|game| {
+                game.linked_applications
+                    .iter()
+                    .map(|application| application.id)
+            })
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        self.load_games(session.clone(), game_ids, cx);
+        self.load_applications(session, application_ids, cx);
     }
 }
 
@@ -699,7 +733,8 @@ impl DiscordApp {
             }));
         }
         card.load_games(session.clone(), game_ids, cx);
-        card.load_applications(session, application_ids, cx);
+        card.load_applications(session.clone(), application_ids, cx);
+        card.load_linked_metadata(session, cx);
         self.prefetch_profile_images(cx);
     }
 
@@ -940,6 +975,7 @@ impl DiscordApp {
                 }));
             }
         }
+        card.load_linked_metadata(session, cx);
         self.prefetch_profile_images(cx);
         self.start_profile_game_timer(cx);
         self.load_avatar_theme(cx);

@@ -3664,6 +3664,9 @@ fn invite_view_prefers_custom_banner_and_resolves_game_icons() {
         name: "Example World Game".into(),
         icon: Some("iconhash".into()),
         cover_image: None,
+        deeplink_uri: None,
+        steam_app_id: None,
+        linked_games: Vec::new(),
     })];
     let invite = Invite::from_model(&invite, &applications).unwrap();
     assert_eq!(invite.name, "Sample Server One");
