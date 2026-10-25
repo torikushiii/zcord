@@ -344,7 +344,9 @@ pub fn tooltip_above(label: impl Into<SharedString>) -> impl IntoElement {
                     )
                     .child(icon("tooltip-arrow-down", 12., TOOLTIP_BG).h(rpx(6.))),
             ),
-        ))
+        )
+        // Tooltips also appear inside deferred popouts, so they must outrank them.
+        .with_priority(2))
 }
 
 pub fn badge(count: u32, ring: u32) -> impl IntoElement {
