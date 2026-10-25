@@ -59,7 +59,7 @@ fn launch() -> &'static Launch {
     static LAUNCH: OnceLock<Launch> = OnceLock::new();
     LAUNCH.get_or_init(|| Launch {
         id: uuid_v4(),
-        signature: uuid_v4(),
+        signature: launch_signature(),
         heartbeat_session: uuid_v4(),
     })
 }
@@ -68,6 +68,31 @@ fn uuid_v4() -> String {
     let mut bytes: [u8; 16] = rand::random();
     bytes[6] = (bytes[6] & 0x0F) | 0x40;
     bytes[8] = (bytes[8] & 0x3F) | 0x80;
+    format_uuid(bytes)
+}
+
+// https://docs.discord.food/reference#launch-signature: these bits flag client mods.
+const MOD_BITS: u128 = (1 << 119)
+    | (1 << 108)
+    | (1 << 100)
+    | (1 << 91)
+    | (1 << 84)
+    | (1 << 75)
+    | (1 << 61)
+    | (1 << 55)
+    | (1 << 48)
+    | (1 << 38)
+    | (1 << 24)
+    | (1 << 11);
+
+fn launch_signature() -> String {
+    let mut bytes: [u8; 16] = rand::random();
+    bytes[6] = (bytes[6] & 0x0F) | 0x40;
+    bytes[8] = (bytes[8] & 0x3F) | 0x80;
+    format_uuid((u128::from_be_bytes(bytes) & !MOD_BITS).to_be_bytes())
+}
+
+fn format_uuid(bytes: [u8; 16]) -> String {
     let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     format!(
         "{}-{}-{}-{}-{}",
@@ -141,5 +166,17 @@ mod tests {
         assert_eq!(launch_id.len(), 36);
         assert_eq!(&launch_id[14..15], "4");
         assert_eq!(super_properties(), super_properties());
+    }
+
+    #[test]
+    fn launch_signature_clears_mod_bits_and_keeps_uuid_v4_bits() {
+        for _ in 0..1000 {
+            let signature = launch_signature();
+            assert_eq!(signature.len(), 36);
+            let value = u128::from_str_radix(&signature.replace('-', ""), 16).unwrap();
+            assert_eq!(value & MOD_BITS, 0);
+            assert_eq!((value >> 76) & 0xF, 4);
+            assert_eq!((value >> 62) & 0b11, 0b10);
+        }
     }
 }
