@@ -1552,7 +1552,7 @@ fn activity_accessory(
 
 /// Rich-presence art is often a GIF behind Discord's media proxy; Discord plays it, so play it
 /// here too, falling back to the still frame while it decodes.
-fn presence_art(
+pub(crate) fn presence_art(
     url: &str,
     size: f32,
     radius: f32,

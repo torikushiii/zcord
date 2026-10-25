@@ -1,3 +1,4 @@
+mod home;
 mod mapping;
 mod seed;
 mod social;
@@ -8,6 +9,7 @@ mod view;
 use crate::discord::{self, model, settings_proto};
 use crate::images::ImageSpec;
 use base64::{Engine, engine::general_purpose::STANDARD};
+use home::PrivateLocation;
 use mapping::{
     channel_unread, forum_new_posts, local_timestamp, map_components, map_decoration, map_guild,
     map_message, map_name_style, map_nameplate, map_reactions, map_snapshot, map_stickers,
@@ -33,6 +35,11 @@ pub struct Store {
     forum_posts: HashMap<u64, ForumPost>,
     guild_badges: Vec<GuildBadges>,
     dm_badges: u64,
+    private: Vec<PrivateChannel>,
+    private_locations: HashMap<u64, PrivateLocation>,
+    relationships: HashMap<u64, Relationship>,
+    request_previews: HashMap<u64, RequestPreview>,
+    pub friend_suggestion_count: u32,
     guild_indices: HashMap<u64, usize>,
     folder_layout: Option<Vec<settings_proto::GuildFolder>>,
     frecency: Option<Vec<u8>>,
@@ -446,6 +453,10 @@ impl Store {
     }
 
     pub fn mark_channel_read(&mut self, guild_id: u64, channel_id: u64) {
+        if self.private_locations.contains_key(&channel_id) {
+            self.mark_private_read(channel_id);
+            return;
+        }
         if let Some(location) = self.channel_locations.get(&channel_id).copied() {
             let guild = &mut self.guilds[location.guild];
             let channel = &mut guild.categories[location.category].channels[location.channel];
@@ -565,11 +576,11 @@ impl Store {
                 .channels
                 .get(location.channel);
         }
-        let location = *self.thread_locations.get(&channel_id)?;
-        self.guilds
-            .get(location.guild)?
-            .threads
-            .get(location.thread)
+        if let Some(location) = self.thread_locations.get(&channel_id).copied() {
+            return self.guilds.get(location.guild)?.threads.get(location.thread);
+        }
+        let location = self.private_locations.get(&channel_id).copied()?;
+        self.private.get(location.index).map(|private| &private.channel)
     }
 
     pub fn at_present(&self, channel_id: u64) -> bool {
@@ -581,6 +592,10 @@ impl Store {
                 .is_some_and(|location| location.at_present)
                 || self
                     .thread_locations
+                    .get(&channel_id)
+                    .is_some_and(|location| location.at_present)
+                || self
+                    .private_locations
                     .get(&channel_id)
                     .is_some_and(|location| location.at_present))
     }
@@ -875,6 +890,7 @@ impl Store {
             .map(|g| map_guild(g, &ready, &read_states))
             .collect();
         let premium_type = ready.user.premium_type;
+        let friend_suggestion_count = ready.friend_suggestion_count;
         let mut store = Self {
             guilds,
             rail: Vec::new(),
@@ -891,6 +907,11 @@ impl Store {
             forum_posts: HashMap::new(),
             guild_badges: Vec::new(),
             dm_badges: 0,
+            private: Vec::new(),
+            private_locations: HashMap::new(),
+            relationships: HashMap::new(),
+            request_previews: HashMap::new(),
+            friend_suggestion_count,
             guild_indices: HashMap::new(),
             folder_layout,
             frecency: None,
@@ -900,6 +921,7 @@ impl Store {
             permission_cache: RefCell::new(HashMap::new()),
         };
         store.init_social();
+        store.init_relationships();
         store.apply_own_status(settings.status.as_ref(), false);
         store.index_channels();
         store
@@ -914,6 +936,11 @@ impl Store {
             .map(|(id, location)| (*id, location.at_present))
             .chain(
                 self.thread_locations
+                    .iter()
+                    .map(|(id, location)| (*id, location.at_present)),
+            )
+            .chain(
+                self.private_locations
                     .iter()
                     .map(|(id, location)| (*id, location.at_present)),
             )
@@ -950,6 +977,7 @@ impl Store {
                 .sum();
             self.dm_mentions = self.dm_badges.min(u64::from(u32::MAX)) as u32;
         }
+        self.rebuild_private(&present);
         for (guild_index, guild) in self.guilds.iter_mut().enumerate() {
             self.guild_indices.insert(guild.id, guild_index);
             let mut badges = GuildBadges {
@@ -1362,11 +1390,17 @@ impl Store {
                 .channels
                 .get_mut(location.channel);
         }
-        let location = *self.thread_locations.get(&channel_id)?;
-        self.guilds
-            .get_mut(location.guild)?
-            .threads
-            .get_mut(location.thread)
+        if let Some(location) = self.thread_locations.get(&channel_id).copied() {
+            return self
+                .guilds
+                .get_mut(location.guild)?
+                .threads
+                .get_mut(location.thread);
+        }
+        let location = self.private_locations.get(&channel_id).copied()?;
+        self.private
+            .get_mut(location.index)
+            .map(|private| &mut private.channel)
     }
 
     fn replace_messages(&mut self, channel_id: u64, mut messages: Vec<model::Message>) {
@@ -1401,6 +1435,8 @@ impl Store {
         if let Some(location) = self.channel_locations.get_mut(&channel_id) {
             location.at_present = present;
         } else if let Some(location) = self.thread_locations.get_mut(&channel_id) {
+            location.at_present = present;
+        } else if let Some(location) = self.private_locations.get_mut(&channel_id) {
             location.at_present = present;
         }
     }
@@ -1593,6 +1629,7 @@ impl Store {
             self.dm_badges =
                 self.dm_badges.saturating_sub(u64::from(previous_mentions)) + u64::from(mentions);
             self.dm_mentions = self.dm_badges.min(u64::from(u32::MAX)) as u32;
+            self.update_private_badges(channel_id, unread, mentions);
         }
     }
 
@@ -1715,7 +1752,13 @@ impl Store {
                 let present = self
                     .channel_locations
                     .get(&message.channel_id)
-                    .is_none_or(|location| location.at_present);
+                    .map(|location| location.at_present)
+                    .or_else(|| {
+                        self.private_locations
+                            .get(&message.channel_id)
+                            .map(|location| location.at_present)
+                    })
+                    .unwrap_or(true);
                 if let Some(channel) = self.network_channel_mut(message.channel_id) {
                     loaded = channel.messages_loaded;
                     if channel
@@ -1742,6 +1785,7 @@ impl Store {
                         channel.last_message_id = Some(Some(previous.max(message.id)));
                     }
                 }
+                self.refresh_request_preview(&message, message.id >= previous);
                 self.update_forum_post_message(&message);
                 let current_user_id = self.current_user_id;
                 let own = message.author.id == current_user_id;
@@ -2013,7 +2057,13 @@ impl Store {
                 self.rebuild_structure(Some(guild_id));
                 Change::Structure
             }
-            Event::ChannelUpsert(update) => {
+            Event::ChannelUpsert(mut update) => {
+                for user in &update.recipients {
+                    self.register_author(user);
+                }
+                if update.recipient_ids.is_empty() {
+                    update.recipient_ids = update.recipients.iter().map(|user| user.id).collect();
+                }
                 let mut guild_id = None;
                 if let Some(source) = &mut self.source {
                     let existing = self.source_channels.get(&update.id).copied();
@@ -2085,6 +2135,18 @@ impl Store {
                 } else {
                     Change::None
                 }
+            }
+            Event::RelationshipAdd(relationship) => {
+                self.apply_relationship_add(&relationship);
+                Change::Structure
+            }
+            Event::RelationshipUpdate(update) => {
+                self.apply_relationship_update(&update);
+                Change::Structure
+            }
+            Event::RelationshipRemove { id } => {
+                self.apply_relationship_remove(id);
+                Change::Structure
             }
             _ => Change::None,
         }

@@ -30,6 +30,7 @@ fn guild(id: u64, channels: usize) -> Guild {
                     name: format!("channel-{index}"),
                     kind: ChannelKind::Text,
                     parent_id: Some(id + 1),
+                    private: false,
                     unread: index == 1,
                     mentions: 0,
                     new_posts: 0,

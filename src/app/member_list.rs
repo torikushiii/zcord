@@ -184,7 +184,7 @@ fn member_row(app: &DiscordApp, guild_id: u64, user: &User, cx: &App) -> impl In
     let nameplate = app
         .store
         .nameplate(Some(guild_id), user.id)
-        .and_then(|nameplate| nameplate_layer(nameplate, user.id, hovered, cx));
+        .and_then(|nameplate| nameplate_layer(nameplate, user.id, ROW_HEIGHT, hovered, cx));
     let plated = nameplate.is_some();
     let row_background = if hovered { theme::HOVER } else { theme::BG };
     let dim = rgba(row_background << 8 | NAMEPLATE_DIM);
@@ -350,13 +350,14 @@ fn palette_color(palette: &str) -> Option<u32> {
     })
 }
 
-fn nameplate_layer(
+pub(crate) fn nameplate_layer(
     nameplate: &Nameplate,
     user_id: u64,
+    height: f32,
     hovered: bool,
     cx: &App,
 ) -> Option<AnyElement> {
-    let image = nameplate_image(&nameplate.asset, user_id, hovered, cx)?;
+    let image = nameplate_image(&nameplate.asset, user_id, height, hovered, cx)?;
     let wash = nameplate
         .palette
         .as_deref()
@@ -419,7 +420,13 @@ fn nameplate_mask(dim: Rgba) -> [AnyElement; 2] {
     ]
 }
 
-fn nameplate_image(asset: &str, user_id: u64, animate: bool, cx: &App) -> Option<AnyElement> {
+fn nameplate_image(
+    asset: &str,
+    user_id: u64,
+    height: f32,
+    animate: bool,
+    cx: &App,
+) -> Option<AnyElement> {
     let spec = |animated| ImageSpec::Nameplate {
         asset: asset.to_owned(),
         animated,
@@ -430,11 +437,11 @@ fn nameplate_image(asset: &str, user_id: u64, animate: bool, cx: &App) -> Option
         .flatten()
     {
         Some(image) => animated::image(image)
-            .h(rpx(ROW_HEIGHT))
+            .h(rpx(height))
             .id(("nameplate", user_id))
             .into_any_element(),
         None => img(images::resolve(&spec(false), pixels, cx)?)
-            .h(rpx(ROW_HEIGHT))
+            .h(rpx(height))
             .into_any_element(),
     };
     Some(

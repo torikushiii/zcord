@@ -1053,6 +1053,32 @@ fn ready_mapping_order_permissions_and_badges() {
 }
 
 #[test]
+fn channel_privacy_follows_the_everyone_view_overwrite() {
+    let store = Store::from_ready(ready());
+    let guild = store.guild_by_id(200).unwrap();
+    assert!(guild.channel(2002).unwrap().private);
+    assert!(!guild.channel(2003).unwrap().private);
+    assert!(store.guild_by_id(100).unwrap().channel(1001).unwrap().private);
+
+    let mut ready = ready();
+    let channel = ready.guilds[0]
+        .channels
+        .as_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|channel| channel.id == 2003)
+        .unwrap();
+    channel.permission_overwrites = Some(vec![model::Overwrite {
+        id: 200,
+        kind: 0,
+        allow: discord::VIEW_CHANNEL,
+        deny: 0,
+    }]);
+    let store = Store::from_ready(ready);
+    assert!(!store.guild_by_id(200).unwrap().channel(2003).unwrap().private);
+}
+
+#[test]
 fn mentioning_message_increments_channel_and_guild_mentions() {
     let mut store = Store::from_ready(ready());
     let message: model::Message = serde_json::from_value(json!({

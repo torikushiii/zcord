@@ -149,17 +149,29 @@ pub fn render(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         .pb_3()
         .overflow_y_scroll()
         .child(
-            rail_item("home", HOME_KEY, "Direct Messages", false, false, app)
+            rail_item("home", HOME_KEY, "Direct Messages", app.is_home(), false, app)
+                .on_click({
+                    let entity = app.entity.clone();
+                    move |_, window, cx| {
+                        entity
+                            .update(cx, |this, cx| this.open_home(window, cx))
+                            .ok();
+                    }
+                })
                 .child(round(
                     div()
                         .flex()
                         .items_center()
                         .justify_center()
                         .size(rpx(ICON))
-                        .bg(rgb(theme::ELEVATED))
+                        .bg(rgb(if app.is_home() {
+                            theme::BLURPLE
+                        } else {
+                            theme::ELEVATED
+                        }))
                         .group_hover("rail-item", |style| style.bg(rgb(theme::BLURPLE)))
                         .child(theme::icon("discord", 28., theme::STRONG)),
-                    Corners::Morph(HOME_KEY, false),
+                    Corners::Morph(HOME_KEY, app.is_home()),
                     app,
                     morphs,
                 ))
