@@ -1303,6 +1303,7 @@ impl Store {
             mapped.activity.clone_from(&existing.activity);
             mapped.custom_status.clone_from(&existing.custom_status);
             mapped.playing = existing.playing;
+            mapped.game.clone_from(&existing.game);
             mapped.role_color = existing.role_color;
             if user.primary_guild.is_none() {
                 mapped.tag.clone_from(&existing.tag);
@@ -1607,7 +1608,9 @@ impl Store {
         };
         match event {
             Event::Ready(ready) => {
+                let sessions = ready.sessions.clone();
                 *self = Self::from_ready(*ready);
+                self.apply_sessions(&sessions);
                 Change::Structure
             }
             Event::SettingsUpdate(update) => {

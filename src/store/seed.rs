@@ -75,6 +75,7 @@ impl Store {
                 }),
                 playing: false,
                 activity: activity.map(Into::into),
+                game: None,
                 custom_status: None,
                 avatar: None,
                 discriminator: None,

@@ -1,25 +1,17 @@
 use super::{Error, OutgoingMessage, ProfileKind, model, properties};
 use reqwest::{
-    Client, RequestBuilder, Response,
+    Client, Request, RequestBuilder, Response,
     header::{AUTHORIZATION, HeaderMap, HeaderValue, REFERER, USER_AGENT},
 };
 use serde::Serialize;
 use serde_json::Value;
-use std::time::Duration;
-use tokio::{
-    sync::Mutex,
-    time::{Instant, sleep_until},
-};
+use std::{collections::HashMap, time::Duration};
+mod rate_limits;
+use rate_limits::{Limiter, Permit, Route};
 
 pub(super) struct Rest {
     client: Client,
-    // A single serialized gate conservatively honors route AND global limits across all clones.
-    gate: Mutex<Gate>,
-}
-
-struct Gate {
-    next_request: Instant,
-    unauthorized: bool,
+    limits: Limiter,
 }
 
 impl Rest {
@@ -65,10 +57,7 @@ impl Rest {
             .map_err(|_| Error::Network)?;
         Ok(Self {
             client,
-            gate: Mutex::new(Gate {
-                next_request: Instant::now(),
-                unauthorized: false,
-            }),
+            limits: Limiter::default(),
         })
     }
 
@@ -258,40 +247,20 @@ impl Rest {
         &self,
         guild_id: Option<u64>,
         channel_id: u64,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         let referer = referer(guild_id, channel_id);
         let url = format!("https://discord.com/api/v9/channels/{channel_id}/typing");
-        {
-            let Ok(mut gate) = self.gate.try_lock() else {
-                return Ok(());
-            };
-            if gate.unauthorized {
-                return Err(Error::Http(401));
-            }
-            if gate.next_request > Instant::now() {
-                return Ok(());
-            }
-            gate.next_request = Instant::now() + Duration::from_secs(1);
-        }
-        let response = self
+        let request = self
             .client
             .post(&url)
             .header(REFERER, &referer)
-            .send()
-            .await
+            .build()
             .map_err(|_| Error::Network)?;
-        let status = response.status();
-        if status.as_u16() == 401 {
-            if let Ok(mut gate) = self.gate.try_lock() {
-                gate.unauthorized = true;
-            }
-            return Err(Error::Http(401));
-        }
-        if !status.is_success() {
-            let value = response.json::<Value>().await.unwrap_or(Value::Null);
-            return Err(classify(status.as_u16(), &value));
-        }
-        Ok(())
+        let Some(permit) = self.limits.try_acquire(Route::of(&request))? else {
+            return Ok(false);
+        };
+        self.execute(request, permit).await?;
+        Ok(true)
     }
 
     pub async fn ack_message(
@@ -337,6 +306,198 @@ impl Rest {
         response.json().await.map_err(|_| Error::Decode)
     }
 
+    pub async fn fetch_user_badges(
+        &self,
+        user_id: u64,
+        guild_id: Option<u64>,
+        channel_id: Option<u64>,
+    ) -> Result<model::UserBadges, Error> {
+        let referer = channel_id.map_or_else(
+            || "https://discord.com/channels/@me".to_owned(),
+            |channel_id| referer(guild_id, channel_id),
+        );
+        let url = format!("https://discord.com/api/v9/users/{user_id}/badges");
+        let response = self
+            .send(|| self.client.get(&url).header(REFERER, &referer))
+            .await?;
+        response.json().await.map_err(|_| Error::Decode)
+    }
+
+    pub async fn fetch_outbox(&self, user_id: u64) -> Result<model::Outbox, Error> {
+        let url = format!("https://discord.com/api/v9/content-inventory/users/{user_id}/outbox");
+        let response = self
+            .send(|| {
+                self.client
+                    .get(&url)
+                    .header(REFERER, "https://discord.com/channels/@me")
+            })
+            .await?;
+        response.json().await.map_err(|_| Error::Decode)
+    }
+
+    pub async fn fetch_application_identities(
+        &self,
+        user_id: u64,
+    ) -> Result<model::ApplicationIdentities, Error> {
+        let url = format!("https://discord.com/api/v9/users/{user_id}/application-identities");
+        let response = self
+            .send(|| {
+                self.client
+                    .get(&url)
+                    .query(&[("with_profiles", "true")])
+                    .header(REFERER, "https://discord.com/channels/@me")
+            })
+            .await?;
+        response.json().await.map_err(|_| Error::Decode)
+    }
+
+    pub async fn fetch_wishlist(&self, wishlist_id: u64) -> Result<model::Wishlist, Error> {
+        let url = format!("https://discord.com/api/v9/wishlists/{wishlist_id}");
+        let response = self
+            .send(|| {
+                self.client
+                    .get(&url)
+                    .query(&[("source", "user_profile")])
+                    .header(REFERER, "https://discord.com/channels/@me")
+            })
+            .await?;
+        response.json().await.map_err(|_| Error::Decode)
+    }
+
+    /// `Ok(None)` means the user has no note; Discord answers 404 with code 10013.
+    pub async fn fetch_note(&self, user_id: u64) -> Result<Option<String>, Error> {
+        let url = format!("https://discord.com/api/v9/users/@me/notes/{user_id}");
+        let response = match self
+            .send(|| {
+                self.client
+                    .get(&url)
+                    .header(REFERER, "https://discord.com/channels/@me")
+            })
+            .await
+        {
+            Ok(response) => response,
+            Err(Error::Http(404)) | Err(Error::Rejected { status: 404, .. }) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let value = response.json::<Value>().await.map_err(|_| Error::Decode)?;
+        Ok(value
+            .get("note")
+            .and_then(Value::as_str)
+            .filter(|note| !note.is_empty())
+            .map(str::to_owned))
+    }
+
+    /// `Ok(None)` means Discord rejected the code (404, invite error 10006).
+    pub async fn fetch_invite(&self, code: &str) -> Result<Option<model::Invite>, Error> {
+        if code.len() < 2
+            || code.len() > 32
+            || !code
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        {
+            return Ok(None);
+        }
+        let url = format!("https://discord.com/api/v9/invites/{code}");
+        let response = match self
+            .send(|| {
+                self.client
+                    .get(&url)
+                    .query(&[("with_counts", "true"), ("with_expiration", "true")])
+                    .header(REFERER, "https://discord.com/channels/@me")
+            })
+            .await
+        {
+            Ok(response) => response,
+            Err(Error::Http(404)) | Err(Error::Rejected { status: 404, .. }) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        response.json().await.map_err(|_| Error::Decode).map(Some)
+    }
+
+    pub async fn fetch_games(&self, ids: &[u64]) -> Result<Vec<model::Game>, Error> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Discord answers at most 20 ids per request (its own client batches by 20); the rest
+        // would otherwise come back absent and be cached as missing.
+        let mut games = Vec::with_capacity(ids.len());
+        for chunk in ids.chunks(LOOKUP_BATCH) {
+            let query: Vec<_> = chunk.iter().map(|id| ("game_ids", id.to_string())).collect();
+            let response = self
+                .send(|| {
+                    self.client
+                        .get("https://discord.com/api/v9/games")
+                        .query(&query)
+                        .header(REFERER, "https://discord.com/channels/@me")
+                })
+                .await?;
+            let value = response.json::<Value>().await.map_err(|_| Error::Decode)?;
+            games.extend(model::parse_entries(value));
+        }
+        Ok(games)
+    }
+
+    pub async fn fetch_public_applications(
+        &self,
+        ids: &[u64],
+    ) -> Result<Vec<model::PublicApplication>, Error> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut applications = Vec::with_capacity(ids.len());
+        for chunk in ids.chunks(LOOKUP_BATCH) {
+            let query: Vec<_> = chunk
+                .iter()
+                .map(|id| ("application_ids", id.to_string()))
+                .collect();
+            let response = self
+                .send(|| {
+                    self.client
+                        .get("https://discord.com/api/v9/applications/public")
+                        .query(&query)
+                        .header(REFERER, "https://discord.com/channels/@me")
+                })
+                .await?;
+            let value = response.json::<Value>().await.map_err(|_| Error::Decode)?;
+            applications.extend(model::parse_entries(value));
+        }
+        Ok(applications)
+    }
+
+    pub async fn fetch_featured_widget_configs(
+        &self,
+    ) -> Result<HashMap<u64, model::WidgetConfig>, Error> {
+        let response = self
+            .send(|| {
+                self.client
+                    .get("https://discord.com/api/v9/widget-configs/featured")
+                    .header(REFERER, "https://discord.com/channels/@me")
+            })
+            .await?;
+        let value = response.json::<Value>().await.map_err(|_| Error::Decode)?;
+        Ok(model::parse_featured_widget_configs(value))
+    }
+
+    pub async fn fetch_application_widget_configs(
+        &self,
+        application_id: u64,
+    ) -> Result<Option<model::WidgetConfig>, Error> {
+        let url =
+            format!("https://discord.com/api/v9/applications/{application_id}/widget-configs");
+        let response = self
+            .send(|| {
+                self.client
+                    .get(&url)
+                    .header(REFERER, "https://discord.com/channels/@me")
+            })
+            .await?;
+        let value = response.json::<Value>().await.map_err(|_| Error::Decode)?;
+        Ok(model::parse_application_widget_configs(
+            value,
+            application_id,
+        ))
+    }
+
     pub async fn fetch_collectible_product(
         &self,
         sku_id: u64,
@@ -354,72 +515,45 @@ impl Rest {
     }
 
     async fn send(&self, request: impl Fn() -> RequestBuilder) -> Result<Response, Error> {
-        let mut gate = self.gate.lock().await;
-        if gate.unauthorized {
+        for attempt in 0..3 {
+            let request = request().build().map_err(|_| Error::Network)?;
+            let permit = self.limits.acquire(Route::of(&request)).await?;
+            match self.execute(request, permit).await {
+                Err(Error::RateLimited { .. }) if attempt < 2 => continue,
+                result => return result,
+            }
+        }
+        unreachable!()
+    }
+
+    async fn execute(&self, request: Request, permit: Permit<'_>) -> Result<Response, Error> {
+        let response = self
+            .client
+            .execute(request)
+            .await
+            .map_err(|_| Error::Network)?;
+        let status = response.status();
+        permit.observe(status.as_u16(), response.headers());
+        if status.as_u16() == 401 {
             return Err(Error::Http(401));
         }
-        for attempt in 0..3 {
-            sleep_until(gate.next_request).await;
-            gate.next_request = Instant::now() + Duration::from_secs(1);
-            let response = request().send().await.map_err(|_| Error::Network)?;
-            let status = response.status();
-            if status.as_u16() == 401 {
-                gate.unauthorized = true;
-            }
-            let headers = response.headers();
-            let retry_header = seconds(
-                headers
-                    .get("retry-after")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.parse().ok()),
-            );
-            if headers
-                .get("x-ratelimit-remaining")
-                .and_then(|v| v.to_str().ok())
-                == Some("0")
-            {
-                let reset = seconds(
-                    headers
-                        .get("x-ratelimit-reset-after")
-                        .and_then(|v| v.to_str().ok())
-                        .and_then(|v| v.parse().ok()),
-                );
-                if let Some(reset) = reset {
-                    gate.next_request = gate.next_request.max(Instant::now() + reset);
-                }
-            }
-            if status.as_u16() == 429 {
-                let value = response.json::<Value>().await.unwrap_or(Value::Null);
-                let body_retry = seconds(value.get("retry_after").and_then(Value::as_f64));
-                let delay = retry_header
-                    .into_iter()
-                    .chain(body_retry)
-                    .max()
-                    .unwrap_or(Duration::from_secs(5))
-                    .max(Duration::from_secs(1));
-                gate.next_request = gate.next_request.max(Instant::now() + delay);
-                if attempt == 2 {
-                    return Err(Error::RateLimited { retry_after: delay });
-                }
-                continue;
-            }
-            if !status.is_success() {
-                if let Some(delay) = retry_header {
-                    gate.next_request = gate.next_request.max(Instant::now() + delay);
-                }
-                if status.as_u16() == 401 {
-                    return Err(Error::Http(401));
-                }
-                let value = response.json::<Value>().await.unwrap_or(Value::Null);
-                return Err(classify(status.as_u16(), &value));
-            }
-            return Ok(response);
+        if status.as_u16() == 429 {
+            let headers = response.headers().clone();
+            let body = response.json::<Value>().await.unwrap_or(Value::Null);
+            return Err(Error::RateLimited {
+                retry_after: permit.retry(&headers, &body),
+            });
         }
-        Err(Error::Decode)
+        if !status.is_success() {
+            let value = response.json::<Value>().await.unwrap_or(Value::Null);
+            return Err(classify(status.as_u16(), &value));
+        }
+        Ok(response)
     }
 }
 
 const ACK_BULK_LIMIT: usize = 100;
+const LOOKUP_BATCH: usize = 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Anchor {
@@ -629,7 +763,7 @@ fn profile_query(kind: ProfileKind, guild_id: Option<u64>) -> Vec<(&'static str,
     let mut query = vec![
         ("type", if modal { "modal" } else { "popout" }.to_owned()),
         ("with_mutual_guilds", modal.to_string()),
-        ("with_mutual_friends", false.to_string()),
+        ("with_mutual_friends", modal.to_string()),
         ("with_mutual_friends_count", modal.to_string()),
     ];
     if let Some(guild_id) = guild_id {
@@ -675,6 +809,162 @@ fn seconds(value: Option<f64>) -> Option<Duration> {
 mod tests {
     use super::*;
     use crate::discord::OutgoingReply;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+        time::{Instant, timeout},
+    };
+
+    fn local_rest() -> Rest {
+        Rest {
+            client: Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(2))
+                .build()
+                .unwrap(),
+            limits: Limiter::default(),
+        }
+    }
+
+    async fn accept_request(listener: &TcpListener) -> TcpStream {
+        timeout(Duration::from_secs(2), async {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut bytes = [0; 1024];
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let count = stream.read(&mut bytes).await.unwrap();
+                assert!(count > 0 && request.len() < 8192);
+                request.extend_from_slice(&bytes[..count]);
+            }
+            stream
+        })
+        .await
+        .unwrap()
+    }
+
+    async fn respond(mut stream: TcpStream, status: &str, headers: &str, body: &str) {
+        stream.write_all(format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{headers}\r\n{body}",
+            body.len(),
+        ).as_bytes()).await.unwrap();
+        stream.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn independent_requests_start_before_either_response_arrives() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/api/v9", listener.local_addr().unwrap());
+        let profile = format!("{base}/users/1/profile");
+        let outbox = format!("{base}/content-inventory/users/1/outbox");
+        let rest = local_rest();
+        let server = async {
+            let first = accept_request(&listener).await;
+            let second = accept_request(&listener).await;
+            respond(first, "200 OK", "", "{}").await;
+            respond(second, "200 OK", "", "{}").await;
+        };
+        let clients = async {
+            let (profile, outbox) = tokio::join!(
+                rest.send(|| rest.client.get(&profile)),
+                rest.send(|| rest.client.get(&outbox)),
+            );
+            assert!(profile.unwrap().status().is_success());
+            assert!(outbox.unwrap().status().is_success());
+        };
+        tokio::join!(server, clients);
+    }
+
+    #[tokio::test]
+    async fn successful_responses_with_no_remaining_requests_wait_for_reset() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/api/v9/users/1/profile",
+            listener.local_addr().unwrap()
+        );
+        let rest = local_rest();
+        let server = async {
+            let first = accept_request(&listener).await;
+            let started = Instant::now();
+            respond(first, "200 OK", "X-RateLimit-Bucket: profile\r\nX-RateLimit-Remaining: 0\r\nX-RateLimit-Reset-After: 0.05\r\n", "{}").await;
+            let second = accept_request(&listener).await;
+            assert!(started.elapsed() >= Duration::from_millis(50));
+            respond(second, "200 OK", "", "{}").await;
+        };
+        let client = async {
+            rest.send(|| rest.client.get(&url)).await.unwrap();
+            rest.send(|| rest.client.get(&url)).await.unwrap();
+        };
+        tokio::join!(server, client);
+    }
+
+    #[tokio::test]
+    async fn rate_limited_requests_retry_after_the_body_delay() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/api/v9/users/1/profile",
+            listener.local_addr().unwrap()
+        );
+        let rest = local_rest();
+        let server = async {
+            let first = accept_request(&listener).await;
+            let started = Instant::now();
+            respond(
+                first,
+                "429 Too Many Requests",
+                "X-RateLimit-Bucket: profile\r\nRetry-After: 0.01\r\n",
+                r#"{"retry_after":0.05,"global":true}"#,
+            )
+            .await;
+            let second = accept_request(&listener).await;
+            assert!(started.elapsed() >= Duration::from_millis(50));
+            respond(second, "200 OK", "", "{}").await;
+        };
+        let ((), result) = tokio::join!(server, rest.send(|| rest.client.get(&url)));
+        assert!(result.unwrap().status().is_success());
+    }
+
+    #[tokio::test]
+    async fn repeated_rate_limits_have_a_bounded_retry_count() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/api/v9/users/1/profile",
+            listener.local_addr().unwrap()
+        );
+        let rest = local_rest();
+        let server = async {
+            for _ in 0..3 {
+                let stream = accept_request(&listener).await;
+                respond(stream, "429 Too Many Requests", "", r#"{"retry_after":0}"#).await;
+            }
+        };
+        let ((), result) = tokio::join!(server, rest.send(|| rest.client.get(&url)));
+        assert!(matches!(result, Err(Error::RateLimited { .. })));
+    }
+
+    #[tokio::test]
+    async fn unauthorized_response_stops_subsequent_dispatches() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/api/v9/users/1/profile",
+            listener.local_addr().unwrap()
+        );
+        let rest = local_rest();
+        let server = async {
+            let stream = accept_request(&listener).await;
+            respond(stream, "401 Unauthorized", "", "{}").await;
+        };
+        let ((), result) = tokio::join!(server, rest.send(|| rest.client.get(&url)));
+        assert!(matches!(result, Err(Error::Http(401))));
+        let result = rest
+            .send(|| rest.client.get(format!("{url}/different-route")))
+            .await;
+        assert!(matches!(result, Err(Error::Http(401))));
+        assert!(
+            timeout(Duration::from_millis(10), listener.accept())
+                .await
+                .is_err()
+        );
+    }
 
     #[test]
     fn emoji_api_reaction_path_encodes_custom_and_unicode() {
@@ -731,11 +1021,11 @@ mod tests {
         );
         assert_eq!(
             encode(ProfileKind::Modal, Some(1191168956170240010)),
-            "type=modal&with_mutual_guilds=true&with_mutual_friends=false&with_mutual_friends_count=true&guild_id=1191168956170240010"
+            "type=modal&with_mutual_guilds=true&with_mutual_friends=true&with_mutual_friends_count=true&guild_id=1191168956170240010"
         );
         assert_eq!(
             encode(ProfileKind::Modal, None),
-            "type=modal&with_mutual_guilds=true&with_mutual_friends=false&with_mutual_friends_count=true"
+            "type=modal&with_mutual_guilds=true&with_mutual_friends=true&with_mutual_friends_count=true"
         );
     }
 

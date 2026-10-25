@@ -556,6 +556,7 @@ fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) -> Option<E
             "PRESENCE_UPDATE" => serde_json::from_value(value)
                 .ok()
                 .map(|v| Event::PresenceUpdate(Box::new(v))),
+            "SESSIONS_REPLACE" => Some(Event::SessionsReplace(model::parse_entries(value))),
             "GUILD_MEMBERS_CHUNK" => serde_json::from_value(value)
                 .ok()
                 .map(|v| Event::MembersChunk(Box::new(v))),

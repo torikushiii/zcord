@@ -5,6 +5,9 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
+const EMBEDDED_ACTIVITY_FLAG: u64 = 1 << 8;
+const PLAY_ACTIVITY_FLAG: u64 = 1 << 5;
+
 #[derive(Default)]
 pub(super) struct Social {
     pub guilds: HashMap<u64, GuildSocial>,
@@ -124,31 +127,81 @@ pub(super) fn activity(activities: &[model::Activity]) -> Option<(String, bool)>
             return Some((text, false));
         }
     }
-    activities.iter().find_map(|a| {
-        let verb = match a.kind {
-            0 => "",
-            1 => "Streaming",
-            2 => "Listening to",
-            3 => "Watching",
-            5 => "Competing in",
-            _ => return None,
-        };
-        let name = if a.kind == 1 {
-            a.details
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .unwrap_or(&a.name)
-        } else {
-            &a.name
-        };
-        (!name.is_empty()).then(|| {
-            if verb.is_empty() {
-                (name.to_owned(), true)
-            } else {
-                (format!("{verb} {name}"), false)
-            }
-        })
+    let activity = playing_activity(activities)?;
+    let verb = activity_verb(activity.kind)?;
+    let name = activity_name(activity);
+    Some(if verb.is_empty() {
+        (name.to_owned(), true)
+    } else {
+        (format!("{verb} {name}"), false)
     })
+}
+
+fn playing_activity(activities: &[model::Activity]) -> Option<&model::Activity> {
+    activities.iter().find(|activity| {
+        activity_verb(activity.kind).is_some() && !activity_name(activity).is_empty()
+    })
+}
+
+fn activity_text(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn activity_image(
+    application_id: Option<u64>,
+    key: Option<&str>,
+    text: Option<&str>,
+) -> Option<ActivityImage> {
+    let key = key?;
+    if key.trim().is_empty() {
+        return None;
+    }
+    let url = if key.bytes().all(|byte| byte.is_ascii_digit()) {
+        let application_id = application_id?;
+        format!("https://cdn.discordapp.com/app-assets/{application_id}/{key}.png")
+    } else if let Some(path) = key.strip_prefix("mp:") {
+        if path.trim().is_empty() {
+            return None;
+        }
+        format!("https://media.discordapp.net/{path}")
+    } else if let Some(id) = key.strip_prefix("spotify:") {
+        if id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+            return None;
+        }
+        format!("https://i.scdn.co/image/{id}")
+    } else {
+        return None;
+    };
+    Some(ActivityImage {
+        url,
+        text: activity_text(text),
+    })
+}
+
+fn activity_verb(kind: u8) -> Option<&'static str> {
+    Some(match kind {
+        0 => "",
+        1 => "Streaming",
+        2 => "Listening to",
+        3 => "Watching",
+        5 => "Competing in",
+        _ => return None,
+    })
+}
+
+fn activity_name(activity: &model::Activity) -> &str {
+    if activity.kind == 1 {
+        activity
+            .details
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&activity.name)
+    } else {
+        &activity.name
+    }
 }
 
 fn map_role(role: &model::Role) -> Role {
@@ -207,6 +260,11 @@ impl Store {
         }
         // The top-level user wins when present; omitted cosmetics retain the nested user's data.
         self.absorb_user(&profile.user.user);
+        if let Some(friends) = &profile.mutual_friends {
+            for friend in friends {
+                self.absorb_user(friend);
+            }
+        }
     }
 
     pub fn member_decoration(&self, guild_id: u64, user_id: u64) -> Option<&Decoration> {
@@ -557,10 +615,70 @@ impl Store {
         }
         if let Some(activities) = &presence.activities {
             let current = activity(activities);
-            user.playing = current.as_ref().is_some_and(|(_, playing)| *playing);
+            let playing = current.as_ref().is_some_and(|(_, playing)| *playing);
+            user.playing = playing;
             user.activity = current.map(|(text, _)| text);
+            // A custom status takes the activity line, but the game still shows on the profile.
+            user.game = playing_activity(activities)
+                .filter(|activity| activity.kind == 0)
+                .map(|activity| {
+                    let assets = activity.assets.as_ref();
+                    let platform = activity
+                        .platform
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|platform| !platform.is_empty())
+                        .map(str::to_lowercase);
+                    let embedded = activity.flags & EMBEDDED_ACTIVITY_FLAG != 0
+                        || platform.as_deref() == Some("embedded");
+                    let playable = activity.flags & PLAY_ACTIVITY_FLAG != 0;
+                    GameActivity {
+                        name: activity.name.clone(),
+                        application_id: activity.application_id,
+                        platform,
+                        embedded,
+                        playable,
+                        started_at: activity
+                            .timestamps
+                            .as_ref()
+                            .and_then(|timestamps| timestamps.start)
+                            .or(activity.created_at)
+                            .and_then(|start| UNIX_EPOCH.checked_add(Duration::from_millis(start))),
+                        details: activity_text(activity.details.as_deref()),
+                        state: activity_text(activity.state.as_deref()),
+                        large_image: activity_image(
+                            activity.application_id,
+                            assets.and_then(|assets| assets.large_image.as_deref()),
+                            assets.and_then(|assets| assets.large_text.as_deref()),
+                        ),
+                        small_image: activity_image(
+                            activity.application_id,
+                            assets.and_then(|assets| assets.small_image.as_deref()),
+                            assets.and_then(|assets| assets.small_text.as_deref()),
+                        ),
+                    }
+                });
             user.custom_status = custom_status_from_presence(activities);
         }
+    }
+
+    pub(super) fn apply_sessions(&mut self, sessions: &[model::Session]) {
+        let Some(session) = sessions
+            .iter()
+            .find(|session| session.session_id == "all")
+            .or_else(|| sessions.iter().find(|session| session.active))
+            .or_else(|| sessions.first())
+        else {
+            return;
+        };
+        let presence = model::Presence {
+            user: None,
+            user_id: Some(self.current_user_id),
+            guild_id: None,
+            status: session.status.clone(),
+            activities: Some(session.activities.clone()),
+        };
+        self.apply_presence(&presence, None);
     }
 
     pub(super) fn apply_own_status(
@@ -951,6 +1069,10 @@ impl Store {
             Event::PresenceUpdate(presence) => {
                 self.apply_presence(&presence, None);
                 presence.guild_id
+            }
+            Event::SessionsReplace(sessions) => {
+                self.apply_sessions(&sessions);
+                None
             }
             Event::MembersChunk(chunk) => {
                 for member in &chunk.members {
