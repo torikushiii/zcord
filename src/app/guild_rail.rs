@@ -25,13 +25,22 @@ const ADD_SERVER_KEY: u64 = 2;
 const DISCOVER_KEY: u64 = 3;
 const CIRCLE: f32 = ICON / 2.;
 const SQUARE: f32 = 16.;
-const MORPH: Duration = Duration::from_millis(180);
+/// Circle to square on hover-in is slower than the snap back on hover-out.
+const MORPH_IN: Duration = Duration::from_millis(300);
+const MORPH_OUT: Duration = Duration::from_millis(180);
 
 struct Morph {
     id: u64,
     started: Instant,
+    duration: Duration,
     from: f32,
     to: f32,
+}
+
+impl Morph {
+    fn running(&self, now: Instant) -> bool {
+        now.duration_since(self.started) < self.duration
+    }
 }
 
 #[derive(Default)]
@@ -43,23 +52,24 @@ pub struct Morphs {
 impl Morphs {
     pub fn start(&mut self, key: u64, hovered: bool) {
         let now = Instant::now();
-        let (from, to) = if hovered {
-            (CIRCLE, SQUARE)
+        let (from, to, duration) = if hovered {
+            (CIRCLE, SQUARE, MORPH_IN)
         } else {
-            (SQUARE, CIRCLE)
+            (SQUARE, CIRCLE, MORPH_OUT)
         };
         let from = self.running(key, now).map_or(from, |morph| {
-            let progress = (now - morph.started).as_secs_f32() / MORPH.as_secs_f32();
+            let progress = (now - morph.started).as_secs_f32() / morph.duration.as_secs_f32();
             morph.from + (morph.to - morph.from) * ease_out_quint()(progress)
         });
         self.active
-            .retain(|_, morph| now.duration_since(morph.started) < MORPH);
+            .retain(|_, morph| morph.running(now));
         self.next_id += 1;
         self.active.insert(
             key,
             Morph {
                 id: self.next_id,
                 started: now,
+                duration,
                 from,
                 to,
             },
@@ -69,7 +79,7 @@ impl Morphs {
     fn running(&self, key: u64, now: Instant) -> Option<&Morph> {
         self.active
             .get(&key)
-            .filter(|morph| now.duration_since(morph.started) < MORPH)
+            .filter(|morph| morph.running(now))
     }
 
     fn clock(&self) -> Option<Instant> {
@@ -79,7 +89,7 @@ impl Morphs {
         let now = Instant::now();
         self.active
             .values()
-            .any(|morph| now.duration_since(morph.started) < MORPH)
+            .any(|morph| morph.running(now))
             .then_some(now)
     }
 }
@@ -109,7 +119,7 @@ fn round<E: Styled + IntoElement + 'static>(
             element
                 .with_animation(
                     ("rail-morph", morph.id),
-                    Animation::new(MORPH).with_easing(ease_out_quint()),
+                    Animation::new(morph.duration).with_easing(ease_out_quint()),
                     move |element, delta| element.rounded(rpx(from + (to - from) * delta)),
                 )
                 .into_any_element()
