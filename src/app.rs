@@ -3,6 +3,7 @@ mod chat;
 mod embeds;
 mod emoji_picker;
 mod forum;
+mod gif_picker;
 mod guild_rail;
 mod invite_card;
 mod lightbox;
@@ -161,6 +162,7 @@ pub struct DiscordApp {
     emoji_picker_animation: u64,
     emoji_picker_closed_at: Option<Instant>,
     pub(crate) emoji_suggest: emoji_picker::Suggest,
+    pub(crate) gifs: gif_picker::Gifs,
     pub(crate) quick_switcher: Option<switcher::QuickSwitcher>,
     quick_switcher_opens: u64,
     recent_channels: crate::quick_switcher::Recent,
@@ -290,6 +292,7 @@ impl DiscordApp {
             emoji_picker_animation: 0,
             emoji_picker_closed_at: None,
             emoji_suggest: Default::default(),
+            gifs: Default::default(),
             quick_switcher: None,
             quick_switcher_opens: 0,
             recent_channels: Default::default(),
@@ -2371,6 +2374,19 @@ impl DiscordApp {
         }
         self.composer
             .update(cx, |input, cx| input.set_value("", window, cx));
+        self.send_content(content, window, cx);
+    }
+
+    pub(crate) fn send_content(
+        &mut self,
+        content: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let channel_id = self.selected_channel_id;
+        if !self.store.can_send(channel_id) {
+            return;
+        }
         let reply = self.reply.take();
         self.typing_sent = None;
         self.unread_since = None;
@@ -2866,7 +2882,10 @@ impl DiscordApp {
         if self.exit_video_fullscreen(window, cx) {
             return;
         }
-        if self.dismiss_emoji_suggestions(cx) || self.close_emoji_picker(cx) {
+        if self.dismiss_emoji_suggestions(cx)
+            || self.close_emoji_picker(cx)
+            || self.close_gif_picker(cx)
+        {
             return;
         }
         if self.close_lightbox(cx) {

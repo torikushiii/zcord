@@ -7,6 +7,7 @@ mod view;
 
 use crate::discord::{self, model, settings_proto};
 use crate::images::ImageSpec;
+use base64::{Engine, engine::general_purpose::STANDARD};
 use mapping::{
     channel_unread, forum_new_posts, local_timestamp, map_components, map_decoration, map_guild,
     map_message, map_name_style, map_nameplate, map_reactions, map_snapshot, map_stickers,
@@ -34,6 +35,8 @@ pub struct Store {
     dm_badges: u64,
     guild_indices: HashMap<u64, usize>,
     folder_layout: Option<Vec<settings_proto::GuildFolder>>,
+    frecency: Option<Vec<u8>>,
+    favorite_gifs: Vec<settings_proto::FavoriteGif>,
     rail_order: Vec<u64>,
     social: social::Social,
     permission_cache: RefCell<HashMap<u64, u64>>,
@@ -776,6 +779,31 @@ impl Store {
         self.permissions(channel_id)
             .is_some_and(|permissions| permissions & discord::MANAGE_MESSAGES != 0)
     }
+
+    pub fn set_frecency(&mut self, proto: Vec<u8>) {
+        match settings_proto::favorite_gifs(&proto) {
+            Ok(gifs) => {
+                self.frecency = Some(proto);
+                self.favorite_gifs = gifs;
+            }
+            Err(_) => {
+                self.frecency = None;
+                self.favorite_gifs.clear();
+            }
+        }
+    }
+
+    pub fn frecency(&self) -> Option<&[u8]> {
+        self.frecency.as_deref()
+    }
+
+    pub fn favorite_gifs(&self) -> &[settings_proto::FavoriteGif] {
+        &self.favorite_gifs
+    }
+
+    pub fn is_favorite_gif(&self, url: &str) -> bool {
+        self.favorite_gifs.iter().any(|gif| gif.url == url)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -802,6 +830,7 @@ pub enum Change {
     Members {
         guild_id: Option<u64>,
     },
+    FavoriteGifs,
 }
 
 impl Store {
@@ -864,6 +893,8 @@ impl Store {
             dm_badges: 0,
             guild_indices: HashMap::new(),
             folder_layout,
+            frecency: None,
+            favorite_gifs: Vec::new(),
             rail_order,
             social: social::Social::default(),
             permission_cache: RefCell::new(HashMap::new()),
@@ -1565,6 +1596,37 @@ impl Store {
         }
     }
 
+    fn apply_frecency(&mut self, update: &model::SettingsUpdate) -> Change {
+        let previous = self.favorite_gifs.clone();
+        let decoded = STANDARD.decode(&update.settings.proto);
+        let proto = match (update.partial, decoded) {
+            (false, Ok(proto)) => Some(proto),
+            (false, Err(_)) => None,
+            (true, Ok(update)) => {
+                let Some(base) = self.frecency.as_deref() else {
+                    return Change::None;
+                };
+                match settings_proto::merge_partial(base, &update) {
+                    Ok(merged) => Some(merged),
+                    Err(_) => return Change::None,
+                }
+            }
+            (true, Err(_)) => return Change::None,
+        };
+        match proto {
+            Some(proto) => self.set_frecency(proto),
+            None => {
+                self.frecency = None;
+                self.favorite_gifs.clear();
+            }
+        }
+        if self.favorite_gifs == previous {
+            Change::None
+        } else {
+            Change::FavoriteGifs
+        }
+    }
+
     fn apply_ack(&mut self, channel_id: u64, message_id: u64) {
         let latest = self.latest_message_id(channel_id);
         let mentions = self.mention_count(channel_id);
@@ -1614,8 +1676,11 @@ impl Store {
                 Change::Structure
             }
             Event::SettingsUpdate(update) => {
-                if update.settings.kind != 1 {
-                    return Change::None;
+                // Proto type 1 is PreloadedUserSettings, type 2 is FrecencyUserSettings.
+                match update.settings.kind {
+                    1 => {}
+                    2 => return self.apply_frecency(&update),
+                    _ => return Change::None,
                 }
                 match settings_proto::decode_base64(&update.settings.proto) {
                     Ok(settings) => {

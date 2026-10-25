@@ -8,6 +8,8 @@ use std::{
 use gpui::{App, Bounds, Global, Pixels, Task, Window, WindowBounds, point, px, size};
 use serde::{Deserialize, Serialize};
 
+use crate::discord::gifs::GifProvider;
+
 const SAVE_DELAY: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -26,6 +28,8 @@ pub struct Settings {
     pub collapsed_categories: HashSet<u64>,
     #[serde(default)]
     pub video_audio: Option<VideoAudio>,
+    #[serde(default)]
+    pub gif_provider: GifProvider,
 }
 
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]

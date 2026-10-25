@@ -1,6 +1,6 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 
-fn varint(mut n: u64) -> Vec<u8> {
+pub(crate) fn varint(mut n: u64) -> Vec<u8> {
     let mut bytes = Vec::new();
     while n >= 128 {
         bytes.push((n as u8 & 127) | 128);
@@ -9,10 +9,15 @@ fn varint(mut n: u64) -> Vec<u8> {
     bytes.push(n as u8);
     bytes
 }
-fn field(field: u32, bytes: &[u8]) -> Vec<u8> {
+pub(crate) fn field(field: u32, bytes: &[u8]) -> Vec<u8> {
     let mut out = varint((u64::from(field) << 3) | 2);
     out.extend(varint(bytes.len() as u64));
     out.extend(bytes);
+    out
+}
+pub(crate) fn uint(field: u32, value: u64) -> Vec<u8> {
+    let mut out = varint(u64::from(field) << 3);
+    out.extend(varint(value));
     out
 }
 pub(crate) fn fixture(packed: bool) -> String {

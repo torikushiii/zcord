@@ -8,7 +8,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::{
     animated,
-    app::DiscordApp,
+    app::{DiscordApp, gif_picker},
     emoji, images,
     store::{EmojiAccess, EmojiChoice},
     theme::{self, rpx},
@@ -18,7 +18,8 @@ const COLUMNS: usize = 9;
 const CELL: f32 = 48.;
 const ROW: f32 = 48.;
 const SIDEBAR: f32 = 48.;
-const HEIGHT: f32 = 488.;
+pub(super) const HEIGHT: f32 = 488.;
+pub(super) const PANEL_WIDTH: f32 = SIDEBAR + COLUMNS as f32 * CELL + 24.;
 const SUGGESTIONS: usize = 10;
 const GRID_EMOJI: f32 = 40.;
 const PICKER_RISE: f32 = 8.;
@@ -91,6 +92,7 @@ pub(crate) struct EmojiPicker {
     scroll: UniformListScrollHandle,
     hovered: Option<Entry>,
     closing: bool,
+    swapped: bool,
     /// Unique per open, so reopening replays the entry animation.
     animation: u64,
     _search_events: Subscription,
@@ -130,16 +132,37 @@ impl DiscordApp {
         {
             return;
         }
-        self.open_emoji_picker(target, position, window, cx);
+        self.open_emoji_picker(target, position, false, window, cx);
     }
 
-    fn open_emoji_picker(
+    pub(super) fn open_emoji_tab(
         &mut self,
-        target: PickerTarget,
         position: Point<Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_emoji_picker(PickerTarget::Composer, position, true, window, cx);
+    }
+
+    /// Removes the composer picker at once (no exit animation) and returns its anchor.
+    pub(super) fn take_emoji_picker(&mut self) -> Option<Point<Pixels>> {
+        let picker = self
+            .emoji_picker
+            .take_if(|picker| picker.target == PickerTarget::Composer)?;
+        self.emoji_picker_closing = None;
+        Some(picker.position)
+    }
+
+    /// `swapped` opens in place of the GIF picker's tab, without the entry animation.
+    fn open_emoji_picker(
+        &mut self,
+        target: PickerTarget,
+        position: Point<Pixels>,
+        swapped: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_gif_picker(cx);
         // A pending close must never remove the picker opened in its place.
         self.emoji_picker_closing = None;
         self.emoji_picker_animation = self.emoji_picker_animation.wrapping_add(1);
@@ -178,6 +201,7 @@ impl DiscordApp {
             scroll: UniformListScrollHandle::new(),
             hovered: None,
             closing: false,
+            swapped,
             animation,
             _search_events: events,
         });
@@ -500,7 +524,7 @@ fn access_note(access: EmojiAccess) -> Option<&'static str> {
     }
 }
 
-pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
+pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyElement> {
     let picker = app.emoji_picker.as_ref()?;
     let closing = picker.closing;
     let close = app.entity.clone();
@@ -516,8 +540,8 @@ pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
         .id("emoji-picker")
         .flex()
         .flex_col()
-        .w(rpx(SIDEBAR + COLUMNS as f32 * CELL + 24.))
-        .h(rpx(HEIGHT))
+        .w(rpx(PANEL_WIDTH))
+        .h(gif_picker::panel_height(picker.position, window))
         .rounded(rpx(8.))
         .border_1()
         .border_color(rgb(theme::BORDER))
@@ -534,9 +558,15 @@ pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
         .child(
             div()
                 .flex_none()
+                .flex()
+                .flex_col()
+                .gap(rpx(12.))
                 .p(rpx(12.))
                 .border_b_1()
                 .border_color(rgb(theme::BORDER))
+                .when(picker.target == PickerTarget::Composer, |this| {
+                    this.child(gif_picker::tabs(app, gif_picker::Tab::Emoji))
+                })
                 .child(
                     div()
                         .flex()
@@ -567,13 +597,19 @@ pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                 .child(sidebar(picker, cx, !closing))
                 .child(grid(app, picker, animate_grid, !closing)),
         )
-        .child(footer(app, picker, cx))
-        .with_animation((key, picker.animation), animation, move |this, delta| {
-            let progress = if closing { 1. - delta } else { delta };
-            this.relative()
-                .top(px((1. - progress) * PICKER_RISE))
-                .opacity(progress)
-        });
+        .child(footer(app, picker, cx));
+    let panel = if picker.swapped && !closing {
+        panel.into_any_element()
+    } else {
+        panel
+            .with_animation((key, picker.animation), animation, move |this, delta| {
+                let progress = if closing { 1. - delta } else { delta };
+                this.relative()
+                    .top(px((1. - progress) * PICKER_RISE))
+                    .opacity(progress)
+            })
+            .into_any_element()
+    };
     Some(
         deferred(
             anchored()

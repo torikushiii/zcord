@@ -270,6 +270,8 @@ impl Store {
                     guild_ids: vec![4, 5, 6],
                 },
             ]),
+            frecency: None,
+            favorite_gifs: Vec::new(),
             rail_order: vec![1, 2, 3, 4, 5, 6],
             social: social::Social::default(),
             permission_cache: RefCell::new(HashMap::new()),

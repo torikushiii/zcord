@@ -1,5 +1,6 @@
 mod commands;
 mod gateway;
+pub mod gifs;
 pub mod model;
 mod permissions;
 mod properties;
@@ -9,6 +10,7 @@ pub mod settings_fixtures;
 pub mod settings_proto;
 
 use futures::channel::mpsc::{self, UnboundedReceiver};
+use gifs::{Gif, GifCategories, GifProvider};
 use std::{
     collections::{HashMap, HashSet},
     fmt,
@@ -43,6 +45,8 @@ enum Control {
 
 struct Inner {
     rest: Result<rest::Rest, Error>,
+    // Tenor/Giphy only: never carries the Discord session headers.
+    gif_client: Result<reqwest::Client, Error>,
     cache: Mutex<Cache>,
     requests: Mutex<HashMap<CacheRequest, Weak<AsyncMutex<()>>>>,
     sends: Mutex<HashMap<u64, tokio::sync::oneshot::Receiver<()>>>,
@@ -76,11 +80,16 @@ impl Session {
         let (sender, receiver) = mpsc::unbounded();
         let (control, shutdown) = watch::channel(Control::Running);
         let rest = rest::Rest::new(&token.0);
+        let gif_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|_| Error::Network);
         let (commands, command_receiver) = tokio::sync::mpsc::unbounded_channel();
         let generation = Arc::new(AtomicU64::new(0));
         let session = Self {
             inner: Arc::new(Inner {
                 rest,
+                gif_client,
                 cache: Mutex::default(),
                 requests: Mutex::default(),
                 sends: Mutex::default(),
@@ -113,6 +122,53 @@ impl Session {
                 .await
         })
         .await
+    }
+
+    pub async fn gif_search(&self, provider: GifProvider, query: &str) -> Result<Vec<Gif>, Error> {
+        match provider {
+            GifProvider::Klipy => {
+                self.rest(async |rest| rest.fetch_gif_search(query).await)
+                    .await
+            }
+            GifProvider::Tenor => gifs::tenor_search(self.gif_client()?, query).await,
+            GifProvider::Giphy => gifs::giphy_search(self.gif_client()?, query).await,
+        }
+    }
+
+    pub async fn gif_trending(&self, provider: GifProvider) -> Result<Vec<Gif>, Error> {
+        match provider {
+            GifProvider::Klipy => {
+                self.rest(async |rest| rest.fetch_gif_trending().await)
+                    .await
+            }
+            GifProvider::Tenor => gifs::tenor_trending(self.gif_client()?).await,
+            GifProvider::Giphy => gifs::giphy_trending(self.gif_client()?).await,
+        }
+    }
+
+    pub async fn gif_categories(&self, provider: GifProvider) -> Result<GifCategories, Error> {
+        match provider {
+            GifProvider::Klipy => {
+                self.rest(async |rest| rest.fetch_gif_categories().await)
+                    .await
+            }
+            GifProvider::Tenor => gifs::tenor_categories_request(self.gif_client()?).await,
+            GifProvider::Giphy => gifs::giphy_categories_request(self.gif_client()?).await,
+        }
+    }
+
+    pub async fn frecency_settings(&self) -> Result<Vec<u8>, Error> {
+        self.rest(async |rest| rest.fetch_frecency_settings().await)
+            .await
+    }
+
+    pub async fn update_frecency_settings(&self, proto: &[u8]) -> Result<Vec<u8>, Error> {
+        self.rest(async |rest| rest.update_frecency_settings(proto).await)
+            .await
+    }
+
+    fn gif_client(&self) -> Result<&reqwest::Client, Error> {
+        self.inner.gif_client.as_ref().map_err(Clone::clone)
     }
 
     pub async fn ack_bulk(
@@ -361,7 +417,6 @@ impl Session {
         Ok(wishlist)
     }
 
-    /// `None` when the user has no note for `user_id`.
     pub async fn note(&self, user_id: u64) -> Result<Option<String>, Error> {
         self.rest(async |rest| rest.fetch_note(user_id).await)
             .await
@@ -1112,6 +1167,7 @@ mod tests {
         Session {
             inner: Arc::new(Inner {
                 rest: Err(Error::Network),
+                gif_client: Err(Error::Network),
                 cache: Mutex::default(),
                 requests: Mutex::default(),
                 sends: Mutex::default(),

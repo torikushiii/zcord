@@ -1,6 +1,7 @@
-//! Guild folders and status from PreloadedUserSettings. Schema:
-//! https://github.com/discord-userdoccers/discord-protos/blob/master/discord_protos/discord_users/v1/PreloadedUserSettings.proto
+//! Guild folders and status from PreloadedUserSettings, favorite GIFs from FrecencyUserSettings.
+//! Schemas: https://github.com/discord-userdoccers/discord-protos/tree/master/discord_protos/discord_users/v1
 use base64::{Engine, engine::general_purpose::STANDARD};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GuildFolder {
@@ -29,6 +30,16 @@ pub struct CustomStatus {
     pub emoji_id: u64,
     pub emoji_name: String,
     pub expires_at_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FavoriteGif {
+    pub url: String,
+    pub src: String,
+    pub format: u32,
+    pub width: u32,
+    pub height: u32,
+    pub order: u32,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -267,6 +278,233 @@ pub fn decode_base64(encoded: &str) -> Result<Settings> {
     decode(&STANDARD.decode(encoded).map_err(|_| DecodeError)?)
 }
 
+struct Field<'a> {
+    number: u32,
+    wire: u8,
+    raw: &'a [u8],
+    value: Option<&'a [u8]>,
+}
+
+fn fields(bytes: &[u8]) -> Result<Vec<Field<'_>>> {
+    let mut reader = Reader::new(bytes);
+    let mut fields = Vec::new();
+    loop {
+        let start = reader.offset;
+        let Some((number, wire)) = reader.tag()? else {
+            break;
+        };
+        let value = match wire {
+            2 => Some(reader.bytes(wire)?),
+            0 => {
+                reader.varint()?;
+                None
+            }
+            1 => {
+                reader.take(8)?;
+                None
+            }
+            5 => {
+                reader.take(4)?;
+                None
+            }
+            _ => {
+                reader.skip(number, wire, 0)?;
+                None
+            }
+        };
+        fields.push(Field {
+            number,
+            wire,
+            raw: &bytes[start..reader.offset],
+            value,
+        });
+    }
+    Ok(fields)
+}
+
+fn favorite_gif(bytes: &[u8]) -> Result<FavoriteGif> {
+    let mut reader = Reader::new(bytes);
+    let mut gif = FavoriteGif {
+        url: String::new(),
+        src: String::new(),
+        format: 0,
+        width: 0,
+        height: 0,
+        order: 0,
+    };
+    while let Some((field, wire)) = reader.tag()? {
+        match (field, wire) {
+            (1, 0) => gif.format = u32::try_from(reader.varint()?).map_err(|_| DecodeError)?,
+            (2, 2) => {
+                gif.src = std::str::from_utf8(reader.bytes(wire)?)
+                    .map_err(|_| DecodeError)?
+                    .to_owned()
+            }
+            (3, 0) => gif.width = u32::try_from(reader.varint()?).map_err(|_| DecodeError)?,
+            (4, 0) => gif.height = u32::try_from(reader.varint()?).map_err(|_| DecodeError)?,
+            (5, 0) => gif.order = u32::try_from(reader.varint()?).map_err(|_| DecodeError)?,
+            _ => reader.skip(field, wire, 0)?,
+        }
+    }
+    Ok(gif)
+}
+
+fn favorite_entry(bytes: &[u8]) -> Result<(String, FavoriteGif)> {
+    let mut reader = Reader::new(bytes);
+    let mut url = None;
+    let mut gif = None;
+    while let Some((field, wire)) = reader.tag()? {
+        match (field, wire) {
+            (1, 2) => {
+                url = Some(
+                    std::str::from_utf8(reader.bytes(wire)?)
+                        .map_err(|_| DecodeError)?
+                        .to_owned(),
+                )
+            }
+            (2, 2) => gif = Some(favorite_gif(reader.bytes(wire)?)?),
+            _ => reader.skip(field, wire, 0)?,
+        }
+    }
+    let url = url.filter(|url| !url.is_empty()).ok_or(DecodeError)?;
+    let mut gif = gif.unwrap_or(FavoriteGif {
+        url: String::new(),
+        src: String::new(),
+        format: 0,
+        width: 0,
+        height: 0,
+        order: 0,
+    });
+    gif.url = url.clone();
+    Ok((url, gif))
+}
+
+pub fn favorite_gifs(frecency: &[u8]) -> Result<Vec<FavoriteGif>> {
+    let mut gifs = HashMap::new();
+    for field in fields(frecency)? {
+        if field.number != 2 {
+            continue;
+        }
+        for entry in fields(field.value.ok_or(DecodeError)?)? {
+            if entry.number != 1 {
+                continue;
+            }
+            let (url, gif) = favorite_entry(entry.value.ok_or(DecodeError)?)?;
+            gifs.insert(url, gif);
+        }
+    }
+    let mut gifs: Vec<FavoriteGif> = gifs.into_values().collect();
+    gifs.sort_by(|left, right| {
+        right
+            .order
+            .cmp(&left.order)
+            .then_with(|| left.url.cmp(&right.url))
+    });
+    Ok(gifs)
+}
+
+fn push_varint(out: &mut Vec<u8>, mut value: u64) {
+    while value >= 128 {
+        out.push((value as u8 & 127) | 128);
+        value >>= 7;
+    }
+    out.push(value as u8);
+}
+
+fn push_bytes(out: &mut Vec<u8>, field: u32, value: &[u8]) {
+    push_varint(out, (u64::from(field) << 3) | 2);
+    push_varint(out, value.len() as u64);
+    out.extend_from_slice(value);
+}
+
+fn push_uint(out: &mut Vec<u8>, field: u32, value: u64) {
+    push_varint(out, u64::from(field) << 3);
+    push_varint(out, value);
+}
+
+fn favorite_entry_bytes(gif: &FavoriteGif) -> Vec<u8> {
+    let mut value = Vec::new();
+    push_uint(&mut value, 1, u64::from(gif.format));
+    push_bytes(&mut value, 2, gif.src.as_bytes());
+    push_uint(&mut value, 3, u64::from(gif.width));
+    push_uint(&mut value, 4, u64::from(gif.height));
+    push_uint(&mut value, 5, u64::from(gif.order));
+    let mut entry = Vec::new();
+    push_bytes(&mut entry, 1, gif.url.as_bytes());
+    push_bytes(&mut entry, 2, &value);
+    // Map entries are a repeated message field, not bare key/value pairs.
+    let mut wrapped = Vec::new();
+    push_bytes(&mut wrapped, 1, &entry);
+    wrapped
+}
+
+pub fn with_favorite_gifs(frecency: &[u8], gifs: &[FavoriteGif]) -> Result<Vec<u8>> {
+    let top = fields(frecency)?;
+    let mut preserved = Vec::new();
+    for field in &top {
+        if field.number != 2 {
+            continue;
+        }
+        let Some(value) = field.value else {
+            return Err(DecodeError);
+        };
+        for sub in fields(value)? {
+            if sub.number == 1 && sub.wire == 2 {
+                continue;
+            }
+            preserved.push(sub.raw);
+        }
+    }
+    let mut content = Vec::new();
+    for raw in preserved {
+        content.extend_from_slice(raw);
+    }
+    for gif in gifs {
+        content.extend(favorite_entry_bytes(gif));
+    }
+    let mut out = Vec::with_capacity(frecency.len() + content.len());
+    let mut written = false;
+    for field in &top {
+        if field.number == 2 {
+            if !written {
+                push_bytes(&mut out, 2, &content);
+                written = true;
+            }
+        } else {
+            out.extend_from_slice(field.raw);
+        }
+    }
+    if !written {
+        push_bytes(&mut out, 2, &content);
+    }
+    Ok(out)
+}
+
+pub fn merge_partial(base: &[u8], update: &[u8]) -> Result<Vec<u8>> {
+    let base = fields(base)?;
+    let update = fields(update)?;
+    let numbers: HashSet<u32> = update.iter().map(|field| field.number).collect();
+    let mut merged = Vec::with_capacity(base.len() + update.len());
+    let mut replaced = HashSet::new();
+    for field in &base {
+        if numbers.contains(&field.number) {
+            if replaced.insert(field.number) {
+                for next in update.iter().filter(|next| next.number == field.number) {
+                    merged.extend_from_slice(next.raw);
+                }
+            }
+        } else {
+            merged.extend_from_slice(field.raw);
+        }
+    }
+    for field in &update {
+        if !base.iter().any(|existing| existing.number == field.number) {
+            merged.extend_from_slice(field.raw);
+        }
+    }
+    Ok(merged)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -350,5 +588,172 @@ pub(crate) mod tests {
             .custom_status
             .is_some()
         );
+    }
+
+    use crate::discord::settings_fixtures::{field, uint};
+
+    fn favorite(url: &str, src: &str, order: u32) -> FavoriteGif {
+        FavoriteGif {
+            url: url.into(),
+            src: src.into(),
+            format: 1,
+            width: 200,
+            height: 150,
+            order,
+        }
+    }
+
+    fn favorite_value(gif: &FavoriteGif) -> Vec<u8> {
+        let mut value = uint(1, u64::from(gif.format));
+        value.extend(field(2, gif.src.as_bytes()));
+        value.extend(uint(3, u64::from(gif.width)));
+        value.extend(uint(4, u64::from(gif.height)));
+        value.extend(uint(5, u64::from(gif.order)));
+        value
+    }
+
+    fn favorite_map_entry(gif: &FavoriteGif) -> Vec<u8> {
+        let mut entry = field(1, gif.url.as_bytes());
+        entry.extend(field(2, &favorite_value(gif)));
+        entry
+    }
+
+    fn frecency_fixture(gifs: &[FavoriteGif]) -> Vec<u8> {
+        let mut favorites = uint(2, 1);
+        for gif in gifs {
+            favorites.extend(field(1, &favorite_map_entry(gif)));
+        }
+        favorites.extend(field(9, b"unknown-subfield"));
+        let mut bytes = field(1, &uint(1, 3));
+        bytes.extend(field(2, &favorites));
+        bytes.extend(field(5, &field(1, &[])));
+        bytes.extend(field(6, &[8, 5]));
+        bytes.extend(field(99, b"unknown-top-level"));
+        bytes
+    }
+
+    #[test]
+    fn favorite_gifs_decode_and_sort_newest_first() {
+        let older = favorite(
+            "https://klipy.com/gifs/older",
+            "https://static.klipy.com/older.webp",
+            3,
+        );
+        let newer = favorite(
+            "https://klipy.com/gifs/newer",
+            "https://static.klipy.com/newer.webp",
+            9,
+        );
+        let decoded = favorite_gifs(&frecency_fixture(&[newer.clone(), older.clone()])).unwrap();
+        assert_eq!(decoded, [newer, older]);
+        assert!(favorite_gifs(&[]).unwrap().is_empty());
+        assert!(favorite_gifs(&frecency_fixture(&[])).unwrap().is_empty());
+    }
+
+    #[test]
+    fn with_favorite_gifs_replaces_only_map_entries() {
+        let old = favorite(
+            "https://klipy.com/gifs/old",
+            "https://static.klipy.com/old.webp",
+            1,
+        );
+        let first = favorite(
+            "https://klipy.com/gifs/first",
+            "https://static.klipy.com/first.webp",
+            2,
+        );
+        let second = favorite(
+            "https://klipy.com/gifs/second",
+            "https://static.klipy.com/second.webp",
+            7,
+        );
+        let original = frecency_fixture(&[old]);
+
+        let mut expected_favorites = uint(2, 1);
+        expected_favorites.extend(field(9, b"unknown-subfield"));
+        expected_favorites.extend(field(1, &favorite_map_entry(&first)));
+        expected_favorites.extend(field(1, &favorite_map_entry(&second)));
+        let mut expected = field(1, &uint(1, 3));
+        expected.extend(field(2, &expected_favorites));
+        expected.extend(field(5, &field(1, &[])));
+        expected.extend(field(6, &[8, 5]));
+        expected.extend(field(99, b"unknown-top-level"));
+
+        let updated = with_favorite_gifs(&original, &[first.clone(), second.clone()]).unwrap();
+        assert_eq!(updated, expected);
+        assert_eq!(favorite_gifs(&updated).unwrap(), [second, first]);
+
+        let mut expected_favorites = uint(2, 1);
+        expected_favorites.extend(field(9, b"unknown-subfield"));
+        let mut expected_empty = field(1, &uint(1, 3));
+        expected_empty.extend(field(2, &expected_favorites));
+        expected_empty.extend(field(5, &field(1, &[])));
+        expected_empty.extend(field(6, &[8, 5]));
+        expected_empty.extend(field(99, b"unknown-top-level"));
+
+        let removed = with_favorite_gifs(&updated, &[]).unwrap();
+        assert_eq!(removed, expected_empty);
+        assert!(favorite_gifs(&removed).unwrap().is_empty());
+    }
+
+    #[test]
+    fn with_favorite_gifs_creates_the_favorites_field_when_missing() {
+        let gif = favorite(
+            "https://klipy.com/gifs/new",
+            "https://static.klipy.com/new.webp",
+            1,
+        );
+        let bare = field(1, &uint(1, 3));
+        let updated = with_favorite_gifs(&bare, std::slice::from_ref(&gif)).unwrap();
+        assert_eq!(&updated[..bare.len()], &bare[..]);
+        assert_eq!(favorite_gifs(&updated).unwrap(), [gif]);
+    }
+
+    #[test]
+    fn merge_partial_replaces_only_the_fields_carried_by_the_update() {
+        let base = [field(1, b"one"), field(2, b"two"), field(5, b"five")].concat();
+        let update = [field(2, b"new-two"), field(6, b"six"), uint(7, 9)].concat();
+        assert_eq!(
+            merge_partial(&base, &update).unwrap(),
+            [
+                field(1, b"one"),
+                field(2, b"new-two"),
+                field(5, b"five"),
+                field(6, b"six"),
+                uint(7, 9)
+            ]
+            .concat()
+        );
+        let repeated = [field(1, b"one"), field(2, b"a"), field(2, b"b")].concat();
+        let replacement = [field(2, b"c"), field(2, b"d")].concat();
+        assert_eq!(
+            merge_partial(&repeated, &replacement).unwrap(),
+            [field(1, b"one"), field(2, b"c"), field(2, b"d")].concat()
+        );
+        assert_eq!(merge_partial(&[], &[]).unwrap(), Vec::<u8>::new());
+        assert_eq!(merge_partial(&base, &[]).unwrap(), base);
+    }
+
+    #[test]
+    fn malformed_frecency_input_is_rejected_without_panicking() {
+        for bytes in [
+            &[18][..],
+            &[18, 5, 10][..],
+            &[18, 3, 10, 1, b'x'][..],
+            &[0xff; 11][..],
+            &[0][..],
+        ] {
+            assert!(favorite_gifs(bytes).is_err());
+        }
+        for bytes in [&[18][..], &[18, 5, 10][..], &[0xff; 11][..], &[0][..]] {
+            assert!(with_favorite_gifs(bytes, &[]).is_err());
+        }
+        let valid = frecency_fixture(&[]);
+        for length in 0..valid.len() {
+            let _ = favorite_gifs(&valid[..length]);
+            let _ = with_favorite_gifs(&valid[..length], &[]);
+            let _ = merge_partial(&valid[..length], &valid);
+        }
+        assert!(merge_partial(&valid, &[18, 9]).is_err());
     }
 }

@@ -1,4 +1,5 @@
-use super::{Error, OutgoingMessage, ProfileKind, model, properties};
+use super::{Error, OutgoingMessage, ProfileKind, gifs, model, properties};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use reqwest::{
     Client, Request, RequestBuilder, Response,
     header::{AUTHORIZATION, HeaderMap, HeaderValue, REFERER, USER_AGENT},
@@ -514,6 +515,83 @@ impl Rest {
         response.json().await.map_err(|_| Error::Decode)
     }
 
+    pub async fn fetch_gif_search(&self, query: &str) -> Result<Vec<gifs::Gif>, Error> {
+        let value = self
+            .fetch_gif_json(
+                "https://discord.com/api/v9/gifs/search",
+                &[
+                    ("q", query),
+                    ("media_format", "webp"),
+                    ("locale", properties::LOCALE),
+                    ("limit", "50"),
+                ],
+            )
+            .await?;
+        Ok(gifs::klipy_gifs(&value))
+    }
+
+    pub async fn fetch_gif_trending(&self) -> Result<Vec<gifs::Gif>, Error> {
+        let value = self
+            .fetch_gif_json(
+                "https://discord.com/api/v9/gifs/trending-gifs",
+                &[
+                    ("media_format", "webp"),
+                    ("locale", properties::LOCALE),
+                    ("limit", "50"),
+                ],
+            )
+            .await?;
+        Ok(gifs::klipy_gifs(&value))
+    }
+
+    pub async fn fetch_gif_categories(&self) -> Result<gifs::GifCategories, Error> {
+        let value = self
+            .fetch_gif_json(
+                "https://discord.com/api/v9/gifs/trending",
+                &[("media_format", "webp"), ("locale", properties::LOCALE)],
+            )
+            .await?;
+        Ok(gifs::klipy_categories(&value))
+    }
+
+    async fn fetch_gif_json(&self, url: &str, query: &[(&str, &str)]) -> Result<Value, Error> {
+        let response = self
+            .send(|| {
+                self.client
+                    .get(url)
+                    .query(query)
+                    .header(REFERER, "https://discord.com/channels/@me")
+            })
+            .await?;
+        response.json().await.map_err(|_| Error::Decode)
+    }
+
+    pub async fn fetch_frecency_settings(&self) -> Result<Vec<u8>, Error> {
+        let response = self
+            .send(|| {
+                self.client
+                    .get(FRECENCY_SETTINGS)
+                    .header(REFERER, "https://discord.com/channels/@me")
+            })
+            .await?;
+        let value = response.json::<Value>().await.map_err(|_| Error::Decode)?;
+        decode_settings(&value)
+    }
+
+    pub async fn update_frecency_settings(&self, proto: &[u8]) -> Result<Vec<u8>, Error> {
+        let body = serde_json::json!({"settings": STANDARD.encode(proto)});
+        let response = self
+            .send(|| {
+                self.client
+                    .patch(FRECENCY_SETTINGS)
+                    .header(REFERER, "https://discord.com/channels/@me")
+                    .json(&body)
+            })
+            .await?;
+        let value = response.json::<Value>().await.map_err(|_| Error::Decode)?;
+        decode_settings(&value)
+    }
+
     async fn send(&self, request: impl Fn() -> RequestBuilder) -> Result<Response, Error> {
         for attempt in 0..3 {
             let request = request().build().map_err(|_| Error::Network)?;
@@ -554,6 +632,7 @@ impl Rest {
 
 const ACK_BULK_LIMIT: usize = 100;
 const LOOKUP_BATCH: usize = 20;
+const FRECENCY_SETTINGS: &str = "https://discord.com/api/v9/users/@me/settings-proto/2";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Anchor {
@@ -717,6 +796,14 @@ fn message_body<'a>(
             }),
         flags: 0,
     }
+}
+
+fn decode_settings(value: &Value) -> Result<Vec<u8>, Error> {
+    let encoded = value
+        .get("settings")
+        .and_then(Value::as_str)
+        .ok_or(Error::Decode)?;
+    STANDARD.decode(encoded).map_err(|_| Error::Decode)
 }
 
 fn classify(status: u16, value: &Value) -> Error {

@@ -1,6 +1,9 @@
 use super::*;
+use crate::discord::settings_fixtures::{field, uint};
+use crate::discord::settings_proto::FavoriteGif;
 use crate::discord::{Event, settings_fixtures};
 use crate::images::ImageSpec;
+use base64::{Engine, engine::general_purpose::STANDARD};
 use chrono::{Datelike, Timelike};
 
 use serde_json::json;
@@ -3719,4 +3722,150 @@ fn invite_view_prefers_custom_banner_and_resolves_game_icons() {
     );
     let group: model::Invite = serde_json::from_value(json!({"code": "group"})).unwrap();
     assert!(Invite::from_model(&group, &[]).is_none());
+}
+
+fn favorite_gif(url: &str, order: u32) -> FavoriteGif {
+    FavoriteGif {
+        url: url.into(),
+        src: format!("https://static.klipy.com/{order}.webp"),
+        format: 1,
+        width: 200,
+        height: 150,
+        order,
+    }
+}
+
+fn favorite_entry(gif: &FavoriteGif) -> Vec<u8> {
+    let mut value = uint(1, u64::from(gif.format));
+    value.extend(field(2, gif.src.as_bytes()));
+    value.extend(uint(3, u64::from(gif.width)));
+    value.extend(uint(4, u64::from(gif.height)));
+    value.extend(uint(5, u64::from(gif.order)));
+    let mut entry = field(1, gif.url.as_bytes());
+    entry.extend(field(2, &value));
+    entry
+}
+
+fn frecency_proto(gifs: &[FavoriteGif], hide_tooltip: bool) -> Vec<u8> {
+    let mut favorites = if hide_tooltip { uint(2, 1) } else { Vec::new() };
+    for gif in gifs {
+        favorites.extend(field(1, &favorite_entry(gif)));
+    }
+    let mut bytes = field(1, &uint(1, 3));
+    bytes.extend(field(2, &favorites));
+    bytes.extend(field(5, &field(1, &[])));
+    bytes
+}
+
+fn settings_update(kind: u8, proto: &[u8], partial: bool) -> Event {
+    Event::SettingsUpdate(Box::new(model::SettingsUpdate {
+        settings: model::SettingsProto {
+            kind,
+            proto: STANDARD.encode(proto),
+        },
+        partial,
+    }))
+}
+
+#[test]
+fn frecency_full_updates_replace_favorites_and_report_the_change() {
+    let mut store = Store::from_ready(ready());
+    assert!(store.frecency().is_none());
+    assert!(store.favorite_gifs().is_empty());
+    let older = favorite_gif("https://klipy.com/gifs/older", 1);
+    let newer = favorite_gif("https://klipy.com/gifs/newer", 2);
+    let proto = frecency_proto(&[older.clone(), newer.clone()], false);
+    assert_eq!(
+        store.apply(settings_update(2, &proto, false)),
+        Change::FavoriteGifs
+    );
+    assert_eq!(store.frecency(), Some(proto.as_slice()));
+    assert_eq!(store.favorite_gifs(), [newer.clone(), older.clone()]);
+    assert!(store.is_favorite_gif(&newer.url));
+    assert!(!store.is_favorite_gif("https://klipy.com/gifs/missing"));
+    assert_eq!(store.apply(settings_update(2, &proto, false)), Change::None);
+}
+
+#[test]
+fn frecency_partial_updates_merge_onto_the_known_state() {
+    let mut store = Store::from_ready(ready());
+    let first = favorite_gif("https://klipy.com/gifs/first", 1);
+    assert_eq!(
+        store.apply(settings_update(
+            2,
+            &frecency_proto(&[first.clone()], true),
+            false
+        )),
+        Change::FavoriteGifs
+    );
+    let versions = field(1, &uint(1, 4));
+    assert_eq!(
+        store.apply(settings_update(2, &versions, true)),
+        Change::None
+    );
+    assert_eq!(store.favorite_gifs(), [first.clone()]);
+
+    let unchanged = field(2, &[uint(2, 0), field(1, &favorite_entry(&first))].concat());
+    assert_eq!(
+        store.apply(settings_update(2, &unchanged, true)),
+        Change::None
+    );
+    assert_eq!(store.favorite_gifs(), [first]);
+
+    let second = favorite_gif("https://klipy.com/gifs/second", 5);
+    let update = field(2, &field(1, &favorite_entry(&second)));
+    assert_eq!(
+        store.apply(settings_update(2, &update, true)),
+        Change::FavoriteGifs
+    );
+    assert_eq!(store.favorite_gifs(), [second]);
+    let expected = [
+        field(1, &uint(1, 4)),
+        field(
+            2,
+            &field(
+                1,
+                &favorite_entry(&favorite_gif("https://klipy.com/gifs/second", 5)),
+            ),
+        ),
+        field(5, &field(1, &[])),
+    ]
+    .concat();
+    assert_eq!(store.frecency(), Some(expected.as_slice()));
+}
+
+#[test]
+fn frecency_partial_updates_are_ignored_before_the_state_is_known() {
+    let mut store = Store::from_ready(ready());
+    let gif = favorite_gif("https://klipy.com/gifs/unknown", 1);
+    let update = field(2, &field(1, &favorite_entry(&gif)));
+    assert_eq!(store.apply(settings_update(2, &update, true)), Change::None);
+    assert!(store.frecency().is_none());
+    assert!(store.favorite_gifs().is_empty());
+}
+
+#[test]
+fn malformed_frecency_updates_clear_known_state() {
+    let mut store = Store::from_ready(ready());
+    let gif = favorite_gif("https://klipy.com/gifs/existing", 1);
+    store.set_frecency(frecency_proto(&[gif.clone()], false));
+    assert_eq!(store.favorite_gifs(), [gif.clone()]);
+    assert_eq!(
+        store.apply(settings_update(2, &[18, 5, 10], false)),
+        Change::FavoriteGifs
+    );
+    assert!(store.frecency().is_none());
+    assert!(store.favorite_gifs().is_empty());
+
+    store.set_frecency(frecency_proto(&[gif], false));
+    let broken = Event::SettingsUpdate(Box::new(model::SettingsUpdate {
+        settings: model::SettingsProto {
+            kind: 2,
+            proto: "not base64!".into(),
+        },
+        partial: false,
+    }));
+    assert_eq!(store.apply(broken), Change::FavoriteGifs);
+    assert!(store.frecency().is_none());
+    assert!(store.favorite_gifs().is_empty());
 }
