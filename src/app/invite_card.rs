@@ -18,7 +18,6 @@ const ICON_OVERHANG: f32 = ICON / 2. + ICON_RING;
 const BUTTON_GREEN: u32 = 0x00863A;
 const BUTTON_GREEN_HOVER: u32 = 0x047B37;
 
-/// Server invite cards for the invite links in a message, in link order.
 pub(super) fn cards(app: &DiscordApp, message: &Message, cx: &App) -> Vec<AnyElement> {
     invite_codes(&message.content)
         .into_iter()

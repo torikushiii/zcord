@@ -52,7 +52,6 @@ pub struct Section {
 pub struct Recent(VecDeque<u64>);
 
 impl Recent {
-    /// Move `channel_id` to the front; dedupe; cap at 50 entries.
     pub fn visit(&mut self, channel_id: u64) {
         self.0.retain(|id| *id != channel_id);
         self.0.push_front(channel_id);

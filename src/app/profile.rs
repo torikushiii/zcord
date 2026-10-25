@@ -1870,7 +1870,6 @@ fn badge_art(url: &str) -> ImageSpec {
     }
 }
 
-/// Rich badge card, centred above the badge like Discord's.
 fn badge_tooltip(tip: &BadgeTip, cx: &App) -> impl IntoElement {
     let art = tip
         .art
