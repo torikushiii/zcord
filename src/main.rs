@@ -11,6 +11,7 @@ mod fonts;
 mod images;
 mod markdown;
 mod player;
+mod quick_switcher;
 mod settings;
 mod store;
 mod theme;
@@ -71,6 +72,8 @@ fn main() {
                 KeyBinding::new("secondary-0", ResetZoom, None),
                 KeyBinding::new("escape", app::JumpToPresent, None),
                 KeyBinding::new("shift-escape", app::MarkGuildRead, None),
+                KeyBinding::new("secondary-k", app::QuickSwitch, None),
+                KeyBinding::new("secondary-t", app::QuickSwitch, None),
                 KeyBinding::new("up", app::ComposerUp, Some("Input")),
                 KeyBinding::new("down", app::ComposerDown, Some("Input")),
                 KeyBinding::new("tab", app::ComposerTab, Some("Input")),

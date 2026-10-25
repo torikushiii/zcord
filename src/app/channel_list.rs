@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant, SystemTime};
+use std::{
+    collections::{HashMap, HashSet},
+    time::{Duration, Instant, SystemTime},
+};
 
 use gpui::{prelude::*, *};
 use gpui_component::tooltip::Tooltip;
@@ -16,6 +19,9 @@ pub const WIDTH: f32 = 303.;
 const HEADER_HEIGHT: f32 = 48.;
 /// Discord's banner is 135px tall in its 240px sidebar; keep the height and crop wider.
 const BANNER_HEIGHT: f32 = 135.;
+const CHANNEL_HEIGHT: f32 = 32.;
+const CHANNEL_GAP: f32 = 2.;
+pub(crate) const FOLD: Duration = Duration::from_millis(200);
 
 #[cfg(test)]
 mod tests;
@@ -28,12 +34,28 @@ enum Row {
     Channel { category: usize, channel: usize },
 }
 
+struct Fold {
+    started: Instant,
+    from: f32,
+    to: f32,
+}
+
+impl Fold {
+    fn openness(&self, now: Instant) -> Option<f32> {
+        let progress = now.duration_since(self.started).as_secs_f32() / FOLD.as_secs_f32();
+        (progress < 1.).then(|| self.from + (self.to - self.from) * ease_out_quint()(progress))
+    }
+}
+
 /// Flatten the channel hierarchy only when the server or its structure changes.
 pub(crate) struct Rows {
     state: ListState,
     rows: Vec<Row>,
     guild_id: Option<u64>,
     banner: Option<ImageSpec>,
+    collapsed: HashSet<u64>,
+    folds: HashMap<u64, Fold>,
+    kept: u64,
     account_menu: Option<Point<Pixels>>,
     account_menu_closed_at: Option<Instant>,
     subtitle_hovered_once: bool,
@@ -46,18 +68,65 @@ impl Rows {
             rows: vec![Row::Shortcuts],
             guild_id: None,
             banner: None,
+            collapsed: HashSet::new(),
+            folds: HashMap::new(),
+            kept: 0,
             account_menu: None,
             account_menu_closed_at: None,
             subtitle_hovered_once: false,
         }
     }
 
-    #[cfg(test)]
-    pub fn sync(&mut self, guild: Option<&Guild>) {
-        self.sync_with_banner(guild, None);
+    pub fn with_collapsed(collapsed: HashSet<u64>) -> Self {
+        Self {
+            collapsed,
+            ..Self::new()
+        }
     }
 
-    pub fn sync_with_banner(&mut self, guild: Option<&Guild>, banner: Option<ImageSpec>) {
+    #[cfg(test)]
+    pub fn sync(&mut self, guild: Option<&Guild>, selected_channel_id: u64) {
+        self.sync_with_banner(guild, None, selected_channel_id);
+    }
+
+    /// Returns whether the category is now collapsed.
+    pub(crate) fn toggle_collapsed(&mut self, id: u64) -> bool {
+        let now = Instant::now();
+        let from = self.openness(id, now);
+        let collapsed = !self.collapsed.remove(&id) && self.collapsed.insert(id);
+        self.folds.retain(|_, fold| fold.openness(now).is_some());
+        self.folds.insert(
+            id,
+            Fold {
+                started: now,
+                from,
+                to: if collapsed { 0. } else { 1. },
+            },
+        );
+        collapsed
+    }
+
+    /// 1 when the category is expanded, 0 when collapsed, in between while it folds.
+    fn openness(&self, id: u64, now: Instant) -> f32 {
+        self.folds
+            .get(&id)
+            .and_then(|fold| fold.openness(now))
+            .unwrap_or(if self.collapsed.contains(&id) { 0. } else { 1. })
+    }
+
+    fn folding(&self, id: u64, now: Instant) -> bool {
+        self.folds
+            .get(&id)
+            .is_some_and(|fold| fold.openness(now).is_some())
+    }
+
+    pub fn sync_with_banner(
+        &mut self,
+        guild: Option<&Guild>,
+        banner: Option<ImageSpec>,
+        selected_channel_id: u64,
+    ) {
+        let now = Instant::now();
         let mut rows = Vec::new();
         if banner.is_some() {
             rows.push(Row::Banner);
@@ -69,8 +138,15 @@ impl Rows {
             .enumerate()
         {
             rows.push(Row::Category(category));
+            // Collapsing channels stay listed until they have folded away.
+            let collapsed = self.collapsed.contains(&group.id) && !self.folding(group.id, now);
             rows.extend(
-                (0..group.channels.len()).map(|channel| Row::Channel { category, channel }),
+                (0..group.channels.len())
+                    // Discord keeps the selected channel visible under a collapsed category.
+                    .filter(|&channel| {
+                        !collapsed || group.channels[channel].id == selected_channel_id
+                    })
+                    .map(|channel| Row::Channel { category, channel }),
             );
         }
         let guild_id = guild.map(|guild| guild.id);
@@ -96,6 +172,7 @@ impl Rows {
         }
         self.guild_id = guild_id;
         self.rows = rows;
+        self.kept = selected_channel_id;
         self.banner = banner;
     }
 
@@ -131,7 +208,7 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> impl IntoElement +
         .border_color(rgb(theme::BORDER))
         .when(!banner, |this| this.child(guild_header(guild, 1.)))
         .child(
-            list(app.channel_rows.state.clone(), move |index, _, cx| {
+            list(app.channel_rows.state.clone(), move |index, window, cx| {
                 let Some(app_entity) = entity.upgrade() else {
                     return div().into_any_element();
                 };
@@ -148,19 +225,50 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> impl IntoElement +
                         .map(|channel| channel.id),
                     _ => None,
                 };
+                let group = match row {
+                    Row::Category(category) | Row::Channel { category, .. } => {
+                        app.guild().and_then(|guild| guild.categories.get(category))
+                    }
+                    _ => None,
+                };
+                let rows = &app.channel_rows;
+                let now = Instant::now();
+                if group.is_some_and(|group| rows.folding(group.id, now)) {
+                    window.request_animation_frame();
+                }
+                let openness = group.map_or(1., |group| match row {
+                    Row::Channel { channel, .. }
+                        if group
+                            .channels
+                            .get(channel)
+                            .is_some_and(|channel| channel.id == rows.kept) =>
+                    {
+                        1.
+                    }
+                    _ => rows.openness(group.id, now),
+                });
+                let category = match row {
+                    Row::Category(_) => group.map(|group| group.id).filter(|id| *id != 0),
+                    _ => None,
+                };
                 if row == Row::Banner {
                     return banner_row(app.channel_rows.banner.as_ref(), cx).into_any_element();
                 }
                 let entity = app.entity.clone();
-                row_content(app.guild(), row, app.selected_channel_id)
+                row_content(app.guild(), row, app.selected_channel_id, openness)
                     .id(("channel-list-row", index))
-                    .map(|this| match channel {
-                        Some(id) => this.on_click(move |_, window, cx| {
+                    .map(|this| match (channel, category) {
+                        (Some(id), _) => this.on_click(move |_, window, cx| {
                             entity
                                 .update(cx, |app, cx| app.select_channel(id, window, cx))
                                 .ok();
                         }),
-                        None => this,
+                        (None, Some(id)) => this.on_click(move |_, _, cx| {
+                            entity
+                                .update(cx, |app, cx| app.toggle_category(id, cx))
+                                .ok();
+                        }),
+                        (None, None) => this,
                     })
                     .into_any_element()
             })
@@ -276,7 +384,7 @@ fn banner_row(spec: Option<&ImageSpec>, cx: &App) -> impl IntoElement + use<> {
         .children(image)
 }
 
-fn row_content(guild: Option<&Guild>, row: Row, selected: u64) -> Div {
+fn row_content(guild: Option<&Guild>, row: Row, selected: u64, openness: f32) -> Div {
     let content = match row {
         Row::Banner => div().into_any_element(),
         Row::Shortcuts => div()
@@ -307,7 +415,14 @@ fn row_content(guild: Option<&Guild>, row: Row, selected: u64) -> Div {
                                 .truncate()
                                 .child(label(("category", category.id), &category.name)),
                         )
-                        .child(theme::icon("chevron-down", 12., theme::MUTED))
+                        .child(theme::icon("chevron-down", 12., theme::MUTED).when(
+                            openness < 1.,
+                            |icon| {
+                                icon.with_transformation(Transformation::rotate(radians(
+                                    -std::f32::consts::FRAC_PI_2 * (1. - openness),
+                                )))
+                            },
+                        ))
                         .child(div().flex_1())
                         .child(theme::icon("plus", 16., theme::MUTED)),
                 )
@@ -318,6 +433,17 @@ fn row_content(guild: Option<&Guild>, row: Row, selected: u64) -> Div {
             .and_then(|guild| guild.categories.get(category))
             .and_then(|category| category.channels.get(channel))
         {
+            Some(channel) if openness < 1. => div()
+                .h(rpx((CHANNEL_HEIGHT + CHANNEL_GAP) * openness))
+                .overflow_hidden()
+                .opacity(openness)
+                .child(
+                    div()
+                        .flex_none()
+                        .h(rpx(CHANNEL_HEIGHT + CHANNEL_GAP))
+                        .child(channel_row(channel, selected == channel.id)),
+                )
+                .into_any_element(),
             Some(channel) => channel_row(channel, selected == channel.id).into_any_element(),
             None => div().into_any_element(),
         },
@@ -402,8 +528,8 @@ fn channel_row(channel: &Channel, selected: bool) -> impl IntoElement + use<> {
         .flex()
         .items_center()
         .gap_2()
-        .h(rpx(32.))
-        .mt(rpx(2.))
+        .h(rpx(CHANNEL_HEIGHT))
+        .mt(rpx(CHANNEL_GAP))
         .px_2()
         .rounded(rpx(6.))
         .text_size(rpx(16.))

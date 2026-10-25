@@ -4,6 +4,7 @@ mod embeds;
 mod emoji_picker;
 mod forum;
 mod guild_rail;
+mod invite_card;
 mod lightbox;
 mod login;
 mod member_list;
@@ -11,6 +12,7 @@ mod message_body;
 mod profile;
 mod rich_text;
 mod smooth_scroll;
+mod switcher;
 mod titlebar;
 mod views;
 
@@ -21,6 +23,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet, VecDeque},
     rc::Rc,
+    sync::Arc,
     time::{Duration, Instant, SystemTime},
 };
 
@@ -32,7 +35,10 @@ use gpui_tokio::Tokio;
 use crate::{
     composer_tokens, credentials, emoji, markdown,
     player::{Fullscreen, Player, VideoDrag},
-    store::{Change, Channel, EmojiAccess, EmojiChoice, Guild, ReactionEmoji, ReplyState, Store},
+    store::{
+        Change, Channel, EmojiAccess, EmojiChoice, Guild, Invite, InviteState, ReactionEmoji,
+        ReplyState, Store,
+    },
     theme::{self, rpx},
 };
 
@@ -56,6 +62,7 @@ const NEWER_MESSAGES_THRESHOLD: usize = 8;
 
 pub(crate) const DISCORD_EPOCH_MS: u64 = 1_420_070_400_000;
 const ACK_DELAY: Duration = Duration::from_secs(1);
+const OLDER_RETRY_DELAY: Duration = Duration::from_secs(5);
 pub(crate) const MESSAGE_LIMIT: usize = 2000;
 const TYPING_RESEND: Duration = Duration::from_secs(9);
 const TYPING_DURATION: Duration = Duration::from_secs(10);
@@ -94,7 +101,8 @@ actions!(
         MarkGuildRead,
         ComposerUp,
         ComposerDown,
-        ComposerTab
+        ComposerTab,
+        QuickSwitch
     ]
 );
 
@@ -153,6 +161,9 @@ pub struct DiscordApp {
     emoji_picker_animation: u64,
     emoji_picker_closed_at: Option<Instant>,
     pub(crate) emoji_suggest: emoji_picker::Suggest,
+    pub(crate) quick_switcher: Option<switcher::QuickSwitcher>,
+    quick_switcher_opens: u64,
+    recent_channels: crate::quick_switcher::Recent,
     typing: HashMap<u64, Vec<(u64, Instant)>>,
     typing_timer: Option<Task<()>>,
     typing_sent: Option<(u64, Instant)>,
@@ -168,12 +179,15 @@ pub struct DiscordApp {
     pending_token: Option<String>,
     loading: HashSet<u64>,
     loading_older: HashSet<u64>,
+    older_retry_at: HashMap<u64, Instant>,
     loading_newer: HashSet<u64>,
+    reaction_requests: HashSet<(u64, u64, String)>,
     /// Channels waiting for a latest-page fetch before jumping to the present.
     pending_present: HashSet<u64>,
     pending_sends: Vec<(u64, String, Option<ReplyTarget>)>,
     history_complete: HashSet<u64>,
     forum_pages: HashMap<u64, ForumPage>,
+    pub(crate) invites: HashMap<String, InviteState>,
     member_top: usize,
     open_folders: HashSet<u64>,
     drafts: HashMap<u64, String>,
@@ -276,12 +290,17 @@ impl DiscordApp {
             emoji_picker_animation: 0,
             emoji_picker_closed_at: None,
             emoji_suggest: Default::default(),
+            quick_switcher: None,
+            quick_switcher_opens: 0,
+            recent_channels: Default::default(),
             typing: HashMap::new(),
             typing_timer: None,
             typing_sent: None,
             last_nonce: 0,
             messages,
-            channel_rows: channel_list::Rows::new(),
+            channel_rows: channel_list::Rows::with_collapsed(
+                crate::settings::get(cx).collapsed_categories,
+            ),
             member_rows: ListState::new(0, ListAlignment::Top, px(400.)),
             member_layout: member_list::Layout::default(),
             member_subscription: None,
@@ -291,11 +310,14 @@ impl DiscordApp {
             pending_token: None,
             loading: HashSet::new(),
             loading_older: HashSet::new(),
+            older_retry_at: HashMap::new(),
             loading_newer: HashSet::new(),
+            reaction_requests: HashSet::new(),
             pending_present: HashSet::new(),
             pending_sends: Vec::new(),
             history_complete: HashSet::new(),
             forum_pages: HashMap::new(),
+            invites: HashMap::new(),
             member_top: 0,
             open_folders: HashSet::new(),
             drafts: HashMap::new(),
@@ -533,6 +555,7 @@ impl DiscordApp {
         self.pending_sends.clear();
         self.history_complete.clear();
         self.forum_pages.clear();
+        self.invites.clear();
         self.member_subscription = None;
         self.members_timer = None;
         self.status_expiry = None;
@@ -836,6 +859,8 @@ impl DiscordApp {
             self.close_lightbox(cx);
         }
         self.selected_channel_id = id;
+        self.recent_channels.visit(id);
+        self.sync_channel_rows();
         if forum {
             self.unread_since = None;
             self.unread_bar = false;
@@ -891,6 +916,33 @@ impl DiscordApp {
             }
         }
         cx.notify();
+    }
+
+    pub(crate) fn toggle_category(&mut self, id: u64, cx: &mut Context<Self>) {
+        if id == 0 {
+            return;
+        }
+        let collapsed = self.channel_rows.toggle_collapsed(id);
+        crate::settings::update(cx, |settings| {
+            if collapsed {
+                settings.collapsed_categories.insert(id);
+            } else {
+                settings.collapsed_categories.remove(&id);
+            }
+        });
+        self.sync_channel_rows();
+        cx.notify();
+        if collapsed {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(channel_list::FOLD).await;
+                this.update(cx, |app, cx| {
+                    app.sync_channel_rows();
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
     }
 
     pub(crate) fn forum_loading(&self) -> bool {
@@ -988,6 +1040,71 @@ impl DiscordApp {
             .ok();
         })
         .detach();
+    }
+
+    pub(crate) fn invite(&self, code: &str) -> InviteState {
+        self.invites
+            .get(code)
+            .cloned()
+            .unwrap_or(InviteState::Loading)
+    }
+
+    pub(crate) fn load_invite(&mut self, code: &str, cx: &mut Context<Self>) {
+        if self.invites.contains_key(code) {
+            return;
+        }
+        // Offline: leave the code unknown so a later render retries.
+        let Some(session) = self.session.clone().filter(|_| self.live) else {
+            return;
+        };
+        self.invites.insert(code.to_owned(), InviteState::Loading);
+        let code_owned = code.to_owned();
+        let task_code = code_owned.clone();
+        let request = Tokio::spawn(cx, async move {
+            let invite = match session.invite(&task_code).await {
+                Ok(invite) => invite,
+                Err(error) => return Err(error),
+            };
+            let Some(invite) = invite else {
+                return Ok(None);
+            };
+            let game_ids = invite
+                .profile
+                .as_ref()
+                .map(|profile| profile.game_application_ids.as_slice())
+                .unwrap_or_default();
+            let applications = session
+                .public_applications(game_ids)
+                .await
+                .unwrap_or_default();
+            Ok(Invite::from_model(&invite, &applications))
+        });
+        cx.spawn(async move |this, cx| {
+            let state = match request.await {
+                Ok(Ok(Some(invite))) => InviteState::Ready(Arc::new(invite)),
+                Ok(Ok(None)) => InviteState::Invalid,
+                Ok(Err(error)) => {
+                    log::warn!("Could not load invite {code_owned}: {error}");
+                    InviteState::Invalid
+                }
+                Err(error) => {
+                    log::warn!("Invite task failed for {code_owned}: {error}");
+                    InviteState::Invalid
+                }
+            };
+            this.update(cx, |app, cx| {
+                app.invites.insert(code_owned, state);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(crate) fn prefetch_invites(&mut self, content: &str, cx: &mut Context<Self>) {
+        for code in discord::model::invite_codes(content) {
+            self.load_invite(&code, cx);
+        }
     }
 
     pub(crate) fn record_emoji_use(&mut self, choice: &EmojiChoice, cx: &mut Context<Self>) {
@@ -1253,11 +1370,34 @@ impl DiscordApp {
         }
         self.remeasure_message(message_id);
         cx.notify();
+        if self.session.is_none() || !self.live {
+            return;
+        }
+        if self
+            .reaction_requests
+            .contains(&(channel_id, message_id, reaction_emoji_text(&emoji)))
+        {
+            return;
+        }
+        let guild_id = Some(self.selected_guild_id);
+        self.send_reaction(guild_id, channel_id, message_id, emoji, add, cx);
+    }
+
+    fn send_reaction(
+        &mut self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        message_id: u64,
+        emoji: ReactionEmoji,
+        add: bool,
+        cx: &mut Context<Self>,
+    ) {
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;
         };
         let text = reaction_emoji_text(&emoji);
-        let guild_id = Some(self.selected_guild_id);
+        self.reaction_requests
+            .insert((channel_id, message_id, text.clone()));
         let request = Tokio::spawn(cx, async move {
             if add {
                 session
@@ -1270,17 +1410,35 @@ impl DiscordApp {
             }
         });
         cx.spawn(async move |this, cx| {
-            if let Ok(Err(error)) = request.await {
-                log::warn!("Could not update reaction: {error}");
-                this.update(cx, |app, cx| {
-                    if app.store.set_reaction(channel_id, message_id, &emoji, !add) != Change::None
-                    {
-                        app.remeasure_message(message_id);
-                        cx.notify();
+            let result = request.await;
+            this.update(cx, |app, cx| {
+                app.reaction_requests
+                    .remove(&(channel_id, message_id, reaction_emoji_text(&emoji)));
+                match result {
+                    Ok(Ok(())) => {
+                        let desired = app
+                            .store
+                            .reaction_state(channel_id, message_id, &emoji)
+                            .unwrap_or(false);
+                        if desired != add && app.live && app.session.is_some() {
+                            app.send_reaction(
+                                guild_id, channel_id, message_id, emoji, desired, cx,
+                            );
+                        }
                     }
-                })
-                .ok();
-            }
+                    Ok(Err(error)) => {
+                        log::warn!("Could not update reaction: {error}");
+                        if app.store.set_reaction(channel_id, message_id, &emoji, !add)
+                            != Change::None
+                        {
+                            app.remeasure_message(message_id);
+                            cx.notify();
+                        }
+                    }
+                    Err(error) => log::warn!("Reaction task failed: {error}"),
+                }
+            })
+            .ok();
         })
         .detach();
     }
@@ -1707,6 +1865,13 @@ impl DiscordApp {
         else {
             return;
         };
+        if self
+            .older_retry_at
+            .get(&channel_id)
+            .is_some_and(|at| Instant::now() < *at)
+        {
+            return;
+        }
         if self.history_complete.contains(&channel_id) || !self.loading_older.insert(channel_id) {
             return;
         }
@@ -1722,6 +1887,7 @@ impl DiscordApp {
                 app.loading_older.remove(&channel_id);
                 match result {
                     Ok(Ok(messages)) => {
+                        app.older_retry_at.remove(&channel_id);
                         let current_oldest = app
                             .store
                             .guilds
@@ -1750,8 +1916,16 @@ impl DiscordApp {
                             }
                         }
                     }
-                    Ok(Err(error)) => log::warn!("Could not load older messages: {error}"),
-                    Err(error) => log::warn!("History task failed: {error}"),
+                    Ok(Err(error)) => {
+                        app.older_retry_at
+                            .insert(channel_id, Instant::now() + OLDER_RETRY_DELAY);
+                        log::warn!("Could not load older messages: {error}");
+                    }
+                    Err(error) => {
+                        app.older_retry_at
+                            .insert(channel_id, Instant::now() + OLDER_RETRY_DELAY);
+                        log::warn!("History task failed: {error}");
+                    }
                 }
                 cx.notify();
             })
@@ -1797,7 +1971,8 @@ impl DiscordApp {
             .iter()
             .find(|guild| guild.id == self.selected_guild_id);
         let banner = guild.and_then(|guild| self.store.guild_banner(guild.id));
-        self.channel_rows.sync_with_banner(guild, banner);
+        let selected = self.thread_parent().unwrap_or(self.selected_channel_id);
+        self.channel_rows.sync_with_banner(guild, banner, selected);
     }
 
     fn sync_member_rows(&mut self) {
@@ -2022,6 +2197,9 @@ impl DiscordApp {
             cx.open_url(&url);
             return;
         };
+        if let Some(audio) = crate::settings::get(cx).video_audio {
+            player.restore_audio(audio.volume, audio.muted);
+        }
         player.attach(cx);
         self.player = Some(player);
         self.hovered_video = Some(key);
@@ -2079,6 +2257,7 @@ impl DiscordApp {
     pub(crate) fn toggle_video_mute(&mut self, key: u64, cx: &mut Context<Self>) {
         if let Some(player) = self.player.as_ref().filter(|player| player.key == key) {
             player.toggle_muted();
+            remember_video_audio(player, cx);
         }
         cx.notify();
     }
@@ -2163,6 +2342,7 @@ impl DiscordApp {
                     let fraction =
                         1. - ((position.y - bounds.origin.y).as_f32() / height).clamp(0., 1.);
                     player.set_volume(fraction as f64);
+                    remember_video_audio(player, cx);
                 }
             }
         }
@@ -2251,11 +2431,8 @@ impl DiscordApp {
                 mention: reply.mention,
             }),
         };
-        let request = Tokio::spawn(cx, async move {
-            session
-                .send_message(Some(guild_id), channel_id, outgoing)
-                .await
-        });
+        let send = session.send_message(Some(guild_id), channel_id, outgoing);
+        let request = Tokio::spawn(cx, send);
         cx.spawn_in(window, async move |this, cx| {
             let result = request.await;
             this.update_in(cx, |app, window, cx| {
@@ -2342,9 +2519,21 @@ impl DiscordApp {
         let request = Tokio::spawn(cx, async move {
             session.trigger_typing(Some(guild_id), channel_id).await
         });
-        cx.spawn(async move |_, _| {
-            if let Ok(Err(error)) = request.await {
-                log::debug!("Could not send typing indicator: {error}");
+        cx.spawn(async move |this, cx| {
+            match request.await {
+                Ok(Ok(true)) => {}
+                Ok(Ok(false)) => {
+                    this.update(cx, |app, _| {
+                        if app.typing_sent == Some((channel_id, now)) {
+                            app.typing_sent = None;
+                        }
+                    })
+                    .ok();
+                }
+                Ok(Err(error)) => {
+                    log::debug!("Could not send typing indicator: {error}");
+                }
+                Err(_) => {}
             }
         })
         .detach();
@@ -2671,6 +2860,9 @@ impl DiscordApp {
     }
 
     fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_quick_switcher(window, cx) {
+            return;
+        }
         if self.exit_video_fullscreen(window, cx) {
             return;
         }
@@ -2699,6 +2891,9 @@ impl DiscordApp {
     }
 
     fn composer_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.move_quick_switcher(-1, cx) {
+            return;
+        }
         if self.composer_focused(window, cx) && self.move_emoji_suggestion(-1, cx) {
             return;
         }
@@ -2811,6 +3006,15 @@ fn snap_target(range: &std::ops::Range<usize>, previous: usize, cursor: usize) -
     } else {
         range.end
     }
+}
+
+fn remember_video_audio(player: &Player, cx: &mut App) {
+    let view = player.view();
+    let audio = crate::settings::VideoAudio {
+        volume: view.volume,
+        muted: view.muted,
+    };
+    crate::settings::update(cx, |settings| settings.video_audio = Some(audio));
 }
 
 fn send_error_text(error: &discord::Error) -> String {
@@ -2936,8 +3140,13 @@ impl Render for DiscordApp {
             .on_action(cx.listener(|app, _: &JumpToPresent, window, cx| app.escape(window, cx)))
             .on_action(cx.listener(|app, _: &MarkGuildRead, _, cx| app.mark_guild_read(cx)))
             .on_action(cx.listener(|app, _: &ComposerUp, window, cx| app.composer_up(window, cx)))
+            .on_action(cx.listener(|app, _: &QuickSwitch, window, cx| {
+                app.toggle_quick_switcher(window, cx);
+            }))
             .on_action(cx.listener(|app, _: &ComposerDown, window, cx| {
-                if !(app.composer_focused(window, cx) && app.move_emoji_suggestion(1, cx)) {
+                if !(app.move_quick_switcher(1, cx)
+                    || app.composer_focused(window, cx) && app.move_emoji_suggestion(1, cx))
+                {
                     cx.propagate();
                 }
             }))

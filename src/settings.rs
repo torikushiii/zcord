@@ -1,4 +1,9 @@
-use std::{collections::HashMap, fs, path::PathBuf, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::PathBuf,
+    time::Duration,
+};
 
 use gpui::{App, Bounds, Global, Pixels, Task, Window, WindowBounds, point, px, size};
 use serde::{Deserialize, Serialize};
@@ -17,6 +22,16 @@ pub struct Settings {
     pub guild_channels: HashMap<u64, u64>,
     #[serde(default)]
     pub recent_emojis: Vec<String>,
+    #[serde(default)]
+    pub collapsed_categories: HashSet<u64>,
+    #[serde(default)]
+    pub video_audio: Option<VideoAudio>,
+}
+
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct VideoAudio {
+    pub volume: f64,
+    pub muted: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

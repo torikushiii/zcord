@@ -1,11 +1,11 @@
 use std::{
     cell::RefCell,
+    collections::{HashMap, HashSet},
     sync::Arc,
     time::{Duration, Instant},
 };
 
 use gpui::{prelude::*, *};
-use gpui_component::tooltip::Tooltip;
 use gpui_tokio::Tokio;
 use palette::{FromColor, Lab, Mix, Srgb};
 
@@ -15,7 +15,7 @@ use crate::{
         DISCORD_EPOCH_MS, DiscordApp,
         message_body::{BodyColors, BodyContext, label, render_body, wrapped_label},
     },
-    discord::{ProfileKind, model},
+    discord::{ProfileKind, Session, model},
     images::{self, ImageSpec, profile_frame_layer_url},
     store::User,
     theme::{self, WithoutTextSelection, rpx},
@@ -24,6 +24,7 @@ use crate::{
 #[cfg(test)]
 mod activity_tests;
 mod avatar_colors;
+mod board;
 
 const POPOUT_WIDTH: f32 = 300.;
 const MODAL_WIDTH: f32 = 962.;
@@ -46,6 +47,10 @@ const EFFECT_MAX_PX: u32 = 1200;
 const THEME_OVERLAY: f32 = 0.6;
 const SURFACE_HIGHEST: u32 = 0x26262C;
 const MAX_VISIBLE_BADGES: usize = 6;
+const BADGE_ART: f32 = 96.;
+const MUTUAL_ICON: f32 = 20.;
+/// Each stacked mutual icon starts 4px before the previous one ends.
+const MUTUAL_STEP: f32 = MUTUAL_ICON - 4.;
 const STATUS_OVERLAP: f32 = 10.;
 /// Example questions Discord shows in your own empty status bubble.
 const STATUS_PROMPTS: [&str; 6] = [
@@ -86,6 +91,25 @@ pub(crate) struct ProfileCard {
     anchor: Anchor,
     modal: bool,
     profile: Option<Arc<model::Profile>>,
+    pub(crate) games: HashMap<u64, Arc<model::Game>>,
+    pub(crate) applications: HashMap<u64, Arc<model::PublicApplication>>,
+    pub(crate) identities: Option<Arc<model::ApplicationIdentities>>,
+    pub(crate) outbox: Option<Arc<model::Outbox>>,
+    pub(crate) wishlist: Option<Arc<model::Wishlist>>,
+    pub(crate) note: Option<String>,
+    pub(crate) badge_details: Option<Arc<model::UserBadges>>,
+    hovered_badge: Option<usize>,
+    /// `(widget id, game id)` of the Board cover under the pointer, for its name tooltip.
+    pub(crate) hovered_cover: Option<(u64, u64)>,
+    pub(crate) widget_configs: HashMap<u64, Arc<model::WidgetConfig>>,
+    board_requested: bool,
+    modal_request_pending: bool,
+    details_requested: bool,
+    wishlist_requested: bool,
+    note_requested: bool,
+    pub(crate) shop_menu_open: bool,
+    game_timer_started: bool,
+    effect_timer_started: bool,
     avatar_theme: Option<ProfileTheme>,
     avatar_theme_source: Option<ImageSpec>,
     effect: Option<Arc<model::CollectibleProduct>>,
@@ -98,13 +122,21 @@ pub(crate) struct ProfileCard {
     status_prompt: usize,
     /// Chosen once per opening, not during redraws or tab changes.
     activity_prompt: usize,
+    /// Game widgets opened past their first entries with "Show more".
+    expanded_widgets: HashSet<u64>,
+    /// The last "Show more"/"Show less" per widget: a generation that restarts its animation, and
+    /// when it happened.
+    pub(crate) widget_toggles: HashMap<u64, (u64, Instant)>,
     _tasks: Vec<Task<()>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tab {
+    Board,
     Activity,
+    Wishlist,
     Servers,
+    Friends,
 }
 
 struct Layout {
@@ -126,6 +158,92 @@ impl ProfileCard {
 
     fn palette(&self) -> ProfilePalette {
         ProfilePalette::of(self.theme())
+    }
+
+    fn load_applications(
+        &mut self,
+        session: Session,
+        mut application_ids: Vec<u64>,
+        cx: &mut Context<DiscordApp>,
+    ) {
+        application_ids.retain(|id| !self.applications.contains_key(id));
+        if application_ids.is_empty() {
+            return;
+        }
+        let (user_id, guild_id) = (self.user_id, self.guild_id);
+        let request = Tokio::spawn(cx, async move {
+            session.public_applications(&application_ids).await
+        });
+        self._tasks.push(cx.spawn(async move |this, cx| {
+            let applications = match request.await {
+                Ok(Ok(applications)) => applications,
+                Ok(Err(error)) => {
+                    log::warn!("Could not load profile applications for user {user_id}: {error}");
+                    return;
+                }
+                Err(error) => {
+                    log::warn!("Profile applications task failed for user {user_id}: {error}");
+                    return;
+                }
+            };
+            this.update(cx, |app, cx| {
+                let Some(card) = app
+                    .profile
+                    .as_mut()
+                    .filter(|card| card.user_id == user_id && card.guild_id == guild_id)
+                else {
+                    return;
+                };
+                for application in applications {
+                    card.applications.insert(application.id, application);
+                }
+                app.prefetch_profile_images(cx);
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn load_games(
+        &mut self,
+        session: Session,
+        mut game_ids: Vec<u64>,
+        cx: &mut Context<DiscordApp>,
+    ) {
+        game_ids.retain(|id| !self.games.contains_key(id));
+        if game_ids.is_empty() {
+            return;
+        }
+        let (user_id, guild_id) = (self.user_id, self.guild_id);
+        let request = Tokio::spawn(cx, async move { session.games(&game_ids).await });
+        self._tasks.push(cx.spawn(async move |this, cx| {
+            let games = match request.await {
+                Ok(Ok(games)) => games,
+                Ok(Err(error)) => {
+                    log::warn!("Could not load profile games for user {user_id}: {error}");
+                    return;
+                }
+                Err(error) => {
+                    log::warn!("Profile games task failed for user {user_id}: {error}");
+                    return;
+                }
+            };
+            this.update(cx, |app, cx| {
+                let Some(card) = app
+                    .profile
+                    .as_mut()
+                    .filter(|card| card.user_id == user_id && card.guild_id == guild_id)
+                else {
+                    return;
+                };
+                for game in games {
+                    card.games.insert(game.id, game);
+                }
+                app.prefetch_profile_images(cx);
+                cx.notify();
+            })
+            .ok();
+        }));
     }
 }
 
@@ -178,6 +296,24 @@ impl DiscordApp {
             anchor,
             modal: false,
             profile: None,
+            games: HashMap::new(),
+            applications: HashMap::new(),
+            identities: None,
+            outbox: None,
+            wishlist: None,
+            note: None,
+            badge_details: None,
+            hovered_badge: None,
+            hovered_cover: None,
+            widget_configs: HashMap::new(),
+            board_requested: false,
+            modal_request_pending: false,
+            details_requested: false,
+            wishlist_requested: false,
+            note_requested: false,
+            shop_menu_open: false,
+            game_timer_started: false,
+            effect_timer_started: false,
             avatar_theme: None,
             avatar_theme_source: None,
             effect: None,
@@ -187,9 +323,22 @@ impl DiscordApp {
             tab: Tab::Activity,
             status_prompt: rand::random::<usize>() % STATUS_PROMPTS.len(),
             activity_prompt: rand::random::<usize>() % ACTIVITY_PROMPTS.len(),
+            expanded_widgets: HashSet::new(),
+            widget_toggles: HashMap::new(),
             _tasks: Vec::new(),
         });
-        self.load_profile(ProfileKind::Popout, cx);
+        // The full response also covers the popout; avoid fetching both variants on a cold open.
+        if let Some(profile) = self
+            .session
+            .as_ref()
+            .filter(|_| self.live)
+            .and_then(|session| session.cached_profile(user_id, guild_id, ProfileKind::Popout))
+        {
+            self.profile_loaded(user_id, guild_id, ProfileKind::Popout, profile, cx);
+        }
+        self.load_profile(ProfileKind::Modal, cx);
+        self.prefetch_profile_details(cx);
+        self.start_profile_game_timer(cx);
         cx.notify();
     }
 
@@ -200,14 +349,87 @@ impl DiscordApp {
         card.modal = true;
         card.opened = Instant::now();
         card.effect_started.replace(None);
-        card.tab = Tab::Activity;
+        // Discord opens on the Board; `side_panel` falls back to Activity without widgets.
+        card.tab = Tab::Board;
         self.load_profile(ProfileKind::Modal, cx);
+        self.start_profile_game_timer(cx);
         cx.notify();
+    }
+
+    fn toggle_profile_widget(&mut self, widget_id: u64, cx: &mut Context<Self>) {
+        if let Some(card) = &mut self.profile {
+            if !card.expanded_widgets.remove(&widget_id) {
+                card.expanded_widgets.insert(widget_id);
+            }
+            let generation = card
+                .widget_toggles
+                .get(&widget_id)
+                .map_or(0, |(generation, _)| generation + 1);
+            card.widget_toggles
+                .insert(widget_id, (generation, Instant::now()));
+            cx.notify();
+            // Redraw once the animation ends so the rows drop their animation-only clip.
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(board::WIDGET_TOGGLE).await;
+                this.update(cx, |_, cx| cx.notify()).ok();
+            })
+            .detach();
+        }
+    }
+
+    fn open_profile_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
+        self.open_full_profile(cx);
+        self.select_profile_tab(tab, cx);
+    }
+
+    pub(crate) fn hover_profile_cover(
+        &mut self,
+        key: (u64, u64),
+        hovered: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(card) = &mut self.profile else {
+            return;
+        };
+        let next = if hovered {
+            Some(key)
+        } else {
+            card.hovered_cover.filter(|current| *current != key)
+        };
+        if card.hovered_cover != next {
+            card.hovered_cover = next;
+            self.views.overlays.update(cx, |_, cx| cx.notify());
+        }
+    }
+
+    fn hover_profile_badge(&mut self, index: usize, hovered: bool, cx: &mut Context<Self>) {
+        let Some(card) = &mut self.profile else {
+            return;
+        };
+        let next = if hovered {
+            Some(index)
+        } else {
+            card.hovered_badge.filter(|current| *current != index)
+        };
+        if card.hovered_badge != next {
+            card.hovered_badge = next;
+            self.views.overlays.update(cx, |_, cx| cx.notify());
+        }
     }
 
     fn select_profile_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
         if let Some(card) = &mut self.profile {
             card.tab = tab;
+            card.shop_menu_open = false;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn set_shop_menu(&mut self, open: bool, cx: &mut Context<Self>) {
+        if let Some(card) = &mut self.profile
+            && card.shop_menu_open != open
+        {
+            card.shop_menu_open = open;
             cx.notify();
         }
     }
@@ -228,7 +450,17 @@ impl DiscordApp {
         let Some(card) = &mut self.profile else {
             return;
         };
+        if kind == ProfileKind::Modal {
+            if card.modal_request_pending || card.board_requested {
+                return;
+            }
+            card.modal_request_pending = true;
+        }
         let (user_id, guild_id) = (card.user_id, card.guild_id);
+        if let Some(profile) = session.cached_profile(user_id, guild_id, kind) {
+            self.profile_loaded(user_id, guild_id, kind, profile, cx);
+            return;
+        }
         let request = Tokio::spawn(cx, async move {
             session
                 .profile(user_id, guild_id, Some(channel_id), kind)
@@ -236,25 +468,262 @@ impl DiscordApp {
         });
         card._tasks.push(cx.spawn(async move |this, cx| {
             let result = request.await;
-            this.update(cx, |app, cx| match result {
-                Ok(Ok(profile)) => app.profile_loaded(user_id, guild_id, profile, cx),
-                Ok(Err(error)) => log::warn!(
-                    "Could not load {kind:?} profile for user {user_id} in guild {guild_id:?}: {error}"
-                ),
-                Err(_) => {}
+            this.update(cx, |app, cx| {
+                if let Some(card) = app.profile.as_mut().filter(|card| {
+                    card.user_id == user_id && card.guild_id == guild_id
+                }) && kind == ProfileKind::Modal {
+                    card.modal_request_pending = false;
+                }
+                match result {
+                    Ok(Ok(profile)) => app.profile_loaded(user_id, guild_id, kind, profile, cx),
+                    Ok(Err(error)) => log::warn!(
+                        "Could not load {kind:?} profile for user {user_id} in guild {guild_id:?}: {error}"
+                    ),
+                    Err(error) => log::warn!(
+                        "Profile task failed for user {user_id}: {error}"
+                    ),
+                }
             })
             .ok();
         }));
+    }
+
+    fn prefetch_profile_details(&mut self, cx: &mut Context<Self>) {
+        let channel_id = self.selected_channel_id;
+        let Some(session) = self.session.clone().filter(|_| self.live) else {
+            return;
+        };
+        let Some(card) = &mut self.profile else {
+            return;
+        };
+        if card.details_requested {
+            return;
+        }
+        card.details_requested = true;
+        let (user_id, guild_id) = (card.user_id, card.guild_id);
+        let game_ids: Vec<_> = self
+            .store
+            .user(user_id)
+            .and_then(|user| user.game.as_ref()?.application_id)
+            .into_iter()
+            .collect();
+        let cached = session.cached_profile_details(user_id, &game_ids, &game_ids);
+        card.games.extend(cached.games);
+        card.applications.extend(cached.applications);
+        card.widget_configs.extend(cached.widget_configs);
+        card.identities = cached.identities;
+        card.outbox = cached.outbox;
+        card.badge_details = cached.badges;
+        let mut application_ids = game_ids.clone();
+        if let Some(outbox) = &card.outbox {
+            for id in outbox_application_ids(outbox) {
+                if !application_ids.contains(&id) {
+                    application_ids.push(id);
+                }
+            }
+        }
+        // Start independent resources now, not after the full profile response or a tab switch.
+        if card.identities.is_none() {
+            let session = session.clone();
+            let request = Tokio::spawn(
+                cx,
+                async move { session.application_identities(user_id).await },
+            );
+            card._tasks.push(cx.spawn(async move |this, cx| {
+                let identities = match request.await {
+                    Ok(Ok(identities)) => identities,
+                    Ok(Err(error)) => {
+                        log::warn!(
+                            "Could not load application identities for user {user_id}: {error}"
+                        );
+                        return;
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            "Application identities task failed for user {user_id}: {error}"
+                        );
+                        return;
+                    }
+                };
+                this.update(cx, |app, cx| {
+                    let Some(card) = app
+                        .profile
+                        .as_mut()
+                        .filter(|card| card.user_id == user_id && card.guild_id == guild_id)
+                    else {
+                        return;
+                    };
+                    card.identities = Some(identities);
+                    cx.notify();
+                })
+                .ok();
+            }));
+        }
+        if card.badge_details.is_none() {
+            let session = session.clone();
+            let request = Tokio::spawn(cx, async move {
+                session
+                    .user_badges(user_id, guild_id, Some(channel_id))
+                    .await
+            });
+            card._tasks.push(cx.spawn(async move |this, cx| {
+                let badges = match request.await {
+                    Ok(Ok(badges)) => badges,
+                    Ok(Err(error)) => {
+                        log::warn!("Could not load user badges for user {user_id}: {error}");
+                        return;
+                    }
+                    Err(error) => {
+                        log::warn!("User badges task failed for user {user_id}: {error}");
+                        return;
+                    }
+                };
+                this.update(cx, |app, cx| {
+                    let Some(card) = app
+                        .profile
+                        .as_mut()
+                        .filter(|card| card.user_id == user_id && card.guild_id == guild_id)
+                    else {
+                        return;
+                    };
+                    card.badge_details = Some(badges);
+                    cx.notify();
+                })
+                .ok();
+            }));
+        }
+        if card.outbox.is_none() {
+            let outbox_session = session.clone();
+            let application_session = session.clone();
+            let request = Tokio::spawn(cx, async move { outbox_session.outbox(user_id).await });
+            card._tasks.push(cx.spawn(async move |this, cx| {
+                let outbox = match request.await {
+                    Ok(Ok(outbox)) => outbox,
+                    Ok(Err(error)) => {
+                        log::warn!("Could not load profile outbox for user {user_id}: {error}");
+                        return;
+                    }
+                    Err(error) => {
+                        log::warn!("Profile outbox task failed for user {user_id}: {error}");
+                        return;
+                    }
+                };
+                let application_ids = outbox_application_ids(&outbox);
+                this.update(cx, |app, cx| {
+                    let Some(card) = app
+                        .profile
+                        .as_mut()
+                        .filter(|card| card.user_id == user_id && card.guild_id == guild_id)
+                    else {
+                        return;
+                    };
+                    card.outbox = Some(outbox);
+                    card.load_applications(application_session, application_ids, cx);
+                    app.prefetch_profile_images(cx);
+                    cx.notify();
+                })
+                .ok();
+            }));
+        }
+        if card.note.is_none() && !card.note_requested && user_id != self.store.current_user_id {
+            card.note_requested = true;
+            let note_session = session.clone();
+            let request = Tokio::spawn(cx, async move { note_session.note(user_id).await });
+            card._tasks.push(cx.spawn(async move |this, cx| {
+                let note = match request.await {
+                    Ok(Ok(note)) => note,
+                    Ok(Err(error)) => {
+                        log::warn!("Could not load profile note for user {user_id}: {error}");
+                        return;
+                    }
+                    Err(error) => {
+                        log::warn!("Profile note task failed for user {user_id}: {error}");
+                        return;
+                    }
+                };
+                let Some(note) = note else {
+                    return;
+                };
+                this.update(cx, |app, cx| {
+                    let Some(card) = app
+                        .profile
+                        .as_mut()
+                        .filter(|card| card.user_id == user_id && card.guild_id == guild_id)
+                    else {
+                        return;
+                    };
+                    card.note = Some(note);
+                    cx.notify();
+                })
+                .ok();
+            }));
+        }
+        // The activity accessory needs the current game's config even when that app has no
+        // Board widget; `details_requested` above keeps this to one request per card.
+        if let Some(application_id) = game_ids.first().copied()
+            && !card.widget_configs.contains_key(&application_id)
+        {
+            let accessory_session = session.clone();
+            let request = Tokio::spawn(cx, async move {
+                accessory_session.widget_config(application_id).await
+            });
+            card._tasks.push(cx.spawn(async move |this, cx| {
+                let config = match request.await {
+                    Ok(Ok(Some(config))) => config,
+                    Ok(Ok(None)) => return,
+                    Ok(Err(error)) => {
+                        log::warn!(
+                            "Could not load activity accessory config for application {application_id}: {error}"
+                        );
+                        return;
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            "Activity accessory config task failed for user {user_id}: {error}"
+                        );
+                        return;
+                    }
+                };
+                this.update(cx, |app, cx| {
+                    let Some(card) = app
+                        .profile
+                        .as_mut()
+                        .filter(|card| card.user_id == user_id && card.guild_id == guild_id)
+                    else {
+                        return;
+                    };
+                    card.widget_configs.insert(application_id, config);
+                    cx.notify();
+                })
+                .ok();
+            }));
+        }
+        card.load_games(session.clone(), game_ids, cx);
+        card.load_applications(session, application_ids, cx);
+        self.prefetch_profile_images(cx);
+    }
+
+    fn prefetch_profile_images(&self, cx: &App) {
+        let Some(card) = &self.profile else {
+            return;
+        };
+        let current = self
+            .store
+            .user(card.user_id)
+            .and_then(|user| user.game.as_ref()?.application_id);
+        board::prefetch_images(card, current, cx);
     }
 
     fn profile_loaded(
         &mut self,
         user_id: u64,
         guild_id: Option<u64>,
+        kind: ProfileKind,
         profile: Arc<model::Profile>,
         cx: &mut Context<Self>,
     ) {
         self.store.absorb_profile(guild_id, &profile);
+        let game = self.store.user(user_id).and_then(|user| user.game.clone());
         let Some(session) = self.session.clone() else {
             return;
         };
@@ -265,6 +734,13 @@ impl DiscordApp {
         else {
             return;
         };
+        // A late popout response lacks the modal's widgets and must not start Board loading.
+        if (card.modal || card.board_requested) && kind == ProfileKind::Popout {
+            return;
+        }
+        if kind == ProfileKind::Modal {
+            card.modal_request_pending = false;
+        }
         let effect = guild_profile(&profile)
             .and_then(|p| p.profile_effect.as_ref())
             .or_else(|| profile.user_profile.as_ref()?.profile_effect.as_ref())
@@ -278,7 +754,83 @@ impl DiscordApp {
         let frame = guild_profile(&profile)
             .and_then(frame_of)
             .or_else(|| profile.user_profile.as_ref().and_then(frame_of));
+        let load_board = kind == ProfileKind::Modal && !card.board_requested;
+        let mut game_ids = if load_board {
+            widget_game_ids(&profile)
+        } else {
+            Vec::new()
+        };
+        let widget_application_ids = if load_board {
+            widget_application_ids(&profile)
+        } else {
+            Vec::new()
+        };
+        let mut application_ids = widget_application_ids.clone();
+        if load_board
+            && let Some(application_id) = game.as_ref().and_then(|game| game.application_id)
+        {
+            if !game_ids.contains(&application_id) {
+                game_ids.push(application_id);
+            }
+            if !application_ids.contains(&application_id) {
+                application_ids.push(application_id);
+            }
+        }
+        if load_board {
+            let cached = session.cached_profile_details(user_id, &game_ids, &application_ids);
+            card.games.extend(cached.games);
+            card.applications.extend(cached.applications);
+            card.identities = cached.identities;
+            card.outbox = cached.outbox;
+            card.widget_configs.extend(cached.widget_configs);
+            if let Some(outbox) = &card.outbox {
+                for id in outbox_application_ids(outbox) {
+                    if !application_ids.contains(&id) {
+                        application_ids.push(id);
+                    }
+                }
+            }
+        }
         card.profile = Some(profile);
+        if card.wishlist.is_none()
+            && !card.wishlist_requested
+            && let Some(wishlist_id) = card
+                .profile
+                .as_ref()
+                .and_then(|profile| profile.wishlist_ids.first().copied())
+        {
+            card.wishlist_requested = true;
+            let wishlist_session = session.clone();
+            let request =
+                Tokio::spawn(cx, async move { wishlist_session.wishlist(wishlist_id).await });
+            card._tasks.push(cx.spawn(async move |this, cx| {
+                let wishlist = match request.await {
+                    Ok(Ok(wishlist)) => wishlist,
+                    Ok(Err(error)) => {
+                        log::warn!(
+                            "Could not load wishlist {wishlist_id} for user {user_id}: {error}"
+                        );
+                        return;
+                    }
+                    Err(error) => {
+                        log::warn!("Wishlist task failed for user {user_id}: {error}");
+                        return;
+                    }
+                };
+                this.update(cx, |app, cx| {
+                    let Some(card) = app
+                        .profile
+                        .as_mut()
+                        .filter(|card| card.user_id == user_id && card.guild_id == guild_id)
+                    else {
+                        return;
+                    };
+                    card.wishlist = Some(wishlist);
+                    cx.notify();
+                })
+                .ok();
+            }));
+        }
         for (sku_id, is_effect) in effect
             .map(|sku| (sku, true))
             .into_iter()
@@ -319,7 +871,8 @@ impl DiscordApp {
                 .ok();
             }));
         }
-        if effect.is_some() {
+        if effect.is_some() && !card.effect_timer_started {
+            card.effect_timer_started = true;
             card._tasks.push(cx.spawn(async move |this, cx| {
                 loop {
                     cx.background_executor().timer(EFFECT_TICK).await;
@@ -338,8 +891,95 @@ impl DiscordApp {
                 }
             }));
         }
+        if load_board {
+            card.board_requested = true;
+            // Board metadata is independent of the user's activity history.
+            card.load_applications(session.clone(), application_ids, cx);
+            card.load_games(session.clone(), game_ids, cx);
+            let config_ids: Vec<_> = widget_application_ids
+                .into_iter()
+                .filter(|id| !card.widget_configs.contains_key(id))
+                .collect();
+            if !config_ids.is_empty() {
+                let session = session.clone();
+                card._tasks.push(cx.spawn(async move |this, cx| {
+                    for application_id in config_ids {
+                        let session = session.clone();
+                        let request = Tokio::spawn(cx, async move {
+                            session.widget_config(application_id).await
+                        });
+                        let config = match request.await {
+                            Ok(Ok(Some(config))) => config,
+                            Ok(Ok(None)) => continue,
+                            Ok(Err(error)) => {
+                                log::warn!(
+                                    "Could not load widget config for application {application_id}: {error}"
+                                );
+                                continue;
+                            }
+                            Err(error) => {
+                                log::warn!(
+                                    "Profile widget config task failed for user {user_id}: {error}"
+                                );
+                                return;
+                            }
+                        };
+                        this.update(cx, |app, cx| {
+                            let Some(card) = app
+                                .profile
+                                .as_mut()
+                                .filter(|card| card.user_id == user_id && card.guild_id == guild_id)
+                            else {
+                                return;
+                            };
+                            card.widget_configs.insert(application_id, config);
+                            cx.notify();
+                        })
+                        .ok();
+                    }
+                }));
+            }
+        }
+        self.prefetch_profile_images(cx);
+        self.start_profile_game_timer(cx);
         self.load_avatar_theme(cx);
         cx.notify();
+    }
+
+    fn start_profile_game_timer(&mut self, cx: &mut Context<Self>) {
+        let Some(card) = &mut self.profile else {
+            return;
+        };
+        if card.game_timer_started
+            || !self
+                .store
+                .user(card.user_id)
+                .and_then(|user| user.game.as_ref())
+                .is_some_and(|game| game.started_at.is_some())
+        {
+            return;
+        }
+        card.game_timer_started = true;
+        let (user_id, guild_id) = (card.user_id, card.guild_id);
+        card._tasks.push(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                let open = this
+                    .update(cx, |app, cx| {
+                        let open = app.profile.as_ref().is_some_and(|card| {
+                            card.user_id == user_id && card.guild_id == guild_id
+                        });
+                        if open {
+                            app.views.overlays.update(cx, |_, cx| cx.notify());
+                        }
+                        open
+                    })
+                    .unwrap_or(false);
+                if !open {
+                    break;
+                }
+            }
+        }));
     }
 
     fn load_avatar_theme(&mut self, cx: &mut Context<Self>) {
@@ -401,6 +1041,56 @@ fn guild_profile(profile: &model::Profile) -> Option<&model::UserProfile> {
     profile.guild_member_profile.as_ref()
 }
 
+fn widget_game_ids(profile: &model::Profile) -> Vec<u64> {
+    let mut ids = Vec::new();
+    for widget in &profile.widgets {
+        let games = match &widget.data {
+            model::WidgetData::FavoriteGames { games }
+            | model::WidgetData::CurrentGames { games }
+            | model::WidgetData::PlayedGames { games }
+            | model::WidgetData::WantToPlayGames { games } => games,
+            _ => continue,
+        };
+        for game in games {
+            if !ids.contains(&game.game_id) {
+                ids.push(game.game_id);
+            }
+        }
+    }
+    ids
+}
+
+fn widget_application_ids(profile: &model::Profile) -> Vec<u64> {
+    let mut ids = Vec::new();
+    for widget in &profile.widgets {
+        if let model::WidgetData::Application { application_id } = &widget.data
+            && !ids.contains(application_id)
+        {
+            ids.push(*application_id);
+        }
+    }
+    ids
+}
+
+fn outbox_application_ids(outbox: &model::Outbox) -> Vec<u64> {
+    let mut ids = Vec::new();
+    for entry in &outbox.entries {
+        if let model::OutboxKind::PlayedGame {
+            application_id: Some(id),
+            ..
+        }
+        | model::OutboxKind::LaunchedActivity {
+            application_id: Some(id),
+            ..
+        } = &entry.kind
+            && !ids.contains(id)
+        {
+            ids.push(*id);
+        }
+    }
+    ids
+}
+
 pub fn opener(
     app: &DiscordApp,
     user_id: u64,
@@ -428,7 +1118,7 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyElement>
     if card.modal {
         Some(modal(app, card, window, cx))
     } else {
-        Some(popout(app, card, cx))
+        Some(popout(app, card, window, cx))
     }
 }
 
@@ -548,6 +1238,10 @@ struct ProfilePalette {
     muted: u32,
     faint: u32,
     panel: Hsla,
+    /// Filled buttons inside a panel (Play, Get on Steam, Browse the Shop).
+    button: Hsla,
+    /// Strips that sit a step above a panel, like the activity accessory footer.
+    raised: Hsla,
     border: Hsla,
     hover: Hsla,
 }
@@ -561,7 +1255,11 @@ impl ProfilePalette {
             text: if light { 0x2E2938 } else { theme::TEXT },
             muted: if light { 0x51495E } else { theme::MUTED },
             faint: if light { 0x62596F } else { theme::FAINT },
-            panel: hsla(0., 0., 1., if light { 0.2 } else { 0.04 }),
+            // Discord's dark profile surfaces are a faintly blue white over the card: #18181a,
+            // #2a2a2c and #2c2c30 on a black theme.
+            panel: if light { hsla(0., 0., 1., 0.2) } else { rgba(0xEBEBFF1A).into() },
+            button: if light { hsla(0., 0., 1., 0.35) } else { rgba(0xEBEBFF2E).into() },
+            raised: if light { hsla(0., 0., 1., 0.3) } else { rgba(0xEBEBFF30).into() },
             border: hsla(0., 0., if light { 0. } else { 1. }, 0.08),
             hover: hsla(0., 0., if light { 0. } else { 1. }, 0.04),
         };
@@ -584,7 +1282,7 @@ impl ProfilePalette {
     }
 }
 
-fn popout(app: &DiscordApp, card: &ProfileCard, cx: &App) -> AnyElement {
+fn popout(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &App) -> AnyElement {
     let theme = card.theme();
     let palette = card.palette();
     let layout = Layout::popout(theme.is_some());
@@ -632,16 +1330,18 @@ fn popout(app: &DiscordApp, card: &ProfileCard, cx: &App) -> AnyElement {
         .into_any_element();
     let framed = framed(card, outer_width, outer, false, cx);
     let close = app.entity.clone();
-    let margin = if card.frame.is_some() { 80. } else { 12. };
+    // Keep the frame art that hangs past the card on screen, not just the card itself.
+    let overflow = frame_overflow(card, outer_width).unwrap_or_default();
+    let margin = |overflow: f32| rpx(overflow).to_pixels(window.rem_size()) + px(12.);
     deferred(
         anchored()
             .position(card.position)
             .anchor(card.anchor)
             .snap_to_window_with_margin(Edges {
-                top: px(margin),
-                bottom: px(12.),
-                left: px(12.),
-                right: px(12.),
+                top: margin(overflow.top),
+                bottom: margin(overflow.bottom),
+                left: margin(overflow.left),
+                right: margin(overflow.right),
             })
             .child(
                 div()
@@ -945,24 +1645,56 @@ fn display_names(
                         .bg(palette.panel)
                         .text_color(rgb(palette.strong))
                 }))
-                .children(profile.and_then(|profile| badges(profile, palette, cx))),
+                .children(profile.and_then(|profile| badges(app, card, profile, palette, cx))),
         )
         .when(!large, |this| {
-            this.children(profile.and_then(|profile| mutuals_line(profile, palette)))
+            this.children(profile.and_then(|profile| mutuals_line(app, profile, palette, cx)))
         })
 }
 
-fn mutuals_line(profile: &model::Profile, palette: ProfilePalette) -> Option<AnyElement> {
-    let friends = profile
+fn mutuals_line(
+    app: &DiscordApp,
+    profile: &model::Profile,
+    palette: ProfilePalette,
+    cx: &App,
+) -> Option<AnyElement> {
+    let friend_count = profile
         .mutual_friends_count
         .filter(|count| *count > 0)
-        .map(|count| plural(count as usize, "Mutual Friend"));
-    let servers = profile
-        .mutual_guilds
-        .as_ref()
-        .filter(|guilds| !guilds.is_empty())
-        .map(|guilds| plural(guilds.len(), "Mutual Server"));
-    let parts: Vec<String> = friends.into_iter().chain(servers).collect();
+        .map(|count| count as usize)
+        .or_else(|| {
+            profile
+                .mutual_friends
+                .as_ref()
+                .map(Vec::len)
+                .filter(|len| *len > 0)
+        });
+    let friend_list = profile.mutual_friends.as_deref().unwrap_or_default();
+    let friends = friend_count.map(|count| {
+        let avatars = friend_list.iter().take(3).map(|friend| {
+            theme::user_avatar(app.store.user(friend.id), friend.id, MUTUAL_ICON, None, false, cx)
+                .into_any_element()
+        });
+        // Only a returned list has a Friends tab to open.
+        let tab = (!friend_list.is_empty()).then_some(Tab::Friends);
+        mutual_part(app, "profile-mutual-friends", avatars, plural(count, "Mutual Friend"), tab)
+    });
+    let guilds = profile.mutual_guilds.as_deref().unwrap_or_default();
+    let servers = (!guilds.is_empty()).then(|| {
+        let icons = guilds
+            .iter()
+            .filter_map(|mutual| app.store.guild_by_id(mutual.id))
+            .take(3)
+            .map(|guild| guild_icon(guild, MUTUAL_ICON, cx));
+        mutual_part(
+            app,
+            "profile-mutual-servers",
+            icons,
+            plural(guilds.len(), "Mutual Server"),
+            Some(Tab::Servers),
+        )
+    });
+    let parts: Vec<_> = friends.into_iter().chain(servers).collect();
     if parts.is_empty() {
         return None;
     }
@@ -973,8 +1705,8 @@ fn mutuals_line(profile: &model::Profile, palette: ProfilePalette) -> Option<Any
             .items_center()
             .gap_x(rpx(6.))
             .py(rpx(4.))
-            .text_size(rpx(12.))
-            .line_height(rpx(16.))
+            .text_size(rpx(14.))
+            .line_height(rpx(18.))
             .text_color(rgb(palette.muted))
             .children(parts.into_iter().enumerate().flat_map(|(index, part)| {
                 let spacer = (index > 0).then(|| {
@@ -984,15 +1716,243 @@ fn mutuals_line(profile: &model::Profile, palette: ProfilePalette) -> Option<Any
                         .bg(rgb(palette.muted))
                         .into_any_element()
                 });
-                spacer
-                    .into_iter()
-                    .chain(std::iter::once(div().child(part).into_any_element()))
+                spacer.into_iter().chain(std::iter::once(part))
             }))
             .into_any_element(),
     )
 }
 
-fn badges(profile: &model::Profile, palette: ProfilePalette, cx: &App) -> Option<AnyElement> {
+/// One "N Mutual …" entry: up to three overlapping icons, then the count, opening `tab` on click.
+fn mutual_part(
+    app: &DiscordApp,
+    id: &'static str,
+    icons: impl Iterator<Item = AnyElement>,
+    text: String,
+    tab: Option<Tab>,
+) -> AnyElement {
+    let entity = app.entity.clone();
+    mutual_entry(id, icons, text)
+        .when_some(tab, |this, tab| {
+            this.cursor_pointer()
+                .hover(|style| style.underline())
+                .on_click(move |_, _, cx| {
+                    entity
+                        .update(cx, |app, cx| app.open_profile_tab(tab, cx))
+                        .ok();
+                })
+        })
+        .into_any_element()
+}
+
+fn mutual_entry(
+    id: &'static str,
+    icons: impl Iterator<Item = AnyElement>,
+    text: String,
+) -> Stateful<Div> {
+    // A negative margin collapses the stack's width to zero in gpui's layout, so the icons are
+    // placed absolutely inside an explicitly sized box instead.
+    let icons: Vec<_> = icons
+        .enumerate()
+        .map(|(index, icon)| {
+            div()
+                .absolute()
+                .top_0()
+                .left(rpx(index as f32 * MUTUAL_STEP))
+                .size(rpx(MUTUAL_ICON))
+                .rounded_full()
+                .child(icon)
+        })
+        .collect();
+    let width = MUTUAL_ICON + icons.len().saturating_sub(1) as f32 * MUTUAL_STEP;
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap(rpx(6.))
+        .when(!icons.is_empty(), |this| {
+            this.child(
+                div()
+                    .debug_selector(|| "mutual-icons".into())
+                    .relative()
+                    .flex_none()
+                    .w(rpx(width))
+                    .h(rpx(MUTUAL_ICON))
+                    .children(icons),
+            )
+        })
+        .child(div().debug_selector(|| "mutual-text".into()).child(text))
+}
+
+fn guild_icon(guild: &crate::store::Guild, size: f32, cx: &App) -> AnyElement {
+    let icon = guild
+        .icon_spec()
+        .and_then(|spec| images::resolve(&spec, theme::image_px(size), cx));
+    match icon {
+        Some(path) => img(path).size(rpx(size)).rounded_full().into_any_element(),
+        None => div()
+            .size(rpx(size))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .bg(rgb(guild.icon_color))
+            .text_size(rpx(size * 0.4))
+            .text_color(rgb(theme::BG))
+            .child(guild.initials.clone())
+            .into_any_element(),
+    }
+}
+
+#[derive(Clone)]
+struct BadgeTip {
+    art: Option<ImageSpec>,
+    category: Option<String>,
+    title: String,
+    detail: Option<String>,
+}
+
+impl BadgeTip {
+    fn of(badge: &model::Badge, detail: &model::BadgeDetail) -> Self {
+        let tier = detail.tier();
+        let tier_name = tier
+            .and_then(|tier| tier.name.clone())
+            .filter(|name| !name.is_empty());
+        let name = Some(detail.name.clone()).filter(|name| !name.is_empty());
+        // Discord titles Nitro tiers "Nitro Opal"; other levelled badges put the badge name above the tier.
+        let (category, title) = match tier_name {
+            Some(tier) if detail.badge_id == 1 => {
+                (None, name.map_or(tier.clone(), |name| format!("{name} {tier}")))
+            }
+            Some(tier) => (name, tier),
+            None => (None, name.unwrap_or_else(|| badge.description.clone())),
+        };
+        let art = [
+            tier.and_then(|tier| tier.complex_icon_animated_url.as_deref()),
+            detail.complex_icon_animated_url.as_deref(),
+            tier.and_then(|tier| tier.simple_icon_raster_url.as_deref()),
+            detail.simple_icon_raster_url.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(badge_art)
+        .next()
+        .or_else(|| {
+            Some(ImageSpec::Badge {
+                icon: badge.icon.clone(),
+            })
+        });
+        let detail = detail
+            .info_label
+            .clone()
+            .or_else(|| Some(badge.description.clone()))
+            .filter(|text| !text.is_empty() && !text.eq_ignore_ascii_case(&title));
+        Self {
+            art,
+            category,
+            title,
+            detail,
+        }
+    }
+}
+
+// The SVG variants of badge art can't be decoded, so only the PNG URLs reach here.
+fn badge_art(url: &str) -> ImageSpec {
+    match url
+        .rsplit_once("/badge-icons/")
+        .and_then(|(_, file)| file.strip_suffix(".png"))
+    {
+        Some(icon) => ImageSpec::Badge {
+            icon: icon.to_owned(),
+        },
+        None => ImageSpec::Collectible {
+            url: url.to_owned(),
+        },
+    }
+}
+
+/// Rich badge card, centred above the badge like Discord's.
+fn badge_tooltip(tip: &BadgeTip, cx: &App) -> impl IntoElement {
+    let art = tip
+        .art
+        .as_ref()
+        .and_then(|spec| images::resolve(spec, theme::image_px(BADGE_ART), cx));
+    let body = div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .min_w(rpx(192.))
+        .max_w(rpx(256.))
+        .px(rpx(16.))
+        .py(rpx(16.))
+        .rounded(rpx(8.))
+        .bg(rgb(theme::ELEVATED))
+        .border_1()
+        .border_color(rgb(theme::BORDER))
+        .shadow_lg()
+        .text_center()
+        .children(art.map(|path| {
+            img(path)
+                .size(rpx(BADGE_ART))
+                .mb(rpx(8.))
+                .object_fit(ObjectFit::Contain)
+        }))
+        .children(tip.category.clone().map(|category| {
+            div()
+                .text_size(rpx(14.))
+                .line_height(rpx(18.))
+                .text_color(rgb(theme::MUTED))
+                .child(category)
+        }))
+        .child(
+            div()
+                .text_size(rpx(18.))
+                .line_height(rpx(24.))
+                .font_weight(FontWeight::EXTRA_BOLD)
+                .italic()
+                .text_color(rgb(theme::STRONG))
+                .child(tip.title.to_uppercase()),
+        )
+        .children(tip.detail.clone().map(|detail| {
+            div()
+                .text_size(rpx(14.))
+                .line_height(rpx(18.))
+                .text_color(rgb(theme::MUTED))
+                .child(detail)
+        }));
+    div()
+        .absolute()
+        .top(rpx(-4.))
+        .left(relative(0.5))
+        .size_0()
+        .child(
+            deferred(
+                anchored().anchor(Anchor::BottomCenter).child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .child(body)
+                        // Overlaps the border by 1px so the arrow reads as part of the card.
+                        .child(
+                            theme::icon("tooltip-arrow-down", 12., theme::ELEVATED)
+                                .h(rpx(6.))
+                                .mt(rpx(-1.)),
+                        ),
+                ),
+            )
+            // Above the popout, which is itself deferred at priority 1.
+            .with_priority(2),
+        )
+}
+
+fn badges(
+    app: &DiscordApp,
+    card: &ProfileCard,
+    profile: &model::Profile,
+    palette: ProfilePalette,
+    cx: &App,
+) -> Option<AnyElement> {
+    let details = card.badge_details.as_deref();
     if profile.badges.is_empty() {
         return None;
     }
@@ -1026,13 +1986,30 @@ fn badges(profile: &model::Profile, palette: ProfilePalette, cx: &App) -> Option
                         let spec = ImageSpec::Badge {
                             icon: badge.icon.clone(),
                         };
-                        let tip = SharedString::from(badge.description.clone());
+                        let rich = details
+                            .and_then(|details| details.detail_for(badge))
+                            .map(|detail| BadgeTip::of(badge, detail));
+                        // Warm the art before hover; the tooltip only renders what is cached.
+                        if let Some(spec) = rich.as_ref().and_then(|tip| tip.art.as_ref()) {
+                            images::resolve(spec, theme::image_px(BADGE_ART), cx);
+                        }
+                        let hovered = card.hovered_badge == Some(index);
                         let link = badge.link.clone();
+                        let entity = app.entity.clone();
                         div()
                             .id(("profile-badge", index))
+                            .relative()
                             .size(rpx(20.))
                             .when(link.is_some(), |this| this.cursor_pointer())
-                            .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                            .on_hover(move |hovered, _, cx| {
+                                entity
+                                    .update(cx, |app, cx| app.hover_profile_badge(index, *hovered, cx))
+                                    .ok();
+                            })
+                            .when(hovered, |this| match &rich {
+                                Some(rich) => this.child(badge_tooltip(rich, cx)),
+                                None => this.child(theme::tooltip_above(badge.description.clone())),
+                            })
                             .on_click(move |_, _, cx| {
                                 if let Some(link) = &link {
                                     cx.open_url(link);
@@ -1088,7 +2065,11 @@ fn popout_body(
             cx,
         ))
         .children(bio(app, card, true, cx))
-        .children(user.and_then(|user| playing(user, palette)))
+        .children(board::popout_widget(app, card, cx))
+        .children(
+            board::popout_playing(app, card, cx)
+                .or_else(|| user.and_then(|user| playing(user, palette))),
+        )
         .children(roles(app, card))
 }
 
@@ -1290,58 +2271,99 @@ fn connections(profile: &model::Profile, palette: ProfilePalette) -> Option<AnyE
             .flex()
             .flex_col()
             .gap(rpx(16.))
-            .children(profile.connected_accounts.iter().map(|account| {
+            .children(profile.connected_accounts.iter().enumerate().map(|(index, account)| {
+                let url = connection_url(account);
                 div()
+                    .id(("profile-connection", index))
                     .flex()
                     .items_center()
-                    .gap(rpx(8.))
+                    .gap(rpx(12.))
+                    .min_w_0()
                     .child(
                         div()
-                            .size(rpx(24.))
+                            .size(rpx(28.))
                             .flex_none()
                             .flex()
                             .items_center()
                             .justify_center()
                             .rounded(rpx(8.))
                             .bg(rgb(0xFFFFFF))
-                            .text_size(rpx(11.))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(0x2E3035))
-                            .child(connection_initial(&account.kind)),
+                            .map(|this| match connection_icon(&account.kind) {
+                                Some((icon, color)) => this.child(theme::icon(icon, 18., color)),
+                                None => this
+                                    .text_size(rpx(13.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(0x2E3035))
+                                    .child(connection_initial(&account.kind)),
+                            }),
                     )
                     .child(
                         div()
-                            .flex()
-                            .flex_col()
                             .min_w_0()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(rpx(4.))
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .min_w_0()
-                                            .truncate()
-                                            .text_color(rgb(palette.strong))
-                                            .child(account.name.clone()),
-                                    )
-                                    .when(account.verified, |this| {
-                                        this.child(theme::icon("badge-check", 14., palette.muted))
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .text_size(rpx(12.))
-                                    .text_color(rgb(palette.muted))
-                                    .child(connection_name(&account.kind)),
-                            ),
+                            .truncate()
+                            .text_size(rpx(16.))
+                            .text_color(rgb(palette.strong))
+                            .child(account.name.clone()),
                     )
+                    .when_some(url, |this, url| {
+                        this.cursor_pointer()
+                            .child(theme::icon("arrow-up-right", 16., palette.strong))
+                            .on_click(move |_, _, cx| cx.open_url(&url))
+                    })
             }))
             .into_any_element(),
         palette,
     ))
+}
+
+/// Icon and brand color, drawn on the white connection tile.
+fn connection_icon(kind: &str) -> Option<(&'static str, u32)> {
+    Some(match kind {
+        "github" => ("connections/github", 0x181717),
+        "twitch" => ("connections/twitch", 0x9146FF),
+        "youtube" => ("connections/youtube", 0xFF0000),
+        "steam" => ("connections/steam", 0x000000),
+        "spotify" => ("connections/spotify", 0x1ED760),
+        "xbox" => ("connections/xbox", 0x107C10),
+        "playstation" => ("connections/playstation", 0x0070D1),
+        "reddit" => ("connections/reddit", 0xFF4500),
+        "twitter" => ("connections/twitter", 0x000000),
+        "domain" => ("connections/domain", 0x000000),
+        "battlenet" => ("connections/battlenet", 0x148EFF),
+        "leagueoflegends" => ("connections/leagueoflegends", 0xC28F2C),
+        "tiktok" => ("connections/tiktok", 0x000000),
+        "bluesky" => ("connections/bluesky", 0x0285FF),
+        "instagram" => ("connections/instagram", 0xFF0069),
+        "facebook" => ("connections/facebook", 0x0866FF),
+        "epicgames" => ("connections/epicgames", 0x313131),
+        "riotgames" => ("connections/riotgames", 0xEB0029),
+        "roblox" => ("connections/roblox", 0x000000),
+        "paypal" => ("connections/paypal", 0x002991),
+        "ebay" => ("connections/ebay", 0xE53238),
+        "crunchyroll" => ("connections/crunchyroll", 0xFF5E00),
+        _ => return None,
+    })
+}
+
+/// Public profile link for platforms Discord links out to; the rest render without the arrow.
+fn connection_url(account: &model::ConnectedAccount) -> Option<String> {
+    let (name, id) = (&account.name, &account.id);
+    Some(match account.kind.as_str() {
+        "github" => format!("https://github.com/{name}"),
+        "twitch" => format!("https://www.twitch.tv/{name}"),
+        "youtube" => format!("https://www.youtube.com/channel/{id}"),
+        "steam" => format!("https://steamcommunity.com/profiles/{id}"),
+        "spotify" => format!("https://open.spotify.com/user/{id}"),
+        "reddit" => format!("https://www.reddit.com/u/{name}"),
+        "twitter" => format!("https://x.com/{name}"),
+        "domain" => format!("https://{name}"),
+        "tiktok" => format!("https://www.tiktok.com/@{name}"),
+        "bluesky" => format!("https://bsky.app/profile/{id}"),
+        "instagram" => format!("https://www.instagram.com/{name}"),
+        "roblox" => format!("https://www.roblox.com/users/{id}/profile"),
+        "ebay" => format!("https://www.ebay.com/usr/{name}"),
+        _ => return None,
+    })
 }
 
 fn connection_initial(kind: &str) -> String {
@@ -1446,7 +2468,19 @@ fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &App) -> Any
                             card.profile
                                 .as_deref()
                                 .and_then(|profile| connections(profile, palette)),
-                        ),
+                        )
+                        .children(card.note.as_ref().map(|note| {
+                            section(
+                                "Note",
+                                div()
+                                    .text_size(rpx(14.))
+                                    .line_height(rpx(18.))
+                                    .text_color(rgb(palette.text))
+                                    .child(note.clone())
+                                    .into_any_element(),
+                                palette,
+                            )
+                        })),
                 ),
         )
         .children(effect_layers(card, card_width, cx))
@@ -1581,10 +2615,26 @@ fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &App) -> AnyElement {
         .into_iter()
         .flatten()
         .collect();
-    let friends = profile.and_then(|p| p.mutual_friends_count);
+    let mutual_friends: Vec<&model::User> = profile
+        .and_then(|p| p.mutual_friends.as_ref())
+        .into_iter()
+        .flatten()
+        .collect();
+    let friend_count = profile
+        .and_then(|p| p.mutual_friends_count)
+        .filter(|count| *count > 0)
+        .map(|count| count as usize)
+        .or_else(|| (!mutual_friends.is_empty()).then_some(mutual_friends.len()));
+    let has_board = board::has_board(card);
+    let has_wishlist = board::has_wishlist(card);
+    let current = match card.tab {
+        Tab::Board if !has_board => Tab::Activity,
+        Tab::Wishlist if !has_wishlist => Tab::Activity,
+        tab => tab,
+    };
     let tab = |id: Tab, title: String| {
         let entity = app.entity.clone();
-        let selected = card.tab == id;
+        let selected = current == id;
         div()
             .id(SharedString::from(format!("profile-tab-{}", id as u8)))
             .pb(rpx(12.))
@@ -1610,9 +2660,12 @@ fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &App) -> AnyElement {
             })
             .child(title)
     };
-    let panel = match card.tab {
-        Tab::Activity => activity_panel(app, card),
+    let panel = match current {
+        Tab::Board => board::board_panel(app, card, cx),
+        Tab::Activity => activity_panel(app, card, cx),
+        Tab::Wishlist => board::wishlist_panel(app, card, cx),
         Tab::Servers => servers_panel(app, &mutual_guilds, palette, cx),
+        Tab::Friends => friends_panel(app, &mutual_friends, palette, cx),
     };
     div()
         .flex()
@@ -1629,20 +2682,32 @@ fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &App) -> AnyElement {
                 .gap(rpx(24.))
                 .border_b_1()
                 .border_color(palette.border)
+                .when(has_board, |this| {
+                    this.child(tab(Tab::Board, "Board".to_owned()))
+                })
                 .child(tab(Tab::Activity, "Activity".to_owned()))
+                .when(has_wishlist, |this| {
+                    this.child(tab(Tab::Wishlist, "Wishlist".to_owned()))
+                })
                 .when(!mutual_guilds.is_empty(), |this| {
                     this.child(tab(
                         Tab::Servers,
                         plural(mutual_guilds.len(), "Mutual Server"),
                     ))
                 })
-                .children(friends.filter(|count| *count > 0).map(|count| {
-                    div()
-                        .pb(rpx(12.))
-                        .text_size(rpx(14.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(palette.faint))
-                        .child(plural(count as usize, "Mutual Friend"))
+                .children(friend_count.map(|count| {
+                    let title = plural(count, "Mutual Friend");
+                    if mutual_friends.is_empty() {
+                        div()
+                            .pb(rpx(12.))
+                            .text_size(rpx(14.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(palette.faint))
+                            .child(title)
+                            .into_any_element()
+                    } else {
+                        tab(Tab::Friends, title).into_any_element()
+                    }
                 })),
         )
         .child(tab_panel(panel))
@@ -1663,7 +2728,10 @@ fn tab_panel(panel: AnyElement) -> Stateful<Div> {
         .child(panel)
 }
 
-fn activity_panel(app: &DiscordApp, card: &ProfileCard) -> AnyElement {
+fn activity_panel(app: &DiscordApp, card: &ProfileCard, cx: &App) -> AnyElement {
+    if let Some(activity) = board::activity(app, card, cx) {
+        return activity;
+    }
     let palette = card.palette();
     let user = app.store.user(card.user_id);
     if let Some(playing) = user.and_then(|user| playing(user, palette)) {
@@ -1781,30 +2849,132 @@ fn servers_panel(
         .into_any_element()
 }
 
+fn friends_panel(
+    app: &DiscordApp,
+    friends: &[&model::User],
+    palette: ProfilePalette,
+    cx: &App,
+) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(rpx(4.))
+        .children(friends.iter().map(|friend| {
+            let name = friend
+                .global_name
+                .as_deref()
+                .filter(|name| !name.is_empty())
+                .unwrap_or(&friend.username);
+            div()
+                .flex()
+                .items_center()
+                .gap(rpx(12.))
+                .p(rpx(8.))
+                .rounded(rpx(8.))
+                .hover(move |style| style.bg(palette.hover))
+                .child(theme::user_avatar(
+                    app.store.user(friend.id),
+                    friend.id,
+                    40.,
+                    None,
+                    false,
+                    cx,
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(rpx(16.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(rgb(palette.strong))
+                                .child(label(("mutual-friend", friend.id), name)),
+                        )
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(rpx(12.))
+                                .text_color(rgb(palette.muted))
+                                .child(label(
+                                    ("mutual-friend-username", friend.id),
+                                    &friend.username,
+                                )),
+                        ),
+                )
+        }))
+        .into_any_element()
+}
+
+fn profile_frame(card: &ProfileCard) -> Option<(u64, &model::CollectibleItem)> {
+    let product = card.frame.as_ref()?;
+    let item = product.items.iter().find(|item| item.kind == 3)?;
+    Some((product.sku_id, item))
+}
+
+/// How far the profile frame's art reaches past a card `width` wide, in CSS pixels.
+fn frame_overflow(card: &ProfileCard, width: f32) -> Option<Edges<f32>> {
+    let (_, item) = profile_frame(card)?;
+    let scale = width / item.inner_width.unwrap_or(1200).max(1) as f32;
+    let horizontal = item.overflow_horizontal.unwrap_or(0) as f32 * scale;
+    Some(Edges {
+        top: item.overflow_top.unwrap_or(0) as f32 * scale,
+        bottom: item.overflow_bottom.unwrap_or(0) as f32 * scale,
+        left: horizontal,
+        right: horizontal,
+    })
+}
+
 fn framed(card: &ProfileCard, width: f32, body: AnyElement, fill: bool, cx: &App) -> AnyElement {
-    let frame = card.frame.as_ref().and_then(|product| {
-        let item = product.items.iter().find(|item| item.kind == 3)?;
-        Some((product.sku_id, item))
-    });
+    let frame = profile_frame(card);
     let layers = |front: bool| -> Vec<AnyElement> {
-        let Some((sku, item)) = frame else {
+        let (Some((sku, item)), Some(overflow)) = (frame, frame_overflow(card, width)) else {
             return Vec::new();
         };
-        let scale = width / item.inner_width.unwrap_or(1200).max(1) as f32;
-        let overflow_x = item.overflow_horizontal.unwrap_or(0) as f32 * scale;
-        let overflow_top = item.overflow_top.unwrap_or(0) as f32 * scale;
-        let overflow_bottom = item.overflow_bottom.unwrap_or(0) as f32 * scale;
+        let overflow_x = overflow.left;
+        let overflow_top = overflow.top;
+        let overflow_bottom = overflow.bottom;
         let frame_width = width + overflow_x * 2.;
         item.layers
             .iter()
             .filter(|layer| (layer.order == "front") == front)
+            // The full-profile dialog runs to the window's bottom edge, so Discord drops the
+            // bottom staple there and keeps it only on the popout.
+            .filter(|layer| !(fill && layer.kind == "staple" && layer.anchor == "bottom"))
             .filter_map(|layer| {
                 let spec = ImageSpec::Collectible {
                     url: profile_frame_layer_url(sku, layer.id),
                 };
                 let path = images::resolve(&spec, theme::image_px(frame_width), cx)?;
-                let image = img(path).w(rpx(frame_width)).flex_none();
+                let image = img(path.clone()).w(rpx(frame_width)).flex_none();
                 let base = div().absolute().left(rpx(-overflow_x)).w(rpx(frame_width));
+                // Border art is a uniform strip of side rails with no fixed height; Discord repeats
+                // it down the card and masks it out of the overflow, where the staples sit. Pin one
+                // copy to each end of the card and let each fill half, so it fits any card up to
+                // twice the art's height without overlapping.
+                if layer.kind == "border" {
+                    let half = |top: bool| {
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .flex()
+                            .flex_col()
+                            .overflow_hidden()
+                            .map(|half| if top { half.justify_start() } else { half.justify_end() })
+                            .child(img(path.clone()).w(rpx(frame_width)).flex_none())
+                    };
+                    return Some(
+                        base.top_0()
+                            .bottom_0()
+                            .flex()
+                            .flex_col()
+                            .child(half(true))
+                            .child(half(false))
+                            .into_any_element(),
+                    );
+                }
                 let base = match (layer.kind.as_str(), layer.anchor.as_str()) {
                     ("rail", anchor) => base
                         .top_0()
@@ -1968,7 +3138,7 @@ fn effect_layers(card: &ProfileCard, width: f32, cx: &App) -> Vec<AnyElement> {
 mod tests {
     use super::{
         EffectLoad, ProfilePalette, ProfileTheme, THEME_OVERLAY, blend, contrast, effect_start,
-        modal_backdrop_corners, profile_close_button, settle_effect_layers,
+        modal_backdrop_corners, outbox_application_ids, profile_close_button, settle_effect_layers,
     };
     use crate::discord::model;
     use gpui::{px, rgb};
@@ -1998,6 +3168,19 @@ mod tests {
 
     fn profile() -> model::Profile {
         serde_json::from_str(include_str!("../discord/fixtures/profile_modal.json")).unwrap()
+    }
+
+    #[test]
+    fn recent_application_requests_skip_duplicates_and_non_game_entries() {
+        let outbox = serde_json::from_value(serde_json::json!({"entries": [
+            {"id": "1", "extra": {"type": "played_game_extra", "application_id": "7"}},
+            {"id": "2", "extra": {"type": "played_game_extra", "application_id": "7"}},
+            {"id": "3", "extra": {"type": "played_game_extra"}},
+            {"id": "4", "extra": {"type": "listened_session_extra", "application_id": "8"}},
+            {"id": "5", "extra": {"type": "played_game_extra", "application_id": "9"}}
+        ]}))
+        .unwrap();
+        assert_eq!(outbox_application_ids(&outbox), [7, 9]);
     }
 
     #[test]
