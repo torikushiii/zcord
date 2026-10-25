@@ -1451,7 +1451,13 @@ fn current_game(
                         .children(
                             actions
                                 .buttons("profile-current-actions", card.user_id, palette)
-                                .map(|buttons| buttons.mt(rpx(4.))),
+                                .map(|buttons| {
+                                    buttons
+                                        .flex_row()
+                                        .flex_wrap()
+                                        .items_center()
+                                        .mt(rpx(4.))
+                                }),
                         )
                         .children(
                             play_button(game, palette)
@@ -1801,7 +1807,7 @@ fn game_action_button(
         .line_height(rpx(18.))
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(palette.strong))
-        .children(icon.map(|icon| theme::icon(icon, 18., palette.strong)))
+        .children(icon.map(|icon| theme::icon(icon, 16., palette.strong)))
         .child(div().min_w_0().truncate().child(text))
         .on_click(move |_, _, cx| {
             cx.stop_propagation();
