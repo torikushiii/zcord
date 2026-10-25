@@ -1,11 +1,14 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, time::Instant};
 
 use gpui::{
     Context, IntoElement, ListOffset, Render, TestAppContext, Window, div, list, prelude::*, px,
 };
 
-use super::{FOLD, Row, Rows, WIDTH, row_content};
+use super::{
+    BANNER_HEIGHT, BANNER_HOVER_FADE, BannerHover, FOLD, HEADER_HEIGHT, Row, Rows, WIDTH, row_content,
+};
 use crate::{
+    images::ImageSpec,
     store::{Category, Channel, ChannelKind, Guild},
     theme::rpx,
 };
@@ -161,6 +164,106 @@ fn collapsing_keeps_channels_listed_until_the_fold_ends() {
     assert!(!rows.toggle_collapsed(category));
     rows.sync(Some(&guild), 101);
     assert_eq!(rows.rows.len(), 6);
+}
+
+#[test]
+fn banner_hover_fades_and_reverses_without_jumping() {
+    let mut hover = BannerHover::default();
+    let now = Instant::now();
+    assert_eq!(hover.opacity(now), 0.);
+    assert!(!hover.animating(now));
+
+    assert!(hover.set(true, now));
+    assert_eq!(hover.opacity(now), 0.);
+    let halfway = now + BANNER_HOVER_FADE / 2;
+    let opacity = hover.opacity(halfway);
+    assert!((opacity - 0.5).abs() < 0.001);
+    assert!(hover.animating(halfway));
+
+    assert!(hover.set(false, halfway));
+    assert_eq!(hover.opacity(halfway), opacity);
+    assert!(hover.opacity(halfway + BANNER_HOVER_FADE / 2) < opacity);
+    assert_eq!(hover.opacity(halfway + BANNER_HOVER_FADE), 0.);
+    assert!(!hover.animating(halfway + BANNER_HOVER_FADE));
+
+    let later = halfway + BANNER_HOVER_FADE;
+    assert!(hover.set(true, later));
+    assert_eq!(hover.opacity(later + BANNER_HOVER_FADE), 1.);
+}
+
+#[test]
+fn repeated_header_hover_does_not_restart_the_fade() {
+    let mut hover = BannerHover::default();
+    let now = Instant::now();
+    hover.set(true, now);
+    let halfway = now + BANNER_HOVER_FADE / 2;
+    let opacity = hover.opacity(halfway);
+    assert!(!hover.set(true, halfway));
+    assert_eq!(hover.opacity(halfway), opacity);
+    let later = now + BANNER_HOVER_FADE;
+    assert_eq!(hover.opacity(later), 1.);
+    assert!(!hover.animating(later));
+    assert!(hover.set(false, later));
+    assert_eq!(hover.opacity(later + BANNER_HOVER_FADE), 0.);
+}
+
+#[test]
+fn banner_hover_survives_sync_but_resets_on_server_change_or_banner_removal() {
+    let mut rows = Rows::new();
+    let first = guild(1, 1);
+    let banner = ImageSpec::GuildBanner {
+        guild_id: first.id,
+        hash: "banner".into(),
+    };
+    let now = Instant::now();
+    rows.sync_with_banner(Some(&first), Some(banner.clone()), 100);
+    rows.banner_hover.set(true, now);
+    rows.sync_with_banner(Some(&first), Some(banner.clone()), 100);
+    assert_eq!(rows.banner_hover.opacity(now + BANNER_HOVER_FADE), 1.);
+
+    let second = guild(2, 1);
+    let second_banner = ImageSpec::GuildBanner {
+        guild_id: second.id,
+        hash: "other_banner".into(),
+    };
+    rows.sync_with_banner(Some(&second), Some(second_banner), 100);
+    assert_eq!(rows.banner_hover.opacity(now + BANNER_HOVER_FADE), 0.);
+    rows.banner_hover.set(true, now);
+    rows.sync_with_banner(Some(&second), None, 100);
+    assert_eq!(rows.banner_hover.opacity(now + BANNER_HOVER_FADE), 0.);
+}
+
+#[test]
+fn banner_header_becomes_solid_at_the_same_scroll_position_at_every_zoom() {
+    let guild = guild(1, 1);
+    let mut rows = Rows::new();
+    rows.sync_with_banner(
+        Some(&guild),
+        Some(ImageSpec::GuildBanner {
+            guild_id: guild.id,
+            hash: "banner".into(),
+        }),
+        100,
+    );
+    assert_eq!(rows.rows[0], Row::Banner);
+    for zoom in [1., 1.25, 1.5] {
+        let rem_size = px(16. * zoom);
+        let range = rpx(BANNER_HEIGHT - HEADER_HEIGHT).to_pixels(rem_size);
+        for fraction in [0., 0.5, 1.] {
+            rows.state.scroll_to(ListOffset {
+                item_ix: 0,
+                offset_in_item: range * fraction,
+            });
+            assert_eq!(rows.header_solidity(rem_size), Some(fraction));
+        }
+        rows.state.scroll_to(ListOffset {
+            item_ix: 1,
+            offset_in_item: px(0.),
+        });
+        assert_eq!(rows.header_solidity(rem_size), Some(1.));
+    }
+    rows.sync_with_banner(Some(&guild), None, 100);
+    assert_eq!(rows.header_solidity(px(16.)), None);
 }
 
 struct Sidebar {
