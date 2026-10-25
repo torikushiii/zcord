@@ -98,7 +98,6 @@ pub(super) fn board_panel(app: &DiscordApp, card: &ProfileCard, cx: &App) -> Any
         .into_any_element()
 }
 
-/// The Wishlist tab: item count, a shop menu, and a three-column grid of item cards.
 pub(super) fn wishlist_panel(app: &DiscordApp, card: &ProfileCard, cx: &App) -> AnyElement {
     let palette = card.palette();
     let Some(wishlist) = card.wishlist.as_deref() else {
@@ -945,9 +944,6 @@ fn application_widget(
         .into_any_element()
 }
 
-/// Discord pins the hero art to the card's top-right, fills the header's height and fades it
-/// in from the left. gpui's `ObjectFit::Cover` always centres and there's no image mask, so the
-/// art is sized by hand and painted under an edge fade.
 /// The URL of an identity-data image: an image stat, or a text stat some apps fill with a URL.
 fn data_image(
     profile: Option<&IdentityProfile>,
@@ -987,7 +983,9 @@ fn widget_image_art(
     }
 }
 
-/// The Board widget's hero, sized from the art's own proportions; see `widget_image_art`.
+/// Discord pins the hero art to the card's top-right, fills the header's height and fades it
+/// in from the left. gpui's `ObjectFit::Cover` always centres and there's no image mask, so the
+/// art is sized by hand and painted under an edge fade.
 fn widget_hero(
     application_id: u64,
     image: &WidgetImage,
@@ -1240,7 +1238,6 @@ fn media(url: &str, size: f32, cx: &App) -> Option<Arc<Path>> {
     images::resolve(&spec, theme::image_px(size), cx)
 }
 
-/// The Activity tab: what the user is playing now, then their recent activity feed.
 pub(super) fn activity(app: &DiscordApp, card: &ProfileCard, cx: &App) -> Option<AnyElement> {
     let palette = card.palette();
     let game = app
