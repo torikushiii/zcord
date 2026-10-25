@@ -96,6 +96,16 @@ pub enum ImageSpec {
         guild_id: u64,
         hash: String,
     },
+    /// A guild's invite splash (`splashes/{guild_id}/{hash}.png`).
+    GuildSplash {
+        guild_id: u64,
+        hash: String,
+    },
+    /// Also where an invite profile's `custom_banner_hash` lives.
+    DiscoverySplash {
+        guild_id: u64,
+        hash: String,
+    },
     GuildMemberBanner {
         guild_id: u64,
         user_id: u64,
@@ -106,6 +116,24 @@ pub enum ImageSpec {
     },
     Collectible {
         url: String,
+    },
+    /// Application icons and covers (`app-icons/`) or uploaded widget assets (`app-assets/`).
+    AppImage {
+        application_id: u64,
+        hash: String,
+        uploaded: bool,
+        animated: bool,
+    },
+    /// A game's portrait cover (`app-icons/{application_id}/{hash}`). The CDN crops these to a
+    /// square unless asked to keep their aspect ratio.
+    AppCover {
+        application_id: u64,
+        hash: String,
+    },
+    /// SKU store art (`app-assets/{application_id}/store/{asset_id}`), e.g. wishlist cards.
+    StoreAsset {
+        application_id: u64,
+        asset_id: u64,
     },
     Animated {
         still: Box<ImageSpec>,
@@ -121,6 +149,12 @@ impl ImageSpec {
             | ImageSpec::Banner { hash, .. }
             | ImageSpec::GuildBanner { hash, .. }
             | ImageSpec::GuildMemberBanner { hash, .. } => hash,
+            // Uploaded app assets carry no `a_` prefix; the widget config flags animated ones.
+            ImageSpec::AppImage { animated: true, .. } => {
+                return Some(ImageSpec::Animated {
+                    still: Box::new(self.clone()),
+                });
+            }
             _ => return None,
         };
         hash.starts_with("a_").then(|| ImageSpec::Animated {
@@ -167,6 +201,15 @@ pub(crate) fn allowed_url(url: &reqwest::Url) -> bool {
                         !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
                     })
         })
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+}
+
+/// Spotify album art comes from a host outside Discord's CDN; only images may load it.
+fn spotify_image_url(url: &reqwest::Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str() == Some("i.scdn.co")
         && url.username().is_empty()
         && url.password().is_none()
         && url.port().is_none()
@@ -289,6 +332,20 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
             }
             format!("https://cdn.discordapp.com/banners/{guild_id}/{hash}.webp?size={size}")
         }
+        ImageSpec::GuildSplash { guild_id, hash } => {
+            if !valid_hash(hash) {
+                return None;
+            }
+            format!("https://cdn.discordapp.com/splashes/{guild_id}/{hash}.png?size={size}")
+        }
+        ImageSpec::DiscoverySplash { guild_id, hash } => {
+            if !valid_hash(hash) {
+                return None;
+            }
+            format!(
+                "https://cdn.discordapp.com/discovery-splashes/{guild_id}/{hash}.webp?size={size}"
+            )
+        }
         ImageSpec::GuildMemberBanner {
             guild_id,
             user_id,
@@ -301,6 +358,41 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
                 "https://cdn.discordapp.com/guilds/{guild_id}/users/{user_id}/banners/{hash}.png?size={size}"
             )
         }
+        ImageSpec::AppImage {
+            application_id,
+            hash,
+            uploaded,
+            ..
+        } => {
+            if !valid_hash(hash) {
+                return None;
+            }
+            let (route, extension) = if *uploaded {
+                ("app-assets", "webp")
+            } else {
+                ("app-icons", "png")
+            };
+            format!(
+                "https://cdn.discordapp.com/{route}/{application_id}/{hash}.{extension}?size={size}"
+            )
+        }
+        ImageSpec::AppCover {
+            application_id,
+            hash,
+        } => {
+            if !valid_hash(hash) {
+                return None;
+            }
+            format!(
+                "https://cdn.discordapp.com/app-icons/{application_id}/{hash}.png?size={size}&keep_aspect_ratio=true"
+            )
+        }
+        ImageSpec::StoreAsset {
+            application_id,
+            asset_id,
+        } => format!(
+            "https://cdn.discordapp.com/app-assets/{application_id}/store/{asset_id}.webp?size={size}"
+        ),
         ImageSpec::Badge { icon } => {
             if !valid_hash(icon) {
                 return None;
@@ -315,7 +407,7 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
         ImageSpec::Animated { .. } => return None,
     };
     let mut url = reqwest::Url::parse(&raw).ok()?;
-    if !allowed_url(&url) {
+    if !allowed_url(&url) && !spotify_image_url(&url) {
         return None;
     }
     if matches!(spec, ImageSpec::Collectible { .. })
@@ -1027,6 +1119,17 @@ mod tests {
         );
         assert_eq!(
             url(
+                ImageSpec::GuildSplash {
+                    guild_id: 2,
+                    hash: "ff".into()
+                },
+                512
+            )
+            .as_deref(),
+            Some("https://cdn.discordapp.com/splashes/2/ff.png?size=512")
+        );
+        assert_eq!(
+            url(
                 ImageSpec::Badge {
                     icon: "f0000000000000000000000000000001".into()
                 },
@@ -1359,6 +1462,92 @@ mod tests {
             .as_str(),
             "https://images-ext-1.discordapp.net/a"
         );
+    }
+
+    #[test]
+    fn app_images_request_a_sized_copy() {
+        let url = |uploaded| {
+            image_url(
+                &ImageSpec::AppImage {
+                    application_id: 7,
+                    hash: "abc123".into(),
+                    uploaded,
+                    animated: false,
+                },
+                300,
+            )
+            .unwrap()
+            .to_string()
+        };
+        assert_eq!(
+            url(false),
+            "https://cdn.discordapp.com/app-icons/7/abc123.png?size=512"
+        );
+        assert_eq!(
+            url(true),
+            "https://cdn.discordapp.com/app-assets/7/abc123.webp?size=512"
+        );
+        let still = ImageSpec::AppImage {
+            application_id: 7,
+            hash: "abc123".into(),
+            uploaded: true,
+            animated: true,
+        };
+        assert_eq!(
+            image_url(&still.animated().unwrap(), 300)
+                .unwrap()
+                .to_string(),
+            "https://cdn.discordapp.com/app-assets/7/abc123.webp?size=512&animated=true"
+        );
+        let cover = ImageSpec::AppCover {
+            application_id: 7,
+            hash: "abc123".into(),
+        };
+        assert_eq!(
+            image_url(&cover, 300).unwrap().to_string(),
+            "https://cdn.discordapp.com/app-icons/7/abc123.png?size=512&keep_aspect_ratio=true"
+        );
+    }
+
+    #[test]
+    fn spotify_album_art_loads_as_an_image_only() {
+        let url = "https://i.scdn.co/image/synthetic-album-art";
+        assert_eq!(
+            image_url(
+                &ImageSpec::Media {
+                    url: url.into(),
+                    width: 300,
+                    height: 300,
+                    animated: false,
+                },
+                128
+            )
+            .unwrap()
+            .as_str(),
+            "https://i.scdn.co/image/synthetic-album-art?width=128&height=128"
+        );
+        assert!(trusted_video_url("https://i.scdn.co/image/synthetic.mp4").is_none());
+        assert!(!allowed_url(&reqwest::Url::parse(url).unwrap()));
+        for url in [
+            "http://i.scdn.co/image/synthetic-album-art",
+            "https://i.scdn.co.evil.test/image/synthetic-album-art",
+            "https://i.scdn.co:8443/image/synthetic-album-art",
+            "https://user:pass@i.scdn.co/image/synthetic-album-art",
+        ] {
+            assert!(
+                image_url(
+                    &ImageSpec::Media {
+                        url: url.into(),
+                        width: 0,
+                        height: 0,
+                        animated: false,
+                    },
+                    64
+                )
+                .is_none(),
+                "{url}"
+            );
+        }
     }
 
     #[test]

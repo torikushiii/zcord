@@ -255,7 +255,7 @@ fn embeds_map_kinds_text_fields_timestamps_and_proxy_only_media() {
         (Some("gifv"), EmbedKind::Gifv),
         (Some("video"), EmbedKind::Video),
         (Some("components"), EmbedKind::Components),
-        (Some("article"), EmbedKind::Link),
+        (Some("article"), EmbedKind::Article),
         (Some("link"), EmbedKind::Link),
         (Some("future"), EmbedKind::Link),
     ] {
@@ -265,7 +265,8 @@ fn embeds_map_kinds_text_fields_timestamps_and_proxy_only_media() {
         };
         assert!(mapping::map_embed(&wire).kind == expected);
         wire.color = Some(0);
-        if matches!(kind, Some("article" | "link" | "future")) {
+        // Articles keep their layout with a colour; Discord still puts the thumbnail below.
+        if matches!(kind, Some("link" | "future")) {
             assert!(mapping::map_embed(&wire).kind == EmbedKind::Rich);
             wire.color = None;
             wire.fields = vec![serde_json::from_value(json!({})).unwrap()];
@@ -1998,6 +1999,272 @@ fn presence_activity_mapping_and_partial_users_preserve_names() {
 }
 
 #[test]
+fn presence_game_activity_tracks_playing_and_clears() {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let mut store = Store::from_ready(ready());
+    let presence: model::Presence = serde_json::from_value(json!({
+        "user_id": "2",
+        "activities": [{
+            "type": 0,
+            "name": "Example Game",
+            "application_id": "123",
+            "timestamps": {"start": 1700000000000u64}
+        }]
+    }))
+    .unwrap();
+    store.apply(Event::PresenceUpdate(Box::new(presence)));
+    let game = store.user(2).unwrap().game.clone().unwrap();
+    assert_eq!(game.name, "Example Game");
+    assert_eq!(game.application_id, Some(123));
+    assert_eq!(
+        game.started_at,
+        Some(UNIX_EPOCH + Duration::from_millis(1_700_000_000_000))
+    );
+
+    // An author refresh must keep the presence-derived game.
+    let mut message = messages().remove(0);
+    message.author.id = 2;
+    message.author.username = "writer".into();
+    store.set_messages(2002, vec![message]);
+    assert!(store.user(2).unwrap().game.is_some());
+
+    let presence: model::Presence =
+        serde_json::from_value(json!({"user_id":"2","activities":[]})).unwrap();
+    store.apply(Event::PresenceUpdate(Box::new(presence)));
+    assert!(store.user(2).unwrap().game.is_none());
+    assert!(!store.user(2).unwrap().playing);
+}
+
+#[test]
+fn presence_game_activity_maps_rich_assets_and_text() {
+    let mut store = Store::from_ready(ready());
+    let mut apply = |activity: serde_json::Value| {
+        let presence: model::Presence = serde_json::from_value(json!({
+            "user_id": "2",
+            "activities": [activity]
+        }))
+        .unwrap();
+        store.apply(Event::PresenceUpdate(Box::new(presence)));
+        store.user(2).unwrap().game.clone().unwrap()
+    };
+
+    let game = apply(json!({
+        "type": 0,
+        "name": "Visual Studio Code",
+        "application_id": "123",
+        "details": "  Editing quick_switcher.rs  ",
+        "state": "   ",
+        "assets": {
+            "large_image": "456",
+            "large_text": "Example Game",
+            "small_image": "789",
+            "small_text": "VS Code"
+        }
+    }));
+    assert_eq!(game.details.as_deref(), Some("Editing quick_switcher.rs"));
+    assert!(game.state.is_none());
+    let large = game.large_image.unwrap();
+    assert_eq!(large.url, "https://cdn.discordapp.com/app-assets/123/456.png");
+    assert_eq!(large.text.as_deref(), Some("Example Game"));
+    let small = game.small_image.unwrap();
+    assert_eq!(small.url, "https://cdn.discordapp.com/app-assets/123/789.png");
+    assert_eq!(small.text.as_deref(), Some("VS Code"));
+
+    let game = apply(json!({
+        "type": 0,
+        "name": "Code",
+        "details": "   ",
+        "assets": {"large_image": "456"}
+    }));
+    assert!(game.details.is_none());
+    assert!(game.large_image.is_none());
+
+    let game = apply(json!({
+        "type": 0,
+        "name": "Code",
+        "assets": {"large_image": "mp:external/abc/https/x.png"}
+    }));
+    assert_eq!(
+        game.large_image.unwrap().url,
+        "https://media.discordapp.net/external/abc/https/x.png"
+    );
+
+    let game = apply(json!({
+        "type": 0,
+        "name": "Code",
+        "assets": {"large_image": "spotify:f00000000000002a"}
+    }));
+    assert_eq!(
+        game.large_image.unwrap().url,
+        "https://i.scdn.co/image/f00000000000002a"
+    );
+
+    let game = apply(json!({
+        "type": 0,
+        "name": "Code",
+        "assets": {"large_image": "youtube:xyz"}
+    }));
+    assert!(game.large_image.is_none());
+
+    let game = apply(json!({
+        "type": 0,
+        "name": "Code",
+        "details": "Editing quick_switcher.rs",
+        "assets": "malformed"
+    }));
+    assert_eq!(game.details.as_deref(), Some("Editing quick_switcher.rs"));
+    assert!(game.large_image.is_none() && game.small_image.is_none());
+}
+
+#[test]
+fn presence_game_activity_maps_platform_and_embedded_flag() {
+    let mut store = Store::from_ready(ready());
+    let mut apply = |activity: serde_json::Value| {
+        let presence: model::Presence = serde_json::from_value(json!({
+            "user_id": "2",
+            "activities": [activity]
+        }))
+        .unwrap();
+        store.apply(Event::PresenceUpdate(Box::new(presence)));
+        store.user(2).unwrap().game.clone().unwrap()
+    };
+
+    let game = apply(json!({
+        "type": 0,
+        "name": "Example Puzzle",
+        "application_id": "123",
+        "platform": "XBOX",
+        "flags": 256
+    }));
+    assert_eq!(game.platform.as_deref(), Some("xbox"));
+    assert!(game.embedded);
+
+    let game = apply(json!({
+        "type": 0,
+        "name": "Embedded",
+        "platform": "embedded"
+    }));
+    assert_eq!(game.platform.as_deref(), Some("embedded"));
+    assert!(game.embedded);
+
+    let game = apply(json!({"type": 0, "name": "Desktop", "platform": "  ", "flags": 0}));
+    assert!(game.platform.is_none());
+    assert!(!game.embedded);
+}
+
+#[test]
+fn presence_game_activity_falls_back_to_created_at_and_reads_the_play_flag() {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let mut store = Store::from_ready(ready());
+    let mut apply = |activity: serde_json::Value| {
+        let presence: model::Presence = serde_json::from_value(json!({
+            "user_id": "2",
+            "activities": [activity]
+        }))
+        .unwrap();
+        store.apply(Event::PresenceUpdate(Box::new(presence)));
+        store.user(2).unwrap().game.clone().unwrap()
+    };
+
+    let game = apply(json!({
+        "type": 0,
+        "name": "Example Idle Game",
+        "application_id": "1191168989724672018",
+        "created_at": 1704067200000u64,
+        "flags": 288
+    }));
+    assert_eq!(
+        game.started_at,
+        Some(UNIX_EPOCH + Duration::from_millis(1_704_067_200_000))
+    );
+    assert!(game.playable && game.embedded);
+
+    let game = apply(json!({
+        "type": 0,
+        "name": "Both",
+        "created_at": 1704067200000u64,
+        "timestamps": {"start": 1700000000000u64}
+    }));
+    assert_eq!(
+        game.started_at,
+        Some(UNIX_EPOCH + Duration::from_millis(1_700_000_000_000))
+    );
+    assert!(!game.playable && !game.embedded);
+}
+
+#[test]
+fn sessions_replace_applies_the_current_users_activity() {
+    let mut store = Store::from_ready(ready());
+    let current = store.current_user_id;
+    let sessions = model::parse_entries(json!([
+        {
+            "session_id": "all",
+            "status": "online",
+            "active": true,
+            "activities": [{
+                "type": 0,
+                "name": "Visual Studio Code",
+                "application_id": "123",
+                "details": "Editing quick_switcher.rs",
+                "state": "Workspace: discord [SSH: demo-host]",
+                "timestamps": {"start": 1700000000000u64},
+                "assets": {"large_image": "456", "large_text": "Example Game"}
+            }]
+        }
+    ]));
+    store.apply(Event::SessionsReplace(sessions));
+    let game = store.user(current).unwrap().game.clone().unwrap();
+    assert_eq!(game.name, "Visual Studio Code");
+    assert_eq!(game.details.as_deref(), Some("Editing quick_switcher.rs"));
+    assert_eq!(game.state.as_deref(), Some("Workspace: discord [SSH: demo-host]"));
+    assert_eq!(
+        game.large_image.as_ref().map(|image| image.url.as_str()),
+        Some("https://cdn.discordapp.com/app-assets/123/456.png")
+    );
+    assert_eq!(game.application_id, Some(123));
+
+    let sessions = model::parse_entries(json!([
+        {"session_id": "a", "active": false, "activities": [
+            {"type": 0, "name": "Inactive"}
+        ]},
+        {"session_id": "b", "active": true, "activities": [
+            {"type": 0, "name": "Active"}
+        ]}
+    ]));
+    store.apply(Event::SessionsReplace(sessions));
+    assert_eq!(
+        store.user(current).unwrap().game.as_ref().unwrap().name,
+        "Active"
+    );
+
+    let sessions = model::parse_entries(json!([
+        "not a session",
+        {"session_id": "all", "activities": [{"type": 0, "name": "Recovered"}]}
+    ]));
+    assert_eq!(sessions.len(), 1);
+    store.apply(Event::SessionsReplace(sessions));
+    assert_eq!(
+        store.user(current).unwrap().game.as_ref().unwrap().name,
+        "Recovered"
+    );
+
+    let mut ready = ready();
+    ready.sessions = model::parse_entries(json!([
+        {"session_id": "all", "activities": [{
+            "type": 0,
+            "name": "Ready Game",
+            "details": "From READY"
+        }]}
+    ]));
+    store.apply(Event::Ready(Box::new(ready)));
+    let game = store.user(current).unwrap().game.clone().unwrap();
+    assert_eq!(game.name, "Ready Game");
+    assert_eq!(game.details.as_deref(), Some("From READY"));
+}
+
+#[test]
 fn primary_guild_tag_maps_and_survives_users_without_the_field() {
     let mut store = Store::from_ready(ready());
     let mut message = messages().remove(0);
@@ -3342,4 +3609,114 @@ fn typing_start_registers_member_without_state_change() {
         Change::None
     );
     assert_eq!(store.member_name(200, 77), Some("typer"));
+}
+
+#[test]
+fn a_custom_status_keeps_the_game_for_profiles() {
+    let mut store = Store::from_ready(ready());
+    let presence: model::Presence = serde_json::from_value(json!({
+        "user_id": "2",
+        "activities": [
+            {"type": 4, "name": "Custom Status", "state": "busy"},
+            {"type": 0, "name": "Visual Studio Code"}
+        ]
+    }))
+    .unwrap();
+    store.apply(Event::PresenceUpdate(Box::new(presence)));
+    let user = store.user(2).unwrap();
+    assert_eq!(user.activity.as_deref(), Some("busy"));
+    assert!(!user.playing);
+    assert_eq!(user.game.as_ref().unwrap().name, "Visual Studio Code");
+}
+
+#[test]
+fn invite_view_prefers_custom_banner_and_resolves_game_icons() {
+    let invite: model::Invite = serde_json::from_value(json!({
+        "code": "sampleInviteTwo",
+        "expires_at": "2024-02-01T00:00:00+00:00",
+        "guild": {
+            "id": "1191168993918976019",
+            "name": "Sample Server One",
+            "icon": "f0000000000000000000000000000020",
+            "banner": "f0000000000000000000000000000002",
+            "splash": "f0000000000000000000000000000013"
+        },
+        "guild_id": "1191168993918976019",
+        "profile": {
+            "id": "1191168993918976019",
+            "name": "Sample Server One",
+            "icon_hash": "f0000000000000000000000000000020",
+            "member_count": 6797,
+            "online_count": 1888,
+            "banner_hash": null,
+            "custom_banner_hash": "f0000000000000000000000000000019",
+            "game_application_ids": ["1191169086193664041"]
+        },
+        "approximate_member_count": 6797,
+        "approximate_presence_count": 1888
+    }))
+    .unwrap();
+    let applications = [std::sync::Arc::new(model::PublicApplication {
+        id: 1191169086193664041,
+        name: "Example World Game".into(),
+        icon: Some("iconhash".into()),
+        cover_image: None,
+    })];
+    let invite = Invite::from_model(&invite, &applications).unwrap();
+    assert_eq!(invite.name, "Sample Server One");
+    assert_eq!(invite.members, 6797);
+    assert_eq!(invite.online, 1888);
+    assert_eq!(invite.games, [1191169086193664041]);
+    assert_eq!(
+        invite.banner,
+        Some(InviteBanner::Custom(
+            "f0000000000000000000000000000019".into()
+        ))
+    );
+    assert_eq!(
+        invite.banner_spec(),
+        Some(ImageSpec::DiscoverySplash {
+            guild_id: 1191168993918976019,
+            hash: "f0000000000000000000000000000019".into()
+        })
+    );
+    assert_eq!(
+        invite.icon_spec(),
+        Some(ImageSpec::GuildIcon {
+            guild_id: 1191168993918976019,
+            hash: "f0000000000000000000000000000020".into()
+        })
+    );
+    assert!((invite.created_at.year, invite.created_at.month) == (2022, 5));
+    assert!(invite.expires_at.is_some());
+    let game = &invite.game_apps[0];
+    assert_eq!(game.name, "Example World Game");
+    assert_eq!(
+        game.icon_spec(),
+        Some(ImageSpec::AppImage {
+            application_id: 1191169086193664041,
+            hash: "iconhash".into(),
+            uploaded: false,
+            animated: false,
+        })
+    );
+
+    // Without a banner the splash is used; a guild-less invite has no card.
+    let splash: model::Invite = serde_json::from_value(json!({
+        "code": "splash",
+        "guild_id": "1",
+        "guild": {"id": "1", "name": "Splash", "splash": "abc"}
+    }))
+    .unwrap();
+    let splash = Invite::from_model(&splash, &[]).unwrap();
+    assert_eq!(splash.banner, Some(InviteBanner::Splash("abc".into())));
+    assert_eq!(
+        splash.banner_spec(),
+        Some(ImageSpec::GuildSplash {
+            guild_id: 1,
+            hash: "abc".into()
+        })
+    );
+    let group: model::Invite = serde_json::from_value(json!({"code": "group"})).unwrap();
+    assert!(Invite::from_model(&group, &[]).is_none());
 }

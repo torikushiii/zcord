@@ -1,5 +1,7 @@
+use crate::discord::model;
 pub use crate::discord::model::Attachment;
 use crate::images::ImageSpec;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 const MONTHS: [&str; 12] = [
@@ -31,7 +33,7 @@ impl Status {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GuildTag {
     pub text: String,
     pub guild_id: u64,
@@ -58,12 +60,35 @@ pub struct User {
     pub tag: Option<GuildTag>,
     pub playing: bool,
     pub activity: Option<String>,
+    pub game: Option<GameActivity>,
     pub custom_status: Option<CustomStatus>,
     pub avatar: Option<String>,
     pub discriminator: Option<String>,
     pub decoration: Option<Decoration>,
     pub nameplate: Option<Nameplate>,
     pub name_style: Option<NameStyle>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GameActivity {
+    pub name: String,
+    pub application_id: Option<u64>,
+    pub platform: Option<String>,
+    /// An embedded Discord Activity (`flags & (1 << 8)` or platform "embedded").
+    pub embedded: bool,
+    /// The activity advertises a Play action (`flags & (1 << 5)`).
+    pub playable: bool,
+    pub started_at: Option<SystemTime>,
+    pub details: Option<String>,
+    pub state: Option<String>,
+    pub large_image: Option<ActivityImage>,
+    pub small_image: Option<ActivityImage>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActivityImage {
+    pub url: String,
+    pub text: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -188,6 +213,12 @@ impl Timestamp {
         )
     }
 
+    /// "Jan 2017"
+    pub fn month_year(self) -> String {
+        let month = MONTHS[(self.month as usize).saturating_sub(1) % 12];
+        format!("{} {}", &month[..3], self.year)
+    }
+
     pub fn date(self) -> String {
         let month = MONTHS[(self.month as usize).saturating_sub(1) % 12];
         format!("{month} {}, {}", self.day, self.year)
@@ -230,6 +261,8 @@ pub enum EmbedKind {
     Gifv,
     Video,
     Link,
+    /// OpenGraph pages; Discord shows their thumbnail as the large image under the text.
+    Article,
     Components,
 }
 
@@ -681,4 +714,178 @@ pub struct Folder {
     pub name: Option<String>,
     pub color: Option<u32>,
     pub guild_ids: Vec<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InviteState {
+    Loading,
+    Invalid,
+    Ready(Arc<Invite>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Invite {
+    pub code: String,
+    pub guild_id: u64,
+    pub name: String,
+    /// Guild icon hash (`icons/{guild_id}/{hash}`).
+    pub icon: Option<String>,
+    pub banner: Option<InviteBanner>,
+    pub description: Option<String>,
+    pub tag: Option<GuildTag>,
+    pub online: u32,
+    pub members: u32,
+    /// Derived from the guild id snowflake.
+    pub created_at: Timestamp,
+    pub games: Vec<u64>,
+    /// `games` resolved through the public-application lookup, for icons.
+    pub game_apps: Vec<InviteApp>,
+    pub expires_at: Option<Timestamp>,
+}
+
+impl Invite {
+    pub fn from_model(
+        invite: &model::Invite,
+        applications: &[Arc<model::PublicApplication>],
+    ) -> Option<Self> {
+        let profile = invite.profile.as_ref();
+        let guild = invite.guild.as_ref();
+        let guild_id = invite
+            .guild_id
+            .or_else(|| guild.and_then(|guild| guild.id))
+            .or_else(|| profile.and_then(|profile| profile.id))?;
+        let hash = |value: Option<&String>| value.filter(|value| !value.is_empty()).cloned();
+        let name = profile
+            .and_then(|profile| profile.name.clone())
+            .or_else(|| guild.map(|guild| guild.name.clone()))
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| invite.code.clone());
+        let icon = hash(profile.and_then(|profile| profile.icon_hash.as_ref()))
+            .or_else(|| hash(guild.and_then(|guild| guild.icon.as_ref())));
+        let banner = hash(profile.and_then(|profile| profile.custom_banner_hash.as_ref()))
+            .map(InviteBanner::Custom)
+            .or_else(|| {
+                hash(profile.and_then(|profile| profile.banner_hash.as_ref()))
+                    .map(InviteBanner::Banner)
+            })
+            .or_else(|| {
+                hash(guild.and_then(|guild| guild.banner.as_ref()))
+                    .map(InviteBanner::GuildBanner)
+            })
+            .or_else(|| {
+                hash(guild.and_then(|guild| guild.splash.as_ref())).map(InviteBanner::Splash)
+            });
+        let description = profile
+            .and_then(|profile| profile.description.clone())
+            .filter(|description| !description.is_empty())
+            .or_else(|| {
+                guild
+                    .and_then(|guild| guild.description.clone())
+                    .filter(|description| !description.is_empty())
+            });
+        let tag = profile
+            .and_then(|profile| hash(profile.tag.as_ref()))
+            .map(|text| GuildTag {
+                text,
+                guild_id,
+                badge: profile.and_then(|profile| hash(profile.badge_hash.as_ref())),
+            });
+        Some(Self {
+            code: invite.code.clone(),
+            guild_id,
+            name,
+            icon,
+            banner,
+            description,
+            tag,
+            online: profile
+                .and_then(|profile| profile.online_count)
+                .or(invite.approximate_presence_count)
+                .unwrap_or_default(),
+            members: profile
+                .and_then(|profile| profile.member_count)
+                .or(invite.approximate_member_count)
+                .unwrap_or_default(),
+            created_at: super::mapping::timestamp_from_nonce(guild_id),
+            games: profile
+                .map(|profile| profile.game_application_ids.clone())
+                .unwrap_or_default(),
+            game_apps: applications
+                .iter()
+                .map(|application| InviteApp {
+                    id: application.id,
+                    name: application.name.clone(),
+                    icon: application.icon.clone(),
+                })
+                .collect(),
+            expires_at: invite
+                .expires_at
+                .as_deref()
+                .and_then(super::mapping::local_timestamp),
+        })
+    }
+
+    pub fn icon_spec(&self) -> Option<ImageSpec> {
+        self.icon.as_ref().map(|hash| ImageSpec::GuildIcon {
+            guild_id: self.guild_id,
+            hash: hash.clone(),
+        })
+    }
+
+    pub fn banner_spec(&self) -> Option<ImageSpec> {
+        self.banner.as_ref()?.spec(self.guild_id)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InviteBanner {
+    /// `profile.custom_banner_hash`
+    Custom(String),
+    /// `profile.banner_hash`
+    Banner(String),
+    /// `guild.banner`
+    GuildBanner(String),
+    /// `guild.splash`
+    Splash(String),
+}
+
+impl InviteBanner {
+    pub fn hash(&self) -> &str {
+        match self {
+            Self::Custom(hash)
+            | Self::Banner(hash)
+            | Self::GuildBanner(hash)
+            | Self::Splash(hash) => hash,
+        }
+    }
+
+    pub fn spec(&self, guild_id: u64) -> Option<ImageSpec> {
+        let hash = self.hash().to_owned();
+        Some(match self {
+            Self::Custom(_) => ImageSpec::DiscoverySplash { guild_id, hash },
+            Self::Banner(_) | Self::GuildBanner(_) => ImageSpec::GuildBanner { guild_id, hash },
+            Self::Splash(_) => ImageSpec::GuildSplash { guild_id, hash },
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InviteApp {
+    pub id: u64,
+    pub name: String,
+    /// App icon hash (`app-icons/{id}/{hash}`).
+    pub icon: Option<String>,
+}
+
+impl InviteApp {
+    pub fn icon_spec(&self) -> Option<ImageSpec> {
+        let hash = self.icon.clone()?;
+        let animated = hash.starts_with("a_");
+        Some(ImageSpec::AppImage {
+            application_id: self.id,
+            hash,
+            uploaded: false,
+            animated,
+        })
+    }
 }
