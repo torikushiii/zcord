@@ -119,3 +119,30 @@ fn ordinary_tab_content_stays_top_aligned(cx: &mut TestAppContext) {
     assert_eq!(content.top(), panel.top() + px(20.));
     assert_eq!(content.size.height, px(80.));
 }
+
+#[gpui::test]
+fn mutual_icons_never_cover_the_count(cx: &mut TestAppContext) {
+    struct Line;
+    impl Render for Line {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let icons = (0..3).map(|_| div().size(rpx(16.)).rounded_full().into_any_element());
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_x(rpx(6.))
+                .w(rpx(300.))
+                .text_size(rpx(12.))
+                .child(super::mutual_entry("mutual", icons, "16 Mutual Servers".into()))
+        }
+    }
+    let (_, cx) = cx.add_window_view(|_, _| Line);
+    cx.update(|window, cx| {
+        window.set_rem_size(px(16.));
+        let _ = window.draw(cx);
+    });
+    let icons = cx.debug_bounds("mutual-icons").unwrap();
+    let text = cx.debug_bounds("mutual-text").unwrap();
+    assert!(icons.size.width >= px(39.), "icons {:?}", icons);
+    assert!(text.left() >= icons.right(), "icons {:?} text {:?}", icons, text);
+}

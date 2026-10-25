@@ -238,6 +238,7 @@ pub fn messages(app: &DiscordApp, cx: &App) -> AnyElement {
                                 let Some(app) = list_entity.upgrade() else {
                                     return div().into_any_element();
                                 };
+                                request_invites(&app, index, cx);
                                 render_row(app.read(cx), index, cx)
                             })
                             .flex_1()
@@ -324,13 +325,6 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                         .flex()
                         .gap_1()
                         .my(rpx(12.))
-                        .child(theme::icon_button("gift", "gift", 24., theme::MUTED))
-                        .child(theme::icon_button(
-                            "translate",
-                            "languages",
-                            24.,
-                            theme::MUTED,
-                        ))
                         .child(theme::icon_button("gif", "image-play", 24., theme::MUTED))
                         .child(theme::icon_button("stickers", "sticker", 24., theme::MUTED))
                         .child({
@@ -353,8 +347,7 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                                         .ok();
                                 },
                             )
-                        })
-                        .child(theme::icon_button("apps", "layout-grid", 24., theme::MUTED)),
+                        }),
                 )
                 .when(remaining < 200, |this| {
                     this.child(
@@ -679,6 +672,28 @@ fn skeleton(seed: u64) -> impl IntoElement {
         .overflow_hidden()
         .pb(rpx(BOTTOM_SPACER))
         .children(groups)
+}
+
+/// Rendering only reads, so fetch a row's unseen invite links after this frame.
+fn request_invites(app: &Entity<DiscordApp>, index: usize, cx: &mut App) {
+    let content = {
+        let app = app.read(cx);
+        let Some(message) = app.channel().and_then(|channel| channel.messages.get(index)) else {
+            return;
+        };
+        if !crate::discord::model::invite_codes(&message.content)
+            .iter()
+            .any(|code| !app.invites.contains_key(code))
+        {
+            return;
+        }
+        message.content.clone()
+    };
+    let app = app.downgrade();
+    cx.defer(move |cx| {
+        app.update(cx, |app, cx| app.prefetch_invites(&content, cx))
+            .ok();
+    });
 }
 
 fn render_row(app: &DiscordApp, index: usize, cx: &App) -> AnyElement {
@@ -1624,6 +1639,7 @@ fn render_message(
                             &message.components,
                             cx,
                         ))
+                        .children(super::invite_card::cards(app, message, cx))
                         .children(
                             message
                                 .attachments

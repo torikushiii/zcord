@@ -148,6 +148,18 @@ impl Player {
         }
     }
 
+    /// Applies a saved sound level; commands queue until the engine has loaded.
+    pub(crate) fn restore_audio(&self, volume: f64, muted: bool) {
+        let volume = volume.clamp(0., 1.);
+        {
+            let mut state = self.state.lock().unwrap();
+            state.volume = volume;
+            state.muted = muted;
+        }
+        self.commands.send(Command::SetVolume(volume)).ok();
+        self.commands.send(Command::SetMuted(muted)).ok();
+    }
+
     pub(crate) fn attach(&mut self, cx: &mut Context<DiscordApp>) {
         let Some(mut events) = self.events.take() else {
             return;

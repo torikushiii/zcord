@@ -1,4 +1,10 @@
-Icons other than discord.svg are from Lucide (https://lucide.dev), ISC License:
+connections/*.svg, other than connections/domain.svg and connections/xbox.svg, are from Simple Icons v16.35.0
+(https://simpleicons.org), CC0 1.0. The logos are trademarks of their respective owners.
+
+connections/xbox.svg is from Font Awesome Free 7.3.1 (https://fontawesome.com), CC BY 4.0
+(https://creativecommons.org/licenses/by/4.0/). The Xbox logo is a trademark of Microsoft.
+
+The remaining icons, other than discord.svg, are from Lucide (https://lucide.dev), ISC License:
 
 ISC License
 

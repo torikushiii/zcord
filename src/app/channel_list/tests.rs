@@ -4,7 +4,7 @@ use gpui::{
     Context, IntoElement, ListOffset, Render, TestAppContext, Window, div, list, prelude::*, px,
 };
 
-use super::{Row, Rows, WIDTH, row_content};
+use super::{FOLD, Row, Rows, WIDTH, row_content};
 use crate::{
     store::{Category, Channel, ChannelKind, Guild},
     theme::rpx,
@@ -47,7 +47,7 @@ fn guild(id: u64, channels: usize) -> Guild {
 fn hierarchy_updates_without_resetting_scroll_for_the_same_server() {
     let mut guild = guild(1, 4);
     let mut rows = Rows::new();
-    rows.sync(Some(&guild));
+    rows.sync(Some(&guild), 101);
     assert_eq!(
         rows.rows,
         [
@@ -76,23 +76,91 @@ fn hierarchy_updates_without_resetting_scroll_for_the_same_server() {
         offset_in_item: px(5.),
     };
     rows.state.scroll_to(position);
-    rows.sync(Some(&guild));
+    rows.sync(Some(&guild), 101);
     assert_eq!(rows.state.logical_scroll_top().item_ix, position.item_ix);
     assert_eq!(
         rows.state.logical_scroll_top().offset_in_item,
         position.offset_in_item
     );
     guild.categories[0].channels.pop();
-    rows.sync(Some(&guild));
+    rows.sync(Some(&guild), 101);
     assert_eq!(rows.rows.len(), 5);
     assert_eq!(rows.state.item_count(), 5);
     assert_eq!(rows.state.logical_scroll_top().item_ix, position.item_ix);
     guild.id = 2;
-    rows.sync(Some(&guild));
+    rows.sync(Some(&guild), 101);
     assert_eq!(rows.state.logical_scroll_top().item_ix, 0);
-    rows.sync(None);
+    rows.sync(None, 0);
     assert_eq!(rows.rows, [Row::Shortcuts]);
     assert_eq!(rows.state.item_count(), 1);
+}
+
+#[test]
+fn collapsed_categories_hide_channels_but_keep_the_selected_one_across_syncs() {
+    let first = guild(1, 4);
+    let mut rows = Rows::new();
+    rows.sync(Some(&first), 101);
+    let category = first.categories[0].id;
+    rows.collapsed.insert(category);
+    rows.sync(Some(&first), 101);
+    assert_eq!(
+        rows.rows,
+        [
+            Row::Shortcuts,
+            Row::Category(0),
+            Row::Channel {
+                category: 0,
+                channel: 1
+            },
+        ]
+    );
+    assert_eq!(rows.state.item_count(), 3);
+
+    rows.sync(Some(&first), 100);
+    assert_eq!(
+        rows.rows,
+        [
+            Row::Shortcuts,
+            Row::Category(0),
+            Row::Channel {
+                category: 0,
+                channel: 0
+            },
+        ]
+    );
+
+    rows.collapsed.remove(&category);
+    rows.sync(Some(&first), 100);
+    assert_eq!(rows.rows.len(), 6);
+    assert_eq!(rows.state.item_count(), 6);
+
+    rows.collapsed.insert(category);
+    rows.sync(Some(&first), 101);
+    assert_eq!(rows.rows.len(), 3);
+    rows.sync(Some(&guild(2, 2)), 100);
+    assert_eq!(rows.rows.len(), 4);
+    assert!(rows.collapsed.contains(&category));
+    rows.sync(Some(&first), 101);
+    assert_eq!(rows.rows.len(), 3);
+    assert_eq!(rows.state.item_count(), 3);
+}
+
+#[test]
+fn collapsing_keeps_channels_listed_until_the_fold_ends() {
+    let guild = guild(1, 4);
+    let mut rows = Rows::new();
+    rows.sync(Some(&guild), 101);
+    let category = guild.categories[0].id;
+    assert!(rows.toggle_collapsed(category));
+    rows.sync(Some(&guild), 101);
+    assert_eq!(rows.rows.len(), 6);
+    rows.folds.get_mut(&category).unwrap().started -= FOLD;
+    rows.sync(Some(&guild), 101);
+    assert_eq!(rows.rows.len(), 3);
+    assert_eq!(rows.state.item_count(), 3);
+    assert!(!rows.toggle_collapsed(category));
+    rows.sync(Some(&guild), 101);
+    assert_eq!(rows.rows.len(), 6);
 }
 
 struct Sidebar {
@@ -105,7 +173,7 @@ impl Sidebar {
     fn new(channels: usize, rendered: Rc<RefCell<Vec<usize>>>) -> Self {
         let guild = guild(1, channels);
         let mut rows = Rows::new();
-        rows.sync(Some(&guild));
+        rows.sync(Some(&guild), 101);
         Self {
             guild,
             rows,
@@ -121,7 +189,7 @@ impl Render for Sidebar {
             list(self.rows.state.clone(), move |index, _, cx| {
                 let sidebar = entity.read(cx);
                 sidebar.rendered.borrow_mut().push(index);
-                row_content(Some(&sidebar.guild), sidebar.rows.rows[index], 101)
+                row_content(Some(&sidebar.guild), sidebar.rows.rows[index], 101, 1.)
                     .id(("row", index))
                     .debug_selector(move || format!("row-{index}"))
                     .into_any_element()
