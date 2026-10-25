@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     path::Path,
     sync::Arc,
     time::{Duration, SystemTime},
@@ -13,8 +14,9 @@ use crate::{
     animated,
     app::{DISCORD_EPOCH_MS, DiscordApp, message_body::label},
     discord::model::{
-        IdentityProfile, ListenedTrack, OutboxEntry, OutboxKind, OutboxTrait, SkuPrice, StatValue,
-        WidgetAsset, WidgetData, WidgetGame, WidgetImage, WidgetText, Wishlist, WishlistItem,
+        Game, IdentityProfile, ListenedTrack, OutboxEntry, OutboxKind, OutboxTrait,
+        PublicApplication, SkuPrice, StatValue, WidgetAsset, WidgetData, WidgetGame, WidgetImage,
+        WidgetText, Wishlist, WishlistItem,
     },
     images::{self, ImageSpec},
     store::GameActivity,
@@ -1305,7 +1307,9 @@ fn current_game(
     palette: ProfilePalette,
     cx: &App,
 ) -> impl IntoElement {
-    let details = game.application_id.and_then(|id| card.games.get(&id));
+    let actions = game.application_id.map_or_else(GameActions::default, |id| {
+        GameActions::resolve(id, &card.games, &card.applications)
+    });
     let art = game
         .large_image
         .as_ref()
@@ -1345,29 +1349,6 @@ fn current_game(
             .text_color(rgb(palette.strong))
             .child(label((id, card.user_id), text))
     };
-    let steam = details
-        .and_then(|game| game.steam_app_id.clone())
-        .map(|id| {
-            div()
-                .id("profile-current-steam")
-                .flex()
-                .items_center()
-                .gap(rpx(8.))
-                .h(rpx(32.))
-                .px(rpx(12.))
-                .rounded(rpx(8.))
-                .bg(palette.button)
-                .cursor_pointer()
-                .hover(move |style| style.bg(palette.raised))
-                .text_size(rpx(14.))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(palette.strong))
-                .child(theme::icon("connections/steam", 18., palette.strong))
-                .child("Get on Steam")
-                .on_click(move |_, _, cx| {
-                    cx.open_url(&format!("https://store.steampowered.com/app/{id}"))
-                })
-        });
     div()
         .flex()
         .flex_col()
@@ -1467,7 +1448,11 @@ fn current_game(
                                     ),
                                 ),
                         )
-                        .children(steam.map(|steam| div().flex().mt(rpx(4.)).child(steam)))
+                        .children(
+                            actions
+                                .buttons("profile-current-actions", card.user_id, palette)
+                                .map(|buttons| buttons.mt(rpx(4.))),
+                        )
                         .children(
                             play_button(game, palette)
                                 .map(|play| div().flex().mt(rpx(4.)).child(play)),
@@ -1634,8 +1619,197 @@ fn timer_icon(game: &GameActivity) -> &'static str {
     }
 }
 
-/// Activities flagged PLAY get a Play button. zcord can't host the activity itself, so it opens
-/// the app's directory page where it can be launched.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct GameActions {
+    steam_url: Option<String>,
+    play_url: Option<String>,
+}
+
+impl GameActions {
+    fn resolve(
+        application_id: u64,
+        games: &HashMap<u64, Arc<Game>>,
+        applications: &HashMap<u64, Arc<PublicApplication>>,
+    ) -> Self {
+        let game = games.get(&application_id);
+        let mut linked_games: Vec<_> = games
+            .values()
+            .filter(|game| {
+                game.id != application_id
+                    && game
+                        .linked_applications
+                        .iter()
+                        .any(|linked| linked.id == application_id)
+            })
+            .collect();
+        linked_games.sort_by_key(|game| game.id);
+        let mut linked: Vec<_> = applications
+            .values()
+            .filter(|application| {
+                application.id != application_id
+                    && (application
+                        .linked_games
+                        .iter()
+                        .any(|linked| linked.id == application_id)
+                        || game.is_some_and(|game| {
+                            game.linked_applications
+                                .iter()
+                                .any(|linked| linked.id == application.id)
+                        }))
+            })
+            .collect();
+        linked.sort_by_key(|application| application.id);
+        let action_applications: Vec<_> = applications
+            .get(&application_id)
+            .into_iter()
+            .chain(linked)
+            .collect();
+        let mut action_games: Vec<&Game> = game
+            .into_iter()
+            .chain(linked_games)
+            .map(Arc::as_ref)
+            .collect();
+        for application in &action_applications {
+            for linked in application.linked_games.iter().filter(|linked| {
+                application.id == application_id || linked.id == application_id
+            }) {
+                if let Some(game) = games.get(&linked.id) {
+                    action_games.push(game.as_ref());
+                }
+                if let Some(game) = linked.application.as_ref() {
+                    action_games.push(game);
+                }
+            }
+        }
+        Self {
+            steam_url: action_games
+                .iter()
+                .find_map(|game| game.steam_app_id.as_deref().and_then(steam_store_url))
+                .or_else(|| {
+                    action_applications.iter().find_map(|application| {
+                        application.steam_app_id.as_deref().and_then(steam_store_url)
+                    })
+                }),
+            play_url: action_games
+                .iter()
+                .find_map(|game| official_game_website(game))
+                .or_else(|| {
+                    action_applications.iter().find_map(|application| {
+                        application
+                            .deeplink_uri
+                            .as_deref()
+                            .and_then(game_launch_url)
+                            // Browser deep links may be campaigns; use official-site metadata.
+                            .filter(|url| !matches!(url.scheme(), "http" | "https"))
+                            .map(|url| url.to_string())
+                    })
+                }),
+        }
+    }
+
+    fn buttons(
+        self,
+        context: &'static str,
+        key: u64,
+        palette: ProfilePalette,
+    ) -> Option<Stateful<Div>> {
+        if self.steam_url.is_none() && self.play_url.is_none() {
+            return None;
+        }
+        Some(
+            div()
+                .id((context, key))
+                .flex()
+                .flex_col()
+                .gap(rpx(8.))
+                .children(
+                    self.play_url.map(|url| {
+                        game_action_button("play-now", "Play Now", None, url, palette)
+                    }),
+                )
+                .children(self.steam_url.map(|url| {
+                    game_action_button(
+                        "steam",
+                        "Get on Steam",
+                        Some("connections/steam"),
+                        url,
+                        palette,
+                    )
+                })),
+        )
+    }
+}
+
+fn steam_store_url(id: &str) -> Option<String> {
+    let id = id.parse::<u64>().ok().filter(|id| *id > 0)?;
+    Some(format!("https://store.steampowered.com/app/{id}"))
+}
+
+fn official_game_website(game: &Game) -> Option<String> {
+    game.websites
+        .iter()
+        .filter(|website| website.category == 1)
+        .find_map(|website| {
+            let url = game_launch_url(&website.url)?;
+            matches!(url.scheme(), "http" | "https").then(|| url.to_string())
+        })
+}
+
+fn game_launch_url(raw: &str) -> Option<reqwest::Url> {
+    let url = reqwest::Url::parse(raw.trim()).ok()?;
+    // Do not hand arbitrary executable/document protocols to the operating system.
+    let supported = match url.scheme() {
+        "http" | "https" => url.host_str().is_some(),
+        "steam" => matches!(url.host_str(), Some("run" | "rungameid")),
+        "com.epicgames.launcher" => {
+            url.host_str() == Some("apps")
+                && url
+                    .query_pairs()
+                    .any(|(key, value)| key == "action" && value == "launch")
+        }
+        _ => false,
+    };
+    if !supported || !url.username().is_empty() || url.password().is_some() {
+        return None;
+    }
+    Some(url)
+}
+
+fn game_action_button(
+    id: &'static str,
+    text: &'static str,
+    icon: Option<&'static str>,
+    url: String,
+    palette: ProfilePalette,
+) -> Stateful<Div> {
+    // Dark profiles use Discord's Midnight hover tint; light profiles use its standard tint.
+    let hover = rgba(if palette.light { 0x97979F29 } else { 0x97979F33 });
+    div()
+        .id(id)
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .gap(rpx(8.))
+        .h(rpx(32.))
+        .px(rpx(12.))
+        .rounded(rpx(8.))
+        .bg(rgba(0x97979F1F))
+        .cursor_pointer()
+        .hover(move |style| style.bg(hover))
+        .text_size(rpx(14.))
+        .line_height(rpx(18.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(palette.strong))
+        .children(icon.map(|icon| theme::icon(icon, 18., palette.strong)))
+        .child(div().min_w_0().truncate().child(text))
+        .on_click(move |_, _, cx| {
+            cx.stop_propagation();
+            cx.open_url(&url);
+        })
+}
+
+/// Activities with the PLAY flag retain their separate Discord directory action.
 fn play_button(game: &GameActivity, palette: ProfilePalette) -> Option<Stateful<Div>> {
     let application_id = game.application_id.filter(|_| game.playable)?;
     Some(
@@ -1670,6 +1844,9 @@ pub(super) fn popout_playing(app: &DiscordApp, card: &ProfileCard, cx: &App) -> 
         .store
         .user(card.user_id)
         .and_then(|user| user.game.as_ref())?;
+    let actions = game.application_id.map_or_else(GameActions::default, |id| {
+        GameActions::resolve(id, &card.games, &card.applications)
+    });
     let now = Utc::now();
     let outbox = card
         .outbox
@@ -1811,7 +1988,7 @@ pub(super) fn popout_playing(app: &DiscordApp, card: &ProfileCard, cx: &App) -> 
                             ),
                     ),
             )
-            // The popout's Play button spans the card instead of sitting under the text.
+            .children(actions.buttons("profile-popout-playing-actions", card.user_id, palette))
             .children(play_button(game, palette).map(|play| play.w_full()))
             .children(activity_accessory(app, card, game, palette, cx))
             .into_any_element(),
@@ -1904,8 +2081,6 @@ pub(super) fn popout_widget(app: &DiscordApp, card: &ProfileCard, cx: &App) -> O
     let front = div()
         .flex()
         .items_center()
-        .gap(rpx(12.))
-        .p(rpx(12.))
         .rounded(rpx(8.))
         .bg(palette.panel)
         .border_1()
@@ -1916,6 +2091,7 @@ pub(super) fn popout_widget(app: &DiscordApp, card: &ProfileCard, cx: &App) -> O
                 .flex_col()
                 .flex_1()
                 .min_w_0()
+                .p(rpx(8.))
                 .gap(rpx(2.))
                 .child(
                     div()
@@ -1924,14 +2100,14 @@ pub(super) fn popout_widget(app: &DiscordApp, card: &ProfileCard, cx: &App) -> O
                         .gap(rpx(6.))
                         .min_w_0()
                         .children(
-                            icon.map(|path| img(path).size(rpx(18.)).flex_none().rounded(rpx(4.))),
+                            icon.map(|path| img(path).size(rpx(16.)).flex_none().rounded(rpx(4.))),
                         )
                         .child(
                             div()
                                 .truncate()
-                                .text_size(rpx(14.))
-                                .line_height(rpx(18.))
-                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_size(rpx(12.))
+                                .line_height(rpx(16.))
+                                .font_weight(FontWeight::MEDIUM)
                                 .text_color(rgb(palette.strong))
                                 .child(label(("profile-popout-app", application_id), &name)),
                         ),
@@ -1939,21 +2115,24 @@ pub(super) fn popout_widget(app: &DiscordApp, card: &ProfileCard, cx: &App) -> O
                 .child(
                     div()
                         .flex()
+                        .flex_none()
                         .items_center()
-                        .gap(rpx(6.))
+                        .gap(rpx(4.))
                         .min_w_0()
+                        .h(rpx(18.))
                         .mt(rpx(6.))
-                        .children(
-                            stat_icon.map(|icon| div().size(rpx(20.)).flex_none().child(icon)),
-                        )
                         .child(
                             div()
+                                .min_w_0()
                                 .truncate()
-                                .text_size(rpx(16.))
-                                .line_height(rpx(20.))
-                                .font_weight(FontWeight::BOLD)
+                                .text_size(rpx(14.))
+                                .line_height(rpx(18.))
+                                .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(rgb(palette.strong))
                                 .child(label(("profile-popout-app-user", application_id), &title)),
+                        )
+                        .children(
+                            stat_icon.map(|icon| div().size(rpx(18.)).flex_none().child(icon)),
                         ),
                 )
                 .children(stat_label.map(|text| {
@@ -1967,8 +2146,9 @@ pub(super) fn popout_widget(app: &DiscordApp, card: &ProfileCard, cx: &App) -> O
                 .child(
                     div()
                         .id(("profile-popout-stats", application_id))
-                        .text_size(rpx(14.))
-                        .line_height(rpx(18.))
+                        .text_size(rpx(12.))
+                        .line_height(rpx(16.))
+                        .font_weight(FontWeight::NORMAL)
                         .text_color(rgb(palette.text))
                         .cursor_pointer()
                         .hover(|style| style.underline())
@@ -1981,9 +2161,8 @@ pub(super) fn popout_widget(app: &DiscordApp, card: &ProfileCard, cx: &App) -> O
         .children(hero.map(|hero| {
             div()
                 .flex_none()
-                .size(rpx(POPOUT_HERO))
-                .rounded(rpx(8.))
-                .child(hero)
+                .p(rpx(8.))
+                .child(div().size(rpx(POPOUT_HERO)).rounded(rpx(8.)).child(hero))
         }));
     Some(
         div()
@@ -2266,20 +2445,221 @@ fn plural(count: i64, unit: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{collections::HashMap, sync::Arc, time::Duration};
 
     use gpui::{Context, IntoElement, Render, Styled, TestAppContext, Window, div, prelude::*, px};
 
     use super::{
-        COVER_GAP, COVER_HEIGHT, COVER_WIDTH, ProfilePalette, SkuPrice, activity_traits, clock,
-        current_entry, game_cover, game_cover_grid, parse, sku_price, snowflake_time, span,
-        stat_name, tag_label,
+        COVER_GAP, COVER_HEIGHT, COVER_WIDTH, GameActions, ProfilePalette, SkuPrice,
+        activity_traits, clock, current_entry, game_cover, game_cover_grid, game_launch_url, parse,
+        sku_price, snowflake_time, span, stat_name, tag_label,
     };
     use crate::{
-        discord::model::{OutboxEntry, OutboxKind, OutboxTrait},
+        discord::model::{Game, OutboxEntry, OutboxKind, OutboxTrait, PublicApplication},
         store::GameActivity,
         theme::{self, rpx},
     };
+
+    #[test]
+    fn game_actions_use_each_applications_own_targets() {
+        for (id, steam_id) in [(7, "480"), (8, "481")] {
+            let application: PublicApplication = serde_json::from_value(serde_json::json!({
+                "id": id,
+                "name": "Game",
+                "deeplink_uri": format!("steam://run/{steam_id}"),
+                "third_party_skus": [{"distributor": "steam", "id": steam_id}]
+            }))
+            .unwrap();
+            let applications = HashMap::from([(id, Arc::new(application))]);
+            assert_eq!(
+                GameActions::resolve(id, &HashMap::new(), &applications),
+                GameActions {
+                    steam_url: Some(format!("https://store.steampowered.com/app/{steam_id}")),
+                    play_url: Some(format!("steam://run/{steam_id}")),
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn partner_widget_and_playing_game_share_linked_actions_without_presence_flags() {
+        let application: PublicApplication = serde_json::from_value(serde_json::json!({
+            "id": "7",
+            "name": "Partner App",
+            "deeplink_uri": "https://games.example/play",
+            "linked_games": [{
+                "id": "42",
+                "application": {
+                    "id": "42", "name": "Game",
+                    "websites": [{"category": 1, "url": "https://games.example/play"}],
+                    "third_party_skus": [{"distributor": "steam", "id": "480"}]
+                }
+            }]
+        }))
+        .unwrap();
+        let applications = HashMap::from([(7, Arc::new(application))]);
+        let widget_actions = GameActions::resolve(7, &HashMap::new(), &applications);
+        assert_eq!(
+            widget_actions,
+            GameActions {
+                steam_url: Some("https://store.steampowered.com/app/480".into()),
+                play_url: Some("https://games.example/play".into()),
+            }
+        );
+        assert_eq!(
+            GameActions::resolve(42, &HashMap::new(), &applications),
+            widget_actions
+        );
+    }
+
+    #[test]
+    fn game_actions_resolve_missing_embedded_metadata_from_loaded_games() {
+        let application: PublicApplication = serde_json::from_value(serde_json::json!({
+            "id": "7", "name": "Partner App",
+            "deeplink_uri": "https://games.example/play",
+            "linked_games": [{"id": "42"}]
+        }))
+        .unwrap();
+        let game: Game = serde_json::from_value(serde_json::json!({
+            "id": "42", "name": "Game",
+            "third_party_skus": [{"distributor": "steam", "id": "480"}],
+            "websites": [{"category": 1, "url": "https://games.example/play"}],
+            "linked_applications": [{"id": "7"}]
+        }))
+        .unwrap();
+        let mut applications = HashMap::from([(7, Arc::new(application))]);
+        assert_eq!(
+            GameActions::resolve(7, &HashMap::new(), &applications),
+            GameActions::default()
+        );
+        let games = HashMap::from([(42, Arc::new(game))]);
+        let expected = GameActions {
+            steam_url: Some("https://store.steampowered.com/app/480".into()),
+            play_url: Some("https://games.example/play".into()),
+        };
+        assert_eq!(GameActions::resolve(7, &games, &applications), expected);
+        Arc::make_mut(applications.get_mut(&7).unwrap())
+            .linked_games
+            .clear();
+        assert_eq!(GameActions::resolve(7, &games, &applications), expected);
+        assert_eq!(GameActions::resolve(42, &games, &applications), expected);
+    }
+
+    #[test]
+    fn game_actions_prefer_official_website_to_campaign_and_store_links() {
+        let application: PublicApplication = serde_json::from_value(serde_json::json!({
+            "id": "7", "name": "Partner App",
+            "deeplink_uri": "https://games.example/campaign/index.html",
+            "linked_games": [{"id": "42"}]
+        }))
+        .unwrap();
+        let game: Game = serde_json::from_value(serde_json::json!({
+            "id": "42", "name": "Game",
+            "websites": [
+                {"category": 13, "url": "https://store.steampowered.com/app/480/"},
+                {"category": 4, "url": "https://www.facebook.com/example"},
+                {"category": 1, "url": "https://games.example/en/"}
+            ],
+            "linked_applications": [{"id": "7"}]
+        }))
+        .unwrap();
+        let applications = HashMap::from([(7, Arc::new(application))]);
+        let games = HashMap::from([(42, Arc::new(game))]);
+        for id in [7, 42] {
+            assert_eq!(
+                GameActions::resolve(id, &games, &applications).play_url.as_deref(),
+                Some("https://games.example/en/")
+            );
+        }
+    }
+
+    #[test]
+    fn game_actions_do_not_use_a_campaign_when_the_official_site_is_missing() {
+        let application: PublicApplication = serde_json::from_value(serde_json::json!({
+            "id": "7", "name": "Partner App",
+            "deeplink_uri": "https://games.example/campaign/index.html",
+            "linked_games": [{
+                "id": "42",
+                "application": {
+                    "id": "42", "name": "Game",
+                    "websites": [{"category": 4, "url": "https://www.facebook.com/example"}]
+                }
+            }]
+        }))
+        .unwrap();
+        let mut applications = HashMap::from([(7, Arc::new(application))]);
+        assert_eq!(
+            GameActions::resolve(7, &HashMap::new(), &applications).play_url,
+            None
+        );
+        let linked_game = Arc::make_mut(applications.get_mut(&7).unwrap())
+            .linked_games[0].application.as_mut().unwrap();
+        linked_game.websites.push(crate::discord::model::GameWebsite {
+            url: "http://games.example/".into(),
+            category: 1,
+        });
+        assert_eq!(
+            GameActions::resolve(7, &HashMap::new(), &applications).play_url.as_deref(),
+            Some("http://games.example/")
+        );
+    }
+
+    #[test]
+    fn game_actions_do_not_borrow_unrelated_or_invalid_targets() {
+        let application: PublicApplication = serde_json::from_value(serde_json::json!({
+            "id": "7", "name": "Invalid Targets",
+            "deeplink_uri": "javascript:alert(1)",
+            "third_party_skus": [{"distributor": "steam", "id": "../invalid"}],
+            "linked_games": [{"id": "42"}]
+        }))
+        .unwrap();
+        let unrelated: Game = serde_json::from_value(serde_json::json!({
+            "id": "99", "name": "Other Game",
+            "third_party_skus": [{"distributor": "steam", "id": "480"}]
+        }))
+        .unwrap();
+        let applications = HashMap::from([(7, Arc::new(application))]);
+        let games = HashMap::from([(99, Arc::new(unrelated))]);
+        assert_eq!(
+            GameActions::resolve(7, &games, &applications),
+            GameActions::default()
+        );
+        assert_eq!(
+            GameActions::resolve(8, &games, &applications),
+            GameActions::default()
+        );
+        assert_eq!(
+            GameActions::resolve(99, &games, &applications),
+            GameActions {
+                steam_url: Some("https://store.steampowered.com/app/480".into()),
+                play_url: None,
+            }
+        );
+    }
+
+    #[test]
+    fn game_launch_urls_only_accept_supported_launch_protocols() {
+        for url in [
+            "https://games.example/play",
+            "steam://run/480",
+            "steam://rungameid/480",
+            "com.epicgames.launcher://apps/example?action=launch",
+        ] {
+            assert!(game_launch_url(url).is_some(), "{url}");
+        }
+        for url in [
+            "",
+            "not a URL",
+            "javascript:alert(1)",
+            "file:///tmp/game",
+            "data:text/html,game",
+            "https://user:password@games.example/play",
+            "steam://uninstall/480",
+            "com.epicgames.launcher://apps/example?action=uninstall",
+        ] {
+            assert!(game_launch_url(url).is_none(), "{url}");
+        }
+    }
 
     const COVER_SELECTORS: [&str; 5] = [
         "liked-game-cover-0",

@@ -1617,8 +1617,26 @@ pub struct Game {
         deserialize_with = "steam_app_id"
     )]
     pub steam_app_id: Option<String>,
+    #[serde(default, deserialize_with = "entries")]
+    pub linked_applications: Vec<LinkedApplication>,
+    #[serde(default, deserialize_with = "entries")]
+    pub websites: Vec<GameWebsite>,
     #[serde(default, deserialize_with = "default_value")]
     pub media: GameMedia,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct LinkedApplication {
+    #[serde(deserialize_with = "snowflake")]
+    pub id: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct GameWebsite {
+    pub url: String,
+    /// IGDB website category: 1 is the official game site.
+    #[serde(default, deserialize_with = "default_value")]
+    pub category: u64,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -1639,6 +1657,24 @@ pub struct PublicApplication {
     pub icon: Option<String>,
     #[serde(default, deserialize_with = "default_value")]
     pub cover_image: Option<String>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub deeplink_uri: Option<String>,
+    #[serde(
+        rename = "third_party_skus",
+        default,
+        deserialize_with = "steam_app_id"
+    )]
+    pub steam_app_id: Option<String>,
+    #[serde(default, deserialize_with = "entries")]
+    pub linked_games: Vec<LinkedGame>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct LinkedGame {
+    #[serde(deserialize_with = "snowflake")]
+    pub id: u64,
+    #[serde(default, deserialize_with = "default_value")]
+    pub application: Option<Game>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -3275,6 +3311,71 @@ mod tests {
         assert_eq!(applications.len(), 1);
         assert_eq!(applications[0].id, 3);
         assert_eq!(applications[0].icon.as_deref(), Some("icon"));
+    }
+
+    #[test]
+    fn game_action_metadata_preserves_partner_links_and_store_targets() {
+        let application: PublicApplication = serde_json::from_value(json!({
+            "id": "7",
+            "name": "Partner App",
+            "deeplink_uri": "https://games.example/play",
+            "third_party_skus": [{"distributor": "steam", "id": 480}],
+            "linked_games": [
+                {
+                    "id": "42",
+                    "application": {
+                        "id": "42",
+                        "name": "Linked Game",
+                        "third_party_skus": [{"distributor": "steam", "id": "481"}]
+                    }
+                },
+                {"id": "43"},
+                {"id": "invalid"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(
+            application.deeplink_uri.as_deref(),
+            Some("https://games.example/play")
+        );
+        assert_eq!(application.steam_app_id.as_deref(), Some("480"));
+        assert_eq!(application.linked_games.len(), 2);
+        assert_eq!(application.linked_games[0].id, 42);
+        assert_eq!(
+            application.linked_games[0]
+                .application
+                .as_ref()
+                .unwrap()
+                .steam_app_id
+                .as_deref(),
+            Some("481")
+        );
+        assert!(application.linked_games[1].application.is_none());
+
+        let game: Game = serde_json::from_value(json!({
+            "id": "42",
+            "name": "Linked Game",
+            "linked_applications": [{"id": "7"}, {"id": "invalid"}],
+            "websites": [
+                {"category": 13, "url": "https://store.steampowered.com/app/481/"},
+                {"category": 1, "url": "https://games.example/en/"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(game.linked_applications.len(), 1);
+        assert_eq!(game.linked_applications[0].id, 7);
+        assert_eq!(game.websites.len(), 2);
+        assert_eq!(game.websites[1].category, 1);
+        assert_eq!(game.websites[1].url, "https://games.example/en/");
+
+        let bare: PublicApplication = serde_json::from_value(json!({
+            "id": "8", "name": "No Actions",
+            "deeplink_uri": null, "linked_games": null, "third_party_skus": null
+        }))
+        .unwrap();
+        assert!(bare.deeplink_uri.is_none());
+        assert!(bare.steam_app_id.is_none());
+        assert!(bare.linked_games.is_empty());
     }
 
     #[test]
