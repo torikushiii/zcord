@@ -155,8 +155,8 @@ fn card_content_width(embed: &Embed, media: (f32, f32)) -> f32 {
         || embed.description.is_some()
         || embed.author.is_some()
         || !embed.fields.is_empty();
-    // Portrait media must not squeeze a rich post into a narrow text column.
-    if has_text && media.0 < media.1 {
+    // Portrait or small media (a 64px site logo) must not squeeze the text into a narrow column.
+    if has_text && (media.0 < media.1 || media.0 < EMBED_MEDIA.0) {
         EMBED_WIDTH - EMBED_HORIZONTAL_INSET
     } else {
         media.0
@@ -505,7 +505,7 @@ pub fn render_embed(
     let side_thumbnail = embed
         .thumbnail
         .as_ref()
-        .filter(|_| !video && embed.kind != EmbedKind::Image);
+        .filter(|_| !video && !matches!(embed.kind, EmbedKind::Image | EmbedKind::Article));
     let big_media: Vec<&Media> = if video {
         embed
             .thumbnail
@@ -513,7 +513,8 @@ pub fn render_embed(
             .chain(embed.images.first())
             .take(1)
             .collect()
-    } else if embed.kind == EmbedKind::Image && embed.images.is_empty() {
+    } else if matches!(embed.kind, EmbedKind::Image | EmbedKind::Article) && embed.images.is_empty()
+    {
         embed.thumbnail.iter().collect()
     } else {
         embed.images.iter().collect()
@@ -638,21 +639,46 @@ pub fn render_embed(
 
     let media_max = EMBED_MEDIA;
     let media = if let Some(url) = video_url.as_deref() {
-        let poster = embed.thumbnail.as_ref().or(embed.images.first());
+        // Direct-video links (e.g. kkinstagram) come without a thumbnail; the media proxy
+        // renders the video's first frame instead.
+        let poster = embed
+            .thumbnail
+            .as_ref()
+            .or(embed.images.first())
+            .map(Media::spec)
+            .or_else(|| {
+                embed.video.as_ref().map(|video| images::ImageSpec::VideoPoster {
+                    id: key(VIDEO_SLOT),
+                    url: video.url.clone(),
+                    width: video.width,
+                    height: video.height,
+                })
+            });
         let dimensions = video_dimensions.expect("playable video has dimensions");
-        Some(crate::player::video_box(
+        let player = crate::player::video_box(
             app,
             crate::player::Video {
                 key: key(VIDEO_SLOT),
                 url,
-                poster: poster.map(Media::spec),
+                poster,
                 width: dimensions.0,
                 height: dimensions.1,
                 radius: 8.,
                 fullscreen: false,
             },
             cx,
-        ))
+        );
+        // Discord drops the card around a video with nothing else to show.
+        if embed.provider.is_none()
+            && embed.title.is_none()
+            && embed.description.is_none()
+            && embed.author.is_none()
+            && embed.fields.is_empty()
+            && embed.footer.is_none()
+        {
+            return div().mt_1().child(player).into_any_element();
+        }
+        Some(player)
     } else {
         match big_media.as_slice() {
             [] => None,
@@ -785,24 +811,91 @@ fn media_grid(
     key: impl Fn(usize) -> u64,
     cx: &App,
 ) -> Div {
-    let columns = if media.len() == 3 { 3 } else { 2 };
-    let gap = 4.;
-    let cell = ((width - gap * (columns as f32 - 1.)) / columns as f32).floor();
-    let height = if media.len() <= 3 {
-        cell * 1.2
-    } else {
-        cell * 0.75
-    };
-    div()
-        .flex()
-        .flex_wrap()
-        .gap(rpx(gap))
-        .w(rpx(width))
-        .children(
-            media.iter().enumerate().map(|(slot, media)| {
-                lightbox_box(app, key(slot), media, cell, height.floor(), 4., cx)
-            }),
-        )
+    mosaic(media.len(), width, media[0], |slot, w, h| {
+        lightbox_box(app, key(slot), media[slot], w, h, 4., cx).into_any_element()
+    })
+}
+
+/// Discord's media mosaic (MediaMosaic CSS): two side by side, three as a large tile beside a
+/// stacked pair, four as a 2x2 grid, and more as rows of square thirds led by a full-width
+/// tile or a pair when the count isn't a multiple of three.
+fn mosaic(
+    count: usize,
+    width: f32,
+    lead: &Media,
+    mut tile: impl FnMut(usize, f32, f32) -> AnyElement,
+) -> Div {
+    const GAP: f32 = 4.;
+    const ROW_MAX: f32 = 280.;
+    const BLOCK_MAX: f32 = 350.;
+    let half = ((width - GAP) / 2.).floor();
+    let third = ((width - GAP * 2.) / 3.).floor();
+    let row = || div().flex().gap(rpx(GAP));
+    let column = || div().flex().flex_col().gap(rpx(GAP)).w(rpx(width));
+    match count {
+        3 => {
+            let solo = ((width - GAP) * 2. / 3.).floor();
+            let duo = width - GAP - solo;
+            let height = BLOCK_MAX.min(solo).floor();
+            let stacked = ((height - GAP) / 2.).floor();
+            return column().child(
+                row().child(tile(0, solo, height)).child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(rpx(GAP))
+                        .child(tile(1, duo, stacked))
+                        .child(tile(2, duo, stacked)),
+                ),
+            );
+        }
+        4 => {
+            let height = ((BLOCK_MAX - GAP) / 2.).min(half).floor();
+            return column()
+                .child(
+                    row()
+                        .child(tile(0, half, height))
+                        .child(tile(1, half, height)),
+                )
+                .child(
+                    row()
+                        .child(tile(2, half, height))
+                        .child(tile(3, half, height)),
+                );
+        }
+        _ => {}
+    }
+    let leading = if count == 2 { 2 } else { count % 3 };
+    let mut rows = Vec::new();
+    match leading {
+        1 => {
+            let natural = if lead.width > 0 && lead.height > 0 {
+                width * lead.height as f32 / lead.width as f32
+            } else {
+                width * 9. / 16.
+            };
+            rows.push(row().child(tile(0, width, ROW_MAX.min(natural).floor())));
+        }
+        2 => {
+            let height = ROW_MAX.min(half).floor();
+            rows.push(
+                row()
+                    .child(tile(0, half, height))
+                    .child(tile(1, half, height)),
+            );
+        }
+        _ => {}
+    }
+    let mut slot = leading;
+    while slot < count {
+        let mut thirds = row();
+        for slot in slot..(slot + 3).min(count) {
+            thirds = thirds.child(tile(slot, third, third));
+        }
+        rows.push(thirds);
+        slot += 3;
+    }
+    column().children(rows)
 }
 
 pub fn render_components(
@@ -1067,33 +1160,14 @@ fn gallery(
         )
         .into_any_element();
     }
-    let width = PLAIN_MEDIA.0;
-    let columns = if items.len() == 2 || items.len() == 4 {
-        2
-    } else {
-        3
+    let Some((_, lead)) = keyed.first() else {
+        return div().into_any_element();
     };
-    let gap = 4.;
-    let cell = ((width - gap * (columns as f32 - 1.)) / columns as f32).floor();
-    let height = if columns == 2 { cell * 0.75 } else { cell };
-    div()
-        .flex()
-        .flex_wrap()
-        .gap(rpx(gap))
-        .w(rpx(width))
-        .children(keyed.into_iter().map(|(key, item)| {
-            spoiler_media(
-                app,
-                key,
-                item.spoiler,
-                &item.media,
-                cell,
-                height.floor(),
-                4.,
-                cx,
-            )
-        }))
-        .into_any_element()
+    mosaic(keyed.len(), PLAIN_MEDIA.0, &lead.media, |slot, w, h| {
+        let (key, item) = keyed[slot];
+        spoiler_media(app, key, item.spoiler, &item.media, w, h, 4., cx).into_any_element()
+    })
+    .into_any_element()
 }
 
 fn button(
