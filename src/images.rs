@@ -32,6 +32,10 @@ pub enum ImageSpec {
         guild_id: u64,
         hash: String,
     },
+    ChannelIcon {
+        channel_id: u64,
+        hash: String,
+    },
     Avatar {
         user_id: u64,
         hash: String,
@@ -305,6 +309,10 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
         }
         ImageSpec::GuildIcon { guild_id, hash }
         | ImageSpec::GuildTagBadge { guild_id, hash }
+        | ImageSpec::ChannelIcon {
+            channel_id: guild_id,
+            hash,
+        }
         | ImageSpec::Avatar {
             user_id: guild_id,
             hash,
@@ -315,6 +323,7 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
             let route = match spec {
                 ImageSpec::GuildIcon { .. } => "icons",
                 ImageSpec::GuildTagBadge { .. } => "guild-tag-badges",
+                ImageSpec::ChannelIcon { .. } => "channel-icons",
                 _ => "avatars",
             };
             format!("https://cdn.discordapp.com/{route}/{guild_id}/{hash}.png?size={size}")

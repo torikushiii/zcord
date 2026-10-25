@@ -616,6 +616,15 @@ fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) -> Option<E
             "CHANNEL_DELETE" | "THREAD_DELETE" => {
                 id(&value, "id").map(|id| Event::ChannelDelete { id })
             }
+            "RELATIONSHIP_ADD" => serde_json::from_value(value)
+                .ok()
+                .map(|r| Event::RelationshipAdd(Box::new(r))),
+            "RELATIONSHIP_UPDATE" => serde_json::from_value(value)
+                .ok()
+                .map(|r| Event::RelationshipUpdate(Box::new(r))),
+            "RELATIONSHIP_REMOVE" => {
+                id(&value, "id").map(|id| Event::RelationshipRemove { id })
+            }
             "THREAD_LIST_SYNC" => serde_json::from_value(value)
                 .ok()
                 .map(|sync| Event::ThreadListSync(Box::new(sync))),
@@ -679,6 +688,21 @@ mod tests {
                     && typing.guild_id == Some(3)
                     && typing.user_id == 4
                     && typing.member.as_ref().and_then(|m| m.user.as_ref()).is_some_and(|u| u.id == 4)
+        ));
+        assert!(ignored.is_empty());
+    }
+
+    #[test]
+    fn relationship_remove_dispatches_id() {
+        let mut ignored = HashSet::new();
+        let event = dispatch(
+            "RELATIONSHIP_REMOVE",
+            json!({"id":"10","type":1}),
+            &mut ignored,
+        );
+        assert!(matches!(
+            event,
+            Some(Event::RelationshipRemove { id: 10 })
         ));
         assert!(ignored.is_empty());
     }

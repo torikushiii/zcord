@@ -5,6 +5,7 @@ mod emoji_picker;
 mod forum;
 mod gif_picker;
 mod guild_rail;
+mod home;
 mod invite_card;
 mod lightbox;
 mod login;
@@ -163,6 +164,7 @@ pub struct DiscordApp {
     emoji_picker_closed_at: Option<Instant>,
     pub(crate) emoji_suggest: emoji_picker::Suggest,
     pub(crate) gifs: gif_picker::Gifs,
+    pub(crate) home: home::Home,
     pub(crate) quick_switcher: Option<switcher::QuickSwitcher>,
     quick_switcher_opens: u64,
     recent_channels: crate::quick_switcher::Recent,
@@ -293,6 +295,7 @@ impl DiscordApp {
             emoji_picker_closed_at: None,
             emoji_suggest: Default::default(),
             gifs: Default::default(),
+            home: Default::default(),
             quick_switcher: None,
             quick_switcher_opens: 0,
             recent_channels: Default::default(),
@@ -440,7 +443,26 @@ impl DiscordApp {
     }
 
     pub(crate) fn channel(&self) -> Option<&Channel> {
+        if self.is_home() {
+            return self
+                .store
+                .private_channel(self.selected_channel_id)
+                .map(|dm| &dm.channel);
+        }
         self.guild()?.channel(self.selected_channel_id)
+    }
+
+    /// The Home screen (DMs and friends) is the selection without a guild.
+    pub(crate) fn is_home(&self) -> bool {
+        self.selected_guild_id == 0
+    }
+
+    pub(crate) fn showing_home_page(&self) -> bool {
+        self.is_home() && self.selected_channel_id == 0
+    }
+
+    fn request_guild(&self) -> Option<u64> {
+        (!self.is_home()).then_some(self.selected_guild_id)
     }
 
     pub(crate) fn selected_forum(&self) -> Option<u64> {
@@ -720,8 +742,12 @@ impl DiscordApp {
             Change::Structure => {
                 self.sync_channel_rows();
                 self.sync_member_rows();
-                if self.channel().is_none() {
-                    self.select_first_guild(window, cx);
+                if self.channel().is_none() && !self.showing_home_page() {
+                    if self.is_home() {
+                        self.open_friends(window, cx);
+                    } else {
+                        self.select_first_guild(window, cx);
+                    }
                     return;
                 }
                 if self.messages.item_count() != len {
@@ -735,6 +761,10 @@ impl DiscordApp {
 
     fn select_initial(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let saved = crate::settings::get(cx).last_channel;
+        if saved.is_some_and(|saved| saved.guild_id == 0) {
+            self.open_home(window, cx);
+            return;
+        }
         let valid = saved.is_some_and(|saved| {
             self.store.guilds.iter().any(|guild| {
                 guild.id == saved.guild_id
@@ -807,19 +837,29 @@ impl DiscordApp {
 
     pub(crate) fn select_channel(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         self.profile = None;
-        let Some((name, kind, count, messages_loaded, parent_id, is_thread)) =
-            self.guild().and_then(|guild| {
-                let channel = guild.channel(id)?;
-                Some((
+        let found = match self.guild() {
+            Some(guild) => guild.channel(id).map(|channel| {
+                (
                     channel.name.clone(),
                     channel.kind,
                     channel.messages.len(),
                     channel.messages_loaded,
                     channel.parent_id,
                     guild.threads.iter().any(|thread| thread.id == id),
-                ))
-            })
-        else {
+                )
+            }),
+            None => self.store.private_channel(id).map(|dm| {
+                (
+                    self.store.private_channel_name(id),
+                    dm.channel.kind,
+                    dm.channel.messages.len(),
+                    dm.channel.messages_loaded,
+                    None,
+                    false,
+                )
+            }),
+        };
+        let Some((name, kind, count, messages_loaded, parent_id, is_thread)) = found else {
             return;
         };
         if !kind.is_selectable() {
@@ -830,7 +870,9 @@ impl DiscordApp {
         let placeholder = if forum {
             "Select a post".to_owned()
         } else if self.store.can_send(id) {
-            if is_thread {
+            if self.is_home() {
+                home::placeholder(&self.store, id, &name)
+            } else if is_thread {
                 format!("Message {name}")
             } else {
                 format!("Message #{name}")
@@ -1382,7 +1424,7 @@ impl DiscordApp {
         {
             return;
         }
-        let guild_id = Some(self.selected_guild_id);
+        let guild_id = self.request_guild();
         self.send_reaction(guild_id, channel_id, message_id, emoji, add, cx);
     }
 
@@ -1638,11 +1680,11 @@ impl DiscordApp {
             message_id,
         });
         cx.notify();
-        let guild_id = self.selected_guild_id;
+        let guild_id = self.request_guild();
         let days = days_since_discord_epoch();
         let request = Tokio::spawn(cx, async move {
             session
-                .ack_message(Some(guild_id), channel_id, message_id, days)
+                .ack_message(guild_id, channel_id, message_id, days)
                 .await
         });
         cx.spawn(async move |_, _| match request.await {
@@ -1790,7 +1832,7 @@ impl DiscordApp {
         if self.store.at_present(channel_id) || !self.loading_newer.insert(channel_id) {
             return;
         }
-        let guild_id = Some(self.selected_guild_id);
+        let guild_id = self.request_guild();
         let request = Tokio::spawn(cx, async move {
             session
                 .fetch_messages_after(guild_id, channel_id, newest, MESSAGE_PAGE)
@@ -1878,7 +1920,7 @@ impl DiscordApp {
         if self.history_complete.contains(&channel_id) || !self.loading_older.insert(channel_id) {
             return;
         }
-        let guild_id = Some(self.selected_guild_id);
+        let guild_id = self.request_guild();
         let request = Tokio::spawn(cx, async move {
             session
                 .fetch_messages(guild_id, channel_id, Some(oldest), OLDER_PAGE)
@@ -2055,7 +2097,7 @@ impl DiscordApp {
         let Some(session) = self.session.as_ref().filter(|_| self.live) else {
             return;
         };
-        if self.channel().is_none() {
+        if self.channel().is_none() || self.is_home() {
             return;
         }
         let top = self.member_top as u32;
@@ -2429,7 +2471,7 @@ impl DiscordApp {
             .guilds
             .iter()
             .find(|guild| guild.channel(channel_id).is_some())
-            .map_or(self.selected_guild_id, |guild| guild.id);
+            .map(|guild| guild.id);
         self.last_nonce = now_snowflake().max(self.last_nonce + 1);
         let nonce = self.last_nonce;
         let change = self.store.queue_message(
@@ -2447,7 +2489,7 @@ impl DiscordApp {
                 mention: reply.mention,
             }),
         };
-        let send = session.send_message(Some(guild_id), channel_id, outgoing);
+        let send = session.send_message(guild_id, channel_id, outgoing);
         let request = Tokio::spawn(cx, send);
         cx.spawn_in(window, async move |this, cx| {
             let result = request.await;
@@ -2531,9 +2573,9 @@ impl DiscordApp {
             return;
         }
         self.typing_sent = Some((channel_id, now));
-        let guild_id = self.selected_guild_id;
+        let guild_id = self.request_guild();
         let request = Tokio::spawn(cx, async move {
-            session.trigger_typing(Some(guild_id), channel_id).await
+            session.trigger_typing(guild_id, channel_id).await
         });
         cx.spawn(async move |this, cx| {
             match request.await {
@@ -2755,10 +2797,10 @@ impl DiscordApp {
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;
         };
-        let guild_id = self.selected_guild_id;
+        let guild_id = self.request_guild();
         let request = Tokio::spawn(cx, async move {
             session
-                .edit_message(Some(guild_id), channel_id, message_id, content)
+                .edit_message(guild_id, channel_id, message_id, content)
                 .await
         });
         cx.spawn_in(window, async move |this, cx| {
@@ -2828,10 +2870,10 @@ impl DiscordApp {
             self.apply_change(change, window, cx);
             return;
         };
-        let guild_id = self.selected_guild_id;
+        let guild_id = self.request_guild();
         let request = Tokio::spawn(cx, async move {
             session
-                .delete_message(Some(guild_id), channel_id, message_id)
+                .delete_message(guild_id, channel_id, message_id)
                 .await
         });
         cx.spawn_in(window, async move |this, cx| {
@@ -3073,6 +3115,7 @@ impl Render for DiscordApp {
         views::count_render(views::ViewKind::Root);
         if matches!(self.screen, Screen::Chat) {
             self.update_member_subscription();
+            self.load_active_now_apps(cx);
         }
         let body = match &self.screen {
             Screen::Login(form) => login::render(form, cx).into_any_element(),
@@ -3137,11 +3180,12 @@ impl Render for DiscordApp {
                                                 .child(self.views.composer.clone().cached(
                                                     views::composer_style(
                                                         self.views.composer.read(cx).height(),
-                                                        self.selected_forum().is_some(),
+                                                        self.selected_forum().is_some()
+                                                            || self.showing_home_page(),
                                                     ),
                                                 )),
                                         )
-                                        .when(self.show_members, |this| {
+                                        .when(self.show_members && !self.is_home(), |this| {
                                             this.child(
                                                 self.views
                                                     .members

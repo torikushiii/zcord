@@ -15,7 +15,7 @@ use gpui::{prelude::*, *};
 
 use crate::{
     app::{
-        DiscordApp, channel_list, chat, emoji_picker, gif_picker, guild_rail, lightbox,
+        DiscordApp, channel_list, chat, emoji_picker, gif_picker, guild_rail, home, lightbox,
         member_list, profile, switcher,
     },
     theme::rpx,
@@ -171,7 +171,17 @@ impl Render for ChatHeaderView {
         let Some(app) = self.app.upgrade() else {
             return div().into_any_element();
         };
-        chat::header(app.read(cx)).into_any_element()
+        let app = app.read(cx);
+        if app.showing_home_page() {
+            match app.home.page {
+                home::HomePage::Friends => home::friends_header(app).into_any_element(),
+                home::HomePage::Requests => home::requests_header(app).into_any_element(),
+            }
+        } else if app.is_home() {
+            home::dm_header(app, cx).into_any_element()
+        } else {
+            chat::header(app).into_any_element()
+        }
     }
 }
 
@@ -195,7 +205,14 @@ impl Render for MessagesView {
         let Some(app) = self.app.upgrade() else {
             return div().into_any_element();
         };
-        chat::messages(app.read(cx), cx)
+        let app = app.read(cx);
+        if app.showing_home_page() {
+            return match app.home.page {
+                home::HomePage::Friends => home::friends_page(app, cx),
+                home::HomePage::Requests => home::requests_page(app, cx),
+            };
+        }
+        chat::messages(app, cx)
     }
 }
 
@@ -226,14 +243,17 @@ impl Render for ComposerView {
             return div().into_any_element();
         };
         let app = app.read(cx);
-        if app.selected_forum().is_some() {
+        if app.selected_forum().is_some() || app.showing_home_page() {
             return div().into_any_element();
         }
         let measured = self.height.clone();
         let view = cx.entity().entity_id();
         div()
             .w_full()
-            .child(chat::composer(app, cx))
+            .child(match home::request_bar(app) {
+                Some(bar) => bar,
+                None => chat::composer(app, cx).into_any_element(),
+            })
             .child(
                 canvas(
                     move |bounds, window, _cx| {

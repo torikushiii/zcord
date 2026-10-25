@@ -8,7 +8,7 @@ use gpui_component::tooltip::Tooltip;
 
 use crate::{
     animated,
-    app::{DiscordApp, message_body::label, profile},
+    app::{DiscordApp, home, member_list, message_body::label, profile},
     emoji,
     images::{self, ImageSpec},
     store::{Channel, ChannelKind, Guild, Status, StatusEmoji, User},
@@ -177,7 +177,10 @@ impl Rows {
             .flat_map(|guild| &guild.categories)
             .enumerate()
         {
-            rows.push(Row::Category(category));
+            // Channels outside any category sit in group 0, which Discord shows without a header.
+            if group.id != 0 {
+                rows.push(Row::Category(category));
+            }
             // Collapsing channels stay listed until they have folded away.
             let collapsed = self.collapsed.contains(&group.id) && !self.folding(group.id, now);
             rows.extend(
@@ -232,7 +235,20 @@ impl Rows {
     }
 }
 
-pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> impl IntoElement + use<> {
+pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
+    if app.is_home() {
+        return div()
+            .flex()
+            .flex_col()
+            .w(rpx(WIDTH))
+            .h_full()
+            .flex_none()
+            .border_r_1()
+            .border_color(rgb(theme::BORDER))
+            .child(home::sidebar(app, cx))
+            .child(user_panel(app, cx))
+            .into_any_element();
+    }
     let entity = app.entity.clone();
     let banner = app.channel_rows.banner.is_some();
     let solidity = app
@@ -331,6 +347,7 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> impl IntoElement +
             )
         })
         .child(user_panel(app, cx))
+        .into_any_element()
 }
 
 fn banner_hover_listener(app: &DiscordApp) -> impl Fn(&bool, &mut Window, &mut App) + use<> {
@@ -691,15 +708,27 @@ fn channel_row(channel: &Channel, selected: bool) -> impl IntoElement + use<> {
                     .bg(rgb(theme::STRONG)),
             )
         })
-        .child(theme::icon(
-            icon,
-            20.,
-            if selected || unread {
+        .child({
+            let color = if selected || unread {
                 theme::STRONG
             } else {
                 theme::FAINT
-            },
-        ))
+            };
+            div()
+                .relative()
+                .flex_none()
+                .size(rpx(20.))
+                .child(theme::icon(icon, 20., color))
+                .when(channel.private, |this| {
+                    this.child(
+                        div()
+                            .absolute()
+                            .top(rpx(-1.))
+                            .right(rpx(-2.))
+                            .child(theme::icon("lock", 10., color)),
+                    )
+                })
+        })
         .child(
             div()
                 .flex_1()
@@ -715,6 +744,7 @@ fn channel_row(channel: &Channel, selected: bool) -> impl IntoElement + use<> {
 }
 
 const SUBTITLE_HEIGHT: f32 = 16.;
+const USER_PANEL_HEIGHT: f32 = 58.;
 
 /// The custom status (or the presence when there is none), which slides up to reveal the
 /// username while the panel is hovered, like Discord's.
@@ -807,18 +837,32 @@ fn status_label(status: Status) -> &'static str {
 
 fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
     let user = app.store.user(app.store.current_user_id);
+    let nameplate = user
+        .and_then(|user| app.store.nameplate(None, user.id))
+        .and_then(|nameplate| {
+            member_list::nameplate_layer(
+                nameplate,
+                app.store.current_user_id,
+                USER_PANEL_HEIGHT,
+                app.hovered_account,
+                cx,
+            )
+        });
     div()
+        .relative()
         .flex()
         .flex_none()
         .items_center()
         .gap_2()
-        .h(rpx(58.))
+        .h(rpx(USER_PANEL_HEIGHT))
         .m_2()
         .px(rpx(6.))
         .rounded(rpx(8.))
+        .overflow_hidden()
         .bg(rgb(theme::ELEVATED))
         .border_1()
         .border_color(rgb(theme::BORDER))
+        .children(nameplate)
         .children(user.map(|user| {
             div()
                 .id("account")
@@ -830,7 +874,8 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 .p(rpx(2.))
                 .rounded(rpx(6.))
                 .cursor_pointer()
-                .hover(|style| style.bg(rgb(theme::SELECTED)))
+                // Translucent so a nameplate behind the panel stays visible.
+                .hover(|style| style.bg(rgba(0xFFFFFF14)))
                 .on_hover({
                     let entity = app.entity.clone();
                     move |hovered: &bool, _, cx| {

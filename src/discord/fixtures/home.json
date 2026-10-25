@@ -1,0 +1,41 @@
+{
+  "session_id": "fixture-session",
+  "user": {"id": "1", "username": "owner", "global_name": "Local Owner"},
+  "users": [
+    {"id": "10", "username": "alice", "global_name": "Alice", "avatar": "alice-hash"},
+    {"id": "11", "username": "bob", "global_name": null},
+    {"id": "12", "username": "carol", "global_name": "Carol"},
+    {"id": "13", "username": "blocked", "global_name": null},
+    {"id": "14", "username": "dave", "global_name": "Dave"},
+    {"id": "15", "username": "spammer", "global_name": null},
+    {"id": "16", "username": "ignored", "global_name": null},
+    {"id": "17", "username": "erin", "global_name": "Erin"},
+    {"id": "18", "username": "frank", "global_name": "Frank"}
+  ],
+  "guilds": [],
+  "relationships": [
+    {"id": "10", "user_id": "10", "type": 1, "nickname": null, "since": "2024-05-01T12:00:00.000000+00:00", "is_spam_request": false, "user_ignored": false},
+    {"id": "11", "user_id": "11", "type": 1, "nickname": "Bobby", "since": "2023-01-02T03:04:05.000000+00:00", "is_spam_request": false, "user_ignored": false},
+    {"id": "12", "user_id": "12", "type": 1, "nickname": null, "since": "2022-07-08T09:10:11.000000+00:00", "is_spam_request": false, "user_ignored": false},
+    {"id": "13", "user_id": "13", "type": 2, "nickname": null, "since": "2021-01-01T00:00:00.000000+00:00", "is_spam_request": false, "user_ignored": false},
+    {"id": "14", "user_id": "14", "type": 3, "nickname": null, "since": "2025-02-03T04:05:06.000000+00:00", "is_spam_request": false, "user_ignored": false},
+    {"id": "15", "user_id": "15", "type": 3, "nickname": null, "since": "2025-02-03T04:05:06.000000+00:00", "is_spam_request": true, "user_ignored": false},
+    {"id": "16", "user_id": "16", "type": 3, "nickname": null, "since": "2025-02-03T04:05:06.000000+00:00", "is_spam_request": false, "user_ignored": true},
+    {"id": "17", "user_id": "17", "type": 4, "nickname": null, "since": "2025-03-04T05:06:07.000000+00:00", "is_spam_request": false, "user_ignored": false}
+  ],
+  "friend_suggestion_count": 2,
+  "private_channels": [
+    {"id": "900", "type": 1, "recipient_ids": ["10"], "last_message_id": "500", "is_message_request": false, "is_message_request_timestamp": null, "is_spam": false, "flags": 0, "recipient_flags": 0, "safety_warnings": []},
+    {"id": "901", "type": 1, "recipient_ids": ["11"], "last_message_id": "700", "is_message_request": false, "is_message_request_timestamp": null, "is_spam": false, "flags": 0, "recipient_flags": 0, "safety_warnings": []},
+    {"id": "902", "type": 3, "recipient_ids": ["10", "12"], "last_message_id": "600", "name": "Raid night", "icon": "group-icon", "owner_id": "10", "last_pin_timestamp": "2025-01-01T00:00:00+00:00", "flags": 0, "recipient_flags": 0, "blocked_user_warning_dismissed": false},
+    {"id": "903", "type": 3, "recipient_ids": ["10", "11", "12"], "last_message_id": "300", "name": null, "icon": null, "owner_id": "1", "flags": 0, "recipient_flags": 0},
+    {"id": "904", "type": 1, "recipient_ids": ["14"], "last_message_id": "650", "is_message_request": true, "is_message_request_timestamp": "2025-02-03T04:05:06.000000+00:00", "is_spam": false, "flags": 0, "recipient_flags": 0, "safety_warnings": []},
+    {"id": "905", "type": 1, "recipient_ids": ["15"], "last_message_id": "800", "is_message_request": true, "is_message_request_timestamp": "2025-02-03T04:05:06.000000+00:00", "is_spam": true, "flags": 0, "recipient_flags": 0, "safety_warnings": []},
+    {"id": "906", "type": 1, "recipient_ids": ["18"], "last_message_id": null, "is_message_request": false, "is_spam": false, "flags": 0, "recipient_flags": 0, "safety_warnings": []}
+  ],
+  "read_state": {"version": 7, "partial": false, "entries": [
+    {"id": "900", "last_message_id": "400", "mention_count": 2},
+    {"id": "901", "last_message_id": "700", "mention_count": 0},
+    {"id": "902", "last_message_id": "600", "mention_count": 0}
+  ]}
+}

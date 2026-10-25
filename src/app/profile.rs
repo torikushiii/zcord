@@ -25,6 +25,7 @@ use crate::{
 mod activity_tests;
 mod avatar_colors;
 mod board;
+pub(crate) use board::presence_art;
 
 const POPOUT_WIDTH: f32 = 300.;
 const MODAL_WIDTH: f32 = 962.;

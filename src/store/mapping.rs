@@ -403,6 +403,7 @@ pub(super) fn map_user(user: &model::User) -> User {
         playing: false,
         activity: None,
         game: None,
+        listening: None,
         custom_status: None,
         avatar: user.avatar.clone(),
         discriminator: user.discriminator.clone(),
@@ -556,11 +557,22 @@ pub(super) fn map_guild(
             .and_then(|id| category_indices.get(&id))
             .copied()
             .unwrap_or(0);
+        let private = channel
+            .permission_overwrites
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .any(|overwrite| {
+                overwrite.id == guild.id
+                    && overwrite.kind == 0
+                    && overwrite.deny & discord::VIEW_CHANNEL != 0
+            });
         mapped[index].channels.push(Channel {
             id: channel.id,
             name: channel.name.clone().unwrap_or_default(),
             kind,
             parent_id: channel.parent_id.flatten(),
+            private,
             unread: kind.is_unreadable() && (channel_unread(channel, state) || new_posts > 0),
             mentions: mention_count,
             new_posts,
@@ -585,6 +597,7 @@ pub(super) fn map_guild(
                 name: thread.name.clone().unwrap_or_default(),
                 kind: ChannelKind::Text,
                 parent_id: thread.parent_id.flatten(),
+                private: false,
                 unread: channel_unread(thread, state),
                 mentions: state.map_or(0, |s| s.mention_count),
                 new_posts: 0,

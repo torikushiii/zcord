@@ -13,7 +13,7 @@ use crate::{
         DIALOG_EXIT, DISCORD_EPOCH_MS, DiscordApp, Editing, JUMP_HIGHLIGHT, MESSAGE_LIMIT,
         ReplyTarget, embeds,
         emoji_picker::{self, PickerTarget},
-        forum, member_list,
+        forum, home, member_list,
         message_body::{BodyContext, label, preview_pieces, render_body, wrapped_label},
         profile,
         rich_text::rich_text,
@@ -216,7 +216,7 @@ pub fn messages(app: &DiscordApp, cx: &App) -> AnyElement {
                         .flex_1()
                         .min_h_0()
                         .pb(rpx(BOTTOM_SPACER))
-                        .children(welcome(app)),
+                        .children(welcome(app, cx)),
                 )
             } else {
                 let bar = if is_detached(app) {
@@ -733,7 +733,7 @@ fn render_row(app: &DiscordApp, index: usize, cx: &App) -> AnyElement {
     });
     div()
         .w_full()
-        .when(start, |this| this.children(welcome(app)))
+        .when(start, |this| this.children(welcome(app, cx)))
         .map(|this| {
             if new_day || start {
                 this.child(date_divider(message, first_unread))
@@ -754,7 +754,10 @@ fn is_system(kind: u8) -> bool {
     !matches!(kind, 0 | 19 | 20 | 23)
 }
 
-fn welcome(app: &DiscordApp) -> Option<AnyElement> {
+fn welcome(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
+    if app.is_home() {
+        return home::dm_welcome(app, cx);
+    }
     let channel = app.channel()?;
     let subtitle = || div().mt_2().text_color(rgb(0xB5BAC1));
     if let Some(guild) = app.guild().filter(|guild| guild.id == channel.id) {

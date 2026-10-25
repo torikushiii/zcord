@@ -102,6 +102,11 @@ fn nullable<'de, D: Deserializer<'de>, T: DeserializeOwned>(
     })
 }
 
+fn lenient_message<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Message>, D::Error> {
+    let value = Value::deserialize(d)?;
+    Ok(serde_json::from_value(value).ok())
+}
+
 fn timestamp<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
     let value = String::deserialize(d)?;
     chrono::DateTime::parse_from_rfc3339(&value)
@@ -635,6 +640,12 @@ pub struct Channel {
     pub recipient_ids: Vec<u64>,
     #[serde(default, deserialize_with = "entries")]
     pub recipients: Vec<User>,
+    #[serde(default)]
+    pub is_message_request: Option<bool>,
+    #[serde(default)]
+    pub is_spam: Option<bool>,
+    #[serde(default, deserialize_with = "nullable_string")]
+    pub icon: Option<Option<String>>,
 }
 
 impl Channel {
@@ -654,7 +665,10 @@ impl Channel {
             applied_tags,
             flags,
             available_tags,
-            default_sort_order
+            default_sort_order,
+            is_message_request,
+            is_spam,
+            icon
         );
         if !update.recipient_ids.is_empty() {
             self.recipient_ids.clone_from(&update.recipient_ids);
@@ -835,6 +849,40 @@ pub struct ReadStates {
     pub entries: Vec<ReadState>,
 }
 
+#[derive(Clone, Deserialize)]
+pub struct Relationship {
+    #[serde(deserialize_with = "snowflake")]
+    pub id: u64,
+    #[serde(default, rename = "type")]
+    pub kind: u8,
+    #[serde(default)]
+    pub nickname: Option<String>,
+    #[serde(default)]
+    pub since: Option<String>,
+    #[serde(default)]
+    pub is_spam_request: bool,
+    #[serde(default)]
+    pub user_ignored: bool,
+    #[serde(default)]
+    pub user: Option<User>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct RelationshipUpdate {
+    #[serde(deserialize_with = "snowflake")]
+    pub id: u64,
+    #[serde(default, rename = "type")]
+    pub kind: Option<u8>,
+    #[serde(default, deserialize_with = "nullable_string")]
+    pub nickname: Option<Option<String>>,
+    #[serde(default)]
+    pub since: Option<String>,
+    #[serde(default)]
+    pub is_spam_request: Option<bool>,
+    #[serde(default)]
+    pub user_ignored: Option<bool>,
+}
+
 #[derive(Clone)]
 pub struct Ready {
     pub user: User,
@@ -847,6 +895,8 @@ pub struct Ready {
     pub resume_gateway_url: Option<String>,
     pub user_settings_proto: Option<String>,
     pub sessions: Vec<Session>,
+    pub relationships: Vec<Relationship>,
+    pub friend_suggestion_count: u32,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -883,6 +933,10 @@ impl<'de> Deserialize<'de> for Ready {
             user_settings_proto: Option<String>,
             #[serde(default, deserialize_with = "entries")]
             sessions: Vec<Session>,
+            #[serde(default, deserialize_with = "entries")]
+            relationships: Vec<Relationship>,
+            #[serde(default)]
+            friend_suggestion_count: u32,
         }
         let wire = Wire::deserialize(d)?;
         let guild_order = wire
@@ -920,6 +974,8 @@ impl<'de> Deserialize<'de> for Ready {
             resume_gateway_url: wire.resume_gateway_url,
             user_settings_proto: wire.user_settings_proto,
             sessions: wire.sessions,
+            relationships: wire.relationships,
+            friend_suggestion_count: wire.friend_suggestion_count,
         })
     }
 }
@@ -1174,6 +1230,14 @@ pub struct Message {
     pub message_snapshots: Vec<MessageSnapshot>,
     #[serde(default, deserialize_with = "nullable")]
     pub referenced_message: Option<Option<Box<ReferencedMessage>>>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct MessageRequestPreview {
+    #[serde(deserialize_with = "snowflake")]
+    pub channel_id: u64,
+    #[serde(default, deserialize_with = "lenient_message")]
+    pub message_preview: Option<Message>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -4431,5 +4495,17 @@ mod tests {
                 assert_eq!(game.steam_app_id, expected);
             }
         }
+    }
+
+    #[test]
+    fn message_request_previews_keep_null_and_malformed_entries() {
+        let previews: Vec<MessageRequestPreview> = serde_json::from_value(json!([
+            {"channel_id": "1", "message_preview": null},
+            {"channel_id": "2", "message_preview": {"id": "not-a-snowflake"}}
+        ]))
+        .unwrap();
+        assert_eq!(previews.len(), 2);
+        assert!(previews[0].message_preview.is_none());
+        assert!(previews[1].message_preview.is_none());
     }
 }

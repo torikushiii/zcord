@@ -14,6 +14,9 @@ pub(super) struct Social {
     pub names: HashMap<u64, String>,
     messages: HashMap<(u64, u64), MessageInfo>,
     pub revision: u64,
+    /// Server members whose presence Discord chose to send in READY_SUPPLEMENTAL; with
+    /// friends, these are who the official client's Active Now draws from.
+    pub supplemental_presences: HashSet<u64>,
 }
 
 #[derive(Default)]
@@ -141,6 +144,44 @@ fn playing_activity(activities: &[model::Activity]) -> Option<&model::Activity> 
     activities.iter().find(|activity| {
         activity_verb(activity.kind).is_some() && !activity_name(activity).is_empty()
     })
+}
+
+fn game_activity(activity: &model::Activity) -> GameActivity {
+    let assets = activity.assets.as_ref();
+    let platform = activity
+        .platform
+        .as_deref()
+        .map(str::trim)
+        .filter(|platform| !platform.is_empty())
+        .map(str::to_lowercase);
+    let embedded = activity.flags & EMBEDDED_ACTIVITY_FLAG != 0
+        || platform.as_deref() == Some("embedded");
+    let playable = activity.flags & PLAY_ACTIVITY_FLAG != 0;
+    GameActivity {
+        name: activity.name.clone(),
+        application_id: activity.application_id,
+        platform,
+        embedded,
+        playable,
+        started_at: activity
+            .timestamps
+            .as_ref()
+            .and_then(|timestamps| timestamps.start)
+            .or(activity.created_at)
+            .and_then(|start| UNIX_EPOCH.checked_add(Duration::from_millis(start))),
+        details: activity_text(activity.details.as_deref()),
+        state: activity_text(activity.state.as_deref()),
+        large_image: activity_image(
+            activity.application_id,
+            assets.and_then(|assets| assets.large_image.as_deref()),
+            assets.and_then(|assets| assets.large_text.as_deref()),
+        ),
+        small_image: activity_image(
+            activity.application_id,
+            assets.and_then(|assets| assets.small_image.as_deref()),
+            assets.and_then(|assets| assets.small_text.as_deref()),
+        ),
+    }
 }
 
 fn activity_text(value: Option<&str>) -> Option<String> {
@@ -621,43 +662,12 @@ impl Store {
             // A custom status takes the activity line, but the game still shows on the profile.
             user.game = playing_activity(activities)
                 .filter(|activity| activity.kind == 0)
-                .map(|activity| {
-                    let assets = activity.assets.as_ref();
-                    let platform = activity
-                        .platform
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|platform| !platform.is_empty())
-                        .map(str::to_lowercase);
-                    let embedded = activity.flags & EMBEDDED_ACTIVITY_FLAG != 0
-                        || platform.as_deref() == Some("embedded");
-                    let playable = activity.flags & PLAY_ACTIVITY_FLAG != 0;
-                    GameActivity {
-                        name: activity.name.clone(),
-                        application_id: activity.application_id,
-                        platform,
-                        embedded,
-                        playable,
-                        started_at: activity
-                            .timestamps
-                            .as_ref()
-                            .and_then(|timestamps| timestamps.start)
-                            .or(activity.created_at)
-                            .and_then(|start| UNIX_EPOCH.checked_add(Duration::from_millis(start))),
-                        details: activity_text(activity.details.as_deref()),
-                        state: activity_text(activity.state.as_deref()),
-                        large_image: activity_image(
-                            activity.application_id,
-                            assets.and_then(|assets| assets.large_image.as_deref()),
-                            assets.and_then(|assets| assets.large_text.as_deref()),
-                        ),
-                        small_image: activity_image(
-                            activity.application_id,
-                            assets.and_then(|assets| assets.small_image.as_deref()),
-                            assets.and_then(|assets| assets.small_text.as_deref()),
-                        ),
-                    }
-                });
+                .map(game_activity);
+            // Activity type 2 is "Listening to", e.g. Spotify.
+            user.listening = activities
+                .iter()
+                .find(|activity| activity.kind == 2)
+                .map(game_activity);
             user.custom_status = custom_status_from_presence(activities);
         }
     }
@@ -1064,6 +1074,17 @@ impl Store {
                 {
                     self.apply_presence(presence, None);
                 }
+                self.social.supplemental_presences = update
+                    .merged_presences
+                    .guilds
+                    .iter()
+                    .flatten()
+                    .filter_map(|presence| {
+                        presence
+                            .user_id
+                            .or_else(|| presence.user.as_ref().map(|user| user.id))
+                    })
+                    .collect();
                 None
             }
             Event::PresenceUpdate(presence) => {

@@ -222,6 +222,28 @@ impl Session {
         }
     }
 
+    pub async fn open_dm(&self, user_id: u64) -> Result<model::Channel, Error> {
+        self.rest(async |rest| rest.open_dm(user_id).await).await
+    }
+
+    pub async fn accept_message_request(&self, channel_id: u64) -> Result<model::Channel, Error> {
+        self.rest(async |rest| rest.accept_message_request(channel_id).await)
+            .await
+    }
+
+    pub async fn reject_message_request(&self, channel_id: u64) -> Result<(), Error> {
+        self.rest(async |rest| rest.reject_message_request(channel_id).await)
+            .await
+    }
+
+    pub async fn message_request_previews(
+        &self,
+        channel_ids: Vec<u64>,
+    ) -> Result<Vec<model::MessageRequestPreview>, Error> {
+        self.rest(async |rest| rest.message_request_previews(&channel_ids).await)
+            .await
+    }
+
     pub async fn edit_message(
         &self,
         guild_id: Option<u64>,
@@ -1099,6 +1121,9 @@ pub enum Event {
     MessageDelete { channel_id: u64, id: u64 },
     ChannelUpsert(Box<model::Channel>),
     ChannelDelete { id: u64 },
+    RelationshipAdd(Box<model::Relationship>),
+    RelationshipUpdate(Box<model::RelationshipUpdate>),
+    RelationshipRemove { id: u64 },
     ThreadListSync(Box<model::ThreadListSync>),
     GuildUpsert(Box<model::Guild>),
     GuildEmojisUpdate(model::GuildEmojisUpdate),
