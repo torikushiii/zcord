@@ -253,14 +253,6 @@ fn failure_warning_due(now: Instant, last_warn: Option<Instant>) -> bool {
     last_warn.is_none_or(|last| now.saturating_duration_since(last) >= Duration::from_secs(30))
 }
 
-fn input_rebuild_needed(
-    stream_error: bool,
-    has_input: bool,
-    input_available: bool,
-) -> bool {
-    stream_error || has_input != input_available
-}
-
 impl AudioHandle {
     pub fn start(flags: AudioFlags) -> Self {
         let (incoming, incoming_rx) = unbounded_channel();
@@ -668,13 +660,16 @@ fn run_input(
             };
         }
 
+        // A running microphone is rebuilt only on stream errors. Probing the default device
+        // while it streams can fail spuriously (RPC_E_CHANGED_MODE after a Bluetooth reconnect)
+        // and would tear down a working stream every few seconds.
         let now = Instant::now();
-        if now >= next_input_check {
+        if input.is_none() && now >= next_input_check {
             next_input_check = now + Duration::from_secs(3);
             let available = host
                 .default_input_device()
                 .is_some_and(|device| device.default_input_config().is_ok());
-            if input_rebuild_needed(false, input.is_some(), available) {
+            if available {
                 send_stop(&outgoing, &mut speaking);
                 return SideExit {
                     incoming: None,
@@ -1406,16 +1401,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn input_rebuild_uses_stream_errors_and_input_availability() {
-        assert!(!input_rebuild_needed(false, false, false));
-        assert!(!input_rebuild_needed(false, true, true));
-        assert!(input_rebuild_needed(true, false, false));
-        assert!(input_rebuild_needed(true, true, true));
-        assert!(input_rebuild_needed(false, false, true));
-        assert!(input_rebuild_needed(false, true, false));
     }
 
     #[test]
