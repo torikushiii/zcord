@@ -1,3 +1,4 @@
+mod account;
 mod authors;
 mod channels;
 mod emoji;
@@ -18,6 +19,7 @@ mod voice;
 
 use crate::discord::{self, model, settings_proto};
 use crate::media::images::ImageSpec;
+pub use account::Account;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use home::PrivateLocation;
 use mapping::{
@@ -35,6 +37,7 @@ pub struct Store {
     pub rail: Vec<RailEntry>,
     pub users: HashMap<u64, User>,
     pub current_user_id: u64,
+    account: Option<Account>,
     pub dm_mentions: u32,
     premium_type: Option<u8>,
     next_message_id: u64,
@@ -209,12 +212,19 @@ impl Store {
             .map(|g| map_guild(g, &ready, &read_states))
             .collect();
         let premium_type = ready.user.premium_type;
+        let account = Account {
+            username: ready.user.username.clone(),
+            email: ready.user.email.clone(),
+            phone: ready.user.phone.clone(),
+            mfa_enabled: ready.user.mfa_enabled,
+        };
         let friend_suggestion_count = ready.friend_suggestion_count;
         let mut store = Self {
             guilds,
             rail: Vec::new(),
             users,
             current_user_id: ready.user.id,
+            account: Some(account),
             dm_mentions: 0,
             premium_type,
             next_message_id: 1,

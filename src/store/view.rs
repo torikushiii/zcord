@@ -202,6 +202,9 @@ impl Timestamp {
     }
 
     pub fn time(self) -> String {
+        if crate::settings::clock_24h() {
+            return format!("{:02}:{:02}", self.hour, self.minute);
+        }
         let hour = match self.hour % 12 {
             0 => 12,
             hour => hour,

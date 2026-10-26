@@ -11,6 +11,7 @@ use crate::{
     },
     media::animated,
     media::images::{self, ImageSpec},
+    settings,
     store::Store,
     text::emoji::{self, Segment},
     text::markdown::{Block, Span, SpanKind, Style},
@@ -67,6 +68,17 @@ pub fn render_body(
     context: &BodyContext,
     cx: &App,
 ) -> AnyElement {
+    render_body_scaled(blocks, edited, jumbo, 1.0, context, cx)
+}
+
+pub fn render_body_scaled(
+    blocks: &[Block],
+    edited: bool,
+    jumbo: bool,
+    scale: f32,
+    context: &BodyContext,
+    cx: &App,
+) -> AnyElement {
     let mut counter = 0;
     let mut children: Vec<AnyElement> = Vec::new();
     let last = blocks.len().saturating_sub(1);
@@ -78,6 +90,7 @@ pub fn render_body(
             edited_here,
             jumbo,
             0,
+            scale,
             context,
             &mut counter,
             cx,
@@ -108,6 +121,7 @@ fn render_block(
     edited: bool,
     jumbo: bool,
     depth: usize,
+    scale: f32,
     context: &BodyContext,
     counter: &mut u32,
     cx: &App,
@@ -116,8 +130,8 @@ fn render_block(
         Block::Paragraph(spans) => {
             let text = inline(spans, edited, jumbo, context, counter, cx);
             if jumbo {
-                text.emoji_size(rpx(48.))
-                    .line_height(rpx(54.))
+                text.emoji_size(rpx(48. * scale))
+                    .line_height(rpx(54. * scale))
                     .into_any_element()
             } else {
                 text.into_any_element()
@@ -128,7 +142,7 @@ fn render_block(
                 1 => 24.,
                 2 => 20.,
                 _ => 16.,
-            };
+            } * scale;
             div()
                 .when(!first, |this| this.mt(rpx(8.)))
                 .mb(rpx(4.))
@@ -142,9 +156,9 @@ fn render_block(
                 .into_any_element()
         }
         Block::Subtext(spans) => div()
-            .text_size(rpx(13.))
+            .text_size(rpx(13. * scale))
             .text_color(rgb(context.colors.muted))
-            .child(inline(spans, edited, false, context, counter, cx).line_height(rpx(18.)))
+            .child(inline(spans, edited, false, context, counter, cx).line_height(rpx(18. * scale)))
             .into_any_element(),
         Block::Quote(blocks) => div()
             .flex()
@@ -171,6 +185,7 @@ fn render_block(
                             edited && last,
                             false,
                             depth,
+                            scale,
                             context,
                             counter,
                             cx,
@@ -188,8 +203,8 @@ fn render_block(
             .border_color(rgb(theme::BORDER))
             .font_family(cx.theme().mono_font_family.clone())
             .text_color(rgb(theme::TEXT))
-            .text_size(rpx(14.))
-            .line_height(rpx(18.))
+            .text_size(rpx(14. * scale))
+            .line_height(rpx(18. * scale))
             .whitespace_normal()
             .child({
                 *counter += 1;
@@ -198,7 +213,7 @@ fn render_block(
                     vec![Piece::text(code.clone(), PieceStyle::default())],
                 )
                 .selectable()
-                .line_height(rpx(18.))
+                .line_height(rpx(18. * scale))
             })
             .when(edited, |this| {
                 this.child(
@@ -258,6 +273,7 @@ fn render_block(
                                 edited && last_item && block_index + 1 == item.len(),
                                 false,
                                 depth + 1,
+                                scale,
                                 context,
                                 counter,
                                 cx,
@@ -563,13 +579,27 @@ pub fn format_timestamp(unix: i64, style: char) -> String {
         return unix.to_string();
     };
     match style {
-        't' => time.format("%-I:%M %p").to_string(),
-        'T' => time.format("%-I:%M:%S %p").to_string(),
+        't' => time
+            .format(settings::clock_format("%-I:%M %p", "%H:%M"))
+            .to_string(),
+        'T' => time
+            .format(settings::clock_format("%-I:%M:%S %p", "%H:%M:%S"))
+            .to_string(),
         'd' => time.format("%-m/%-d/%Y").to_string(),
         'D' => time.format("%B %-d, %Y").to_string(),
-        'F' => time.format("%A, %B %-d, %Y %-I:%M %p").to_string(),
+        'F' => time
+            .format(settings::clock_format(
+                "%A, %B %-d, %Y %-I:%M %p",
+                "%A, %B %-d, %Y %H:%M",
+            ))
+            .to_string(),
         'R' => relative(unix - Local::now().timestamp()),
-        _ => time.format("%B %-d, %Y %-I:%M %p").to_string(),
+        _ => time
+            .format(settings::clock_format(
+                "%B %-d, %Y %-I:%M %p",
+                "%B %-d, %Y %H:%M",
+            ))
+            .to_string(),
     }
 }
 

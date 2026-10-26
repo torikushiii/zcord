@@ -23,6 +23,7 @@ mod read_state;
 mod rich_text;
 mod selection;
 mod sending;
+mod settings_page;
 mod smooth_scroll;
 mod switcher;
 mod titlebar;
@@ -173,6 +174,8 @@ pub struct DiscordApp {
     pub(crate) hovered_member: Option<u64>,
     pub(crate) hovered_account: bool,
     pub(crate) profile: Option<profile::ProfileCard>,
+    pub(crate) settings_page: Option<settings_page::SettingsPage>,
+    settings_animation: u64,
     pub(crate) lightbox: Option<lightbox::Lightbox>,
     pub(crate) emoji_picker: Option<emoji_picker::EmojiPicker>,
     emoji_picker_closing: Option<Task<()>>,
@@ -305,6 +308,8 @@ impl DiscordApp {
             hovered_member: None,
             hovered_account: false,
             profile: None,
+            settings_page: None,
+            settings_animation: 0,
             lightbox: None,
             emoji_picker: None,
             emoji_picker_closing: None,

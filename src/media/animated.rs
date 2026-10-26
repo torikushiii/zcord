@@ -498,7 +498,21 @@ fn schedule_wakeup(view: EntityId, cx: &mut App, remaining: Duration, window: &W
     clocks.borrow_mut().attach(view, deadline, task);
 }
 
+fn animations_enabled(spec: &ImageSpec) -> bool {
+    match spec {
+        ImageSpec::Emoji { .. } => crate::settings::emoji_animation(),
+        ImageSpec::Media { .. } | ImageSpec::Sticker { .. } | ImageSpec::Attachment { .. } => {
+            crate::settings::gif_autoplay()
+        }
+        ImageSpec::Animated { still } => animations_enabled(still),
+        _ => true,
+    }
+}
+
 pub fn resolve(spec: &ImageSpec, size: u32, cx: &App) -> Option<Arc<RenderImage>> {
+    if !animations_enabled(spec) {
+        return None;
+    }
     match state(spec, size, cx) {
         Load::Ready(image) => Some(image),
         Load::Pending | Load::Failed => None,

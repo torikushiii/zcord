@@ -1,4 +1,4 @@
-use gpui::{App, Global};
+use gpui::{App, Global, Task};
 use gpui_tokio::Tokio;
 use std::{
     cell::RefCell,
@@ -520,9 +520,17 @@ struct Cache {
     entries: HashMap<ImageSpec, HashMap<u32, Entry>>,
     service: Option<Arc<Service>>,
     refresh_pending: bool,
+    generation: u64,
 }
 struct ImageCache(Rc<RefCell<Cache>>);
 impl Global for ImageCache {}
+
+impl Cache {
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.generation = self.generation.wrapping_add(1);
+    }
+}
 
 pub(crate) struct Service {
     client: reqwest::Client,
@@ -577,6 +585,7 @@ pub fn init(cx: &mut App) {
         entries: HashMap::new(),
         service,
         refresh_pending: false,
+        generation: 0,
     }))));
     #[cfg(windows)]
     crate::media::video::init(cx);
@@ -586,10 +595,75 @@ pub(crate) fn download_service(cx: &App) -> Option<Arc<Service>> {
     cx.try_global::<ImageCache>()?.0.borrow().service.clone()
 }
 
+fn cache_directories() -> Option<(PathBuf, PathBuf)> {
+    dirs::cache_dir().map(|dir| {
+        let root = dir.join("zcord");
+        (root.join("images"), root.join("videos"))
+    })
+}
+
+fn clear_cache_dirs(images: &Path, videos: &Path) -> Result<u64, String> {
+    let mut freed = 0u64;
+    for directory in [images, videos] {
+        let entries = match std::fs::read_dir(directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!("Could not read {}: {error}", directory.display()));
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    log::warn!("Could not read a cache entry: {error}");
+                    continue;
+                }
+            };
+            let path = entry.path();
+            if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+                continue;
+            }
+            let size = entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+            match std::fs::remove_file(&path) {
+                Ok(()) => freed = freed.saturating_add(size),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    log::warn!("Could not delete cached file {}: {error}", path.display());
+                }
+            }
+        }
+    }
+    Ok(freed)
+}
+
+pub fn clear_cache(cx: &mut App) -> Task<Result<u64, String>> {
+    let cache = cx.try_global::<ImageCache>().map(|cache| cache.0.clone());
+    let directories = cache_directories();
+    cx.spawn(async move |cx| {
+        let result = match directories {
+            Some((images, videos)) => {
+                cx.background_executor()
+                    .spawn(async move { clear_cache_dirs(&images, &videos) })
+                    .await
+            }
+            None => Ok(0),
+        };
+        cx.update(move |cx| {
+            if let Some(cache) = &cache {
+                cache.borrow_mut().clear();
+            }
+            BLURRED.with(|cache| cache.borrow_mut().clear());
+            cx.refresh_windows();
+        });
+        result
+    })
+}
+
 pub fn resolve(spec: &ImageSpec, size: u32, cx: &App) -> Option<Arc<Path>> {
     let cache = cx.try_global::<ImageCache>()?.0.clone();
     let size = rounded_size(size);
-    let service = {
+    let (service, generation) = {
         let mut state = cache.borrow_mut();
         if let Some(entry) = state.entries.get(spec).and_then(|sizes| sizes.get(&size)) {
             return match entry {
@@ -606,13 +680,17 @@ pub fn resolve(spec: &ImageSpec, size: u32, cx: &App) -> Option<Arc<Path>> {
                 Entry::Failed
             },
         );
-        service
-    }?;
+        (service, state.generation)
+    };
+    let service = service?;
     let spec = spec.clone();
     let request = spec.clone();
     let task = Tokio::spawn(cx, async move { service.load(&request, size).await });
     cx.spawn(async move |cx| {
         let path = task.await.ok().flatten();
+        if cache.borrow().generation != generation {
+            return;
+        }
         let refresh = {
             let mut state = cache.borrow_mut();
             let success = path.is_some();
@@ -648,6 +726,17 @@ struct BlurCache {
     order: VecDeque<BlurKey>,
 }
 
+thread_local! {
+    static BLURRED: RefCell<BlurCache> = RefCell::new(BlurCache::default());
+}
+
+impl BlurCache {
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+    }
+}
+
 pub fn blurred(spec: &ImageSpec, cx: &App) -> Option<Arc<gpui::RenderImage>> {
     blurred_with(spec, BLUR_SOURCE, BLUR_SIGMA, 1., cx)
 }
@@ -659,9 +748,6 @@ pub fn blurred_with(
     saturation: f32,
     cx: &App,
 ) -> Option<Arc<gpui::RenderImage>> {
-    thread_local! {
-        static BLURRED: RefCell<BlurCache> = RefCell::new(BlurCache::default());
-    }
     let path = resolve(spec, source, cx)?;
     let key = (path, sigma.to_bits(), saturation.to_bits());
     BLURRED.with(|cache| {

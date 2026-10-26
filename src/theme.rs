@@ -1,8 +1,10 @@
 use gpui::{prelude::*, *};
+use gpui_component::Theme;
 
 use crate::{
     media::animated,
     media::images::{self, ImageSpec},
+    settings,
     store::{Decoration, GuildTag, NameStyle, Status, Store, User},
 };
 
@@ -25,6 +27,23 @@ pub const YELLOW: u32 = 0xF0B232;
 
 pub const BASE_FONT_SIZE: f32 = 16.;
 pub const ZOOM_LEVELS: [f32; 11] = [0.5, 0.67, 0.75, 0.8, 0.9, 1., 1.1, 1.25, 1.5, 1.75, 2.];
+pub const DEFAULT_ZOOM: usize = 5;
+
+struct Zoom(usize);
+
+impl Global for Zoom {}
+
+pub fn set_zoom(index: usize, cx: &mut App) {
+    let index = index.min(ZOOM_LEVELS.len() - 1);
+    cx.set_global(Zoom(index));
+    settings::update(cx, |settings| settings.zoom = Some(index));
+    Theme::global_mut(cx).font_size = px(BASE_FONT_SIZE * ZOOM_LEVELS[index]);
+    cx.refresh_windows();
+}
+
+pub fn zoom_index(cx: &App) -> usize {
+    cx.try_global::<Zoom>().map_or(DEFAULT_ZOOM, |zoom| zoom.0)
+}
 
 pub fn rpx(css_pixels: f32) -> Rems {
     rems(css_pixels / BASE_FONT_SIZE)

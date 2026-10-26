@@ -170,6 +170,37 @@ impl VoiceManager {
         self.lock().flags.set_noise_suppression(enabled);
     }
 
+    pub fn set_input_device(&self, name: Option<String>) {
+        self.lock().flags.set_input_device(name);
+    }
+
+    pub fn set_output_device(&self, name: Option<String>) {
+        self.lock().flags.set_output_device(name);
+    }
+
+    pub fn set_input_volume(&self, gain: f32) {
+        self.lock().flags.set_input_gain(gain);
+    }
+
+    pub fn set_output_volume(&self, gain: f32) {
+        self.lock().flags.set_output_gain(gain);
+    }
+
+    pub fn set_input_sensitivity(&self, threshold: Option<f32>) {
+        self.lock().flags.set_sensitivity(threshold);
+    }
+
+    pub fn input_level(&self) -> Option<f32> {
+        let shared = self.lock();
+        shared.desired?;
+        shared.flags.input_level()
+    }
+
+    pub fn input_gate_open(&self) -> bool {
+        let shared = self.lock();
+        shared.desired.is_some() && shared.flags.gate_open()
+    }
+
     fn set_flags(&self, mute: bool, deaf: Option<bool>) -> Option<Value> {
         let mut shared = self.lock();
         shared.mute = mute;
@@ -240,9 +271,11 @@ impl VoiceManager {
             }
             shared.desired = Some((guild_id, channel_id));
         }
-        if shared.task.as_ref().is_some_and(|task| {
-            task.guild_id != guild_id || task.channel_id != channel_id
-        }) {
+        if shared
+            .task
+            .as_ref()
+            .is_some_and(|task| task.guild_id != guild_id || task.channel_id != channel_id)
+        {
             shared.restart = Some("channel changed");
         }
         shared.confirmed = Some((guild_id, channel_id));
@@ -513,10 +546,7 @@ fn server_name(endpoint: &str) -> Option<String> {
     let authority = endpoint
         .split_once("://")
         .map_or(endpoint, |(_, authority)| authority);
-    let authority = authority
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default();
+    let authority = authority.split(['/', '?', '#']).next().unwrap_or_default();
     let host = if let Some(rest) = authority.strip_prefix('[') {
         rest.split_once(']')?.0
     } else {
@@ -672,6 +702,13 @@ mod tests {
         assert_eq!(join["d"]["self_mute"], true);
         assert_eq!(join["d"]["self_deaf"], true);
         manager.leave();
+    }
+
+    #[test]
+    fn input_gate_is_closed_without_a_call() {
+        let manager = VoiceManager::default();
+        assert!(!manager.input_gate_open());
+        assert_eq!(manager.input_level(), None);
     }
 
     #[test]

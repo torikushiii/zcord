@@ -241,6 +241,7 @@ impl Store {
             rail: Vec::new(),
             users: users.into_iter().map(|user| (user.id, user)).collect(),
             current_user_id: 1,
+            account: None,
             dm_mentions: 77,
             next_message_id,
             premium_type: None,

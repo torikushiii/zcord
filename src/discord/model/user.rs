@@ -25,6 +25,14 @@ pub struct User {
     pub collectibles: Option<Option<Collectibles>>,
     #[serde(default, deserialize_with = "nullable")]
     pub display_name_styles: Option<Option<DisplayNameStyles>>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub phone: Option<String>,
+    #[serde(default)]
+    pub mfa_enabled: bool,
+    #[serde(default)]
+    pub verified: bool,
 }
 
 #[derive(Clone, Deserialize)]
@@ -49,6 +57,12 @@ pub struct UserUpdate {
     pub collectibles: Option<Option<Collectibles>>,
     #[serde(default, deserialize_with = "nullable")]
     pub display_name_styles: Option<Option<DisplayNameStyles>>,
+    #[serde(default, deserialize_with = "nullable_string")]
+    pub email: Option<Option<String>>,
+    #[serde(default, deserialize_with = "nullable_string")]
+    pub phone: Option<Option<String>>,
+    #[serde(default)]
+    pub mfa_enabled: Option<bool>,
 }
 
 #[derive(Clone, Deserialize)]

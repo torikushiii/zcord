@@ -179,6 +179,7 @@ impl DiscordApp {
         session.set_self_mute(self.voice.self_mute);
         session.set_self_deaf(self.voice.self_deaf);
         session.set_noise_suppression(self.voice.noise_suppression);
+        crate::app::settings_page::apply_preferences(session, &crate::settings::get(cx));
         session.join_voice(guild_id, channel_id);
         self.voice.call = Some(Call::new(guild_id, channel_id));
         self.voice.speaking.clear();
@@ -922,7 +923,7 @@ fn noise_card(app: &DiscordApp, menu: &Menu, cx: &App) -> Stateful<Div> {
                 .text_color(rgb(theme::STRONG))
                 .child("Noise Suppression"),
         )
-        .child(switch(enabled, slide));
+        .child(switch("noise-switch", enabled, slide));
     menu_frame("noise-menu")
         .gap_2()
         .w(rpx(296.))
@@ -994,7 +995,7 @@ fn popup(card: Stateful<Div>, menu: &Menu, cx: &App) -> AnyElement {
 
 /// Discord's settings toggle. `slide` carries the menu's animation id once the user has
 /// flipped it, so the knob and track ease into the new state instead of jumping.
-fn switch(on: bool, slide: Option<u64>) -> AnyElement {
+pub(crate) fn switch(id: &'static str, on: bool, slide: Option<u64>) -> AnyElement {
     const OFF_LEFT: f32 = 2.;
     const ON_LEFT: f32 = 18.;
     let (icon, icon_color) = if on {
@@ -1029,12 +1030,12 @@ fn switch(on: bool, slide: Option<u64>) -> AnyElement {
     let key = slide << 1 | u64::from(on);
     track
         .child(knob.with_animation(
-            ("noise-switch-knob", key),
+            ElementId::NamedInteger(format!("{id}-knob").into(), key),
             animation.clone(),
             move |this, delta| this.left(rpx(OFF_LEFT + (ON_LEFT - OFF_LEFT) * at(delta))),
         ))
         .with_animation(
-            ("noise-switch-track", key),
+            ElementId::NamedInteger(format!("{id}-track").into(), key),
             animation,
             move |this, delta| this.bg(blend(theme::FAINT, theme::BLURPLE, at(delta))),
         )

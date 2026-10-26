@@ -49,6 +49,48 @@ pub(super) fn part_key(message_id: u64, slot: u64) -> u64 {
 
 pub use crate::store::hides_embed_content as hides_content;
 
+pub(super) fn visible(embed: &Embed, content: &str) -> bool {
+    crate::settings::link_previews() || !link_preview(&embed.kind, embed.url.as_deref(), content)
+}
+
+fn link_preview(kind: &EmbedKind, url: Option<&str>, content: &str) -> bool {
+    if !matches!(
+        kind,
+        EmbedKind::Rich | EmbedKind::Link | EmbedKind::Article | EmbedKind::Video
+    ) {
+        return false;
+    }
+    let Some(url) = url else {
+        return false;
+    };
+    content
+        .split_whitespace()
+        .any(|word| url_matches(word, url))
+}
+
+fn url_matches(word: &str, url: &str) -> bool {
+    let word = word.trim_matches(|character: char| {
+        matches!(
+            character,
+            '<' | '>'
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '"'
+                | '\''
+                | ','
+                | '.'
+                | '!'
+                | '?'
+                | ';'
+        )
+    });
+    word == url || word.trim_end_matches('/') == url.trim_end_matches('/')
+}
+
 fn markdown(
     app: &DiscordApp,
     key: u64,
@@ -1372,4 +1414,55 @@ pub fn render_reactions(
             )
             .into_any_element(),
     )
+}
+
+#[cfg(test)]
+mod link_preview_tests {
+    use super::link_preview;
+    use crate::store::EmbedKind;
+
+    #[test]
+    fn url_embeds_are_classified_as_link_previews() {
+        assert!(link_preview(
+            &EmbedKind::Rich,
+            Some("https://example.com/story"),
+            "read https://example.com/story for details"
+        ));
+        assert!(link_preview(
+            &EmbedKind::Article,
+            Some("https://example.com/story"),
+            "read (https://example.com/story)."
+        ));
+        assert!(link_preview(
+            &EmbedKind::Video,
+            Some("https://example.com/clip"),
+            "<https://example.com/clip>"
+        ));
+        assert!(link_preview(
+            &EmbedKind::Link,
+            Some("https://example.com/story/"),
+            "https://example.com/story"
+        ));
+    }
+
+    #[test]
+    fn bot_rich_embeds_and_non_link_kinds_are_kept() {
+        assert!(!link_preview(
+            &EmbedKind::Rich,
+            Some("https://example.com/story"),
+            "a bot-authored embed"
+        ));
+        assert!(!link_preview(
+            &EmbedKind::Rich,
+            None,
+            "https://example.com/story"
+        ));
+        for kind in [EmbedKind::Image, EmbedKind::Gifv, EmbedKind::Components] {
+            assert!(!link_preview(
+                &kind,
+                Some("https://example.com/story"),
+                "https://example.com/story"
+            ));
+        }
+    }
 }

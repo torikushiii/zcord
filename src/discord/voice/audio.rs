@@ -8,7 +8,7 @@ use std::{
     collections::{BTreeMap, HashMap, VecDeque},
     sync::{
         Arc, Mutex, PoisonError,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     },
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -26,10 +26,48 @@ const RNNOISE_FRAME_SAMPLES: usize = 480;
 const PLAYBACK_LIMIT: usize = FRAME_VALUES * 10;
 const MAX_OPUS_PAYLOAD: usize = 1275;
 
+static MISSING_DEVICES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct AudioDevice {
+    pub name: String,
+}
+
+pub fn audio_devices() -> (Vec<AudioDevice>, Vec<AudioDevice>) {
+    let host = cpal::default_host();
+    (
+        host.input_devices().map(device_list).unwrap_or_default(),
+        host.output_devices().map(device_list).unwrap_or_default(),
+    )
+}
+
+fn device_list(devices: impl Iterator<Item = cpal::Device>) -> Vec<AudioDevice> {
+    let mut list: Vec<AudioDevice> = Vec::new();
+    for device in devices {
+        let Ok(description) = device.description() else {
+            continue;
+        };
+        let name = description.name().to_owned();
+        if !list.iter().any(|device| device.name == name) {
+            list.push(AudioDevice { name });
+        }
+    }
+    list
+}
+
 pub(super) struct Flags {
     pub mute: AtomicBool,
     pub deaf: AtomicBool,
     pub noise_suppression: AtomicBool,
+    input_gain: AtomicU32,
+    output_gain: AtomicU32,
+    sensitivity: AtomicU32,
+    input_level: AtomicU32,
+    gate_open: AtomicBool,
+    input_device: Mutex<Option<String>>,
+    output_device: Mutex<Option<String>>,
+    input_generation: AtomicU64,
+    output_generation: AtomicU64,
 }
 
 #[derive(Clone)]
@@ -41,6 +79,15 @@ impl AudioFlags {
             mute: AtomicBool::new(false),
             deaf: AtomicBool::new(false),
             noise_suppression: AtomicBool::new(true),
+            input_gain: AtomicU32::new(1.0f32.to_bits()),
+            output_gain: AtomicU32::new(1.0f32.to_bits()),
+            sensitivity: AtomicU32::new(f32::NAN.to_bits()),
+            input_level: AtomicU32::new(f32::NAN.to_bits()),
+            gate_open: AtomicBool::new(false),
+            input_device: Mutex::new(None),
+            output_device: Mutex::new(None),
+            input_generation: AtomicU64::new(0),
+            output_generation: AtomicU64::new(0),
         }))
     }
 
@@ -63,6 +110,162 @@ impl AudioFlags {
 
     pub fn noise_suppression(&self) -> bool {
         self.0.noise_suppression.load(Ordering::Relaxed)
+    }
+
+    pub fn set_input_gain(&self, gain: f32) {
+        store_f32(&self.0.input_gain, gain.clamp(0.0, 2.0));
+    }
+
+    fn input_gain(&self) -> f32 {
+        load_f32(&self.0.input_gain)
+    }
+
+    pub fn set_output_gain(&self, gain: f32) {
+        store_f32(&self.0.output_gain, gain.clamp(0.0, 2.0));
+    }
+
+    fn output_gain(&self) -> f32 {
+        load_f32(&self.0.output_gain)
+    }
+
+    pub fn set_sensitivity(&self, threshold: Option<f32>) {
+        let value = threshold.map_or(f32::NAN, |db| db.clamp(-100.0, 0.0));
+        store_f32(&self.0.sensitivity, value);
+    }
+
+    fn sensitivity(&self) -> Option<f32> {
+        let value = load_f32(&self.0.sensitivity);
+        (!value.is_nan()).then_some(value)
+    }
+
+    fn set_input_level(&self, db: f32) {
+        store_f32(&self.0.input_level, db);
+    }
+
+    fn clear_input_level(&self) {
+        store_f32(&self.0.input_level, f32::NAN);
+    }
+
+    pub fn input_level(&self) -> Option<f32> {
+        let value = load_f32(&self.0.input_level);
+        (!value.is_nan()).then_some(value)
+    }
+
+    fn set_gate_open(&self, open: bool) {
+        self.0.gate_open.store(open, Ordering::Relaxed);
+    }
+
+    pub fn gate_open(&self) -> bool {
+        self.0.gate_open.load(Ordering::Relaxed)
+    }
+
+    pub fn set_input_device(&self, name: Option<String>) {
+        store_device(&self.0.input_device, &self.0.input_generation, name);
+    }
+
+    fn input_device(&self) -> Option<String> {
+        self.0
+            .input_device
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn input_generation(&self) -> u64 {
+        self.0.input_generation.load(Ordering::Acquire)
+    }
+
+    pub fn set_output_device(&self, name: Option<String>) {
+        store_device(&self.0.output_device, &self.0.output_generation, name);
+    }
+
+    fn output_device(&self) -> Option<String> {
+        self.0
+            .output_device
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn output_generation(&self) -> u64 {
+        self.0.output_generation.load(Ordering::Acquire)
+    }
+}
+
+fn store_f32(atom: &AtomicU32, value: f32) {
+    atom.store(value.to_bits(), Ordering::Relaxed);
+}
+
+fn load_f32(atom: &AtomicU32) -> f32 {
+    f32::from_bits(atom.load(Ordering::Relaxed))
+}
+
+fn store_device(slot: &Mutex<Option<String>>, generation: &AtomicU64, name: Option<String>) {
+    let mut current = slot.lock().unwrap_or_else(PoisonError::into_inner);
+    if *current == name {
+        return;
+    }
+    *current = name;
+    generation.fetch_add(1, Ordering::AcqRel);
+}
+
+fn pick(names: &[String], wanted: Option<&str>) -> Option<usize> {
+    let wanted = wanted?;
+    names.iter().position(|name| name == wanted)
+}
+
+fn named_devices(devices: impl Iterator<Item = cpal::Device>) -> Vec<(cpal::Device, String)> {
+    let mut named = Vec::new();
+    for device in devices {
+        if let Ok(description) = device.description() {
+            named.push((device, description.name().to_owned()));
+        }
+    }
+    named
+}
+
+fn matching_device(host: &cpal::Host, wanted: &str, input: bool) -> Option<cpal::Device> {
+    let named = if input {
+        named_devices(host.input_devices().ok()?)
+    } else {
+        named_devices(host.output_devices().ok()?)
+    };
+    let names: Vec<String> = named.iter().map(|(_, name)| name.clone()).collect();
+    let index = pick(&names, Some(wanted))?;
+    named.into_iter().nth(index).map(|(device, _)| device)
+}
+
+fn log_missing_device(label: &str, name: &str) {
+    let mut missing = MISSING_DEVICES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if missing.iter().any(|existing| existing == name) {
+        return;
+    }
+    missing.push(name.to_owned());
+    log::info!("{label} device {name:?} not found; using default");
+}
+
+fn preferred_device(
+    host: &cpal::Host,
+    wanted: Option<&str>,
+    input: bool,
+    log_missing: bool,
+) -> Option<cpal::Device> {
+    if let Some(wanted) = wanted
+        && let Some(device) = matching_device(host, wanted, input)
+    {
+        return Some(device);
+    }
+    if let Some(wanted) = wanted
+        && log_missing
+    {
+        log_missing_device(if input { "Microphone" } else { "Speakers" }, wanted);
+    }
+    if input {
+        host.default_input_device()
+    } else {
+        host.default_output_device()
     }
 }
 
@@ -95,6 +298,8 @@ pub(super) struct AudioHandle {
 struct Side {
     label: &'static str,
     worker: Option<JoinHandle<SideExit>>,
+    stop: Arc<AtomicBool>,
+    device_generation: u64,
     started: Arc<AtomicBool>,
     active: Arc<AtomicBool>,
     started_at: Instant,
@@ -109,6 +314,8 @@ impl Side {
         Self {
             label,
             worker: None,
+            stop: Arc::new(AtomicBool::new(false)),
+            device_generation: 0,
             started: Arc::new(AtomicBool::new(false)),
             active: Arc::new(AtomicBool::new(false)),
             started_at: Instant::now(),
@@ -119,12 +326,17 @@ impl Side {
         }
     }
 
-    fn begin_spawn(&mut self) -> (Arc<AtomicBool>, Arc<AtomicBool>) {
+    fn begin_spawn(
+        &mut self,
+        generation: u64,
+    ) -> (Arc<AtomicBool>, Arc<AtomicBool>, Arc<AtomicBool>) {
+        self.stop = Arc::new(AtomicBool::new(false));
+        self.device_generation = generation;
         self.started = Arc::new(AtomicBool::new(false));
         self.active = Arc::new(AtomicBool::new(false));
         self.started_at = Instant::now();
         self.logged_running = false;
-        (self.started.clone(), self.active.clone())
+        (self.started.clone(), self.active.clone(), self.stop.clone())
     }
 
     fn failed(&mut self, now: Instant, reason: String) {
@@ -178,9 +390,7 @@ struct SideExit {
 fn is_fatal(kind: cpal::ErrorKind) -> bool {
     !matches!(
         kind,
-        cpal::ErrorKind::Xrun
-            | cpal::ErrorKind::DeviceChanged
-            | cpal::ErrorKind::RealtimeDenied
+        cpal::ErrorKind::Xrun | cpal::ErrorKind::DeviceChanged | cpal::ErrorKind::RealtimeDenied
     )
 }
 
@@ -195,17 +405,11 @@ impl StreamFailure {
     fn report(&self, error: cpal::Error) {
         let kind = error.kind();
         if is_fatal(kind) {
-            let mut current = self
-                .message
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut current = self.message.lock().unwrap_or_else(PoisonError::into_inner);
             *current = Some(error.to_string());
             self.failed.store(true, Ordering::Release);
         } else {
-            let mut notice = self
-                .notice
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut notice = self.notice.lock().unwrap_or_else(PoisonError::into_inner);
             *notice = Some((kind, error.to_string()));
         }
     }
@@ -297,9 +501,23 @@ impl AudioHandle {
     }
 
     fn maintain_input(&mut self) {
+        let generation = self.flags.input_generation();
+        if self.input.device_generation != generation {
+            self.restart_input(generation);
+        }
         let now = Instant::now();
-        if self.input.worker.as_ref().is_some_and(JoinHandle::is_finished) {
-            match self.input.worker.take().and_then(|worker| worker.join().ok()) {
+        if self
+            .input
+            .worker
+            .as_ref()
+            .is_some_and(JoinHandle::is_finished)
+        {
+            match self
+                .input
+                .worker
+                .take()
+                .and_then(|worker| worker.join().ok())
+            {
                 Some(exit) => {
                     if let Some(incoming) = exit.incoming {
                         self.incoming_rx = Some(incoming);
@@ -326,9 +544,23 @@ impl AudioHandle {
     }
 
     fn maintain_output(&mut self) {
+        let generation = self.flags.output_generation();
+        if self.output.device_generation != generation {
+            self.restart_output(generation);
+        }
         let now = Instant::now();
-        if self.output.worker.as_ref().is_some_and(JoinHandle::is_finished) {
-            match self.output.worker.take().and_then(|worker| worker.join().ok()) {
+        if self
+            .output
+            .worker
+            .as_ref()
+            .is_some_and(JoinHandle::is_finished)
+        {
+            match self
+                .output
+                .worker
+                .take()
+                .and_then(|worker| worker.join().ok())
+            {
                 Some(exit) => {
                     match exit.incoming {
                         Some(incoming) => self.incoming_rx = Some(incoming),
@@ -358,6 +590,38 @@ impl AudioHandle {
         }
     }
 
+    fn restart_input(&mut self, generation: u64) {
+        self.input.stop.store(true, Ordering::Release);
+        if let Some(worker) = self.input.worker.take() {
+            let _ = worker.join();
+        }
+        self.input.device_generation = generation;
+        self.input.started_at = Instant::now();
+        self.input.next_attempt = Instant::now();
+        self.input.failures = 0;
+        self.input.logged_running = false;
+        self.input.last_warn = None;
+    }
+
+    fn restart_output(&mut self, generation: u64) {
+        self.output.stop.store(true, Ordering::Release);
+        if let Some(worker) = self.output.worker.take() {
+            match worker.join() {
+                Ok(exit) => match exit.incoming {
+                    Some(incoming) => self.incoming_rx = Some(incoming),
+                    None => self.reset_incoming(),
+                },
+                Err(_) => self.reset_incoming(),
+            }
+        }
+        self.output.device_generation = generation;
+        self.output.started_at = Instant::now();
+        self.output.next_attempt = Instant::now();
+        self.output.failures = 0;
+        self.output.logged_running = false;
+        self.output.last_warn = None;
+    }
+
     fn reset_incoming(&mut self) {
         let (incoming, incoming_rx) = unbounded_channel();
         self.incoming = incoming;
@@ -365,7 +629,9 @@ impl AudioHandle {
     }
 
     fn spawn_input(&mut self) {
-        let (started, active) = self.input.begin_spawn();
+        let generation = self.flags.input_generation();
+        let (started, active, side_stop) = self.input.begin_spawn(generation);
+        let device = self.flags.input_device();
         let outgoing = self.outgoing_tx.clone();
         let flags = self.flags.clone();
         let stop = self.stop.clone();
@@ -376,14 +642,8 @@ impl AudioHandle {
             .name("zcord-voice-in".into())
             .spawn(move || {
                 run_input(
-                    outgoing,
-                    flags,
-                    stop,
-                    started,
-                    active,
-                    mic_frames,
-                    gate_open,
-                    encoded,
+                    outgoing, flags, stop, side_stop, device, started, active, mic_frames,
+                    gate_open, encoded,
                 )
             })
             .map_err(|error| format!("thread: {error}"));
@@ -401,7 +661,9 @@ impl AudioHandle {
             return;
         };
         let holder = Arc::new(Mutex::new(Some(incoming)));
-        let (started, active) = self.output.begin_spawn();
+        let generation = self.flags.output_generation();
+        let (started, active, side_stop) = self.output.begin_spawn(generation);
+        let device = self.flags.output_device();
         let thread_holder = holder.clone();
         let flags = self.flags.clone();
         let stop = self.stop.clone();
@@ -413,7 +675,9 @@ impl AudioHandle {
                     .unwrap_or_else(PoisonError::into_inner)
                     .take();
                 match incoming {
-                    Some(incoming) => run_output(incoming, flags, stop, started, active),
+                    Some(incoming) => {
+                        run_output(incoming, flags, stop, side_stop, device, started, active)
+                    }
                     None => SideExit {
                         incoming: None,
                         failure: Some("incoming audio receiver missing".into()),
@@ -424,10 +688,7 @@ impl AudioHandle {
         match worker {
             Ok(worker) => self.output.worker = Some(worker),
             Err(error) => {
-                self.incoming_rx = holder
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .take();
+                self.incoming_rx = holder.lock().unwrap_or_else(PoisonError::into_inner).take();
                 self.output
                     .failed(Instant::now(), format!("thread: {error}"));
             }
@@ -438,6 +699,10 @@ impl AudioHandle {
 impl Drop for AudioHandle {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
+        self.input.stop.store(true, Ordering::Release);
+        self.output.stop.store(true, Ordering::Release);
+        self.flags.clear_input_level();
+        self.flags.set_gate_open(false);
         let _ = self.input.worker.take();
         let _ = self.output.worker.take();
     }
@@ -458,9 +723,7 @@ fn open_input(
     let queue = Arc::new(Mutex::new(VecDeque::new()));
     let stream = build_input(device, &config, queue.clone(), failure)
         .map_err(|error| format!("build: {error}"))?;
-    stream
-        .play()
-        .map_err(|error| format!("start: {error}"))?;
+    stream.play().map_err(|error| format!("start: {error}"))?;
     Ok(Some(Input {
         _stream: stream,
         queue,
@@ -492,9 +755,7 @@ fn open_output(
         underruns.clone(),
     )
     .map_err(|error| format!("build: {error}"))?;
-    stream
-        .play()
-        .map_err(|error| format!("start: {error}"))?;
+    stream.play().map_err(|error| format!("start: {error}"))?;
     Ok(Some(Output {
         _stream: stream,
         queue,
@@ -559,19 +820,51 @@ impl Denoiser {
     }
 }
 
+struct LevelGuard(AudioFlags);
+
+impl Drop for LevelGuard {
+    fn drop(&mut self) {
+        self.0.clear_input_level();
+        self.0.set_gate_open(false);
+    }
+}
+
+fn apply_gain(frame: &mut [f32], gain: f32) {
+    for sample in frame {
+        *sample = (*sample * gain).clamp(-1.0, 1.0);
+    }
+}
+
+fn output_sample(sample: f32, gain: f32) -> f32 {
+    (sample * gain).clamp(-1.0, 1.0)
+}
+
+fn dbfs(frame: &[f32]) -> f32 {
+    let rms = (frame.iter().map(|sample| sample * sample).sum::<f32>() / frame.len().max(1) as f32)
+        .sqrt();
+    if rms <= 1e-7 {
+        -100.0
+    } else {
+        (20.0 * rms.log10()).max(-100.0)
+    }
+}
+
 fn run_input(
     outgoing: UnboundedSender<Outgoing>,
     flags: AudioFlags,
     stop: Arc<AtomicBool>,
+    side_stop: Arc<AtomicBool>,
+    device_name: Option<String>,
     started: Arc<AtomicBool>,
     active: Arc<AtomicBool>,
     mic_frames: Arc<AtomicU64>,
     gate_open: Arc<AtomicU64>,
     encoded: Arc<AtomicU64>,
 ) -> SideExit {
+    let _level = LevelGuard(flags.clone());
     let host = cpal::default_host();
     let failure = StreamFailure::default();
-    let device = host.default_input_device();
+    let device = preferred_device(&host, device_name.as_deref(), true, true);
     let mut input = match open_input(device.as_ref(), failure.clone()) {
         Ok(input) => input,
         Err(reason) => {
@@ -596,7 +889,7 @@ fn run_input(
     let mut next_input_check = Instant::now() + Duration::from_secs(3);
     let mut last_xrun: Option<Instant> = None;
 
-    while !stop.load(Ordering::Acquire) {
+    while !stop.load(Ordering::Acquire) && !side_stop.load(Ordering::Acquire) {
         std::thread::sleep(Duration::from_millis(5));
 
         let now = Instant::now();
@@ -625,6 +918,8 @@ fn run_input(
         while capture_48k.len() >= FRAME_VALUES {
             let mut frame: Vec<f32> = capture_48k.drain(..FRAME_VALUES).collect();
             mic_frames.fetch_add(1, Ordering::Relaxed);
+            apply_gain(&mut frame, flags.input_gain());
+            flags.set_input_level(dbfs(&frame));
             let muted = flags.muted() || flags.deafened();
             let voice_probability =
                 denoiser.process(&mut frame, !muted && flags.noise_suppression());
@@ -632,8 +927,14 @@ fn run_input(
                 gate.close();
                 false
             } else {
-                gate.update(&frame, voice_probability, Instant::now())
+                gate.update_with_threshold(
+                    &frame,
+                    voice_probability,
+                    Instant::now(),
+                    flags.sensitivity(),
+                )
             };
+            flags.set_gate_open(open);
             if open && !speaking {
                 let _ = outgoing.send(Outgoing::Speaking(true));
             }
@@ -660,14 +961,13 @@ fn run_input(
             };
         }
 
-        // A running microphone is rebuilt only on stream errors. Probing the default device
+        // A running microphone is rebuilt only on stream errors. Probing the device
         // while it streams can fail spuriously (RPC_E_CHANGED_MODE after a Bluetooth reconnect)
         // and would tear down a working stream every few seconds.
         let now = Instant::now();
         if input.is_none() && now >= next_input_check {
             next_input_check = now + Duration::from_secs(3);
-            let available = host
-                .default_input_device()
+            let available = preferred_device(&host, device_name.as_deref(), true, false)
                 .is_some_and(|device| device.default_input_config().is_ok());
             if available {
                 send_stop(&outgoing, &mut speaking);
@@ -692,12 +992,14 @@ fn run_output(
     mut incoming: UnboundedReceiver<Incoming>,
     flags: AudioFlags,
     stop: Arc<AtomicBool>,
+    side_stop: Arc<AtomicBool>,
+    device_name: Option<String>,
     started: Arc<AtomicBool>,
     active: Arc<AtomicBool>,
 ) -> SideExit {
     let host = cpal::default_host();
     let failure = StreamFailure::default();
-    let device = host.default_output_device();
+    let device = preferred_device(&host, device_name.as_deref(), false, true);
     let mut output = match open_output(device.as_ref(), flags.clone(), failure.clone()) {
         Ok(output) => output,
         Err(reason) => {
@@ -719,7 +1021,7 @@ fn run_output(
     let mut next_report = Instant::now() + Duration::from_secs(5);
     let mut last_xrun: Option<Instant> = None;
 
-    while !stop.load(Ordering::Acquire) {
+    while !stop.load(Ordering::Acquire) && !side_stop.load(Ordering::Acquire) {
         std::thread::sleep(Duration::from_millis(5));
 
         let now = Instant::now();
@@ -767,19 +1069,20 @@ fn run_output(
                 if !needs_mix(queued, target) {
                     break;
                 }
-                let mixed = mix(
+                let mut mixed = mix(
                     &mut decoders,
                     flags.deafened(),
                     now,
                     &mut decoded,
                     &mut audible,
                 );
+                let gain = flags.output_gain();
+                for sample in &mut mixed {
+                    *sample = output_sample(*sample, gain);
+                }
                 let mut converted = Vec::new();
                 output.resampler.push(&mixed, &mut converted);
-                let mut queue = output
-                    .queue
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
+                let mut queue = output.queue.lock().unwrap_or_else(PoisonError::into_inner);
                 queue.extend(converted);
                 while queue.len() > limit {
                     queue.pop_front();
@@ -971,7 +1274,18 @@ pub(super) struct VoiceGate {
 }
 
 impl VoiceGate {
+    #[cfg(test)]
     pub fn update(&mut self, frame: &[f32], voice_probability: Option<f32>, now: Instant) -> bool {
+        self.update_with_threshold(frame, voice_probability, now, None)
+    }
+
+    pub fn update_with_threshold(
+        &mut self,
+        frame: &[f32],
+        voice_probability: Option<f32>,
+        now: Instant,
+        threshold_db: Option<f32>,
+    ) -> bool {
         let rms = (frame.iter().map(|sample| sample * sample).sum::<f32>()
             / frame.len().max(1) as f32)
             .sqrt();
@@ -980,9 +1294,10 @@ impl VoiceGate {
         } else {
             20.0 * rms.log10()
         };
+        let threshold = threshold_db.map_or(VAD_THRESHOLD_DB, |db| db.clamp(-100.0, 0.0));
         let voiced =
             voice_probability.is_none_or(|probability| probability >= VOICE_PROBABILITY_THRESHOLD);
-        if db >= VAD_THRESHOLD_DB && voiced {
+        if db >= threshold && voiced {
             self.open = true;
             self.last_voice = Some(now);
         } else if self.open
@@ -1009,6 +1324,188 @@ pub(super) fn stop_sequence() -> [Outgoing; 6] {
         Outgoing::Frame(super::dave::SILENCE.to_vec()),
         Outgoing::Speaking(false),
     ]
+}
+
+pub struct MicTest {
+    stop: Arc<AtomicBool>,
+    flags: AudioFlags,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl MicTest {
+    pub fn start(
+        input: Option<String>,
+        output: Option<String>,
+        input_gain: f32,
+        output_volume: f32,
+        noise_suppression: bool,
+    ) -> Result<MicTest, String> {
+        let flags = AudioFlags::new();
+        flags.set_input_gain(input_gain);
+        flags.set_output_gain(output_volume);
+        flags.set_noise_suppression(noise_suppression);
+        let stop = Arc::new(AtomicBool::new(false));
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let worker_stop = stop.clone();
+        let worker_flags = flags.clone();
+        let worker = std::thread::Builder::new()
+            .name("zcord-mic-test".into())
+            .spawn(move || run_mic_test(input, output, worker_flags, worker_stop, ready_tx))
+            .map_err(|error| format!("Microphone test thread: {error}"))?;
+        match ready_rx.recv() {
+            Ok(Ok(())) => Ok(Self {
+                stop,
+                flags,
+                worker: Some(worker),
+            }),
+            Ok(Err(error)) => {
+                stop.store(true, Ordering::Release);
+                let _ = worker.join();
+                Err(error)
+            }
+            Err(_) => {
+                stop.store(true, Ordering::Release);
+                let _ = worker.join();
+                Err("Microphone test stopped before opening the devices".into())
+            }
+        }
+    }
+
+    pub fn level(&self) -> Option<f32> {
+        self.flags.input_level()
+    }
+
+    pub fn gate_open(&self) -> bool {
+        self.flags.gate_open()
+    }
+
+    pub fn set_input_gain(&self, gain: f32) {
+        self.flags.set_input_gain(gain);
+    }
+
+    pub fn set_output_volume(&self, volume: f32) {
+        self.flags.set_output_gain(volume);
+    }
+
+    pub fn set_input_sensitivity(&self, threshold: Option<f32>) {
+        self.flags.set_sensitivity(threshold);
+    }
+
+    pub fn set_noise_suppression(&self, enabled: bool) {
+        self.flags.set_noise_suppression(enabled);
+    }
+}
+
+impl Drop for MicTest {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+        self.flags.clear_input_level();
+        self.flags.set_gate_open(false);
+    }
+}
+
+fn run_mic_test(
+    input_name: Option<String>,
+    output_name: Option<String>,
+    flags: AudioFlags,
+    stop: Arc<AtomicBool>,
+    ready: std::sync::mpsc::Sender<Result<(), String>>,
+) {
+    let opened = (|| -> Result<(Input, Output, StreamFailure, StreamFailure), String> {
+        let host = cpal::default_host();
+        let input_device = preferred_device(&host, input_name.as_deref(), true, true)
+            .ok_or_else(|| "No microphone is available".to_owned())?;
+        let output_device = preferred_device(&host, output_name.as_deref(), false, true)
+            .ok_or_else(|| "No speakers are available".to_owned())?;
+        let input_failure = StreamFailure::default();
+        let output_failure = StreamFailure::default();
+        let input = open_input(Some(&input_device), input_failure.clone())
+            .map_err(|error| format!("Microphone: {error}"))?
+            .ok_or_else(|| "No microphone is available".to_owned())?;
+        let output = open_output(Some(&output_device), flags.clone(), output_failure.clone())
+            .map_err(|error| format!("Speakers: {error}"))?
+            .ok_or_else(|| "No speakers are available".to_owned())?;
+        Ok((input, output, input_failure, output_failure))
+    })();
+    let (mut input, mut output, input_failure, output_failure) = match opened {
+        Ok(opened) => opened,
+        Err(error) => {
+            let _ = ready.send(Err(error));
+            return;
+        }
+    };
+    if ready.send(Ok(())).is_err() {
+        return;
+    }
+    let _level = LevelGuard(flags.clone());
+    let mut capture_48k = Vec::new();
+    let mut denoiser = Denoiser::default();
+    let mut gate = VoiceGate::default();
+    let mut last_xrun: Option<Instant> = None;
+
+    while !stop.load(Ordering::Acquire) {
+        std::thread::sleep(Duration::from_millis(5));
+        let now = Instant::now();
+        if let Some((kind, text)) = input_failure.take_notice() {
+            if kind == cpal::ErrorKind::Xrun {
+                if last_xrun.is_none_or(|last| {
+                    now.saturating_duration_since(last) >= Duration::from_secs(10)
+                }) {
+                    log::debug!("Microphone test xrun: {text}");
+                    last_xrun = Some(now);
+                }
+            } else {
+                log::debug!("Microphone test stream notice: {text}");
+            }
+        }
+        if let Some((kind, text)) = output_failure.take_notice() {
+            if kind == cpal::ErrorKind::Xrun {
+                log::debug!("Microphone test speaker xrun: {text}");
+            } else {
+                log::debug!("Microphone test speaker notice: {text}");
+            }
+        }
+        if input_failure.take().is_some() || output_failure.take().is_some() {
+            break;
+        }
+        {
+            let mut raw = input.queue.lock().unwrap_or_else(PoisonError::into_inner);
+            if !raw.is_empty() {
+                let samples: Vec<f32> = raw.drain(..).collect();
+                drop(raw);
+                input.resampler.push(&samples, &mut capture_48k);
+            }
+        }
+
+        while capture_48k.len() >= FRAME_VALUES {
+            let mut frame: Vec<f32> = capture_48k.drain(..FRAME_VALUES).collect();
+            apply_gain(&mut frame, flags.input_gain());
+            flags.set_input_level(dbfs(&frame));
+            let probability = denoiser.process(&mut frame, flags.noise_suppression());
+            let open = gate.update_with_threshold(
+                &frame,
+                probability,
+                Instant::now(),
+                flags.sensitivity(),
+            );
+            flags.set_gate_open(open);
+            let mut converted = Vec::new();
+            output.resampler.push(&frame, &mut converted);
+            let gain = flags.output_gain();
+            for sample in &mut converted {
+                *sample = output_sample(*sample, gain);
+            }
+            let mut queue = output.queue.lock().unwrap_or_else(PoisonError::into_inner);
+            queue.extend(converted);
+            let limit = PLAYBACK_LIMIT.max(output.frame_values.saturating_mul(2));
+            while queue.len() > limit {
+                queue.pop_front();
+            }
+        }
+    }
 }
 
 struct StereoResampler {
@@ -1535,5 +2032,63 @@ mod tests {
             assert!(matches!(frame, Outgoing::Frame(data) if data == &[0xF8, 0xFF, 0xFE]));
         }
         assert!(matches!(sequence[5], Outgoing::Speaking(false)));
+    }
+
+    #[test]
+    fn gain_and_output_volume_multiply_and_clamp() {
+        let mut frame = vec![0.25, -0.5, 2.0];
+        apply_gain(&mut frame, 2.0);
+        assert_eq!(frame, vec![0.5, -1.0, 1.0]);
+        assert_eq!(output_sample(0.25, 2.0), 0.5);
+        assert_eq!(output_sample(-0.75, 2.0), -1.0);
+    }
+
+    #[test]
+    fn volume_and_sensitivity_flags_clamp() {
+        let flags = AudioFlags::new();
+        flags.set_input_gain(9.0);
+        assert_eq!(flags.input_gain(), 2.0);
+        flags.set_output_gain(-1.0);
+        assert_eq!(flags.output_gain(), 0.0);
+        flags.set_sensitivity(Some(12.0));
+        assert_eq!(flags.sensitivity(), Some(0.0));
+        flags.set_sensitivity(Some(-150.0));
+        assert_eq!(flags.sensitivity(), Some(-100.0));
+        flags.set_sensitivity(None);
+        assert_eq!(flags.sensitivity(), None);
+    }
+
+    #[test]
+    fn input_level_is_dbfs_and_silence_clamps_to_minus_100() {
+        let flags = AudioFlags::new();
+        assert_eq!(flags.input_level(), None);
+        let frame = vec![0.5; FRAME_VALUES];
+        let level = dbfs(&frame);
+        assert!((level - 20.0 * 0.5f32.log10()).abs() < 1e-5);
+        flags.set_input_level(level);
+        assert_eq!(flags.input_level(), Some(level));
+        assert_eq!(dbfs(&vec![0.0; FRAME_VALUES]), -100.0);
+        flags.clear_input_level();
+        assert_eq!(flags.input_level(), None);
+    }
+
+    #[test]
+    fn configured_sensitivity_replaces_the_default_threshold() {
+        let start = Instant::now();
+        let loud = vec![0.01; FRAME_VALUES];
+        let mut gate = VoiceGate::default();
+        assert!(!gate.update_with_threshold(&loud, None, start, Some(-30.0)));
+        assert!(gate.update_with_threshold(&loud, None, start, Some(-45.0)));
+
+        let mut gate = VoiceGate::default();
+        assert!(gate.update_with_threshold(&loud, None, start, None));
+    }
+
+    #[test]
+    fn device_pick_requires_an_exact_name() {
+        let names = vec!["Microphone A".to_owned(), "Microphone B".to_owned()];
+        assert_eq!(pick(&names, Some("Microphone B")), Some(1));
+        assert_eq!(pick(&names, Some("Microphone C")), None);
+        assert_eq!(pick(&names, None), None);
     }
 }
