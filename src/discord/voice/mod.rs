@@ -2,6 +2,7 @@ mod audio;
 mod crypto;
 mod dave;
 mod gateway;
+mod rtcp;
 mod rtp;
 mod task;
 mod udp;

@@ -6,6 +6,8 @@ use std::{
 use gpui::{prelude::*, *};
 use gpui_component::tooltip::Tooltip;
 
+mod details;
+
 use crate::{
     app::{DiscordApp, message_body::label},
     discord::VoiceEvent,
@@ -29,10 +31,19 @@ pub(crate) struct Voice {
     pub(crate) call: Option<Call>,
     pub(crate) speaking: HashSet<u64>,
     pub(crate) noise_suppression: bool,
-    noise_menu: Option<NoiseMenu>,
-    noise_menu_closed_at: Option<Instant>,
-    noise_menu_opened: u64,
-    noise_menu_close: Option<Task<()>>,
+    hovered_control: Option<Control>,
+    status_hovered: bool,
+    /// Until the first hover the title sits still, so it doesn't play the slide-back
+    /// animation when the panel first appears.
+    status_hovered_once: bool,
+    menu: Option<Menu>,
+    /// Which menu the last mouse-down-outside closed, and when.
+    menu_closed: Option<(MenuKind, Instant)>,
+    menu_opened: u64,
+    menu_close: Option<Task<()>>,
+    details_tab: DetailsTab,
+    privacy_copied: bool,
+    privacy_copied_reset: Option<Task<()>>,
     restored: bool,
     clock: Option<Task<()>>,
 }
@@ -62,7 +73,29 @@ impl Voice {
     }
 }
 
-struct NoiseMenu {
+/// Voice panel controls that show a Discord-style tooltip while hovered.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Control {
+    Signal,
+    NoiseSuppression,
+    Disconnect,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MenuKind {
+    NoiseSuppression,
+    Details,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum DetailsTab {
+    #[default]
+    Connection,
+    Privacy,
+}
+
+struct Menu {
+    kind: MenuKind,
     position: Point<Pixels>,
     closing: bool,
     /// Unique per open, so reopening replays the entry animation.
@@ -87,6 +120,38 @@ pub(crate) struct Call {
     pub(crate) connected: bool,
     pub(crate) connected_at: Option<Instant>,
     pub(crate) encryption: Encryption,
+    pings: Vec<PingSample>,
+    server: Option<String>,
+    packet_loss: Option<f32>,
+}
+
+#[derive(Clone, Copy)]
+struct PingSample {
+    unix: i64,
+    ms: u32,
+}
+
+/// Heartbeats arrive about every 14 seconds, so this covers the graph's window with room
+/// to spare.
+const PING_HISTORY: usize = 64;
+
+impl Call {
+    fn new(guild_id: u64, channel_id: u64) -> Self {
+        Self {
+            guild_id,
+            channel_id,
+            connected: false,
+            connected_at: None,
+            encryption: Encryption::Pending,
+            pings: Vec::new(),
+            server: None,
+            packet_loss: None,
+        }
+    }
+
+    fn last_ping(&self) -> Option<u32> {
+        self.pings.last().map(|sample| sample.ms)
+    }
 }
 
 impl DiscordApp {
@@ -107,13 +172,7 @@ impl DiscordApp {
         session.set_self_deaf(self.voice.self_deaf);
         session.set_noise_suppression(self.voice.noise_suppression);
         session.join_voice(guild_id, channel_id);
-        self.voice.call = Some(Call {
-            guild_id,
-            channel_id,
-            connected: false,
-            connected_at: None,
-            encryption: Encryption::Pending,
-        });
+        self.voice.call = Some(Call::new(guild_id, channel_id));
         self.voice.speaking.clear();
         self.sync_channel_rows();
         cx.notify();
@@ -128,8 +187,10 @@ impl DiscordApp {
         }
         remember_channel(None, cx);
         self.voice.speaking.clear();
-        self.voice.noise_menu = None;
-        self.voice.noise_menu_close = None;
+        self.voice.menu = None;
+        self.voice.hovered_control = None;
+        self.voice.status_hovered = false;
+        self.voice.menu_close = None;
         self.voice.clock = None;
         self.sync_channel_rows();
         cx.notify();
@@ -163,58 +224,81 @@ impl DiscordApp {
         crate::settings::update(cx, |settings| {
             settings.voice_noise_suppression_off = !enabled
         });
-        if let Some(menu) = &mut self.voice.noise_menu {
+        if let Some(menu) = &mut self.voice.menu {
             menu.switch_moved = true;
         }
         cx.notify();
     }
 
-    fn toggle_noise_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+    fn toggle_menu(&mut self, kind: MenuKind, position: Point<Pixels>, cx: &mut Context<Self>) {
         let voice = &mut self.voice;
-        if voice.noise_menu.as_ref().is_some_and(|menu| !menu.closing) {
-            self.close_noise_menu(cx);
+        if voice
+            .menu
+            .as_ref()
+            .is_some_and(|menu| menu.kind == kind && !menu.closing)
+        {
+            self.close_menu(cx);
             return;
         }
-        // The press that closed the menu via mouse-down-outside must not reopen it here.
-        let just_closed = voice
-            .noise_menu_closed_at
-            .is_some_and(|at| at.elapsed() < Duration::from_millis(150));
+        // The press that closed this menu via mouse-down-outside must not reopen it here.
+        let just_closed = voice.menu_closed.is_some_and(|(closed, at)| {
+            closed == kind && at.elapsed() < Duration::from_millis(150)
+        });
         if just_closed {
             return;
         }
-        voice.noise_menu_opened = voice.noise_menu_opened.wrapping_add(1);
-        voice.noise_menu_close = None;
-        voice.noise_menu = Some(NoiseMenu {
+        voice.menu_opened = voice.menu_opened.wrapping_add(1);
+        voice.menu_close = None;
+        voice.menu = Some(Menu {
+            kind,
             position,
             closing: false,
-            animation: voice.noise_menu_opened,
+            animation: voice.menu_opened,
             switch_moved: false,
         });
         cx.notify();
     }
 
-    fn close_noise_menu(&mut self, cx: &mut Context<Self>) {
-        let Some(menu) = self.voice.noise_menu.as_mut().filter(|menu| !menu.closing) else {
+    fn close_menu(&mut self, cx: &mut Context<Self>) {
+        let Some(menu) = self.voice.menu.as_mut().filter(|menu| !menu.closing) else {
             return;
         };
         menu.closing = true;
         let animation = menu.animation;
-        self.voice.noise_menu_closed_at = Some(Instant::now());
-        self.voice.noise_menu_close = Some(cx.spawn(async move |this, cx| {
+        self.voice.menu_closed = Some((menu.kind, Instant::now()));
+        self.voice.menu_close = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(MENU_EXIT).await;
             this.update(cx, |app, cx| {
                 let voice = &mut app.voice;
                 if voice
-                    .noise_menu
+                    .menu
                     .as_ref()
                     .is_some_and(|menu| menu.closing && menu.animation == animation)
                 {
-                    voice.noise_menu = None;
+                    voice.menu = None;
                     cx.notify();
                 }
             })
             .ok();
         }));
+        cx.notify();
+    }
+
+    fn mark_privacy_code_copied(&mut self, cx: &mut Context<Self>) {
+        self.voice.privacy_copied = true;
+        self.voice.privacy_copied_reset = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(2)).await;
+            this.update(cx, |app, cx| {
+                app.voice.privacy_copied = false;
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    fn select_details_tab(&mut self, tab: DetailsTab, cx: &mut Context<Self>) {
+        self.voice.details_tab = tab;
         cx.notify();
     }
 
@@ -282,13 +366,13 @@ impl DiscordApp {
                     .call
                     .take()
                     .filter(|call| call.channel_id == channel_id);
-                voice.call = Some(Call {
-                    guild_id,
-                    channel_id,
-                    connected: false,
-                    connected_at: previous.as_ref().and_then(|call| call.connected_at),
-                    encryption: previous.map(|call| call.encryption).unwrap_or_default(),
-                });
+                let mut call = Call::new(guild_id, channel_id);
+                if let Some(previous) = previous {
+                    call.connected_at = previous.connected_at;
+                    call.encryption = previous.encryption;
+                    call.pings = previous.pings;
+                }
+                voice.call = Some(call);
             }
             VoiceEvent::Connected {
                 guild_id,
@@ -301,11 +385,9 @@ impl DiscordApp {
                     }
                     _ => {
                         voice.call = Some(Call {
-                            guild_id,
-                            channel_id,
                             connected: true,
                             connected_at: Some(Instant::now()),
-                            encryption: Encryption::Pending,
+                            ..Call::new(guild_id, channel_id)
                         })
                     }
                 }
@@ -323,6 +405,10 @@ impl DiscordApp {
                     log::warn!("Voice disconnected: {reason}");
                 }
                 voice.call = None;
+                voice.menu = None;
+                voice.menu_close = None;
+                voice.hovered_control = None;
+                voice.status_hovered = false;
                 voice.speaking.clear();
                 voice.clock = None;
                 remember_channel(None, cx);
@@ -339,6 +425,33 @@ impl DiscordApp {
                 }
                 return;
             }
+            VoiceEvent::Ping(ms) => {
+                if let Some(call) = &mut voice.call {
+                    if call.pings.len() == PING_HISTORY {
+                        call.pings.remove(0);
+                    }
+                    call.pings.push(PingSample {
+                        unix: chrono::Utc::now().timestamp(),
+                        ms,
+                    });
+                }
+                self.notify_voice_stats(cx);
+                return;
+            }
+            VoiceEvent::Server(host) => {
+                if let Some(call) = &mut voice.call {
+                    call.server = Some(host);
+                }
+                self.notify_voice_stats(cx);
+                return;
+            }
+            VoiceEvent::PacketLoss(percent) => {
+                if let Some(call) = &mut voice.call {
+                    call.packet_loss = Some(percent);
+                }
+                self.notify_voice_stats(cx);
+                return;
+            }
             VoiceEvent::PrivacyCode(code) => {
                 if let Some(call) = &mut voice.call {
                     call.encryption = code.map_or(Encryption::Off, Encryption::On);
@@ -350,6 +463,59 @@ impl DiscordApp {
         self.sync_channel_rows();
         cx.notify();
     }
+}
+
+impl DiscordApp {
+    /// Connection stats show in the signal tooltip, which lives in the channel list, and in
+    /// the details menu, which lives in the overlay; only repaint the overlay when it's open.
+    fn notify_voice_stats(&mut self, cx: &mut Context<Self>) {
+        if self
+            .voice
+            .menu
+            .as_ref()
+            .is_some_and(|menu| menu.kind == MenuKind::Details)
+        {
+            cx.notify();
+        } else {
+            self.views.channel_list.update(cx, |_, cx| cx.notify());
+        }
+    }
+}
+
+/// "Voice Connected" slides up into "Voice Details" on hover, like the account panel's
+/// status line.
+fn connected_title(details: bool, animate: bool, color: u32) -> AnyElement {
+    const LINE: f32 = 20.;
+    let lines = div()
+        .relative()
+        .flex()
+        .flex_col()
+        .child(div().h(rpx(LINE)).truncate().child("Voice Connected"))
+        .child(div().h(rpx(LINE)).truncate().child("Voice Details"));
+    let lines = if animate {
+        let animation = Animation::new(Duration::from_millis(200)).with_easing(ease_out_quint());
+        lines
+            .with_animation(
+                ("voice-title", u64::from(details)),
+                animation,
+                move |this, delta| {
+                    let shown = if details { delta } else { 1. - delta };
+                    this.top(rpx(-LINE * shown))
+                },
+            )
+            .into_any_element()
+    } else {
+        lines
+            .top(rpx(if details { -LINE } else { 0. }))
+            .into_any_element()
+    };
+    div()
+        .h(rpx(LINE))
+        .min_w_0()
+        .overflow_hidden()
+        .text_color(rgb(color))
+        .child(lines)
+        .into_any_element()
 }
 
 pub(crate) fn format_elapsed(elapsed: Duration) -> String {
@@ -493,11 +659,24 @@ pub(crate) fn panel(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
     } else {
         ("Connecting…", theme::YELLOW)
     };
-    let encryption: SharedString = match &call.encryption {
-        Encryption::On(code) => format!("End-to-end encrypted\nPrivacy code: {code}").into(),
-        Encryption::Off => "Not end-to-end encrypted".into(),
-        Encryption::Pending if call.connected => "Setting up end-to-end encryption…".into(),
-        Encryption::Pending => "Connecting to voice…".into(),
+    let details_open = app
+        .voice
+        .menu
+        .as_ref()
+        .is_some_and(|menu| menu.kind == MenuKind::Details && !menu.closing);
+    let title = if call.connected {
+        connected_title(
+            app.voice.status_hovered || details_open,
+            app.voice.status_hovered_once,
+            color,
+        )
+    } else {
+        div().child(status).into_any_element()
+    };
+    let ping: SharedString = match call.last_ping() {
+        Some(ms) => format!("{ms} ms").into(),
+        None if call.connected => "Measuring ping…".into(),
+        None => "Connecting to voice…".into(),
     };
     let entity = app.entity.clone();
     let header = div()
@@ -506,14 +685,16 @@ pub(crate) fn panel(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
         .gap_2()
         .child(
             div()
+                .id("voice-signal")
                 .flex()
                 .flex_none()
                 .items_center()
                 .justify_center()
-                .size(rpx(36.))
+                .size(rpx(32.))
                 .rounded(rpx(8.))
-                .bg(rgba(color << 8 | 0x0C))
-                .child(theme::icon("rss", 20., color)),
+                .bg(rgba(color << 8 | 0x14))
+                .child(theme::icon("rss", 18., color))
+                .map(|this| with_tooltip(this, app, Control::Signal, ping)),
         )
         .child(
             div()
@@ -522,21 +703,45 @@ pub(crate) fn panel(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
                 .flex_col()
                 .flex_1()
                 .min_w_0()
-                .tooltip(move |window, cx| Tooltip::new(encryption.clone()).build(window, cx))
+                .when(call.connected, |this| {
+                    let hover = app.entity.clone();
+                    let open = app.entity.clone();
+                    this.cursor_pointer()
+                        .on_hover(move |hovered, _, cx| {
+                            let hovered = *hovered;
+                            hover
+                                .update(cx, |app, cx| {
+                                    app.voice.status_hovered = hovered;
+                                    app.voice.status_hovered_once = true;
+                                    app.views.channel_list.update(cx, |_, cx| cx.notify());
+                                })
+                                .ok();
+                        })
+                        .on_mouse_down(MouseButton::Left, move |event, _, cx| {
+                            cx.stop_propagation();
+                            let position = event.position;
+                            open.update(cx, |app, cx| {
+                                app.toggle_menu(MenuKind::Details, position, cx)
+                            })
+                            .ok();
+                        })
+                })
                 .child(
                     div()
+                        .mt(rpx(-1.))
                         .truncate()
-                        .text_size(rpx(16.))
+                        .text_size(rpx(14.))
                         .line_height(rpx(20.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(color))
-                        .child(status),
+                        .child(title),
                 )
                 .child(
                     div()
                         .truncate()
-                        .text_size(rpx(13.))
+                        .text_size(rpx(12.))
                         .line_height(rpx(16.))
+                        .font_weight(FontWeight::MEDIUM)
                         .text_color(rgb(theme::MUTED))
                         .child(place),
                 ),
@@ -548,13 +753,27 @@ pub(crate) fn panel(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
             } else {
                 theme::FAINT
             };
+            let menu_open = app
+                .voice
+                .menu
+                .as_ref()
+                .is_some_and(|menu| menu.kind == MenuKind::NoiseSuppression && !menu.closing);
             theme::icon_button("voice-noise", "audio-lines", 20., color)
-                .tooltip(|window, cx| Tooltip::new("Noise Suppression").build(window, cx))
+                .when(!menu_open, |this| {
+                    with_tooltip(
+                        this,
+                        app,
+                        Control::NoiseSuppression,
+                        "Noise Suppression powered by RNNoise",
+                    )
+                })
                 .on_mouse_down(MouseButton::Left, move |event, _, cx| {
                     cx.stop_propagation();
                     let position = event.position;
                     entity
-                        .update(cx, |app, cx| app.toggle_noise_menu(position, cx))
+                        .update(cx, |app, cx| {
+                            app.toggle_menu(MenuKind::NoiseSuppression, position, cx)
+                        })
                         .ok();
                 })
         })
@@ -569,10 +788,10 @@ pub(crate) fn panel(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
                 .rounded(rpx(4.))
                 .cursor_pointer()
                 .hover(|style| style.bg(rgb(theme::SELECTED)))
-                .tooltip(|window, cx| Tooltip::new("Disconnect").build(window, cx))
                 .on_click(move |_, _, cx| {
                     entity.update(cx, |app, cx| app.leave_voice(cx)).ok();
                 })
+                .map(|this| with_tooltip(this, app, Control::Disconnect, "Disconnect"))
                 // Lucide's handset tilted down into Discord's hang-up glyph.
                 .child(theme::icon("phone", 20., theme::TEXT).with_transformation(
                     Transformation::rotate(radians(std::f32::consts::FRAC_PI_4 * 3.)),
@@ -595,7 +814,7 @@ pub(crate) fn panel(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
                     .justify_center()
                     .h(rpx(32.))
                     .rounded(rpx(8.))
-                    .bg(rgb(theme::ELEVATED))
+                    .bg(rgba(0x97979F1F))
                     .child(theme::icon(icon, 20., theme::TEXT)),
                 feature,
             )
@@ -613,6 +832,34 @@ pub(crate) fn panel(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
     )
 }
 
+fn with_tooltip(
+    element: Stateful<Div>,
+    app: &DiscordApp,
+    control: Control,
+    label: impl Into<SharedString>,
+) -> Stateful<Div> {
+    let entity = app.entity.clone();
+    element
+        .relative()
+        .on_hover(move |hovered, _, cx| {
+            let hovered = *hovered;
+            entity
+                .update(cx, |app, cx| {
+                    let voice = &mut app.voice;
+                    if hovered {
+                        voice.hovered_control = Some(control);
+                    } else if voice.hovered_control == Some(control) {
+                        voice.hovered_control = None;
+                    }
+                    app.views.channel_list.update(cx, |_, cx| cx.notify());
+                })
+                .ok();
+        })
+        .when(app.voice.hovered_control == Some(control), |this| {
+            this.child(theme::tooltip_above(label))
+        })
+}
+
 /// Discord's voice controls that zcord doesn't implement yet: shown for familiarity, with a
 /// tooltip saying so instead of doing nothing silently.
 fn unavailable(button: Stateful<Div>, feature: &'static str) -> Stateful<Div> {
@@ -623,16 +870,28 @@ fn unavailable(button: Stateful<Div>, feature: &'static str) -> Stateful<Div> {
 
 /// Noise suppression popover above the voice panel's waveform button. Rendered from the
 /// overlay view because deferred popups can't live inside the cached channel list view.
-pub(crate) fn noise_menu(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
-    let menu = app
-        .voice
-        .noise_menu
-        .as_ref()
-        .filter(|_| app.voice.call.is_some())?;
+/// The voice panel's popups. Rendered from the overlay view because deferred popups can't
+/// live inside the cached channel list view.
+pub(crate) fn menu(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
+    let menu = app.voice.menu.as_ref()?;
+    let call = app.voice.call.as_ref()?;
+    let card = match menu.kind {
+        MenuKind::NoiseSuppression => noise_card(app, menu, cx),
+        MenuKind::Details => details::card(app, call, app.voice.details_tab, menu.closing, cx),
+    };
+    let close = app.entity.clone();
+    let card = card.when(!menu.closing, |this| {
+        this.occlude().on_mouse_down_out(move |_, _, cx| {
+            close.update(cx, |app, cx| app.close_menu(cx)).ok();
+        })
+    });
+    Some(popup(card, menu, cx))
+}
+
+fn noise_card(app: &DiscordApp, menu: &Menu, cx: &App) -> Stateful<Div> {
     let closing = menu.closing;
     let reduce_motion = cx.reduce_motion();
     let enabled = app.voice.noise_suppression;
-    let close = app.entity.clone();
     let toggle = app.entity.clone();
     let slide = (menu.switch_moved && !reduce_motion).then_some(menu.animation);
     let title = div()
@@ -658,23 +917,10 @@ pub(crate) fn noise_menu(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                 .child("Noise Suppression"),
         )
         .child(switch(enabled, slide));
-    let card = div()
-        .id("noise-menu")
-        .flex()
-        .flex_col()
+    menu_frame("noise-menu")
         .gap_2()
         .w(rpx(296.))
         .p(rpx(16.))
-        .rounded(rpx(8.))
-        .bg(rgb(theme::ELEVATED))
-        .border_1()
-        .border_color(rgb(theme::BORDER))
-        .shadow_lg()
-        .when(!closing, |this| {
-            this.occlude().on_mouse_down_out(move |_, _, cx| {
-                close.update(cx, |app, cx| app.close_noise_menu(cx)).ok();
-            })
-        })
         .child(title)
         .child(
             div()
@@ -694,14 +940,30 @@ pub(crate) fn noise_menu(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                 .line_height(rpx(16.))
                 .text_color(rgb(theme::MUTED))
                 .child("Powered by RNNoise"),
-        );
-    let card = if reduce_motion {
+        )
+}
+
+fn menu_frame(id: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .flex_col()
+        .rounded(rpx(8.))
+        .bg(rgb(theme::ELEVATED))
+        .border_1()
+        .border_color(rgb(theme::BORDER))
+        .shadow_lg()
+}
+
+fn popup(card: Stateful<Div>, menu: &Menu, cx: &App) -> AnyElement {
+    let closing = menu.closing;
+    let card = if cx.reduce_motion() {
         card.into_any_element()
     } else {
         let key = if closing {
-            "noise-menu-out"
+            "voice-menu-out"
         } else {
-            "noise-menu-in"
+            "voice-menu-in"
         };
         let animation = Animation::new(if closing { MENU_EXIT } else { MENU_ENTER })
             .with_easing(ease_out_quint());
@@ -713,17 +975,15 @@ pub(crate) fn noise_menu(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
         })
         .into_any_element()
     };
-    Some(
-        deferred(
-            anchored()
-                .position(menu.position - point(px(0.), px(16.)))
-                .anchor(Anchor::BottomCenter)
-                .snap_to_window_with_margin(px(8.))
-                .child(card),
-        )
-        .with_priority(2)
-        .into_any_element(),
+    deferred(
+        anchored()
+            .position(menu.position - point(px(0.), px(16.)))
+            .anchor(Anchor::BottomCenter)
+            .snap_to_window_with_margin(px(8.))
+            .child(card),
     )
+    .with_priority(2)
+    .into_any_element()
 }
 
 /// Discord's settings toggle. `slide` carries the menu's animation id once the user has

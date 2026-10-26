@@ -28,6 +28,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "circle-question-mark",
     "clock",
     "compass",
+    "copy",
     "connections/battlenet",
     "connections/bluesky",
     "connections/crunchyroll",

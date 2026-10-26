@@ -2,7 +2,7 @@ use super::{
     audio::{AudioFlags, AudioHandle, Incoming, Outgoing},
     crypto::{Cipher, Mode},
     dave::{Dave, EncryptOutcome, SILENCE},
-    emit,
+    emit, rtcp,
     rtp::Header,
     udp,
 };
@@ -40,6 +40,7 @@ pub(super) struct Config {
     pub user_id: u64,
     pub session_id: Secret,
     pub token: Secret,
+    pub server: String,
     pub ws_url: String,
 }
 
@@ -77,6 +78,7 @@ struct RxStats {
     dave_failed: u64,
     unknown_ssrc: u64,
     forwarded: u64,
+    rtcp_logged: [bool; 32],
     next_report: Instant,
 }
 
@@ -88,6 +90,7 @@ impl RxStats {
             dave_failed: 0,
             unknown_ssrc: 0,
             forwarded: 0,
+            rtcp_logged: [false; 32],
             next_report: Instant::now() + Duration::from_secs(5),
         }
     }
@@ -281,7 +284,10 @@ impl Connection {
                             }
                             let op = value.get("op").and_then(Value::as_u64).unwrap_or(0) as u8;
                             if op == 6 {
-                                ack_at = None;
+                                if let Some(sent) = ack_at.take() {
+                                    let ping = sent.elapsed().as_millis().min(u128::from(u32::MAX));
+                                    emit(events, VoiceEvent::Ping(ping as u32));
+                                }
                                 continue;
                             }
                             if op == 8 {
@@ -763,6 +769,7 @@ impl Connection {
         if self.audio.is_none() {
             self.audio = Some(AudioHandle::start(self.flags.clone()));
         }
+        emit(events, VoiceEvent::Server(self.config.server.clone()));
         emit(
             events,
             VoiceEvent::Connected {
@@ -988,6 +995,10 @@ impl Connection {
 
     async fn on_datagram(&mut self, packet: &[u8], events: &UnboundedSender<Event>) {
         self.rx.datagrams = self.rx.datagrams.saturating_add(1);
+        if let Some(packet_type) = rtcp::packet_type(packet) {
+            self.on_rtcp(packet_type, packet, events);
+            return;
+        }
         let Some(info) = Header::parse(packet) else {
             return;
         };
@@ -1055,6 +1066,42 @@ impl Connection {
         {
             self.rx.forwarded = self.rx.forwarded.saturating_add(1);
         }
+    }
+
+    fn on_rtcp(&mut self, packet_type: u8, packet: &[u8], events: &UnboundedSender<Event>) {
+        // Discord keeps the RTCP header and sender SSRC clear and encrypts the rest.
+        // https://docs.discord.food/topics/voice-connections#sending-and-receiving-media
+        let plaintext = if packet.len() >= 8 {
+            self.cipher
+                .as_ref()
+                .and_then(|cipher| cipher.decrypt(&packet[..8], &packet[8..]))
+        } else {
+            None
+        };
+        let index = usize::from(packet_type - 192);
+        if !self.rx.rtcp_logged[index] {
+            self.rx.rtcp_logged[index] = true;
+            log::info!(
+                "voice rtcp: type={packet_type} len={} decrypted={}",
+                packet.len(),
+                plaintext.is_some()
+            );
+        }
+        let Some(plaintext) = plaintext else {
+            return;
+        };
+        let mut decrypted = packet[..8].to_vec();
+        decrypted.extend_from_slice(&plaintext);
+        let Some(block) = rtcp::report_block_for(&decrypted, self.ssrc) else {
+            return;
+        };
+        log::debug!(
+            "voice rtcp loss: ssrc={} fraction={} cumulative={}",
+            block.ssrc,
+            block.fraction_lost,
+            block.cumulative_lost
+        );
+        emit(events, VoiceEvent::PacketLoss(block.loss_percent()));
     }
 }
 
@@ -1227,6 +1274,7 @@ mod tests {
             user_id: 30,
             session_id: Secret("fixture-session".into()),
             token: Secret("fixture-token".into()),
+            server: "fixture.invalid".into(),
             ws_url: "wss://fixture.invalid/?v=9".into(),
         }
     }

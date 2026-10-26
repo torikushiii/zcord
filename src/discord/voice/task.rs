@@ -389,6 +389,9 @@ impl VoiceManager {
         let Some(ws_url) = ws_url(&endpoint) else {
             return;
         };
+        let Some(server) = server_name(&endpoint) else {
+            return;
+        };
         if shared.task.as_ref().is_some_and(|task| {
             task.guild_id == guild_id && task.channel_id == channel_id && task.endpoint == endpoint
         }) {
@@ -426,6 +429,7 @@ impl VoiceManager {
             user_id,
             session_id,
             token,
+            server,
             ws_url,
         };
         drop(shared);
@@ -504,6 +508,26 @@ fn ws_url(endpoint: &str) -> Option<String> {
     )
 }
 
+fn server_name(endpoint: &str) -> Option<String> {
+    let endpoint = endpoint.trim();
+    let authority = endpoint
+        .split_once("://")
+        .map_or(endpoint, |(_, authority)| authority);
+    let authority = authority
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        rest.split_once(']')?.0
+    } else {
+        match authority.rsplit_once(':') {
+            Some((host, port)) if port.bytes().all(|byte| byte.is_ascii_digit()) => host,
+            _ => authority,
+        }
+    };
+    (!host.is_empty()).then(|| host.to_owned())
+}
+
 async fn connection_loop(
     config: Config,
     events: UnboundedSender<Event>,
@@ -575,6 +599,28 @@ async fn connection_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_name_strips_scheme_path_and_port() {
+        let expected = Some("c-sin20-b41c6763.discord.media");
+        assert_eq!(
+            server_name("c-sin20-b41c6763.discord.media:443").as_deref(),
+            expected
+        );
+        assert_eq!(
+            server_name("c-sin20-b41c6763.discord.media").as_deref(),
+            expected
+        );
+        assert_eq!(
+            server_name("wss://c-sin20-b41c6763.discord.media:443").as_deref(),
+            expected
+        );
+        assert_eq!(
+            server_name("  wss://c-sin20-b41c6763.discord.media/?v=9  ").as_deref(),
+            expected
+        );
+        assert_eq!(server_name(""), None);
+    }
 
     #[test]
     fn voice_server_restarts_only_when_endpoint_or_token_changes() {
