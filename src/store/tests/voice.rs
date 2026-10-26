@@ -107,3 +107,22 @@ fn ready_supplemental_users_supply_missing_voice_names() {
     assert_eq!(store.member_name(200, 99), Some("New Voice"));
     assert_eq!(store.voice_members(200, 2005)[0].user_id, 99);
 }
+
+#[test]
+fn guild_voice_activity_prefers_streaming() {
+    let mut store = Store::from_ready(ready_with_voice());
+    assert_eq!(store.guild_voice_activity(200), Some(VoiceActivity::Voice));
+
+    let mut streaming = state(200, Some(2006), 3);
+    streaming.self_stream = true;
+    store.apply(Event::VoiceStateUpdate(Box::new(streaming)));
+    assert_eq!(
+        store.guild_voice_activity(200),
+        Some(VoiceActivity::Streaming)
+    );
+
+    for user in [1, 2, 3] {
+        store.apply(Event::VoiceStateUpdate(Box::new(state(200, None, user))));
+    }
+    assert_eq!(store.guild_voice_activity(200), None);
+}

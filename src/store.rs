@@ -28,7 +28,7 @@ use mapping::{
 use seed::SEED_START;
 use std::{cell::RefCell, collections::HashMap};
 pub use view::*;
-pub use voice::VoiceMember;
+pub use voice::{VoiceActivity, VoiceMember};
 
 pub struct Store {
     pub guilds: Vec<Guild>,

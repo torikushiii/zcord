@@ -1,6 +1,12 @@
 use super::*;
 use crate::discord::model;
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum VoiceActivity {
+    Voice,
+    Streaming,
+}
+
 pub struct VoiceMember {
     pub user_id: u64,
     pub self_mute: bool,
@@ -118,6 +124,28 @@ impl Store {
                 .then_with(|| a.user_id.cmp(&b.user_id))
         });
         members
+    }
+
+    /// What the guild rail shows on a server's icon: a screen while anyone there is
+    /// streaming, otherwise a speaker while anyone is in a voice channel.
+    pub fn guild_voice_activity(&self, guild_id: u64) -> Option<VoiceActivity> {
+        let guild = self
+            .source
+            .as_ref()?
+            .guilds
+            .iter()
+            .find(|guild| guild.id == guild_id)?;
+        let mut states = guild
+            .voice_states
+            .iter()
+            .filter(|state| state.channel_id.is_some())
+            .peekable();
+        states.peek()?;
+        Some(if states.any(|state| state.self_stream) {
+            VoiceActivity::Streaming
+        } else {
+            VoiceActivity::Voice
+        })
     }
 
     pub fn can_connect_voice(&self, guild_id: u64, channel_id: u64) -> bool {
