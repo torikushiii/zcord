@@ -3,6 +3,7 @@ name = "zcord"
 version = "0.1.0"
 edition = "2024"
 publish = false
+license = "GPL-3.0-only"
 
 [dependencies]
 gpui = { git = "https://github.com/zeronsh/zui", rev = "361ff20b919fdfb80199ee6d9aed725300cb7d54" }
