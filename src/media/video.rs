@@ -1,4 +1,4 @@
-use crate::images::ImageSpec;
+use crate::media::images::ImageSpec;
 use gpui::{App, RenderImage};
 use std::sync::Arc;
 
@@ -137,7 +137,7 @@ mod animation {
 #[cfg(windows)]
 mod platform {
     use super::{animation::*, *};
-    use crate::images;
+    use crate::media::images;
     use anyhow::{Context, Result, ensure};
     use gpui::Global;
     use gpui_tokio::Tokio;

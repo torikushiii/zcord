@@ -3,7 +3,7 @@ use gpui::{prelude::*, *};
 use super::DiscordApp;
 use crate::{
     discord::model::invite_codes,
-    images,
+    media::images,
     store::{Invite, InviteApp, InviteState, Message},
     theme::{self, rpx},
 };

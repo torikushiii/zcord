@@ -6,13 +6,13 @@ use std::{
 use gpui::{prelude::*, *};
 
 use crate::{
-    animated,
     app::{
         DiscordApp,
         message_body::emoji_pieces,
         rich_text::{PieceStyle, rich_text},
     },
-    images::{self, ImageSpec},
+    media::animated,
+    media::images::{self, ImageSpec},
     store::{Folder, Guild, RailEntry},
     theme::{self, rpx},
 };
@@ -61,8 +61,7 @@ impl Morphs {
             let progress = (now - morph.started).as_secs_f32() / morph.duration.as_secs_f32();
             morph.from + (morph.to - morph.from) * ease_out_quint()(progress)
         });
-        self.active
-            .retain(|_, morph| morph.running(now));
+        self.active.retain(|_, morph| morph.running(now));
         self.next_id += 1;
         self.active.insert(
             key,
@@ -77,9 +76,7 @@ impl Morphs {
     }
 
     fn running(&self, key: u64, now: Instant) -> Option<&Morph> {
-        self.active
-            .get(&key)
-            .filter(|morph| morph.running(now))
+        self.active.get(&key).filter(|morph| morph.running(now))
     }
 
     fn clock(&self) -> Option<Instant> {
@@ -149,33 +146,40 @@ pub fn render(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         .pb_3()
         .overflow_y_scroll()
         .child(
-            rail_item("home", HOME_KEY, "Direct Messages", app.is_home(), false, app)
-                .on_click({
-                    let entity = app.entity.clone();
-                    move |_, window, cx| {
-                        entity
-                            .update(cx, |this, cx| this.open_home(window, cx))
-                            .ok();
-                    }
-                })
-                .child(round(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .size(rpx(ICON))
-                        .bg(rgb(if app.is_home() {
-                            theme::BLURPLE
-                        } else {
-                            theme::ELEVATED
-                        }))
-                        .group_hover("rail-item", |style| style.bg(rgb(theme::BLURPLE)))
-                        .child(theme::icon("discord", 28., theme::STRONG)),
-                    Corners::Morph(HOME_KEY, app.is_home()),
-                    app,
-                    morphs,
-                ))
-                .children(corner_badge(app.store.dm_mentions)),
+            rail_item(
+                "home",
+                HOME_KEY,
+                "Direct Messages",
+                app.is_home(),
+                false,
+                app,
+            )
+            .on_click({
+                let entity = app.entity.clone();
+                move |_, window, cx| {
+                    entity
+                        .update(cx, |this, cx| this.open_home(window, cx))
+                        .ok();
+                }
+            })
+            .child(round(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(rpx(ICON))
+                    .bg(rgb(if app.is_home() {
+                        theme::BLURPLE
+                    } else {
+                        theme::ELEVATED
+                    }))
+                    .group_hover("rail-item", |style| style.bg(rgb(theme::BLURPLE)))
+                    .child(theme::icon("discord", 28., theme::STRONG)),
+                Corners::Morph(HOME_KEY, app.is_home()),
+                app,
+                morphs,
+            ))
+            .children(corner_badge(app.store.dm_mentions)),
         )
         .child(
             div()

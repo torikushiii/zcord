@@ -5,15 +5,15 @@ use gpui::{prelude::*, *};
 use gpui_component::ActiveTheme;
 
 use crate::{
-    animated,
     app::{
         DiscordApp,
         rich_text::{Action, Chip, Content, EmojiSource, Piece, PieceStyle, rich_text},
     },
-    emoji::{self, Segment},
-    images::{self, ImageSpec},
-    markdown::{Block, Span, SpanKind, Style},
+    media::animated,
+    media::images::{self, ImageSpec},
     store::Store,
+    text::emoji::{self, Segment},
+    text::markdown::{Block, Span, SpanKind, Style},
     theme::{self, rpx},
 };
 

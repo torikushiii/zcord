@@ -965,11 +965,13 @@ impl Element for RichText {
                             .size(emoji_size)
                             .flex_none()
                             .into_any_element(),
-                        EmojiSource::Animated(image) => crate::animated::image(image.clone())
-                            .size(emoji_size)
-                            .flex_none()
-                            .id(("emoji", fragment.piece))
-                            .into_any_element(),
+                        EmojiSource::Animated(image) => {
+                            crate::media::animated::image(image.clone())
+                                .size(emoji_size)
+                                .flex_none()
+                                .id(("emoji", fragment.piece))
+                                .into_any_element()
+                        }
                     };
                     let inset = (fragment.width - emoji_size) / 2.;
                     let top = (line.height - emoji_size) / 2.;

@@ -7,10 +7,11 @@ use gpui::{prelude::*, *};
 use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::{
-    animated,
     app::{DiscordApp, gif_picker},
-    emoji, images,
+    media::animated,
+    media::images,
     store::{EmojiAccess, EmojiChoice},
+    text::emoji,
     theme::{self, rpx},
 };
 

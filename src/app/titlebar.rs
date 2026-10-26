@@ -2,7 +2,7 @@ use gpui::{prelude::*, *};
 
 use crate::{
     app::{DiscordApp, guild_rail, message_body::label},
-    images,
+    media::images,
     store::Guild,
     theme::{self, rpx},
 };

@@ -10,13 +10,13 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_tokio::Tokio;
 
 use crate::{
-    animated,
     app::{DiscordApp, emoji_picker},
     discord::{
         gifs::{Gif, GifCategories, GifCategory, GifProvider},
         settings_proto::{self, FavoriteGif},
     },
-    images::ImageSpec,
+    media::animated,
+    media::images::ImageSpec,
     settings,
     theme::{self, rpx},
 };
@@ -1263,7 +1263,7 @@ fn media(
             width,
             height,
         };
-        crate::video::resolve(&spec, pixels, cx)
+        crate::media::video::resolve(&spec, pixels, cx)
     } else if animate {
         let spec = ImageSpec::Media {
             url: src.clone(),
@@ -1301,7 +1301,7 @@ fn media(
             animated: false,
         }
     };
-    match crate::images::resolve(&still, pixels, cx) {
+    match crate::media::images::resolve(&still, pixels, cx) {
         Some(path) => img(path)
             .absolute()
             .inset_0()

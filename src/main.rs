@@ -1,21 +1,16 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-mod animated;
 mod app;
 mod assets;
-mod composer_tokens;
 mod credentials;
 mod discord;
-mod emoji;
 mod fonts;
-mod images;
-mod markdown;
-mod player;
+mod media;
 mod quick_switcher;
 mod settings;
 mod store;
+mod text;
 mod theme;
-mod video;
 
 use gpui::{
     App, AppContext, Global, KeyBinding, TitlebarOptions, WindowBounds, WindowDecorations,
@@ -59,8 +54,8 @@ fn main() {
         .run(|cx| {
             gpui_component::init(cx);
             gpui_tokio::init(cx);
-            images::init(cx);
-            animated::init(cx);
+            media::images::init(cx);
+            media::animated::init(cx);
             Theme::change(ThemeMode::Dark, None, cx);
             fonts::init(cx);
             settings::init(cx);

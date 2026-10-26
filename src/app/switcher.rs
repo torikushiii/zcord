@@ -5,7 +5,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::{
     app::{DIALOG_EXIT, DiscordApp, message_body::label},
-    images,
+    media::images,
     quick_switcher::{self, Item, ItemKind, Section, SectionKind, Target},
     theme::{self, rpx},
 };
@@ -106,10 +106,9 @@ impl DiscordApp {
             return false;
         }
         let animation = switcher.animation;
-        self.composer
-            .update(cx, |input, cx| input.focus(window, cx));
         if cx.reduce_motion() {
             self.quick_switcher = None;
+            self.focus_composer(window, cx);
             cx.notify();
             return true;
         }
@@ -127,6 +126,7 @@ impl DiscordApp {
             })
             .ok();
         }));
+        self.focus_composer(window, cx);
         cx.notify();
         true
     }

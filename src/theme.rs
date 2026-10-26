@@ -1,8 +1,8 @@
 use gpui::{prelude::*, *};
 
 use crate::{
-    animated,
-    images::{self, ImageSpec},
+    media::animated,
+    media::images::{self, ImageSpec},
     store::{Decoration, GuildTag, NameStyle, Status, Store, User},
 };
 
@@ -330,23 +330,25 @@ pub fn tooltip_above(label: impl Into<SharedString>) -> impl IntoElement {
         .top(rpx(-4.))
         .left(relative(0.5))
         .size_0()
-        .child(deferred(
-            anchored().anchor(Anchor::BottomCenter).child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .child(
-                        tooltip_bubble()
-                            .text_size(rpx(14.))
-                            .line_height(rpx(18.))
-                            .child(label.into()),
-                    )
-                    .child(icon("tooltip-arrow-down", 12., TOOLTIP_BG).h(rpx(6.))),
-            ),
+        .child(
+            deferred(
+                anchored().anchor(Anchor::BottomCenter).child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .child(
+                            tooltip_bubble()
+                                .text_size(rpx(14.))
+                                .line_height(rpx(18.))
+                                .child(label.into()),
+                        )
+                        .child(icon("tooltip-arrow-down", 12., TOOLTIP_BG).h(rpx(6.))),
+                ),
+            )
+            // Tooltips also appear inside deferred popouts, so they must outrank them.
+            .with_priority(2),
         )
-        // Tooltips also appear inside deferred popouts, so they must outrank them.
-        .with_priority(2))
 }
 
 pub fn badge(count: u32, ring: u32) -> impl IntoElement {

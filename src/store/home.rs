@@ -88,7 +88,10 @@ impl Store {
                 let channel = &mut private.channel;
                 (
                     channel.id,
-                    (channel.messages_loaded, std::mem::take(&mut channel.messages)),
+                    (
+                        channel.messages_loaded,
+                        std::mem::take(&mut channel.messages),
+                    ),
                 )
             })
             .collect();
@@ -106,10 +109,7 @@ impl Store {
                 channel.id,
                 PrivateLocation {
                     index: private_channels.len(),
-                    at_present: present
-                        .get(&channel.id)
-                        .copied()
-                        .unwrap_or(messages_loaded),
+                    at_present: present.get(&channel.id).copied().unwrap_or(messages_loaded),
                 },
             );
             private_channels.push(PrivateChannel {
@@ -222,7 +222,9 @@ impl Store {
     pub fn remove_private_locally(&mut self, channel_id: u64) -> Change {
         self.clear_message_info(channel_id);
         if let Some(source) = &mut self.source {
-            source.private_channels.retain(|channel| channel.id != channel_id);
+            source
+                .private_channels
+                .retain(|channel| channel.id != channel_id);
         }
         self.request_previews.remove(&channel_id);
         self.rebuild_structure(None);
@@ -481,8 +483,8 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use crate::discord::model;
     use crate::discord::Event;
+    use crate::discord::model;
     use crate::store::{Change, PrivateChannel, RelationshipKind, Status, Store};
     use serde_json::json;
 
@@ -676,10 +678,7 @@ mod tests {
         assert_eq!(store.private_channel(900).unwrap().channel.mentions, 2);
         assert_eq!(store.dm_mentions, 2);
 
-        store.set_messages(
-            900,
-            vec![message(490, 900, 10), message(500, 900, 10)],
-        );
+        store.set_messages(900, vec![message(490, 900, 10), message(500, 900, 10)]);
         assert_eq!(store.network_channel(900).unwrap().messages.len(), 2);
         assert!(store.at_present(900));
 

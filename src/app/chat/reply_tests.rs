@@ -1,6 +1,6 @@
 use gpui::{Context, IntoElement, Render, TestAppContext, Window, div, prelude::*, px};
 
-use super::attachment_reply_preview;
+use super::message::attachment_reply_preview;
 use crate::theme::rpx;
 
 struct AttachmentReply {

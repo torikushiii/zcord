@@ -7,9 +7,9 @@ use std::{
 use flate2::read::ZlibDecoder;
 use gpui::{Image, ImageFormat};
 
-static BUNDLE: &[u8] = include_bytes!("../assets/twemoji.bin");
-static SHORTCODES: &str = include_str!("../assets/emoji_shortcodes.tsv");
-static CATEGORY_DATA: &str = include_str!("../assets/emoji_categories.tsv");
+static BUNDLE: &[u8] = include_bytes!("../../assets/twemoji.bin");
+static SHORTCODES: &str = include_str!("../../assets/emoji_shortcodes.tsv");
+static CATEGORY_DATA: &str = include_str!("../../assets/emoji_categories.tsv");
 const MAX_SVG_SIZE: u64 = 1024 * 1024;
 
 struct Entry<'a> {
@@ -188,8 +188,8 @@ fn segment_with_bundle<'a>(text: &'a str, bundle: Option<&Bundle<'_>>) -> Vec<Se
             at += 1;
             continue;
         }
-        let end = match crate::markdown::emoji_sequence(&chars, at, |c| {
-            crate::markdown::pictographic(c)
+        let end = match crate::text::markdown::emoji_sequence(&chars, at, |c| {
+            crate::text::markdown::pictographic(c)
                 || matches!(c as u32, 0x24C2 | 0x25AA..=0x25AB | 0x25B6 | 0x25C0 | 0x25FB..=0x25FE | 0x2934..=0x2935)
         }) {
             Ok(end) => end,

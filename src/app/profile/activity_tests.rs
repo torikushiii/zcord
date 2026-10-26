@@ -1,6 +1,9 @@
 use gpui::{Context, IntoElement, Render, Styled, TestAppContext, Window, div, prelude::*, px};
 
-use super::{ACTIVITY_PROMPTS, ProfilePalette, ProfileTheme, activity_empty, tab_panel};
+use super::{
+    ACTIVITY_PROMPTS, ProfilePalette, ProfileTheme,
+    modal::{activity_empty, tab_panel},
+};
 use crate::theme::rpx;
 
 struct ActivityLayout {
@@ -133,7 +136,11 @@ fn mutual_icons_never_cover_the_count(cx: &mut TestAppContext) {
                 .gap_x(rpx(6.))
                 .w(rpx(300.))
                 .text_size(rpx(12.))
-                .child(super::mutual_entry("mutual", icons, "16 Mutual Servers".into()))
+                .child(super::mutuals::mutual_entry(
+                    "mutual",
+                    icons,
+                    "16 Mutual Servers".into(),
+                ))
         }
     }
     let (_, cx) = cx.add_window_view(|_, _| Line);
@@ -144,5 +151,10 @@ fn mutual_icons_never_cover_the_count(cx: &mut TestAppContext) {
     let icons = cx.debug_bounds("mutual-icons").unwrap();
     let text = cx.debug_bounds("mutual-text").unwrap();
     assert!(icons.size.width >= px(39.), "icons {:?}", icons);
-    assert!(text.left() >= icons.right(), "icons {:?} text {:?}", icons, text);
+    assert!(
+        text.left() >= icons.right(),
+        "icons {:?} text {:?}",
+        icons,
+        text
+    );
 }

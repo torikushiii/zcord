@@ -1,4 +1,4 @@
-use crate::emoji;
+use crate::text::emoji;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Block {
@@ -1637,7 +1637,7 @@ mod tests {
             }
         }
         let message: crate::discord::model::Message =
-            serde_json::from_str(include_str!("store/fixtures/formatting.json")).unwrap();
+            serde_json::from_str(include_str!("../store/fixtures/formatting.json")).unwrap();
         let blocks = parse(&message.content);
         let mut actual = Vec::new();
         collect_spans(&blocks, &mut actual);

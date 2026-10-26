@@ -54,7 +54,7 @@ fn media(
     let proxied = nonempty(proxy);
     let raw = proxied.as_ref().or(url.as_ref())?;
     let parsed = reqwest::Url::parse(raw).ok()?;
-    if !crate::images::allowed_url(&parsed)
+    if !crate::media::images::allowed_url(&parsed)
         || (proxied.is_none()
             && !matches!(
                 parsed.host_str(),

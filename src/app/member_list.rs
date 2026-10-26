@@ -1,9 +1,9 @@
 use gpui::{prelude::*, *};
 
 use crate::{
-    animated,
     app::{DiscordApp, message_body::label},
-    images::{self, ImageSpec},
+    media::animated,
+    media::images::{self, ImageSpec},
     store::{MemberList, MemberRow, NameStyle, Nameplate, User},
     theme::{self, WithoutTextSelection, rpx},
 };

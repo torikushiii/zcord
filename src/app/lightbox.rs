@@ -4,7 +4,7 @@ use gpui::{prelude::*, *};
 
 use crate::{
     app::{DiscordApp, embeds},
-    images::{self, ImageSpec},
+    media::images::{self, ImageSpec},
     store::Media,
     theme::{self, WithoutTextSelection, rpx},
 };
@@ -45,7 +45,7 @@ impl Lightbox {
 #[cfg(test)]
 mod tests {
     use super::Lightbox;
-    use crate::{images::ImageSpec, store::Media};
+    use crate::{media::images::ImageSpec, store::Media};
 
     fn media(url: &str, width: u32, height: u32) -> Media {
         Media {
@@ -148,13 +148,13 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
     );
     let frames = matches!(lightbox.spec, ImageSpec::Video { .. })
         .then(|| {
-            crate::video::resolve(&lightbox.spec, theme::image_px(width.max(height)), cx)
-                .or_else(|| crate::video::resolve(&lightbox.spec, lightbox.preview, cx))
+            crate::media::video::resolve(&lightbox.spec, theme::image_px(width.max(height)), cx)
+                .or_else(|| crate::media::video::resolve(&lightbox.spec, lightbox.preview, cx))
         })
         .flatten();
     let image = frames
         .map(|frames| {
-            crate::animated::image(frames)
+            crate::media::animated::image(frames)
                 .size_full()
                 .object_fit(ObjectFit::Contain)
                 .rounded(rpx(4.))

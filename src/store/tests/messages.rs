@@ -1,0 +1,998 @@
+use super::*;
+
+#[test]
+fn component_and_formatting_fixtures_map_to_view() {
+    let source: model::Message =
+        serde_json::from_str(include_str!("../fixtures/components_v2.json")).unwrap();
+    let message = map_message(&source).unwrap();
+    assert!(message.embeds.is_empty());
+    let [
+        Component::Container {
+            accent,
+            spoiler,
+            components,
+        },
+    ] = message.components.as_slice()
+    else {
+        panic!("container")
+    };
+    assert_eq!(*accent, None);
+    assert!(!spoiler);
+    let [
+        Component::Section {
+            components,
+            accessory,
+        },
+        Component::Row(buttons),
+    ] = components.as_slice()
+    else {
+        panic!("section and row")
+    };
+    assert!(
+        matches!(&components[..], [Component::Text(text)] if text.starts_with("## SAMPLE NOTICE"))
+    );
+    let Component::Thumbnail {
+        media,
+        description,
+        spoiler,
+    } = accessory.as_deref().unwrap()
+    else {
+        panic!("thumbnail")
+    };
+    assert_eq!(
+        media.url,
+        source.components[0].components[0]
+            .accessory
+            .as_ref()
+            .unwrap()
+            .media
+            .as_ref()
+            .unwrap()
+            .proxy_url
+            .as_ref()
+            .unwrap()
+            .as_str()
+    );
+    assert!(
+        media
+            .url
+            .starts_with("https://images-ext-1.discordapp.net/")
+    );
+    assert_eq!((media.width, media.height), (256, 256));
+    assert!(description.is_none() && !spoiler);
+    let [
+        Component::Button {
+            style,
+            label,
+            emoji,
+            disabled,
+            url,
+        },
+    ] = buttons.as_slice()
+    else {
+        panic!("button")
+    };
+    assert_eq!(*style, 2);
+    assert_eq!(label.as_deref(), Some("Actions: 12"));
+    assert_eq!(emoji.as_ref().unwrap().name, "\u{1f36f}");
+    assert!(!disabled && url.is_none());
+    assert_eq!(message.reactions.len(), 5);
+    for (wire, view) in source.reactions.iter().zip(&message.reactions) {
+        assert_eq!(wire.count, view.count);
+        assert_eq!(wire.emoji.id, view.emoji.id);
+        assert_eq!(wire.emoji.name.as_deref(), Some(view.emoji.name.as_str()));
+    }
+    let animated = &message.reactions[4];
+    assert_eq!(animated.emoji.name, "sample_animated");
+    assert_eq!(animated.emoji.id, Some(1191168972947456014));
+    assert!(animated.emoji.animated);
+    assert_eq!(animated.count, 4);
+    let mut source = source;
+    source.reactions[0].me_burst = true;
+    source.reactions[1].burst_me = true;
+    source.reactions[2].me = true;
+    assert!(
+        map_message(&source).unwrap().reactions[..3]
+            .iter()
+            .all(|r| r.me)
+    );
+
+    let source: model::Message =
+        serde_json::from_str(include_str!("../fixtures/formatting.json")).unwrap();
+    let message = map_message(&source).unwrap();
+    assert_eq!(message.content, source.content);
+    assert!(message.embeds.is_empty() && message.components.is_empty());
+    assert_eq!(message.reactions.len(), 3);
+    assert_eq!(message.reactions[1].emoji.name, "sample_icon");
+}
+
+#[test]
+fn malformed_rich_entries_never_discard_a_message() {
+    let mut value = json!({
+        "id":"1", "channel_id":"2", "author":{"id":"3"},
+        "timestamp":"2026-04-09T10:24:21Z", "content":"intact",
+        "embeds":[false, {"title":77}, {"title":"survives", "fields":[false, {"name":"n","value":"v"}]}],
+        "components":[{"type":99}, null, {"type":17,"components":[{"type":99},{"type":9,"components":[false,{"type":10,"content":"intact"}],"accessory":{"type":99}}]},
+            {"type":12,"items":[false,{"media":7},{"media":{"url":"https://cdn.discordapp.com/a"}}]}],
+        "reactions":[false,{"count":"bad"},{"emoji":{"name":"ok"},"count":2}]
+    });
+    let source: model::Message = serde_json::from_value(value.clone()).unwrap();
+    let mapped = map_message(&source).unwrap();
+    assert_eq!(mapped.content, "intact");
+    assert_eq!(mapped.embeds.len(), 1);
+    assert_eq!(mapped.embeds[0].fields.len(), 1);
+    assert_eq!(mapped.reactions.len(), 1);
+    assert_eq!(mapped.components.len(), 2);
+    let Component::Container { components, .. } = &mapped.components[0] else {
+        panic!("container")
+    };
+    assert!(
+        matches!(&components[..], [Component::Section { accessory: None, components }] if matches!(&components[..], [Component::Text(text)] if text == "intact"))
+    );
+    assert!(matches!(&mapped.components[1], Component::Gallery(items) if items.len() == 1));
+    for field in ["embeds", "components", "reactions"] {
+        value[field] = json!({"not":"an array"});
+    }
+    let source: model::Message = serde_json::from_value(value).unwrap();
+    assert!(
+        source.embeds.is_empty() && source.components.is_empty() && source.reactions.is_empty()
+    );
+}
+
+#[test]
+fn message_updates_preserve_absent_fields_and_restore_suppressed_embeds() {
+    let mut store = Store::from_ready(ready());
+    let mut source: model::Message =
+        serde_json::from_str(include_str!("../fixtures/components_v2.json")).unwrap();
+    source.channel_id = 2002;
+    source.id = 500;
+    source.embeds = model::parse_entries(json!([{"title":"original"}]));
+    source.message_reference = Some(serde_json::from_value(json!({"message_id":"400"})).unwrap());
+    source.referenced_message = Some(Some(Box::new(
+        serde_json::from_value(json!({
+            "id":"400","author":{"id":"7"},"components":[{"type":10,"content":"reply"}]
+        }))
+        .unwrap(),
+    )));
+    store.set_messages(2002, vec![source]);
+    let message = &store.guilds[0].channel(2002).unwrap().messages[0];
+    assert!(matches!(
+        &message.reply,
+        Some(ReplyState::Loaded(Reply { embeds: true, .. }))
+    ));
+    for update in [
+        json!({"flags":4}),
+        json!({"content":"edited"}),
+        json!({"embeds":[{"title":"replacement"}]}),
+    ] {
+        let mut value = update;
+        value["id"] = json!("500");
+        value["channel_id"] = json!("2002");
+        assert_eq!(
+            store.apply(Event::MessageUpdate(Box::new(
+                serde_json::from_value(value).unwrap()
+            ))),
+            Change::MessageChanged {
+                channel_id: 2002,
+                index: 0
+            }
+        );
+        let message = &store.guilds[0].channel(2002).unwrap().messages[0];
+        assert!(message.embeds.is_empty());
+        assert_eq!(message.reactions.len(), 5);
+        assert_eq!(message.components.len(), 1);
+    }
+    let update = serde_json::from_value(json!({"id":"500","channel_id":"2002","flags":0,"components":[{"type":10,"content":"new"},{"type":99}]})).unwrap();
+    store.apply(Event::MessageUpdate(Box::new(update)));
+    let message = &store.guilds[0].channel(2002).unwrap().messages[0];
+    assert_eq!(
+        message.embeds[0].title.as_ref().unwrap().text,
+        "replacement"
+    );
+    assert!(matches!(&message.components[..], [Component::Text(text)] if text == "new"));
+    let update = serde_json::from_value(
+        json!({"id":"500","channel_id":"2002","embeds":[],"components":[],"reactions":[]}),
+    )
+    .unwrap();
+    store.apply(Event::MessageUpdate(Box::new(update)));
+    let message = &store.guilds[0].channel(2002).unwrap().messages[0];
+    assert!(
+        message.embeds.is_empty() && message.components.is_empty() && message.reactions.is_empty()
+    );
+}
+
+#[test]
+fn message_history_order_local_time_and_embeds() {
+    let mut store = Store::from_ready(ready());
+    assert!(!store.guilds[0].channel(2002).unwrap().messages_loaded);
+    store.set_messages(2002, messages());
+    let channel = store.guilds[0].channel(2002).unwrap();
+    assert!(channel.messages_loaded);
+    assert_eq!(
+        channel.messages.iter().map(|m| m.id).collect::<Vec<_>>(),
+        [61, 62]
+    );
+    let timestamp = channel.messages[1].timestamp;
+    let expected = chrono::DateTime::parse_from_rfc3339("2026-10-22T12:34:56.123+00:00")
+        .unwrap()
+        .with_timezone(&chrono::Local);
+    assert_eq!(
+        (
+            timestamp.year,
+            timestamp.month,
+            timestamp.day,
+            timestamp.hour,
+            timestamp.minute
+        ),
+        (
+            expected.year() as u16,
+            expected.month() as u8,
+            expected.day() as u8,
+            expected.hour() as u8,
+            expected.minute() as u8
+        )
+    );
+    let embed = &channel.messages[1].embeds[0];
+    assert!(embed.title.is_none());
+    assert_eq!(embed.author.as_ref().unwrap().text, "Status");
+    assert_eq!(channel.messages[1].embeds.len(), 2);
+    assert_eq!(embed.description.as_deref(), Some("one\ntwo"));
+    assert_eq!(embed.fields[0].name, "Count");
+    assert_eq!(embed.fields[0].value, "3");
+    assert_eq!(embed.footer.as_ref().unwrap().text, "footer");
+    assert_eq!(embed.color, None);
+    assert_eq!(channel.messages[1].content, "<@1> **raw**");
+    assert!(store.user(3).unwrap().bot);
+}
+
+#[test]
+fn apply_messages_loaded_unloaded_update_delete_and_ack() {
+    let mut store = Store::from_ready(ready());
+    let mut message = messages().remove(0);
+    message.channel_id = 2004;
+    message.id = 100;
+    assert_eq!(
+        store.apply(Event::MessageCreate(Box::new(message.clone()))),
+        Change::Structure
+    );
+    assert!(store.guilds[0].channel(2004).unwrap().messages.is_empty());
+    assert!(store.guilds[0].channel(2004).unwrap().unread);
+    store.set_messages(2004, vec![]);
+    message.id = 101;
+    assert_eq!(
+        store.apply(Event::MessageCreate(Box::new(message.clone()))),
+        Change::MessageInserted {
+            channel_id: 2004,
+            index: 0
+        }
+    );
+    assert_eq!(
+        store.apply(Event::MessageCreate(Box::new(message))),
+        Change::None
+    );
+    let update =
+        serde_json::from_value(json!({"id":"101", "channel_id":"2004", "content":"", "embeds":[]}))
+            .unwrap();
+    assert_eq!(
+        store.apply(Event::MessageUpdate(Box::new(update))),
+        Change::MessageChanged {
+            channel_id: 2004,
+            index: 0
+        }
+    );
+    let updated = &store.guilds[0].channel(2004).unwrap().messages[0];
+    assert!(updated.content.is_empty());
+    assert!(updated.embeds.is_empty());
+    assert_eq!(updated.author_id, 3);
+    let update = serde_json::from_value(json!({"id":"101", "channel_id":"2004"})).unwrap();
+    store.apply(Event::MessageUpdate(Box::new(update)));
+    assert!(
+        store.guilds[0].channel(2004).unwrap().messages[0]
+            .content
+            .is_empty()
+    );
+    store.apply(Event::MessageAck {
+        channel_id: 2004,
+        message_id: 100,
+    });
+    assert!(store.guilds[0].channel(2004).unwrap().unread);
+    store.apply(Event::MessageAck {
+        channel_id: 2004,
+        message_id: 101,
+    });
+    assert!(!store.guilds[0].channel(2004).unwrap().unread);
+    assert_eq!(
+        store.apply(Event::MessageDelete {
+            channel_id: 2004,
+            id: 101
+        }),
+        Change::MessageRemoved {
+            channel_id: 2004,
+            index: 0
+        }
+    );
+    assert_eq!(
+        store.apply(Event::MessageDelete {
+            channel_id: 2004,
+            id: 101
+        }),
+        Change::None
+    );
+}
+
+#[test]
+fn reply_previews_hide_only_standalone_media_urls_and_keep_the_original_time() {
+    let mut store = Store::from_ready(ready());
+    let url = "https://klipy.com/gifs/pardofelis-honkai-impact";
+    let timestamp = "2026-10-22T12:57:00Z";
+    for (kind, content, embed_url, flags, expected) in [
+        ("gifv", url.to_owned(), url, 0, String::new()),
+        ("image", format!("  {url}\n"), url, 0, String::new()),
+        ("article", url.to_owned(), url, 0, url.to_owned()),
+        (
+            "gifv",
+            format!("Look at this {url}"),
+            url,
+            0,
+            format!("Look at this {url}"),
+        ),
+        ("gifv", url.to_owned(), url, 4, url.to_owned()),
+        (
+            "gifv",
+            url.to_owned(),
+            "https://example.com/different",
+            0,
+            url.to_owned(),
+        ),
+    ] {
+        let value = json!({
+            "id":"500", "channel_id":"2002", "guild_id":"200",
+            "author":{"id":"2","username":"writer"},
+            "timestamp":"2026-10-22T13:00:00Z", "content":"reply",
+            "message_reference":{"message_id":"400","channel_id":"2002"},
+            "referenced_message":{
+                "id":"400", "author":{"id":"8","username":"original"},
+                "timestamp":timestamp, "content":content, "flags":flags,
+                "embeds":[{"type":kind,"url":embed_url}]
+            }
+        });
+        store.set_messages(2002, vec![serde_json::from_value(value).unwrap()]);
+        let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+        let Some(ReplyState::Loaded(reply)) = &channel.messages[0].reply else {
+            panic!("loaded reply expected");
+        };
+        assert_eq!(reply.content, expected, "kind={kind} flags={flags}");
+        assert_eq!(Some(reply.timestamp), local_timestamp(timestamp));
+    }
+}
+
+#[test]
+fn queued_and_forwarded_gif_replies_use_the_same_media_preview_rule() {
+    let mut store = Store::from_ready(ready());
+    let url = "https://klipy.com/gifs/example";
+    let original = json!({
+        "id":"400", "channel_id":"2002", "guild_id":"200",
+        "author":{"id":"8","username":"original"},
+        "timestamp":"2026-10-22T12:57:00Z", "content":url,
+        "embeds":[{"type":"gifv","url":url}]
+    });
+    store.set_messages(2002, vec![serde_json::from_value(original).unwrap()]);
+    store.queue_message(2002, 600, "reply".into(), Some(400));
+    let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+    assert_eq!(channel.messages[0].content, url);
+    let Some(ReplyState::Loaded(reply)) = &channel.messages[1].reply else {
+        panic!("queued reply expected");
+    };
+    assert!(reply.content.is_empty() && reply.embeds);
+    assert_eq!(reply.timestamp, channel.messages[0].timestamp);
+
+    let forwarded = json!({
+        "id":"700", "channel_id":"2002", "guild_id":"200",
+        "author":{"id":"2","username":"writer"},
+        "timestamp":"2026-10-22T13:00:00Z", "content":"reply",
+        "message_reference":{"message_id":"500","channel_id":"2002"},
+        "referenced_message":{
+            "id":"500", "author":{"id":"8","username":"original"},
+            "content":"", "message_snapshots":[{"message":{
+                "content":url, "embeds":[{"type":"gifv","url":url}]
+            }}]
+        }
+    });
+    store.set_messages(2002, vec![serde_json::from_value(forwarded).unwrap()]);
+    let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+    let Some(ReplyState::Loaded(reply)) = &channel.messages[0].reply else {
+        panic!("forwarded reply expected");
+    };
+    assert!(reply.content.is_empty() && reply.embeds);
+}
+
+#[test]
+fn replies_mentions_and_partial_message_updates() {
+    let mut store = Store::from_ready(ready());
+    let base = json!({"id":"500","channel_id":"2002","guild_id":"200","author":{"id":"2","username":"writer"},"timestamp":"2026-10-22T00:00:00Z","content":"reply","member":{"nick":"Message Nick","roles":["201"]},"message_reference":{"message_id":"400","channel_id":"2002","guild_id":"200"}});
+    for (referenced, expected) in [
+        (None, ReplyState::Unavailable),
+        (Some(serde_json::Value::Null), ReplyState::Deleted),
+        (
+            Some(
+                json!({"id":"400","author":{"id":"8","username":"reply-author"},"content":"original","attachments":[{"id":"1"}],"embeds":[{}],"referenced_message":{"author":"malformed nested object is ignored"}}),
+            ),
+            ReplyState::Loaded(Reply {
+                message_id: 400,
+                author_id: 8,
+                timestamp: timestamp_from_nonce(400),
+                content: "original".into(),
+                attachments: true,
+                embeds: true,
+                sticker: None,
+            }),
+        ),
+    ] {
+        let mut value = base.clone();
+        if let Some(referenced) = referenced {
+            value["referenced_message"] = referenced;
+        }
+        let message = serde_json::from_value(value).unwrap();
+        store.set_messages(2002, vec![message]);
+        assert_eq!(
+            store
+                .guild_by_id(200)
+                .unwrap()
+                .channel(2002)
+                .unwrap()
+                .messages[0]
+                .reply,
+            Some(expected)
+        );
+    }
+    assert!(store.user(8).is_some());
+    assert_eq!(store.member_name(200, 2), Some("Message Nick"));
+    let mut forwarded = base.clone();
+    forwarded["message_reference"]["type"] = 1.into();
+    forwarded["message_snapshots"] = json!([{
+        "message": {
+            "content": "forwarded text",
+            "embeds": [],
+            "attachments": [],
+            "components": [],
+            "flags": 0,
+            "type": 0,
+            "timestamp": "2026-10-22T02:00:00Z",
+            "edited_timestamp": null
+        }
+    }]);
+    store.set_messages(2002, vec![serde_json::from_value(forwarded).unwrap()]);
+    let message = &store
+        .guild_by_id(200)
+        .unwrap()
+        .channel(2002)
+        .unwrap()
+        .messages[0];
+    assert!(message.reply.is_none());
+    let forward = message.forward.as_ref().unwrap();
+    assert_eq!(forward.content, "forwarded text");
+    assert_eq!(forward.channel_id, Some(2002));
+    assert_eq!(forward.guild_id, Some(200));
+    assert!(forward.timestamp.is_some() && !forward.edited);
+    for fields in [
+        json!({"mentions":[{"id":"1"}]}),
+        json!({"mention_roles":["201"]}),
+        json!({"mention_everyone":true}),
+    ] {
+        let mut value = base.clone();
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        let message: model::Message = serde_json::from_value(value).unwrap();
+        store.set_messages(2002, vec![]);
+        store.apply(Event::MessageCreate(Box::new(message)));
+        assert!(
+            store
+                .guild_by_id(200)
+                .unwrap()
+                .channel(2002)
+                .unwrap()
+                .messages[0]
+                .mentions_me
+        );
+        let update = serde_json::from_value(json!({"id":"500","channel_id":"2002","edited_timestamp":"2026-10-22T01:00:00Z","type":7})).unwrap();
+        store.apply(Event::MessageUpdate(Box::new(update)));
+        let message = &store
+            .guild_by_id(200)
+            .unwrap()
+            .channel(2002)
+            .unwrap()
+            .messages[0];
+        assert!(message.mentions_me && message.edited);
+        assert_eq!(message.kind, 7);
+        let update = serde_json::from_value(json!({"id":"500","channel_id":"2002","mentions":[],"mention_roles":[],"mention_everyone":false,"referenced_message":null,"member":{"nick":"Updated Nick"}})).unwrap();
+        store.apply(Event::MessageUpdate(Box::new(update)));
+        let message = &store
+            .guild_by_id(200)
+            .unwrap()
+            .channel(2002)
+            .unwrap()
+            .messages[0];
+        assert!(!message.mentions_me);
+        assert_eq!(message.reply, Some(ReplyState::Deleted));
+        assert_eq!(store.member_name(200, 2), Some("Updated Nick"));
+    }
+}
+
+#[test]
+fn sticker_items_map_into_messages_forwards_and_updates() {
+    let mut store = Store::from_ready(ready());
+    let message = json!({
+        "id": "500",
+        "channel_id": "2002",
+        "guild_id": "200",
+        "author": {"id": "2", "username": "writer"},
+        "timestamp": "2026-10-22T00:00:00Z",
+        "content": "",
+        "sticker_items": [
+            {"id": "11", "name": "wave", "format_type": 1},
+            {"id": "12", "name": "dance", "format_type": 2}
+        ],
+        "message_reference": {"type": 1, "channel_id": "2002", "guild_id": "200"},
+        "message_snapshots": [{"message": {
+            "content": "",
+            "sticker_items": [{"id": "13", "name": "forwarded", "format_type": 4}]
+        }}]
+    });
+    store.set_messages(2002, vec![serde_json::from_value(message).unwrap()]);
+    let message = &store
+        .guild_by_id(200)
+        .unwrap()
+        .channel(2002)
+        .unwrap()
+        .messages[0];
+    let stickers: Vec<_> = message
+        .stickers
+        .iter()
+        .map(|sticker| (sticker.id, sticker.name.as_str(), sticker.format))
+        .collect();
+    assert_eq!(stickers, [(11, "wave", 1), (12, "dance", 2)]);
+    let forward = message.forward.as_ref().unwrap();
+    assert_eq!(forward.stickers[0].id, 13);
+    assert_eq!(forward.stickers[0].name, "forwarded");
+    assert_eq!(forward.stickers[0].format, 4);
+
+    let update: model::MessageUpdate = serde_json::from_value(json!({
+        "id": "500",
+        "channel_id": "2002",
+        "sticker_items": [{"id": "14", "name": "edited", "format_type": 3}]
+    }))
+    .unwrap();
+    store.apply(Event::MessageUpdate(Box::new(update)));
+    let message = &store
+        .guild_by_id(200)
+        .unwrap()
+        .channel(2002)
+        .unwrap()
+        .messages[0];
+    assert_eq!(message.stickers.len(), 1);
+    assert_eq!(
+        (
+            message.stickers[0].id,
+            message.stickers[0].name.as_str(),
+            message.stickers[0].format
+        ),
+        (14, "edited", 3)
+    );
+}
+
+#[test]
+fn sticker_only_reply_preview_uses_sticker_name() {
+    let mut store = Store::from_ready(ready());
+    let message = json!({
+        "id": "500",
+        "channel_id": "2002",
+        "guild_id": "200",
+        "author": {"id": "2", "username": "writer"},
+        "timestamp": "2026-10-22T00:00:00Z",
+        "message_reference": {"message_id": "400", "channel_id": "2002", "guild_id": "200"},
+        "referenced_message": {
+            "id": "400",
+            "author": {"id": "8", "username": "reply-author"},
+            "content": "",
+            "sticker_items": [{"id": "9", "name": "wave", "format_type": 1}]
+        }
+    });
+    store.set_messages(2002, vec![serde_json::from_value(message).unwrap()]);
+    let Some(ReplyState::Loaded(reply)) = &store
+        .guild_by_id(200)
+        .unwrap()
+        .channel(2002)
+        .unwrap()
+        .messages[0]
+        .reply
+    else {
+        panic!("sticker reply expected");
+    };
+    assert_eq!(reply.sticker.as_deref(), Some("wave"));
+    assert!(!reply.attachments && !reply.embeds);
+}
+
+#[test]
+fn message_update_replaces_forward_snapshot() {
+    let mut store = Store::from_ready(ready());
+    let message = json!({"id":"500","channel_id":"2002","guild_id":"200","author":{"id":"2","username":"writer"},"timestamp":"2026-10-22T00:00:00Z","message_reference":{"type":1,"channel_id":"2002","guild_id":"200"},"message_snapshots":[{"message":{"content":"first"}}]});
+    store.set_messages(2002, vec![serde_json::from_value(message).unwrap()]);
+    let update: model::MessageUpdate = serde_json::from_value(json!({
+        "id": "500",
+        "channel_id": "2002",
+        "message_snapshots": [{"message": {"content": "second"}}]
+    }))
+    .unwrap();
+    store.apply(Event::MessageUpdate(Box::new(update)));
+    let forward = store
+        .guild_by_id(200)
+        .unwrap()
+        .channel(2002)
+        .unwrap()
+        .messages[0]
+        .forward
+        .as_ref()
+        .unwrap();
+    assert_eq!(forward.content, "second");
+    assert_eq!(forward.channel_id, Some(2002));
+}
+
+#[test]
+fn reply_to_forward_previews_snapshot() {
+    let mut store = Store::from_ready(ready());
+    let message = json!({
+        "id": "500",
+        "channel_id": "2002",
+        "guild_id": "200",
+        "author": {"id": "2", "username": "writer"},
+        "timestamp": "2026-10-22T00:00:00Z",
+        "message_reference": {"message_id": "400", "channel_id": "2002", "guild_id": "200"},
+        "referenced_message": {
+            "id": "400",
+            "author": {"id": "8", "username": "reply-author"},
+            "content": "",
+            "attachments": [],
+            "embeds": [],
+            "message_reference": {"type": 1, "channel_id": "2002", "guild_id": "200"},
+            "message_snapshots": [{"message": {
+                "content": "forwarded preview",
+                "attachments": [{"id": "1"}],
+                "embeds": [{}],
+                "sticker_items": [{"id": "9", "name": "forwarded sticker", "format_type": 2}]
+            }}]
+        }
+    });
+    store.set_messages(2002, vec![serde_json::from_value(message).unwrap()]);
+    assert_eq!(
+        store
+            .guild_by_id(200)
+            .unwrap()
+            .channel(2002)
+            .unwrap()
+            .messages[0]
+            .reply,
+        Some(ReplyState::Loaded(Reply {
+            message_id: 400,
+            author_id: 8,
+            timestamp: timestamp_from_nonce(400),
+            content: "forwarded preview".into(),
+            attachments: true,
+            embeds: true,
+            sticker: Some("forwarded sticker".into()),
+        }))
+    );
+}
+
+#[test]
+fn prepend_messages_inserts_only_older_messages_in_order() {
+    let mut store = Store::from_ready(ready());
+    let mut page = messages();
+    page.retain(|message| message.channel_id == 2002);
+    page.sort_by_key(|message| message.id);
+    let (older, newer) = page.split_at(page.len() / 2);
+    assert!(!older.is_empty() && !newer.is_empty());
+    store.set_messages(2002, newer.to_vec());
+    let mut fetched = page.clone();
+    fetched.reverse();
+    assert_eq!(store.prepend_messages(2002, fetched), older.len());
+    let ids: Vec<_> = store
+        .guild_by_id(200)
+        .unwrap()
+        .channel(2002)
+        .unwrap()
+        .messages
+        .iter()
+        .map(|message| message.id)
+        .collect();
+    assert_eq!(
+        ids,
+        page.iter().map(|message| message.id).collect::<Vec<_>>()
+    );
+    assert_eq!(store.prepend_messages(2002, older.to_vec()), 0);
+}
+
+#[test]
+fn open_at_detached_channel_ignores_live_message() {
+    let mut store = Store::from_ready(ready());
+    store.set_around_messages(2002, vec![server_message(55, 2002, 2, None)]);
+    assert!(!store.at_present(2002));
+    assert_eq!(
+        store.apply(Event::MessageCreate(Box::new(server_message(
+            70, 2002, 3, None
+        )))),
+        Change::Structure
+    );
+    let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+    assert_eq!(
+        channel
+            .messages
+            .iter()
+            .map(|message| message.id)
+            .collect::<Vec<_>>(),
+        [55]
+    );
+    assert!(channel.unread);
+    assert_eq!(store.channel_ack(2002), Some(70));
+    assert_eq!(
+        store.queue_message(2002, 90, "mine".into(), None),
+        Change::None
+    );
+
+    store.set_messages(2002, vec![server_message(55, 2002, 2, None)]);
+    assert!(store.at_present(2002));
+    assert_eq!(
+        store.apply(Event::MessageCreate(Box::new(server_message(
+            70, 2002, 3, None
+        )))),
+        Change::MessageInserted {
+            channel_id: 2002,
+            index: 1
+        }
+    );
+    let ids: Vec<_> = store
+        .guild_by_id(200)
+        .unwrap()
+        .channel(2002)
+        .unwrap()
+        .messages
+        .iter()
+        .map(|message| message.id)
+        .collect();
+    assert_eq!(ids, [55, 70]);
+    assert_eq!(
+        store.queue_message(2002, 90, "mine".into(), None),
+        Change::MessageInserted {
+            channel_id: 2002,
+            index: 2
+        }
+    );
+}
+
+#[test]
+fn open_at_append_messages_dedups_and_short_page_marks_present() {
+    let mut store = Store::from_ready(ready());
+    store.set_around_messages(
+        2002,
+        vec![
+            server_message(55, 2002, 2, None),
+            server_message(56, 2002, 2, None),
+        ],
+    );
+    assert!(!store.at_present(2002));
+    assert_eq!(
+        store.append_messages(
+            2002,
+            vec![
+                server_message(57, 2002, 2, None),
+                server_message(56, 2002, 2, None),
+                server_message(58, 2002, 2, None),
+            ],
+            50,
+        ),
+        2
+    );
+    let ids: Vec<_> = store
+        .guild_by_id(200)
+        .unwrap()
+        .channel(2002)
+        .unwrap()
+        .messages
+        .iter()
+        .map(|message| message.id)
+        .collect();
+    assert_eq!(ids, [55, 56, 57, 58]);
+    assert!(store.at_present(2002));
+
+    let mut store = Store::from_ready(ready());
+    store.set_around_messages(2002, vec![server_message(55, 2002, 2, None)]);
+    assert_eq!(
+        store.append_messages(
+            2002,
+            vec![
+                server_message(57, 2002, 2, None),
+                server_message(58, 2002, 2, None),
+            ],
+            2,
+        ),
+        2
+    );
+    assert!(!store.at_present(2002));
+    assert_eq!(store.append_messages(2002, Vec::new(), 50), 0);
+    assert!(store.at_present(2002));
+}
+
+#[test]
+fn queued_message_is_replaced_by_rest_then_gateway_duplicate() {
+    let mut store = Store::from_ready(ready());
+    store.set_messages(2002, messages());
+    assert_eq!(
+        store.queue_message(2002, 1000, "hello".into(), Some(61)),
+        Change::MessageInserted {
+            channel_id: 2002,
+            index: 2
+        }
+    );
+    let queued = &store
+        .guild_by_id(200)
+        .unwrap()
+        .channel(2002)
+        .unwrap()
+        .messages[2];
+    assert_eq!(queued.delivery, Delivery::Pending);
+    assert_eq!(queued.author_id, 1);
+    assert!(matches!(&queued.reply, Some(ReplyState::Loaded(reply)) if reply.message_id == 61));
+    assert_eq!(
+        store.queue_message(2002, 1002, "missing".into(), Some(9999)),
+        Change::MessageInserted {
+            channel_id: 2002,
+            index: 3
+        }
+    );
+    assert!(matches!(
+        &store
+            .guild_by_id(200)
+            .unwrap()
+            .channel(2002)
+            .unwrap()
+            .messages[3]
+            .reply,
+        Some(ReplyState::Unavailable)
+    ));
+    store.discard_message(2002, 1002);
+
+    let created = server_message(1001, 2002, 1, Some(1000));
+    assert_eq!(
+        store.apply(Event::MessageCreate(Box::new(created.clone()))),
+        Change::MessageReplaced {
+            channel_id: 2002,
+            removed: 2,
+            inserted: 2
+        }
+    );
+    let messages = &store
+        .guild_by_id(200)
+        .unwrap()
+        .channel(2002)
+        .unwrap()
+        .messages;
+    assert_eq!(messages[2].delivery, Delivery::Sent);
+    assert_eq!(messages[2].id, 1001);
+    assert_eq!(store.last_read(2002), Some(1001));
+    assert!(
+        !store
+            .guild_by_id(200)
+            .unwrap()
+            .channel(2002)
+            .unwrap()
+            .unread
+    );
+    assert_eq!(
+        store.apply(Event::MessageCreate(Box::new(created))),
+        Change::None
+    );
+}
+
+#[test]
+fn queued_message_is_replaced_by_gateway_then_rest_duplicate() {
+    let mut store = Store::from_ready(ready());
+    store.set_messages(2002, messages());
+    store.queue_message(2002, 2000, "first".into(), None);
+    let created = server_message(2001, 2002, 1, Some(2000));
+    assert_eq!(
+        store.apply(Event::MessageCreate(Box::new(created.clone()))),
+        Change::MessageReplaced {
+            channel_id: 2002,
+            removed: 2,
+            inserted: 2
+        }
+    );
+    assert_eq!(
+        store.apply(Event::MessageCreate(Box::new(created))),
+        Change::None
+    );
+}
+
+#[test]
+fn replacement_indices_account_for_messages_arriving_between() {
+    let mut store = Store::from_ready(ready());
+    store.set_messages(2002, messages());
+    store.queue_message(2002, 1000, "mine".into(), None);
+    assert_eq!(
+        store.apply(Event::MessageCreate(Box::new(server_message(
+            1500, 2002, 2, None
+        )))),
+        Change::MessageInserted {
+            channel_id: 2002,
+            index: 3
+        }
+    );
+    assert_eq!(
+        store.apply(Event::MessageCreate(Box::new(server_message(
+            2000,
+            2002,
+            1,
+            Some(1000)
+        )))),
+        Change::MessageReplaced {
+            channel_id: 2002,
+            removed: 2,
+            inserted: 3
+        }
+    );
+    let ids: Vec<_> = store
+        .guild_by_id(200)
+        .unwrap()
+        .channel(2002)
+        .unwrap()
+        .messages
+        .iter()
+        .map(|message| message.id)
+        .collect();
+    assert_eq!(ids, [61, 62, 1500, 2000]);
+}
+
+#[test]
+fn failed_and_discarded_messages_and_sent_rows_stay() {
+    let mut store = Store::from_ready(ready());
+    store.set_messages(2002, messages());
+    store.queue_message(2002, 5000, "oops".into(), None);
+    assert_eq!(
+        store.fail_message(2002, 5000),
+        Change::MessageChanged {
+            channel_id: 2002,
+            index: 2
+        }
+    );
+    assert_eq!(
+        store
+            .guild_by_id(200)
+            .unwrap()
+            .channel(2002)
+            .unwrap()
+            .messages[2]
+            .delivery,
+        Delivery::Failed
+    );
+    assert_eq!(store.fail_message(2002, 5000), Change::None);
+    assert_eq!(store.discard_message(2002, 61), Change::None);
+    assert_eq!(
+        store.discard_message(2002, 5000),
+        Change::MessageRemoved {
+            channel_id: 2002,
+            index: 2
+        }
+    );
+    assert_eq!(store.discard_message(2002, 5000), Change::None);
+    assert_eq!(
+        store
+            .guild_by_id(200)
+            .unwrap()
+            .channel(2002)
+            .unwrap()
+            .messages
+            .len(),
+        2
+    );
+}

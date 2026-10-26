@@ -332,7 +332,7 @@ impl Render for OverlaysView {
             .children(gif_picker::render(app, window, cx))
             .children(channel_list::account_menu(app))
             .children(switcher::render(app, cx))
-            .children(crate::player::fullscreen(app, cx))
+            .children(crate::media::player::fullscreen(app, cx))
             .into_any_element()
     }
 }
