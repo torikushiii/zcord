@@ -234,6 +234,10 @@ impl Session {
         }
     }
 
+    pub fn set_noise_suppression(&self, enabled: bool) {
+        self.inner.voice.set_noise_suppression(enabled);
+    }
+
     fn voice_command(&self, payload: serde_json::Value) {
         let generation = self.inner.generation.load(Ordering::Acquire);
         if generation % 2 == 0 || *self.inner.control.borrow() != Control::Running {

@@ -17,6 +17,10 @@ use crate::{
 pub(crate) const MEMBER_HEIGHT: f32 = 32.;
 const MEMBER_AVATAR: f32 = 24.;
 const MEMBER_INDENT: f32 = 36.;
+const MENU_ENTER: Duration = Duration::from_millis(150);
+const MENU_EXIT: Duration = Duration::from_millis(100);
+const MENU_RISE: f32 = 6.;
+const SWITCH_SLIDE: Duration = Duration::from_millis(180);
 
 #[derive(Default)]
 pub(crate) struct Voice {
@@ -24,6 +28,11 @@ pub(crate) struct Voice {
     pub(crate) self_deaf: bool,
     pub(crate) call: Option<Call>,
     pub(crate) speaking: HashSet<u64>,
+    pub(crate) noise_suppression: bool,
+    noise_menu: Option<NoiseMenu>,
+    noise_menu_closed_at: Option<Instant>,
+    noise_menu_opened: u64,
+    noise_menu_close: Option<Task<()>>,
     restored: bool,
     clock: Option<Task<()>>,
 }
@@ -47,9 +56,29 @@ impl Voice {
         Self {
             self_mute: settings.voice_mute,
             self_deaf: settings.voice_deaf,
+            noise_suppression: !settings.voice_noise_suppression_off,
             ..Self::default()
         }
     }
+}
+
+struct NoiseMenu {
+    position: Point<Pixels>,
+    closing: bool,
+    /// Unique per open, so reopening replays the entry animation.
+    animation: u64,
+    /// The switch only slides after a click; opening shows it at rest.
+    switch_moved: bool,
+}
+
+/// `Pending` until Discord either finishes the DAVE handshake, which yields the privacy
+/// code, or reports that the call isn't end-to-end encrypted.
+#[derive(Clone, Default)]
+pub(crate) enum Encryption {
+    #[default]
+    Pending,
+    Off,
+    On(String),
 }
 
 pub(crate) struct Call {
@@ -57,7 +86,7 @@ pub(crate) struct Call {
     pub(crate) channel_id: u64,
     pub(crate) connected: bool,
     pub(crate) connected_at: Option<Instant>,
-    pub(crate) privacy_code: Option<String>,
+    pub(crate) encryption: Encryption,
 }
 
 impl DiscordApp {
@@ -76,13 +105,14 @@ impl DiscordApp {
         };
         session.set_self_mute(self.voice.self_mute);
         session.set_self_deaf(self.voice.self_deaf);
+        session.set_noise_suppression(self.voice.noise_suppression);
         session.join_voice(guild_id, channel_id);
         self.voice.call = Some(Call {
             guild_id,
             channel_id,
             connected: false,
             connected_at: None,
-            privacy_code: None,
+            encryption: Encryption::Pending,
         });
         self.voice.speaking.clear();
         self.sync_channel_rows();
@@ -98,6 +128,8 @@ impl DiscordApp {
         }
         remember_channel(None, cx);
         self.voice.speaking.clear();
+        self.voice.noise_menu = None;
+        self.voice.noise_menu_close = None;
         self.voice.clock = None;
         self.sync_channel_rows();
         cx.notify();
@@ -119,6 +151,70 @@ impl DiscordApp {
     pub(crate) fn toggle_self_deaf(&mut self, cx: &mut Context<Self>) {
         self.voice.self_deaf = !self.voice.self_deaf;
         self.sync_voice_flags(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_noise_suppression(&mut self, cx: &mut Context<Self>) {
+        let enabled = !self.voice.noise_suppression;
+        self.voice.noise_suppression = enabled;
+        if let Some(session) = &self.session {
+            session.set_noise_suppression(enabled);
+        }
+        crate::settings::update(cx, |settings| {
+            settings.voice_noise_suppression_off = !enabled
+        });
+        if let Some(menu) = &mut self.voice.noise_menu {
+            menu.switch_moved = true;
+        }
+        cx.notify();
+    }
+
+    fn toggle_noise_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let voice = &mut self.voice;
+        if voice.noise_menu.as_ref().is_some_and(|menu| !menu.closing) {
+            self.close_noise_menu(cx);
+            return;
+        }
+        // The press that closed the menu via mouse-down-outside must not reopen it here.
+        let just_closed = voice
+            .noise_menu_closed_at
+            .is_some_and(|at| at.elapsed() < Duration::from_millis(150));
+        if just_closed {
+            return;
+        }
+        voice.noise_menu_opened = voice.noise_menu_opened.wrapping_add(1);
+        voice.noise_menu_close = None;
+        voice.noise_menu = Some(NoiseMenu {
+            position,
+            closing: false,
+            animation: voice.noise_menu_opened,
+            switch_moved: false,
+        });
+        cx.notify();
+    }
+
+    fn close_noise_menu(&mut self, cx: &mut Context<Self>) {
+        let Some(menu) = self.voice.noise_menu.as_mut().filter(|menu| !menu.closing) else {
+            return;
+        };
+        menu.closing = true;
+        let animation = menu.animation;
+        self.voice.noise_menu_closed_at = Some(Instant::now());
+        self.voice.noise_menu_close = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(MENU_EXIT).await;
+            this.update(cx, |app, cx| {
+                let voice = &mut app.voice;
+                if voice
+                    .noise_menu
+                    .as_ref()
+                    .is_some_and(|menu| menu.closing && menu.animation == animation)
+                {
+                    voice.noise_menu = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
         cx.notify();
     }
 
@@ -191,7 +287,7 @@ impl DiscordApp {
                     channel_id,
                     connected: false,
                     connected_at: previous.as_ref().and_then(|call| call.connected_at),
-                    privacy_code: previous.and_then(|call| call.privacy_code),
+                    encryption: previous.map(|call| call.encryption).unwrap_or_default(),
                 });
             }
             VoiceEvent::Connected {
@@ -209,7 +305,7 @@ impl DiscordApp {
                             channel_id,
                             connected: true,
                             connected_at: Some(Instant::now()),
-                            privacy_code: None,
+                            encryption: Encryption::Pending,
                         })
                     }
                 }
@@ -245,7 +341,7 @@ impl DiscordApp {
             }
             VoiceEvent::PrivacyCode(code) => {
                 if let Some(call) = &mut voice.call {
-                    call.privacy_code = code;
+                    call.encryption = code.map_or(Encryption::Off, Encryption::On);
                 }
                 cx.notify();
                 return;
@@ -397,10 +493,11 @@ pub(crate) fn panel(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
     } else {
         ("Connecting…", theme::YELLOW)
     };
-    let encryption: SharedString = match &call.privacy_code {
-        Some(code) => format!("End-to-end encrypted\nPrivacy code: {code}").into(),
-        None if call.connected => "Not end-to-end encrypted".into(),
-        None => "Connecting to voice…".into(),
+    let encryption: SharedString = match &call.encryption {
+        Encryption::On(code) => format!("End-to-end encrypted\nPrivacy code: {code}").into(),
+        Encryption::Off => "Not end-to-end encrypted".into(),
+        Encryption::Pending if call.connected => "Setting up end-to-end encryption…".into(),
+        Encryption::Pending => "Connecting to voice…".into(),
     };
     let entity = app.entity.clone();
     let header = div()
@@ -444,10 +541,23 @@ pub(crate) fn panel(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
                         .child(place),
                 ),
         )
-        .child(unavailable(
-            theme::icon_button("voice-noise", "audio-lines", 20., theme::TEXT),
-            "Noise suppression",
-        ))
+        .child({
+            let entity = app.entity.clone();
+            let color = if app.voice.noise_suppression {
+                theme::TEXT
+            } else {
+                theme::FAINT
+            };
+            theme::icon_button("voice-noise", "audio-lines", 20., color)
+                .tooltip(|window, cx| Tooltip::new("Noise Suppression").build(window, cx))
+                .on_mouse_down(MouseButton::Left, move |event, _, cx| {
+                    cx.stop_propagation();
+                    let position = event.position;
+                    entity
+                        .update(cx, |app, cx| app.toggle_noise_menu(position, cx))
+                        .ok();
+                })
+        })
         .child(
             div()
                 .id("voice-disconnect")
@@ -509,4 +619,168 @@ fn unavailable(button: Stateful<Div>, feature: &'static str) -> Stateful<Div> {
     button.tooltip(move |window, cx| {
         Tooltip::new(format!("{feature} isn't available in zcord yet")).build(window, cx)
     })
+}
+
+/// Noise suppression popover above the voice panel's waveform button. Rendered from the
+/// overlay view because deferred popups can't live inside the cached channel list view.
+pub(crate) fn noise_menu(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
+    let menu = app
+        .voice
+        .noise_menu
+        .as_ref()
+        .filter(|_| app.voice.call.is_some())?;
+    let closing = menu.closing;
+    let reduce_motion = cx.reduce_motion();
+    let enabled = app.voice.noise_suppression;
+    let close = app.entity.clone();
+    let toggle = app.entity.clone();
+    let slide = (menu.switch_moved && !reduce_motion).then_some(menu.animation);
+    let title = div()
+        .id("noise-suppression-toggle")
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_3()
+        .cursor_pointer()
+        .when(!closing, |this| {
+            this.on_click(move |_, _, cx| {
+                toggle
+                    .update(cx, |app, cx| app.toggle_noise_suppression(cx))
+                    .ok();
+            })
+        })
+        .child(
+            div()
+                .text_size(rpx(16.))
+                .line_height(rpx(20.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(theme::STRONG))
+                .child("Noise Suppression"),
+        )
+        .child(switch(enabled, slide));
+    let card = div()
+        .id("noise-menu")
+        .flex()
+        .flex_col()
+        .gap_2()
+        .w(rpx(296.))
+        .p(rpx(16.))
+        .rounded(rpx(8.))
+        .bg(rgb(theme::ELEVATED))
+        .border_1()
+        .border_color(rgb(theme::BORDER))
+        .shadow_lg()
+        .when(!closing, |this| {
+            this.occlude().on_mouse_down_out(move |_, _, cx| {
+                close.update(cx, |app, cx| app.close_noise_menu(cx)).ok();
+            })
+        })
+        .child(title)
+        .child(
+            div()
+                .text_size(rpx(14.))
+                .line_height(rpx(18.))
+                .text_color(rgb(theme::TEXT))
+                .child(
+                    "Filters steady background noise like fans, hum and typing out of your \
+                     microphone before it's sent. Sudden sounds, such as clapping, may still \
+                     get through.",
+                ),
+        )
+        .child(
+            div()
+                .pt(rpx(4.))
+                .text_size(rpx(12.))
+                .line_height(rpx(16.))
+                .text_color(rgb(theme::MUTED))
+                .child("Powered by RNNoise"),
+        );
+    let card = if reduce_motion {
+        card.into_any_element()
+    } else {
+        let key = if closing {
+            "noise-menu-out"
+        } else {
+            "noise-menu-in"
+        };
+        let animation = Animation::new(if closing { MENU_EXIT } else { MENU_ENTER })
+            .with_easing(ease_out_quint());
+        card.with_animation((key, menu.animation), animation, move |this, delta| {
+            let progress = if closing { 1. - delta } else { delta };
+            this.relative()
+                .top(rpx((1. - progress) * MENU_RISE))
+                .opacity(progress)
+        })
+        .into_any_element()
+    };
+    Some(
+        deferred(
+            anchored()
+                .position(menu.position - point(px(0.), px(16.)))
+                .anchor(Anchor::BottomCenter)
+                .snap_to_window_with_margin(px(8.))
+                .child(card),
+        )
+        .with_priority(2)
+        .into_any_element(),
+    )
+}
+
+/// Discord's settings toggle. `slide` carries the menu's animation id once the user has
+/// flipped it, so the knob and track ease into the new state instead of jumping.
+fn switch(on: bool, slide: Option<u64>) -> AnyElement {
+    const OFF_LEFT: f32 = 2.;
+    const ON_LEFT: f32 = 18.;
+    let (icon, icon_color) = if on {
+        ("check", theme::BLURPLE)
+    } else {
+        ("x", theme::FAINT)
+    };
+    let at = move |t: f32| if on { t } else { 1. - t };
+    let knob = div()
+        .absolute()
+        .top(rpx(2.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(rpx(20.))
+        .rounded_full()
+        .bg(white())
+        .child(theme::icon(icon, 12., icon_color));
+    let track = div()
+        .relative()
+        .flex_none()
+        .w(rpx(40.))
+        .h(rpx(24.))
+        .rounded_full();
+    let Some(slide) = slide else {
+        return track
+            .bg(blend(theme::FAINT, theme::BLURPLE, at(1.)))
+            .child(knob.left(rpx(OFF_LEFT + (ON_LEFT - OFF_LEFT) * at(1.))))
+            .into_any_element();
+    };
+    let animation = Animation::new(SWITCH_SLIDE).with_easing(ease_out_quint());
+    let key = slide << 1 | u64::from(on);
+    track
+        .child(knob.with_animation(
+            ("noise-switch-knob", key),
+            animation.clone(),
+            move |this, delta| this.left(rpx(OFF_LEFT + (ON_LEFT - OFF_LEFT) * at(delta))),
+        ))
+        .with_animation(
+            ("noise-switch-track", key),
+            animation,
+            move |this, delta| this.bg(blend(theme::FAINT, theme::BLURPLE, at(delta))),
+        )
+        .into_any_element()
+}
+
+fn blend(from: u32, to: u32, t: f32) -> Rgba {
+    let (from, to) = (rgb(from), rgb(to));
+    Rgba {
+        r: from.r + (to.r - from.r) * t,
+        g: from.g + (to.g - from.g) * t,
+        b: from.b + (to.b - from.b) * t,
+        a: 1.,
+    }
 }

@@ -36,6 +36,8 @@ pub struct Settings {
     pub voice_mute: bool,
     #[serde(default)]
     pub voice_deaf: bool,
+    #[serde(default)]
+    pub voice_noise_suppression_off: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]

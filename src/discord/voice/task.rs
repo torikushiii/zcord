@@ -166,6 +166,10 @@ impl VoiceManager {
         self.set_flags(mute, Some(deaf))
     }
 
+    pub fn set_noise_suppression(&self, enabled: bool) {
+        self.lock().flags.set_noise_suppression(enabled);
+    }
+
     fn set_flags(&self, mute: bool, deaf: Option<bool>) -> Option<Value> {
         let mut shared = self.lock();
         shared.mute = mute;
