@@ -237,7 +237,8 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
 }
 
 fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &App) -> AnyElement {
-    let profile = card.profile.as_deref();
+    let own_profile = card.user_id == app.store.current_user_id;
+    let profile = card.profile.as_deref().filter(|_| !own_profile);
     let palette = card.palette();
     let mutual_guilds: Vec<&model::MutualGuild> = profile
         .and_then(|p| p.mutual_guilds.as_ref())
@@ -259,6 +260,7 @@ fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &App) -> AnyElement {
     let current = match card.tab {
         Tab::Board if !has_board => Tab::Activity,
         Tab::Wishlist if !has_wishlist => Tab::Activity,
+        Tab::Servers | Tab::Friends if own_profile => Tab::Activity,
         tab => tab,
     };
     let tab = |id: Tab, title: String| {
