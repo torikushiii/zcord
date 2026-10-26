@@ -20,6 +20,8 @@ const DM_HEIGHT: f32 = 42.;
 const DM_AVATAR: f32 = 32.;
 const FRIEND_HEIGHT: f32 = 62.;
 const ACTIVE_NOW_WIDTH: f32 = 420.;
+const ACTIVE_ICON: f32 = 24.;
+const ACTIVE_ART: f32 = 32.;
 const ACTION_SIZE: f32 = 36.;
 const SPOTIFY_GREEN: u32 = 0x1DB954;
 
@@ -1031,23 +1033,23 @@ fn active_card(
     // `presence_art` and the app icon fill their parent, so each needs a sized box.
     let icon = div()
         .flex_none()
-        .size(rpx(20.))
+        .size(rpx(ACTIVE_ICON))
         .child(if listening && game.name == "Spotify" {
-            theme::icon("connections/spotify", 20., SPOTIFY_GREEN).into_any_element()
+            theme::icon("connections/spotify", ACTIVE_ICON, SPOTIFY_GREEN).into_any_element()
         } else {
-            app_icon(20.)
-                .or_else(|| presence(20., "active-icon"))
-                .unwrap_or_else(|| fallback(20.))
+            app_icon(ACTIVE_ICON)
+                .or_else(|| presence(ACTIVE_ICON, "active-icon"))
+                .unwrap_or_else(|| fallback(ACTIVE_ICON))
         });
     let art = div()
         .flex_none()
-        .size(rpx(40.))
-        .rounded(rpx(8.))
+        .size(rpx(ACTIVE_ART))
+        .rounded(rpx(ACTIVE_ART / 5.))
         .bg(rgb(theme::SELECTED))
         .child(
-            presence(40., "active-art")
-                .or_else(|| app_icon(40.))
-                .unwrap_or_else(|| fallback(40.)),
+            presence(ACTIVE_ART, "active-art")
+                .or_else(|| app_icon(ACTIVE_ART))
+                .unwrap_or_else(|| fallback(ACTIVE_ART)),
         );
     let detail = game.details.clone().or_else(|| game.state.clone());
     let state = game.details.as_ref().and(game.state.clone());
