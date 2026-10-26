@@ -8,6 +8,7 @@ use chrono::{Datelike, Timelike};
 
 use serde_json::json;
 
+mod account;
 mod channels;
 mod embeds;
 mod invites;

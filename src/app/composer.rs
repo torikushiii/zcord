@@ -238,6 +238,9 @@ impl DiscordApp {
         if self.close_profile(cx) {
             return;
         }
+        if self.close_settings(cx) {
+            return;
+        }
         if self.confirm_delete.is_some() {
             self.cancel_delete(cx);
         } else if self.editing.is_some() {

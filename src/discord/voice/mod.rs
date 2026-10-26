@@ -8,6 +8,7 @@ mod task;
 mod udp;
 
 use crate::discord::{Event, VoiceEvent};
+pub use audio::{AudioDevice, MicTest, audio_devices};
 use futures::channel::mpsc::UnboundedSender;
 
 pub(super) use task::VoiceManager;

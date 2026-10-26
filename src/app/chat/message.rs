@@ -2,6 +2,7 @@ use super::composer::{emoji_token_overlay, flush_textarea};
 use super::media::{render_attachment, render_sticker};
 use super::rows::is_system;
 use super::*;
+use crate::app::message_body::render_body_scaled;
 
 pub(in crate::app) fn body_context<'a>(app: &'a DiscordApp, message_id: u64) -> BodyContext<'a> {
     BodyContext {
@@ -16,6 +17,21 @@ pub(in crate::app) fn body_context<'a>(app: &'a DiscordApp, message_id: u64) -> 
 
 fn forward_key(message_id: u64) -> u64 {
     embeds::part_key(message_id, embeds::FORWARD_SLOT)
+}
+
+fn render_body_for_chat(
+    blocks: &[crate::text::markdown::Block],
+    edited: bool,
+    jumbo: bool,
+    scale: f32,
+    context: &BodyContext,
+    cx: &App,
+) -> AnyElement {
+    if scale == 1.0 {
+        render_body(blocks, edited, jumbo, context, cx)
+    } else {
+        render_body_scaled(blocks, edited, jumbo, scale, context, cx)
+    }
 }
 
 pub(in crate::app) fn author_name(app: &DiscordApp, user_id: u64) -> String {
@@ -315,6 +331,9 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
 
 fn render_forward(app: &DiscordApp, message_id: u64, forward: &Forward, cx: &App) -> AnyElement {
     let key = forward_key(message_id);
+    let font_size = crate::settings::chat_font_size();
+    let line_height = font_size * 22.0 / 16.0;
+    let text_scale = font_size / 16.0;
     let parsed = app.parsed(key, &forward.content);
     let context = body_context(app, key);
     let show_body =
@@ -366,12 +385,13 @@ fn render_forward(app: &DiscordApp, message_id: u64, forward: &Forward, cx: &App
             this.child(
                 div()
                     .w_full()
-                    .text_size(rpx(16.))
-                    .line_height(rpx(22.))
-                    .child(render_body(
+                    .text_size(rpx(font_size))
+                    .line_height(rpx(line_height))
+                    .child(render_body_for_chat(
                         &parsed.blocks,
                         forward.edited,
                         parsed.jumbo,
+                        text_scale,
                         &context,
                         cx,
                     )),
@@ -394,6 +414,7 @@ fn render_forward(app: &DiscordApp, message_id: u64, forward: &Forward, cx: &App
                 .embeds
                 .iter()
                 .enumerate()
+                .filter(|(_, embed)| embeds::visible(embed, &forward.content))
                 .map(|(index, embed)| embeds::render_embed(app, key, index, embed, cx)),
         )
         .children(embeds::render_components(app, key, &forward.components, cx))
@@ -414,9 +435,16 @@ pub(super) fn render_message(
         return element;
     }
     let user = app.store.user(message.author_id);
+    let font_size = crate::settings::chat_font_size();
+    let line_height = font_size * 22.0 / 16.0;
+    let text_scale = font_size / 16.0;
     let parsed = app.parsed(message.id, &message.content);
     let context = body_context(app, message.id);
-    let rich = !message.embeds.is_empty() || !message.components.is_empty();
+    let rich = message
+        .embeds
+        .iter()
+        .any(|embed| embeds::visible(embed, &message.content))
+        || !message.components.is_empty();
     let trailing_edited = message.edited && parsed.blocks.is_empty() && rich;
     let show_body = (!parsed.blocks.is_empty() || message.edited)
         && !trailing_edited
@@ -597,18 +625,19 @@ pub(super) fn render_message(
                             None if show_body => this.child(
                                 div()
                                     .w_full()
-                                    .text_size(rpx(16.))
-                                    .line_height(rpx(22.))
+                                    .text_size(rpx(font_size))
+                                    .line_height(rpx(line_height))
                                     .when(message.delivery == Delivery::Pending, |this| {
                                         this.opacity(0.5)
                                     })
                                     .when(message.delivery == Delivery::Failed, |this| {
                                         this.text_color(rgb(theme::RED))
                                     })
-                                    .child(render_body(
+                                    .child(render_body_for_chat(
                                         &parsed.blocks,
                                         message.edited,
                                         parsed.jumbo,
+                                        text_scale,
                                         &context,
                                         cx,
                                     )),
@@ -624,9 +653,16 @@ pub(super) fn render_message(
                         .when(message.delivery == Delivery::Failed && !preview, |this| {
                             this.child(send_failure(app, message.id))
                         })
-                        .children(message.embeds.iter().enumerate().map(|(index, embed)| {
-                            embeds::render_embed(app, message.id, index, embed, cx)
-                        }))
+                        .children(
+                            message
+                                .embeds
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, embed)| embeds::visible(embed, &message.content))
+                                .map(|(index, embed)| {
+                                    embeds::render_embed(app, message.id, index, embed, cx)
+                                }),
+                        )
                         .children(embeds::render_components(
                             app,
                             message.id,

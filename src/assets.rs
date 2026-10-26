@@ -11,6 +11,7 @@ macro_rules! icons {
 }
 
 const ICONS: &[(&str, &[u8])] = icons![
+    "accessibility",
     "activity",
     "arrow-left",
     "arrow-right",
@@ -65,8 +66,10 @@ const ICONS: &[(&str, &[u8])] = icons![
     "image",
     "image-play",
     "inbox",
+    "languages",
     "library",
     "lock",
+    "log-out",
     "mail",
     "mail-filled",
     "megaphone",
@@ -75,9 +78,11 @@ const ICONS: &[(&str, &[u8])] = icons![
     "messages-square",
     "mic",
     "mic-off",
+    "minus",
     "monitor-filled",
     "monitor-up",
     "music",
+    "palette",
     "pencil",
     "phone",
     "pin",
@@ -104,6 +109,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "tooltip-arrow-down",
     "trash-2",
     "trending-up",
+    "user",
     "user-plus",
     "users",
     "video",

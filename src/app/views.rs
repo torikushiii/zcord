@@ -16,7 +16,7 @@ use gpui::{prelude::*, *};
 use crate::{
     app::{
         DiscordApp, channel_list, chat, emoji_picker, gif_picker, guild_rail, home, lightbox,
-        member_list, profile, switcher, voice,
+        member_list, profile, settings_page, switcher, voice,
     },
     theme::rpx,
 };
@@ -187,6 +187,7 @@ impl Render for ChatHeaderView {
 
 pub(crate) struct MessagesView {
     app: WeakEntity<DiscordApp>,
+    layout_preferences: (f32, bool),
     _observe: Subscription,
 }
 
@@ -194,6 +195,10 @@ impl MessagesView {
     fn new(app: &Entity<DiscordApp>, cx: &mut Context<Self>) -> Self {
         Self {
             app: app.downgrade(),
+            layout_preferences: (
+                crate::settings::chat_font_size(),
+                crate::settings::link_previews(),
+            ),
             _observe: observe_app(app, cx),
         }
     }
@@ -206,6 +211,15 @@ impl Render for MessagesView {
             return div().into_any_element();
         };
         let app = app.read(cx);
+        let preferences = (
+            crate::settings::chat_font_size(),
+            crate::settings::link_previews(),
+        );
+        if self.layout_preferences != preferences {
+            // Width is unchanged, so the list won't invalidate these cached heights itself.
+            app.messages.remeasure();
+            self.layout_preferences = preferences;
+        }
         if app.showing_home_page() {
             return match app.home.page {
                 home::HomePage::Friends => home::friends_page(app, cx),
@@ -325,12 +339,12 @@ impl Render for OverlaysView {
         };
         let app = app.read(cx);
         overlay_root()
+            .children(settings_page::render(app, window, cx))
             .children(chat::delete_dialog(app, cx))
             .children(profile::render(app, window, cx))
             .children(lightbox::render(app, window, cx))
             .children(emoji_picker::render(app, window, cx))
             .children(gif_picker::render(app, window, cx))
-            .children(channel_list::account_menu(app))
             .children(voice::menu(app, cx))
             .children(switcher::render(app, cx))
             .children(crate::media::player::fullscreen(app, cx))

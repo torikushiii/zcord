@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::PathBuf,
+    sync::atomic::{AtomicBool, AtomicU32, Ordering},
     time::Duration,
 };
 
@@ -11,6 +12,12 @@ use serde::{Deserialize, Serialize};
 use crate::discord::gifs::GifProvider;
 
 const SAVE_DELAY: Duration = Duration::from_millis(500);
+
+static CLOCK_24H: AtomicBool = AtomicBool::new(false);
+static GIF_AUTOPLAY: AtomicBool = AtomicBool::new(true);
+static EMOJI_ANIMATION: AtomicBool = AtomicBool::new(true);
+static LINK_PREVIEWS: AtomicBool = AtomicBool::new(true);
+static CHAT_FONT_SIZE: AtomicU32 = AtomicU32::new(16.0f32.to_bits());
 
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
@@ -38,6 +45,28 @@ pub struct Settings {
     pub voice_deaf: bool,
     #[serde(default)]
     pub voice_noise_suppression_off: bool,
+    #[serde(default)]
+    pub voice_input_device: Option<String>,
+    #[serde(default)]
+    pub voice_output_device: Option<String>,
+    #[serde(default)]
+    pub voice_input_volume: Option<f32>,
+    #[serde(default)]
+    pub voice_output_volume: Option<f32>,
+    #[serde(default)]
+    pub voice_sensitivity: Option<f32>,
+    #[serde(default)]
+    pub gif_autoplay_off: bool,
+    #[serde(default)]
+    pub emoji_animation_off: bool,
+    #[serde(default)]
+    pub link_previews_off: bool,
+    #[serde(default)]
+    pub chat_font_size: Option<f32>,
+    #[serde(default)]
+    pub clock_24h: bool,
+    #[serde(default)]
+    pub reduce_motion: Option<bool>,
 }
 
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -70,8 +99,12 @@ struct State {
 
 impl Global for State {}
 
+pub fn data_dir() -> Option<PathBuf> {
+    dirs::config_dir().map(|dir| dir.join("zcord"))
+}
+
 fn path() -> Option<PathBuf> {
-    dirs::config_dir().map(|dir| dir.join("zcord").join("settings.json"))
+    data_dir().map(|dir| dir.join("settings.json"))
 }
 
 pub fn init(cx: &mut App) {
@@ -91,6 +124,79 @@ pub fn get(cx: &App) -> Settings {
     cx.try_global::<State>()
         .map(|state| state.settings.clone())
         .unwrap_or_default()
+}
+
+pub fn clock_format(hour12: &'static str, hour24: &'static str) -> &'static str {
+    if clock_24h() { hour24 } else { hour12 }
+}
+
+pub fn clock_24h() -> bool {
+    CLOCK_24H.load(Ordering::Relaxed)
+}
+
+pub fn set_clock_24h(cx: &mut App, on: bool) {
+    CLOCK_24H.store(on, Ordering::Relaxed);
+    update(cx, |settings| settings.clock_24h = on);
+    cx.refresh_windows();
+}
+
+pub fn set_reduce_motion(cx: &mut App, value: Option<bool>) {
+    // gpui does not expose the OS reduce-motion preference, only the current value.
+    cx.set_reduce_motion(value.unwrap_or(false));
+    update(cx, |settings| settings.reduce_motion = value);
+    cx.refresh_windows();
+}
+
+pub fn set_gif_autoplay(cx: &mut App, on: bool) {
+    GIF_AUTOPLAY.store(on, Ordering::Relaxed);
+    update(cx, |settings| settings.gif_autoplay_off = !on);
+    cx.refresh_windows();
+}
+
+pub fn gif_autoplay() -> bool {
+    GIF_AUTOPLAY.load(Ordering::Relaxed)
+}
+
+pub fn set_emoji_animation(cx: &mut App, on: bool) {
+    EMOJI_ANIMATION.store(on, Ordering::Relaxed);
+    update(cx, |settings| settings.emoji_animation_off = !on);
+    cx.refresh_windows();
+}
+
+pub fn emoji_animation() -> bool {
+    EMOJI_ANIMATION.load(Ordering::Relaxed)
+}
+
+pub fn set_link_previews(cx: &mut App, on: bool) {
+    LINK_PREVIEWS.store(on, Ordering::Relaxed);
+    update(cx, |settings| settings.link_previews_off = !on);
+    cx.refresh_windows();
+}
+
+pub fn link_previews() -> bool {
+    LINK_PREVIEWS.load(Ordering::Relaxed)
+}
+
+fn clamp_chat_font_size(size: f32) -> f32 {
+    size.clamp(12.0, 24.0)
+}
+
+fn chat_font_setting(size: f32) -> Option<f32> {
+    let size = clamp_chat_font_size(size);
+    (size != 16.0).then_some(size)
+}
+
+pub fn set_chat_font_size(cx: &mut App, size: f32) {
+    let size = clamp_chat_font_size(size);
+    CHAT_FONT_SIZE.store(size.to_bits(), Ordering::Relaxed);
+    update(cx, |settings| {
+        settings.chat_font_size = chat_font_setting(size)
+    });
+    cx.refresh_windows();
+}
+
+pub fn chat_font_size() -> f32 {
+    f32::from_bits(CHAT_FONT_SIZE.load(Ordering::Relaxed))
 }
 
 pub fn update(cx: &mut App, change: impl FnOnce(&mut Settings)) {
@@ -188,4 +294,120 @@ pub fn initial_window_bounds(min_size: gpui::Size<Pixels>, cx: &App) -> Option<W
     } else {
         WindowBounds::Windowed(bounds)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveDate;
+    use serde_json::json;
+
+    #[test]
+    fn clock_preference_switches_time_format() {
+        let time = NaiveDate::from_ymd_opt(2024, 1, 2)
+            .unwrap()
+            .and_hms_opt(13, 5, 9)
+            .unwrap();
+        let timestamp = crate::store::Timestamp {
+            year: 2024,
+            month: 1,
+            day: 2,
+            hour: 13,
+            minute: 5,
+        };
+        CLOCK_24H.store(false, Ordering::Relaxed);
+        assert_eq!(timestamp.time(), "1:05 PM");
+        assert_eq!(timestamp.full(), "1/2/24, 1:05 PM");
+        assert_eq!(
+            time.format(clock_format("%-I:%M %p", "%H:%M")).to_string(),
+            "1:05 PM"
+        );
+        assert_eq!(
+            time.format(clock_format("%-I:%M:%S %p", "%H:%M:%S"))
+                .to_string(),
+            "1:05:09 PM"
+        );
+        assert_eq!(
+            time.format(clock_format(
+                "%A, %B %-d, %Y %-I:%M %p",
+                "%A, %B %-d, %Y %H:%M"
+            ))
+            .to_string(),
+            "Tuesday, January 2, 2024 1:05 PM"
+        );
+        CLOCK_24H.store(true, Ordering::Relaxed);
+        assert_eq!(timestamp.time(), "13:05");
+        assert_eq!(timestamp.full(), "1/2/24, 13:05");
+        assert_eq!(
+            time.format(clock_format("%-I:%M %p", "%H:%M")).to_string(),
+            "13:05"
+        );
+        assert_eq!(
+            time.format(clock_format("%-I:%M:%S %p", "%H:%M:%S"))
+                .to_string(),
+            "13:05:09"
+        );
+        assert_eq!(
+            time.format(clock_format(
+                "%A, %B %-d, %Y %-I:%M %p",
+                "%A, %B %-d, %Y %H:%M"
+            ))
+            .to_string(),
+            "Tuesday, January 2, 2024 13:05"
+        );
+        CLOCK_24H.store(false, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn animation_and_chat_font_atomics_round_trip() {
+        GIF_AUTOPLAY.store(false, Ordering::Relaxed);
+        assert!(!gif_autoplay());
+        GIF_AUTOPLAY.store(true, Ordering::Relaxed);
+        assert!(gif_autoplay());
+
+        EMOJI_ANIMATION.store(false, Ordering::Relaxed);
+        assert!(!emoji_animation());
+        EMOJI_ANIMATION.store(true, Ordering::Relaxed);
+        assert!(emoji_animation());
+
+        LINK_PREVIEWS.store(false, Ordering::Relaxed);
+        assert!(!link_previews());
+        LINK_PREVIEWS.store(true, Ordering::Relaxed);
+        assert!(link_previews());
+
+        CHAT_FONT_SIZE.store(20.0f32.to_bits(), Ordering::Relaxed);
+        assert_eq!(chat_font_size(), 20.0);
+        CHAT_FONT_SIZE.store(16.0f32.to_bits(), Ordering::Relaxed);
+        assert_eq!(chat_font_size(), 16.0);
+    }
+
+    #[test]
+    fn chat_font_size_clamps_and_sixteen_persists_as_none() {
+        assert_eq!(clamp_chat_font_size(8.0), 12.0);
+        assert_eq!(clamp_chat_font_size(30.0), 24.0);
+        assert_eq!(clamp_chat_font_size(18.0), 18.0);
+        assert_eq!(chat_font_setting(16.0), None);
+        assert_eq!(chat_font_setting(12.0), Some(12.0));
+        assert_eq!(chat_font_setting(30.0), Some(24.0));
+    }
+
+    #[test]
+    fn old_settings_json_uses_new_defaults() {
+        let settings: Settings = serde_json::from_value(json!({
+            "zoom": 5,
+            "voice_mute": true,
+            "clock_24h": true
+        }))
+        .unwrap();
+        assert!(settings.voice_input_device.is_none());
+        assert!(settings.voice_output_device.is_none());
+        assert!(settings.voice_input_volume.is_none());
+        assert!(settings.voice_output_volume.is_none());
+        assert!(settings.voice_sensitivity.is_none());
+        assert!(!settings.gif_autoplay_off);
+        assert!(!settings.emoji_animation_off);
+        assert!(!settings.link_previews_off);
+        assert!(settings.chat_font_size.is_none());
+        assert!(settings.clock_24h);
+    }
 }

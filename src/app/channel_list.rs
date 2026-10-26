@@ -103,8 +103,6 @@ pub(crate) struct Rows {
     collapsed: HashSet<u64>,
     folds: HashMap<u64, Fold>,
     kept: u64,
-    account_menu: Option<Point<Pixels>>,
-    account_menu_closed_at: Option<Instant>,
     subtitle_hovered_once: bool,
 }
 
@@ -119,8 +117,6 @@ impl Rows {
             collapsed: HashSet::new(),
             folds: HashMap::new(),
             kept: 0,
-            account_menu: None,
-            account_menu_closed_at: None,
             subtitle_hovered_once: false,
         }
     }
@@ -1023,26 +1019,11 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         .child(
             theme::icon_button("user-settings", "settings", 20., theme::TEXT)
                 .tooltip(|window, cx| Tooltip::new("User Settings").build(window, cx))
-                .on_mouse_down(MouseButton::Left, {
+                .on_click({
                     let entity = app.entity.clone();
-                    move |event, _, cx| {
-                        cx.stop_propagation();
-                        let position = event.position;
+                    move |_, window, cx| {
                         entity
-                            .update(cx, |app, cx| {
-                                let rows = &mut app.channel_rows;
-                                // The press that closed the menu via mouse-down-outside must
-                                // not reopen it here.
-                                let just_closed = rows
-                                    .account_menu_closed_at
-                                    .is_some_and(|at| at.elapsed() < Duration::from_millis(150));
-                                if rows.account_menu.is_none() && !just_closed {
-                                    rows.account_menu = Some(position);
-                                } else {
-                                    rows.account_menu = None;
-                                }
-                                cx.notify();
-                            })
+                            .update(cx, |app, cx| app.open_settings(window, cx))
                             .ok();
                     }
                 }),
@@ -1059,66 +1040,4 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         .border_color(rgb(theme::BORDER))
         .children(voice::panel(app))
         .child(account)
-}
-
-/// Settings menu above the user panel's gear button. Rendered from the overlay view because
-/// deferred popups can't live inside the cached channel list view.
-pub(crate) fn account_menu(app: &DiscordApp) -> Option<AnyElement> {
-    let position = app.channel_rows.account_menu?;
-    let close = app.entity.clone();
-    let log_out = app.entity.clone();
-    let item = div()
-        .id("log-out")
-        .flex()
-        .items_center()
-        .justify_between()
-        .h(rpx(32.))
-        .px(rpx(8.))
-        .rounded(rpx(4.))
-        .text_size(rpx(14.))
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(theme::RED))
-        .cursor_pointer()
-        .hover(|style| style.bg(rgb(theme::RED)).text_color(white()))
-        .child("Log Out")
-        .on_click(move |_, window, cx| {
-            log_out
-                .update(cx, |app, cx| {
-                    app.channel_rows.account_menu = None;
-                    app.log_out(window, cx);
-                })
-                .ok();
-        });
-    Some(
-        deferred(
-            anchored()
-                .position(position - point(px(0.), px(12.)))
-                .anchor(Anchor::BottomRight)
-                .snap_to_window_with_margin(px(8.))
-                .child(
-                    div()
-                        .id("account-menu")
-                        .occlude()
-                        .w(rpx(188.))
-                        .p(rpx(6.))
-                        .rounded(rpx(8.))
-                        .bg(rgb(theme::ELEVATED))
-                        .border_1()
-                        .border_color(rgb(theme::BORDER))
-                        .shadow_lg()
-                        .on_mouse_down_out(move |_, _, cx| {
-                            close
-                                .update(cx, |app, cx| {
-                                    app.channel_rows.account_menu = None;
-                                    app.channel_rows.account_menu_closed_at = Some(Instant::now());
-                                    cx.notify();
-                                })
-                                .ok();
-                        })
-                        .child(item),
-                ),
-        )
-        .with_priority(2)
-        .into_any_element(),
-    )
 }

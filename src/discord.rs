@@ -10,10 +10,10 @@ mod properties;
 pub mod remote_auth;
 mod rest;
 mod session;
-mod voice;
 #[cfg(test)]
 pub mod settings_fixtures;
 pub mod settings_proto;
+mod voice;
 
 use futures::channel::mpsc::{self, UnboundedReceiver};
 use gifs::{Gif, GifCategories, GifProvider};
@@ -34,6 +34,7 @@ pub use permissions::{
     channel_permissions,
 };
 pub use properties::USER_AGENT;
+pub use voice::{AudioDevice, MicTest, audio_devices};
 
 pub(crate) use cache::ProfileDetails;
 use cache::{Cache, CacheRequest, insert_bounded, insert_missing, missing_ids};
@@ -240,6 +241,34 @@ impl Session {
 
     pub fn set_noise_suppression(&self, enabled: bool) {
         self.inner.voice.set_noise_suppression(enabled);
+    }
+
+    pub fn set_input_device(&self, name: Option<String>) {
+        self.inner.voice.set_input_device(name);
+    }
+
+    pub fn set_output_device(&self, name: Option<String>) {
+        self.inner.voice.set_output_device(name);
+    }
+
+    pub fn set_input_volume(&self, gain: f32) {
+        self.inner.voice.set_input_volume(gain);
+    }
+
+    pub fn set_output_volume(&self, gain: f32) {
+        self.inner.voice.set_output_volume(gain);
+    }
+
+    pub fn set_input_sensitivity(&self, threshold_db: Option<f32>) {
+        self.inner.voice.set_input_sensitivity(threshold_db);
+    }
+
+    pub fn input_level(&self) -> Option<f32> {
+        self.inner.voice.input_level()
+    }
+
+    pub fn input_gate_open(&self) -> bool {
+        self.inner.voice.input_gate_open()
     }
 
     fn voice_command(&self, payload: serde_json::Value) {

@@ -8,35 +8,18 @@ mod fonts;
 mod media;
 mod quick_switcher;
 mod settings;
+mod startup;
 mod store;
 mod text;
 mod theme;
 
 use gpui::{
-    App, AppContext, Global, KeyBinding, TitlebarOptions, WindowBounds, WindowDecorations,
-    WindowOptions, actions, px, size,
+    AppContext, KeyBinding, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions,
+    actions, px, size,
 };
 use gpui_component::{Root, Theme, ThemeMode};
 
 actions!(zcord, [ZoomIn, ZoomOut, ResetZoom]);
-
-struct Zoom(usize);
-
-impl Global for Zoom {}
-
-const DEFAULT_ZOOM: usize = 5;
-
-fn set_zoom(index: usize, cx: &mut App) {
-    let index = index.min(theme::ZOOM_LEVELS.len() - 1);
-    cx.set_global(Zoom(index));
-    settings::update(cx, |settings| settings.zoom = Some(index));
-    Theme::global_mut(cx).font_size = px(theme::BASE_FONT_SIZE * theme::ZOOM_LEVELS[index]);
-    cx.refresh_windows();
-}
-
-fn zoom_index(cx: &App) -> usize {
-    cx.try_global::<Zoom>().map_or(DEFAULT_ZOOM, |zoom| zoom.0)
-}
 
 fn main() {
     env_logger::Builder::from_default_env()
@@ -59,7 +42,14 @@ fn main() {
             Theme::change(ThemeMode::Dark, None, cx);
             fonts::init(cx);
             settings::init(cx);
-            set_zoom(settings::get(cx).zoom.unwrap_or(DEFAULT_ZOOM), cx);
+            let saved = settings::get(cx);
+            settings::set_clock_24h(cx, saved.clock_24h);
+            settings::set_reduce_motion(cx, saved.reduce_motion);
+            settings::set_gif_autoplay(cx, !saved.gif_autoplay_off);
+            settings::set_emoji_animation(cx, !saved.emoji_animation_off);
+            settings::set_link_previews(cx, !saved.link_previews_off);
+            settings::set_chat_font_size(cx, saved.chat_font_size.unwrap_or(16.0));
+            theme::set_zoom(saved.zoom.unwrap_or(theme::DEFAULT_ZOOM), cx);
             cx.bind_keys([
                 KeyBinding::new("secondary-=", ZoomIn, None),
                 KeyBinding::new("secondary-+", ZoomIn, None),
@@ -73,9 +63,11 @@ fn main() {
                 KeyBinding::new("down", app::ComposerDown, Some("Input")),
                 KeyBinding::new("tab", app::ComposerTab, Some("Input")),
             ]);
-            cx.on_action(|_: &ZoomIn, cx| set_zoom(zoom_index(cx) + 1, cx));
-            cx.on_action(|_: &ZoomOut, cx| set_zoom(zoom_index(cx).saturating_sub(1), cx));
-            cx.on_action(|_: &ResetZoom, cx| set_zoom(DEFAULT_ZOOM, cx));
+            cx.on_action(|_: &ZoomIn, cx| theme::set_zoom(theme::zoom_index(cx) + 1, cx));
+            cx.on_action(|_: &ZoomOut, cx| {
+                theme::set_zoom(theme::zoom_index(cx).saturating_sub(1), cx)
+            });
+            cx.on_action(|_: &ResetZoom, cx| theme::set_zoom(theme::DEFAULT_ZOOM, cx));
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     settings::flush(cx);

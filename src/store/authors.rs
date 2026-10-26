@@ -19,6 +19,22 @@ impl Store {
     }
 
     pub(super) fn apply_user_update(&mut self, update: &model::UserUpdate) -> bool {
+        if update.id == self.current_user_id
+            && let Some(account) = &mut self.account
+        {
+            if !update.username.is_empty() {
+                account.username.clone_from(&update.username);
+            }
+            if let Some(email) = &update.email {
+                account.email.clone_from(email);
+            }
+            if let Some(phone) = &update.phone {
+                account.phone.clone_from(phone);
+            }
+            if let Some(mfa_enabled) = update.mfa_enabled {
+                account.mfa_enabled = mfa_enabled;
+            }
+        }
         let Some(user) = self.users.get_mut(&update.id) else {
             return false;
         };
