@@ -383,6 +383,7 @@ mod tests {
                 control,
                 commands,
                 generation: Arc::new(AtomicU64::new(0)),
+                voice: voice::VoiceManager::default(),
             }),
         }
     }

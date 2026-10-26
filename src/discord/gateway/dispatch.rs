@@ -88,6 +88,7 @@ pub(super) fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) 
                     if kind == "GUILD_CREATE" && guild.unavailable.is_none() {
                         guild.unavailable = Some(false);
                     }
+                    guild.fill_voice_state_guilds();
                     Event::GuildUpsert(Box::new(guild))
                 }),
             "GUILD_EMOJIS_UPDATE" => serde_json::from_value(value)
@@ -291,5 +292,22 @@ mod tests {
         assert!(commands.receiver.try_recv().is_err());
         commands.ready();
         assert_eq!(generation.load(Ordering::Acquire), 3);
+    }
+
+    #[test]
+    fn guild_create_fills_voice_state_guild_ids() {
+        let mut ignored = HashSet::new();
+        let event = dispatch(
+            "GUILD_CREATE",
+            json!({"id":"7","voice_states":[{"channel_id":"8","user_id":"9"}]}),
+            &mut ignored,
+        );
+        let Some(Event::GuildUpsert(guild)) = event else {
+            panic!("expected guild upsert");
+        };
+        assert_eq!(guild.voice_states.len(), 1);
+        assert_eq!(guild.voice_states[0].guild_id, Some(7));
+        assert_eq!(guild.voice_states[0].channel_id, Some(8));
+        assert_eq!(guild.voice_states[0].user_id, 9);
     }
 }

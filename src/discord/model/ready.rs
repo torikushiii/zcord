@@ -80,6 +80,7 @@ impl<'de> Deserialize<'de> for Ready {
                         if let Some(members) = wire.merged_members.get(index) {
                             guild.members = Some(parse_entries(members.clone()));
                         }
+                        guild.fill_voice_state_guilds();
                         Some(guild)
                     }
                     Err(_) => {

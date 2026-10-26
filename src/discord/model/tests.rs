@@ -1774,3 +1774,39 @@ fn message_request_previews_keep_null_and_malformed_entries() {
     assert!(previews[0].message_preview.is_none());
     assert!(previews[1].message_preview.is_none());
 }
+
+#[test]
+fn ready_and_voice_state_fill_voice_channel_members() {
+    let mut payload: Value = serde_json::from_str(include_str!("../fixtures/ready.json")).unwrap();
+    payload["guilds"][0]["voice_states"] = json!([
+        {"channel_id": "2005", "user_id": "2", "self_mute": true, "self_deaf": false,
+         "mute": false, "deaf": false, "self_stream": true, "self_video": false, "suppress": false},
+        {"channel_id": null, "user_id": "1"}
+    ]);
+    let ready: Ready = serde_json::from_value(payload).unwrap();
+    let states = &ready.guilds[0].voice_states;
+    assert_eq!(states.len(), 2);
+    assert_eq!(states[0].guild_id, Some(200));
+    assert_eq!(states[0].channel_id, Some(2005));
+    assert_eq!(states[0].user_id, 2);
+    assert!(states[0].self_mute);
+    assert!(states[0].self_stream);
+    assert_eq!(states[1].channel_id, None);
+    assert_eq!(states[1].guild_id, Some(200));
+
+    let update: VoiceState = serde_json::from_value(json!({
+        "guild_id": "200", "channel_id": "2005", "user_id": "3",
+        "self_mute": false, "self_deaf": true, "mute": true, "deaf": false,
+        "self_video": true, "suppress": true,
+        "member": {"user": {"id": "3", "username": "speaker"}, "roles": ["201"]}
+    }))
+    .unwrap();
+    assert_eq!(update.guild_id, Some(200));
+    assert_eq!(update.channel_id, Some(2005));
+    assert!(
+        update
+            .member
+            .as_ref()
+            .is_some_and(|member| member.id() == Some(3))
+    );
+}

@@ -97,6 +97,8 @@ pub struct MergedPresences {
 pub struct ReadySupplemental {
     #[serde(default)]
     pub guilds: Vec<Value>,
+    #[serde(default, deserialize_with = "entries")]
+    pub users: Vec<User>,
     #[serde(default, deserialize_with = "entry_groups")]
     pub merged_members: Vec<Vec<PartialMember>>,
     #[serde(default, deserialize_with = "default_value")]

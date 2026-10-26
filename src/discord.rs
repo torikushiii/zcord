@@ -10,6 +10,7 @@ mod properties;
 pub mod remote_auth;
 mod rest;
 mod session;
+mod voice;
 #[cfg(test)]
 pub mod settings_fixtures;
 pub mod settings_proto;
@@ -29,7 +30,7 @@ use std::{
 use tokio::sync::{Mutex as AsyncMutex, watch};
 
 pub use permissions::{
-    MANAGE_MESSAGES, SEND_MESSAGES, USE_EXTERNAL_EMOJIS, VIEW_CHANNEL, can_view,
+    CONNECT, MANAGE_MESSAGES, SEND_MESSAGES, USE_EXTERNAL_EMOJIS, VIEW_CHANNEL, can_view,
     channel_permissions,
 };
 pub use properties::USER_AGENT;
@@ -39,11 +40,16 @@ use cache::{Cache, CacheRequest, insert_bounded, insert_missing, missing_ids};
 pub use error::*;
 pub use event::*;
 
+#[derive(Clone)]
 pub struct Secret(String);
 
 impl Secret {
     pub fn into_inner(self) -> String {
         self.0
+    }
+
+    pub(crate) fn expose(&self) -> &str {
+        &self.0
     }
 }
 
@@ -70,6 +76,7 @@ struct Inner {
     control: watch::Sender<Control>,
     commands: tokio::sync::mpsc::UnboundedSender<(u64, commands::Command)>,
     generation: Arc<AtomicU64>,
+    voice: voice::VoiceManager,
 }
 
 #[derive(Clone)]
@@ -103,6 +110,12 @@ impl Session {
             .map_err(|_| Error::Network);
         let (commands, command_receiver) = tokio::sync::mpsc::unbounded_channel();
         let generation = Arc::new(AtomicU64::new(0));
+        let voice = voice::VoiceManager::new(
+            runtime,
+            sender.clone(),
+            commands.clone(),
+            generation.clone(),
+        );
         let session = Self {
             inner: Arc::new(Inner {
                 rest,
@@ -113,6 +126,7 @@ impl Session {
                 control,
                 commands,
                 generation: generation.clone(),
+                voice: voice.clone(),
             }),
         };
         let owner = Arc::downgrade(&session.inner);
@@ -123,6 +137,7 @@ impl Session {
             owner,
             command_receiver,
             generation,
+            voice,
         ));
         (session, receiver)
     }
@@ -194,6 +209,41 @@ impl Session {
         for command in commands::members(guild_id, &user_ids) {
             self.command(command);
         }
+    }
+
+    pub fn join_voice(&self, guild_id: u64, channel_id: u64) {
+        let payload = self.inner.voice.join(guild_id, channel_id);
+        self.voice_command(payload);
+    }
+
+    pub fn leave_voice(&self) {
+        if let Some(payload) = self.inner.voice.leave() {
+            self.voice_command(payload);
+        }
+    }
+
+    pub fn set_self_mute(&self, mute: bool) {
+        if let Some(payload) = self.inner.voice.set_mute(mute) {
+            self.voice_command(payload);
+        }
+    }
+
+    pub fn set_self_deaf(&self, deaf: bool) {
+        if let Some(payload) = self.inner.voice.set_deaf(deaf) {
+            self.voice_command(payload);
+        }
+    }
+
+    fn voice_command(&self, payload: serde_json::Value) {
+        let generation = self.inner.generation.load(Ordering::Acquire);
+        if generation % 2 == 0 || *self.inner.control.borrow() != Control::Running {
+            log::debug!("Deferring voice state update until the gateway is ready");
+            return;
+        }
+        let _ = self
+            .inner
+            .commands
+            .send((generation, commands::voice_state(payload)));
     }
 }
 

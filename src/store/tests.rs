@@ -17,6 +17,7 @@ mod performance;
 mod reactions;
 mod read_state;
 mod settings;
+mod voice;
 
 pub(super) fn ready() -> model::Ready {
     serde_json::from_str(include_str!("../discord/fixtures/ready.json")).unwrap()

@@ -12,6 +12,7 @@ mod relationship;
 mod serde_helpers;
 mod settings;
 mod user;
+mod voice;
 
 pub use channel::*;
 pub use component::*;
@@ -27,6 +28,7 @@ pub use relationship::*;
 pub use serde_helpers::*;
 pub use settings::*;
 pub use user::*;
+pub use voice::*;
 
 #[cfg(test)]
 mod tests;
