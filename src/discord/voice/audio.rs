@@ -2,6 +2,7 @@ use cpal::{
     FromSample, Sample, SampleFormat, SizedSample, Stream, StreamConfig,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
+use nnnoiseless::DenoiseState;
 use opus::{Application, Bitrate, Channels, Decoder, Encoder};
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
@@ -19,13 +20,16 @@ const FRAME_SAMPLES: usize = 960;
 const FRAME_VALUES: usize = FRAME_SAMPLES * 2;
 const MAX_OPUS_FRAME: usize = 5760;
 const VAD_THRESHOLD_DB: f32 = -50.0;
+const VOICE_PROBABILITY_THRESHOLD: f32 = 0.5;
 const VAD_HANGOVER: Duration = Duration::from_millis(300);
+const RNNOISE_FRAME_SAMPLES: usize = 480;
 const PLAYBACK_LIMIT: usize = FRAME_VALUES * 10;
 const MAX_OPUS_PAYLOAD: usize = 1275;
 
 pub(super) struct Flags {
     pub mute: AtomicBool,
     pub deaf: AtomicBool,
+    pub noise_suppression: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -36,6 +40,7 @@ impl AudioFlags {
         Self(Arc::new(Flags {
             mute: AtomicBool::new(false),
             deaf: AtomicBool::new(false),
+            noise_suppression: AtomicBool::new(true),
         }))
     }
 
@@ -50,6 +55,14 @@ impl AudioFlags {
 
     fn deafened(&self) -> bool {
         self.0.deaf.load(Ordering::Relaxed)
+    }
+
+    pub fn set_noise_suppression(&self, enabled: bool) {
+        self.0.noise_suppression.store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn noise_suppression(&self) -> bool {
+        self.0.noise_suppression.load(Ordering::Relaxed)
     }
 }
 
@@ -508,6 +521,52 @@ fn send_stop(outgoing: &UnboundedSender<Outgoing>, speaking: &mut bool) {
     }
 }
 
+#[derive(Default)]
+struct Denoiser {
+    state: Option<Box<DenoiseState<'static>>>,
+    primed: bool,
+}
+
+impl Denoiser {
+    fn process(&mut self, frame: &mut [f32], enabled: bool) -> Option<f32> {
+        if !enabled {
+            self.state = None;
+            self.primed = false;
+            return None;
+        }
+
+        if self.state.is_none() {
+            self.state = Some(DenoiseState::new());
+            self.primed = false;
+        }
+        let Some(state) = self.state.as_mut() else {
+            return None;
+        };
+        // nnnoiseless expects i16-scaled samples in 480-sample blocks, and its
+        // first block fades in: https://docs.rs/nnnoiseless/0.5.2/nnnoiseless/struct.DenoiseState.html
+        let mut mono = [0.0; RNNOISE_FRAME_SAMPLES];
+        let mut denoised = [0.0; RNNOISE_FRAME_SAMPLES];
+        let mut voice_probability = 0.0f32;
+        for block in frame.chunks_exact_mut(RNNOISE_FRAME_SAMPLES * 2) {
+            for (sample, pair) in mono.iter_mut().zip(block.chunks_exact(2)) {
+                *sample = (pair[0] + pair[1]) * 0.5 * f32::from(i16::MAX);
+            }
+            let probability = state.process_frame(&mut denoised, &mono);
+            if self.primed {
+                voice_probability = voice_probability.max(probability);
+                for (pair, sample) in block.chunks_exact_mut(2).zip(denoised) {
+                    let value = (sample / f32::from(i16::MAX)).clamp(-1.0, 1.0);
+                    pair.fill(value);
+                }
+            } else {
+                block.fill(0.0);
+                self.primed = true;
+            }
+        }
+        Some(voice_probability)
+    }
+}
+
 fn run_input(
     outgoing: UnboundedSender<Outgoing>,
     flags: AudioFlags,
@@ -539,6 +598,7 @@ fn run_input(
         let _ = encoder.set_bitrate(Bitrate::Bits(64_000));
     }
     let mut capture_48k = Vec::new();
+    let mut denoiser = Denoiser::default();
     let mut gate = VoiceGate::default();
     let mut speaking = false;
     let mut next_input_check = Instant::now() + Duration::from_secs(3);
@@ -571,14 +631,16 @@ fn run_input(
         }
 
         while capture_48k.len() >= FRAME_VALUES {
-            let frame: Vec<f32> = capture_48k.drain(..FRAME_VALUES).collect();
+            let mut frame: Vec<f32> = capture_48k.drain(..FRAME_VALUES).collect();
             mic_frames.fetch_add(1, Ordering::Relaxed);
             let muted = flags.muted() || flags.deafened();
+            let voice_probability =
+                denoiser.process(&mut frame, !muted && flags.noise_suppression());
             let open = if muted {
                 gate.close();
                 false
             } else {
-                gate.update(&frame, Instant::now())
+                gate.update(&frame, voice_probability, Instant::now())
             };
             if open && !speaking {
                 let _ = outgoing.send(Outgoing::Speaking(true));
@@ -914,7 +976,7 @@ pub(super) struct VoiceGate {
 }
 
 impl VoiceGate {
-    pub fn update(&mut self, frame: &[f32], now: Instant) -> bool {
+    pub fn update(&mut self, frame: &[f32], voice_probability: Option<f32>, now: Instant) -> bool {
         let rms = (frame.iter().map(|sample| sample * sample).sum::<f32>()
             / frame.len().max(1) as f32)
             .sqrt();
@@ -923,7 +985,9 @@ impl VoiceGate {
         } else {
             20.0 * rms.log10()
         };
-        if db >= VAD_THRESHOLD_DB {
+        let voiced =
+            voice_probability.is_none_or(|probability| probability >= VOICE_PROBABILITY_THRESHOLD);
+        if db >= VAD_THRESHOLD_DB && voiced {
             self.open = true;
             self.last_voice = Some(now);
         } else if self.open
@@ -1246,6 +1310,72 @@ mod tests {
         output
     }
 
+    fn noise_frame(state: &mut u32) -> Vec<f32> {
+        (0..FRAME_VALUES)
+            .map(|_| {
+                *state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let unit = (*state as f64 / u32::MAX as f64) * 2.0 - 1.0;
+                (unit * 0.1732) as f32
+            })
+            .collect()
+    }
+
+    fn rms(frame: &[f32]) -> f32 {
+        (frame.iter().map(|sample| sample * sample).sum::<f32>() / frame.len() as f32).sqrt()
+    }
+
+    #[test]
+    fn denoiser_reduces_synthetic_noise_after_warm_up() {
+        let mut denoiser = Denoiser::default();
+        let mut lcg = 0x1234_5678;
+        let mut input_energy = 0.0f64;
+        let mut output_energy = 0.0f64;
+        let mut frames = 0u32;
+        for index in 0..60 {
+            let mut frame = noise_frame(&mut lcg);
+            if index >= 50 {
+                input_energy += f64::from(rms(&frame)).powi(2);
+            }
+            let _ = denoiser.process(&mut frame, true);
+            if index >= 50 {
+                output_energy += f64::from(rms(&frame)).powi(2);
+                frames += 1;
+            }
+        }
+        let input_rms = (input_energy / f64::from(frames)).sqrt();
+        let output_rms = (output_energy / f64::from(frames)).sqrt();
+        println!(
+            "denoiser RMS: input={input_rms:.6} output={output_rms:.6} ratio={:.3}",
+            output_rms / input_rms
+        );
+        assert!(
+            output_rms < 0.6 * input_rms,
+            "input rms {input_rms:.6}, output rms {output_rms:.6}"
+        );
+    }
+
+    #[test]
+    fn denoiser_preserves_frame_length_and_channels() {
+        let mut denoiser = Denoiser::default();
+        let mut lcg = 0x0BAD_F00D;
+        for _ in 0..10 {
+            let mut frame = noise_frame(&mut lcg);
+            assert!(denoiser.process(&mut frame, true).is_some());
+            assert_eq!(frame.len(), FRAME_VALUES);
+            assert!(frame.chunks_exact(2).all(|pair| pair[0] == pair[1]));
+        }
+    }
+
+    #[test]
+    fn denoiser_disabled_leaves_frame_unchanged() {
+        let mut denoiser = Denoiser::default();
+        let mut lcg = 0xCAFE_BABE;
+        let mut frame = noise_frame(&mut lcg);
+        let original = frame.clone();
+        assert_eq!(denoiser.process(&mut frame, false), None);
+        assert_eq!(frame, original);
+    }
+
     #[test]
     fn microphone_queue_keeps_device_samples_for_one_worker_resample() {
         for rate in [44_100, 48_000, 96_000] {
@@ -1380,12 +1510,26 @@ mod tests {
         let loud = vec![0.01; FRAME_VALUES];
         let quiet = vec![0.0001; FRAME_VALUES];
         let mut gate = VoiceGate::default();
-        assert!(!gate.update(&quiet, start));
-        assert!(gate.update(&loud, start));
-        assert!(gate.update(&quiet, start + Duration::from_millis(200)));
-        assert!(!gate.update(&quiet, start + Duration::from_millis(301)));
+        assert!(!gate.update(&quiet, None, start));
+        assert!(gate.update(&loud, None, start));
+        assert!(gate.update(&quiet, None, start + Duration::from_millis(200)));
+        assert!(!gate.update(&quiet, None, start + Duration::from_millis(301)));
         gate.close();
-        assert!(!gate.update(&quiet, start + Duration::from_millis(400)));
+        assert!(!gate.update(&quiet, None, start + Duration::from_millis(400)));
+    }
+
+    #[test]
+    fn voice_probability_closes_gate_on_loud_frames() {
+        let start = Instant::now();
+        let loud = vec![0.01; FRAME_VALUES];
+        let mut gate = VoiceGate::default();
+        assert!(!gate.update(&loud, Some(0.0), start));
+        assert!(gate.update(&loud, Some(VOICE_PROBABILITY_THRESHOLD), start));
+        assert!(gate.update(&loud, Some(0.0), start + Duration::from_millis(299)));
+        assert!(!gate.update(&loud, Some(0.0), start + Duration::from_millis(300)));
+
+        let mut gate = VoiceGate::default();
+        assert!(gate.update(&loud, None, start));
     }
 
     #[test]
