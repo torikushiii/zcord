@@ -1,4 +1,4 @@
-use crate::images::{self, ImageSpec};
+use crate::media::images::{self, ImageSpec};
 use anyhow::{Context, Result, ensure};
 use gpui::{
     App, DefiniteLength, Element, ElementId, EntityId, Global, GlobalElementId, Hitbox,
@@ -1483,7 +1483,9 @@ mod tests {
             clicks: clicks.clone(),
         });
         for expected in 1..=3 {
-            clock.background_executor.advance_clock(Duration::from_millis(100));
+            clock
+                .background_executor
+                .advance_clock(Duration::from_millis(100));
             view.update(cx, |_, cx| cx.notify());
             cx.update(|window, cx| {
                 let _ = window.draw(cx);
@@ -1493,7 +1495,9 @@ mod tests {
         }
         let position = gpui::point(px(16.), px(16.));
         cx.simulate_mouse_down(position, gpui::MouseButton::Left, gpui::Modifiers::none());
-        clock.background_executor.advance_clock(Duration::from_millis(100));
+        clock
+            .background_executor
+            .advance_clock(Duration::from_millis(100));
         view.update(cx, |_, cx| cx.notify());
         cx.update(|window, cx| {
             let _ = window.draw(cx);

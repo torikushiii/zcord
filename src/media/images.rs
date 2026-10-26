@@ -579,7 +579,7 @@ pub fn init(cx: &mut App) {
         refresh_pending: false,
     }))));
     #[cfg(windows)]
-    crate::video::init(cx);
+    crate::media::video::init(cx);
 }
 
 pub(crate) fn download_service(cx: &App) -> Option<Arc<Service>> {

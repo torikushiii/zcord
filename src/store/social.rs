@@ -1,5 +1,5 @@
 use super::*;
-use crate::images::ImageSpec;
+use crate::media::images::ImageSpec;
 use std::{
     collections::HashSet,
     time::{Duration, UNIX_EPOCH},
@@ -154,8 +154,8 @@ fn game_activity(activity: &model::Activity) -> GameActivity {
         .map(str::trim)
         .filter(|platform| !platform.is_empty())
         .map(str::to_lowercase);
-    let embedded = activity.flags & EMBEDDED_ACTIVITY_FLAG != 0
-        || platform.as_deref() == Some("embedded");
+    let embedded =
+        activity.flags & EMBEDDED_ACTIVITY_FLAG != 0 || platform.as_deref() == Some("embedded");
     let playable = activity.flags & PLAY_ACTIVITY_FLAG != 0;
     GameActivity {
         name: activity.name.clone(),

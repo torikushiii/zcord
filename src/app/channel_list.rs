@@ -7,11 +7,11 @@ use gpui::{prelude::*, *};
 use gpui_component::tooltip::Tooltip;
 
 use crate::{
-    animated,
     app::{DiscordApp, home, member_list, message_body::label, profile},
-    emoji,
-    images::{self, ImageSpec},
+    media::animated,
+    media::images::{self, ImageSpec},
     store::{Channel, ChannelKind, Guild, Status, StatusEmoji, User},
+    text::emoji,
     theme::{self, WithoutTextSelection, rpx},
 };
 
@@ -264,7 +264,9 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
         .flex_none()
         .border_r_1()
         .border_color(rgb(theme::BORDER))
-        .when(!banner, |this| this.child(guild_header(app, 1., window, cx)))
+        .when(!banner, |this| {
+            this.child(guild_header(app, 1., window, cx))
+        })
         .child(
             list(app.channel_rows.state.clone(), move |index, window, cx| {
                 let Some(app_entity) = entity.upgrade() else {
@@ -359,11 +361,7 @@ fn banner_hover_listener(app: &DiscordApp) -> impl Fn(&bool, &mut Window, &mut A
                 if app.selected_guild_id != guild_id {
                     return;
                 }
-                if app
-                    .channel_rows
-                    .banner_hover
-                    .set(*hovered, Instant::now())
-                {
+                if app.channel_rows.banner_hover.set(*hovered, Instant::now()) {
                     cx.notify();
                 }
             })

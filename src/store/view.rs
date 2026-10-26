@@ -1,6 +1,6 @@
 use crate::discord::model;
 pub use crate::discord::model::Attachment;
-use crate::images::ImageSpec;
+use crate::media::images::ImageSpec;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -501,8 +501,8 @@ impl Attachment {
         if !self.is_video() {
             return None;
         }
-        crate::images::trusted_video_url(&self.proxy_url)
-            .or_else(|| crate::images::trusted_video_url(&self.url))
+        crate::media::images::trusted_video_url(&self.proxy_url)
+            .or_else(|| crate::media::images::trusted_video_url(&self.url))
     }
 
     pub fn video_poster_spec(&self) -> Option<ImageSpec> {
@@ -807,8 +807,7 @@ impl Invite {
                     .map(InviteBanner::Banner)
             })
             .or_else(|| {
-                hash(guild.and_then(|guild| guild.banner.as_ref()))
-                    .map(InviteBanner::GuildBanner)
+                hash(guild.and_then(|guild| guild.banner.as_ref())).map(InviteBanner::GuildBanner)
             })
             .or_else(|| {
                 hash(guild.and_then(|guild| guild.splash.as_ref())).map(InviteBanner::Splash)

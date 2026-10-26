@@ -1,0 +1,82 @@
+use super::*;
+
+impl Store {
+    pub(super) fn rebuild_rail(&mut self) {
+        let mut listed = std::collections::HashSet::new();
+        let mut ordered = Vec::new();
+        for folder in self.folder_layout.iter().flatten() {
+            let ids: Vec<_> = folder
+                .guild_ids
+                .iter()
+                .copied()
+                .filter(|id| self.guild_indices.contains_key(id) && listed.insert(*id))
+                .collect();
+            if ids.is_empty() {
+                continue;
+            }
+            if let Some(id) = folder.id {
+                ordered.push(RailEntry::Folder(Folder {
+                    id,
+                    name: folder.name.clone(),
+                    color: folder.color,
+                    guild_ids: ids,
+                }));
+            } else {
+                ordered.extend(ids.into_iter().map(RailEntry::Guild));
+            }
+        }
+        self.rail = self
+            .rail_order
+            .iter()
+            .copied()
+            .filter(|id| self.guild_indices.contains_key(id) && !listed.contains(id))
+            .map(RailEntry::Guild)
+            .chain(ordered)
+            .collect();
+    }
+
+    pub(super) fn guild_upsert(&mut self, update: Box<model::Guild>) -> Change {
+        let id = update.id;
+        if !self.guild_indices.contains_key(&id) {
+            self.rail_order.insert(0, id);
+            for folder in self.folder_layout.iter_mut().flatten() {
+                folder.guild_ids.retain(|guild| *guild != id);
+            }
+        }
+        if let Some(source) = &mut self.source {
+            if let Some(guild) = source.guilds.iter_mut().find(|g| g.id == id) {
+                guild.merge(&update);
+            } else {
+                source.guilds.push(*update);
+            }
+        }
+        self.sync_guild_social(id);
+        self.rebuild_structure(Some(id));
+        Change::Structure
+    }
+
+    pub(super) fn guild_emojis_update(&mut self, update: model::GuildEmojisUpdate) -> Change {
+        if let Some(guild) = self
+            .source
+            .as_mut()
+            .and_then(|source| source.guilds.iter_mut().find(|g| g.id == update.guild_id))
+        {
+            guild.emojis = Some(update.emojis);
+            let id = update.guild_id;
+            self.rebuild_structure(Some(id));
+            Change::Structure
+        } else {
+            Change::None
+        }
+    }
+
+    pub(super) fn guild_delete(&mut self, id: u64) -> Change {
+        self.social.guilds.remove(&id);
+        self.rail_order.retain(|guild| *guild != id);
+        if let Some(source) = &mut self.source {
+            source.guilds.retain(|g| g.id != id);
+        }
+        self.rebuild_structure(Some(id));
+        Change::Structure
+    }
+}

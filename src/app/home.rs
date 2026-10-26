@@ -10,7 +10,7 @@ use std::{
 use crate::{
     app::{DiscordApp, chat, member_list, message_body::label, profile::presence_art, set_text},
     discord::{Event, model::PublicApplication},
-    images::{self, ImageSpec},
+    media::images::{self, ImageSpec},
     store::{GameActivity, PrivateChannel, RelationshipKind, Status, Store, User},
     theme::{self, WithoutTextSelection, rpx},
 };
@@ -147,6 +147,7 @@ impl DiscordApp {
                 });
             });
         }
+        self.focus_composer(window, cx);
         cx.notify();
     }
 

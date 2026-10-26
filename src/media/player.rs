@@ -1,6 +1,6 @@
 use crate::{
     app::DiscordApp,
-    images::{self, ImageSpec},
+    media::images::{self, ImageSpec},
     theme::{self, rpx},
 };
 use gpui::{prelude::*, *};

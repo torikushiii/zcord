@@ -5,10 +5,11 @@ use gpui::{
 };
 
 use super::{
-    BANNER_HEIGHT, BANNER_HOVER_FADE, BannerHover, FOLD, HEADER_HEIGHT, Row, Rows, WIDTH, row_content,
+    BANNER_HEIGHT, BANNER_HOVER_FADE, BannerHover, FOLD, HEADER_HEIGHT, Row, Rows, WIDTH,
+    row_content,
 };
 use crate::{
-    images::ImageSpec,
+    media::images::ImageSpec,
     store::{Category, Channel, ChannelKind, Guild},
     theme::rpx,
 };

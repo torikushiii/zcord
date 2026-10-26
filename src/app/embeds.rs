@@ -12,8 +12,9 @@ use crate::{
         emoji_picker::PickerTarget,
         message_body::{BodyContext, render_body, wrapped_label},
     },
-    emoji, images,
+    media::images,
     store::{Component, Embed, EmbedField, EmbedKind, GalleryItem, Media, Reaction, ReactionEmoji},
+    text::emoji,
     theme::{self, WithoutTextSelection, rpx},
 };
 
@@ -188,7 +189,7 @@ fn image_box(media: &Media, width: f32, height: f32, radius: f32, cx: &App) -> D
     let pixels = theme::image_px(width.max(height));
     let spec = media.spec();
     let frames = animated_media(media)
-        .then(|| crate::animated::resolve(&spec, pixels, cx))
+        .then(|| crate::media::animated::resolve(&spec, pixels, cx))
         .flatten();
     let still_spec = if media.animated {
         images::ImageSpec::Media {
@@ -202,7 +203,7 @@ fn image_box(media: &Media, width: f32, height: f32, radius: f32, cx: &App) -> D
     };
     let child = match frames {
         Some(image) => Some(
-            crate::animated::image(image)
+            crate::media::animated::image(image)
                 .absolute()
                 .inset_0()
                 .size_full()
@@ -245,7 +246,7 @@ fn gifv_box(
     );
     let pixels = theme::image_px(width.max(height));
     let playing = video.and_then(|video| {
-        crate::video::resolve(&video.video_spec(), pixels, cx).map(|frames| (video, frames))
+        crate::media::video::resolve(&video.video_spec(), pixels, cx).map(|frames| (video, frames))
     });
     let element = match playing {
         Some((video, frames)) => div()
@@ -255,7 +256,7 @@ fn gifv_box(
             .rounded(rpx(8.))
             .overflow_hidden()
             .child(
-                crate::animated::image(frames)
+                crate::media::animated::image(frames)
                     .size_full()
                     .object_fit(ObjectFit::Cover)
                     .rounded(rpx(8.))
@@ -472,7 +473,13 @@ pub fn render_embed(
                 .flex()
                 .flex_col()
                 .mt_1()
-                .child(gifv_box(app, key(IMAGE_SLOT), media, embed.video.as_ref(), cx))
+                .child(gifv_box(
+                    app,
+                    key(IMAGE_SLOT),
+                    media,
+                    embed.video.as_ref(),
+                    cx,
+                ))
                 .child(
                     div()
                         .mt(rpx(4.))
@@ -647,17 +654,20 @@ pub fn render_embed(
             .or(embed.images.first())
             .map(Media::spec)
             .or_else(|| {
-                embed.video.as_ref().map(|video| images::ImageSpec::VideoPoster {
-                    id: key(VIDEO_SLOT),
-                    url: video.url.clone(),
-                    width: video.width,
-                    height: video.height,
-                })
+                embed
+                    .video
+                    .as_ref()
+                    .map(|video| images::ImageSpec::VideoPoster {
+                        id: key(VIDEO_SLOT),
+                        url: video.url.clone(),
+                        width: video.width,
+                        height: video.height,
+                    })
             });
         let dimensions = video_dimensions.expect("playable video has dimensions");
-        let player = crate::player::video_box(
+        let player = crate::media::player::video_box(
             app,
-            crate::player::Video {
+            crate::media::player::Video {
                 key: key(VIDEO_SLOT),
                 url,
                 poster,
@@ -1223,7 +1233,7 @@ fn emoji_element(emoji: &ReactionEmoji, size: f32, cx: &App) -> AnyElement {
             let pixels = theme::image_px(size);
             let frames = emoji
                 .animated
-                .then(|| crate::animated::resolve(&spec, pixels, cx))
+                .then(|| crate::media::animated::resolve(&spec, pixels, cx))
                 .flatten();
             let still_spec = images::ImageSpec::Emoji {
                 id,
@@ -1231,7 +1241,7 @@ fn emoji_element(emoji: &ReactionEmoji, size: f32, cx: &App) -> AnyElement {
             };
             let child = match frames {
                 Some(image) => Some(
-                    crate::animated::image(image)
+                    crate::media::animated::image(image)
                         .size_full()
                         .object_fit(ObjectFit::Contain)
                         .id(("emoji", id))

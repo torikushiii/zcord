@@ -8,8 +8,9 @@ use crate::{
         message_body::{label, preview_pieces},
         rich_text::rich_text,
     },
-    emoji, images,
+    media::images,
     store::{ForumPost, ForumTag, StatusEmoji, Timestamp},
+    text::emoji,
     theme::{self, WithoutTextSelection, rpx},
 };
 
