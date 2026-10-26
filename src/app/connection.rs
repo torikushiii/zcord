@@ -14,19 +14,22 @@ impl DiscordApp {
             cx.notify();
             return;
         }
-        form.busy = true;
-        form.error = None;
+        self.login_with_token(token, window, cx);
+    }
+
+    pub(crate) fn login_with_token(
+        &mut self,
+        token: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Screen::Login(form) = &mut self.screen {
+            form.busy = true;
+            form.error = None;
+        }
         self.pending_token = Some(token.clone());
         self.connect(token, window, cx);
         cx.notify();
-    }
-
-    pub(crate) fn open_demo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.disconnect();
-        self.live = false;
-        self.store = Store::seed();
-        self.screen = Screen::Chat;
-        self.select_first_guild(window, cx);
     }
 
     pub(crate) fn log_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {

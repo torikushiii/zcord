@@ -7,6 +7,7 @@ pub mod gifs;
 pub mod model;
 mod permissions;
 mod properties;
+pub mod remote_auth;
 mod rest;
 mod session;
 #[cfg(test)]
@@ -38,7 +39,13 @@ use cache::{Cache, CacheRequest, insert_bounded, insert_missing, missing_ids};
 pub use error::*;
 pub use event::*;
 
-struct Secret(String);
+pub struct Secret(String);
+
+impl Secret {
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
 
 impl fmt::Debug for Secret {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -22,38 +22,11 @@ pub(super) struct Rest {
 
 impl Rest {
     pub fn new(token: &str) -> Result<Self, Error> {
-        let mut headers = HeaderMap::new();
         let mut authorization =
             HeaderValue::from_str(token).map_err(|_| Error::InvalidCredential)?;
         authorization.set_sensitive(true);
+        let mut headers = client_headers()?;
         headers.insert(AUTHORIZATION, authorization);
-        headers.insert(USER_AGENT, HeaderValue::from_static(properties::USER_AGENT));
-        for (name, value) in [
-            ("accept", "*/*"),
-            ("accept-language", properties::ACCEPT_LANGUAGE),
-            ("priority", "u=1, i"),
-            ("sec-ch-ua", properties::SEC_CH_UA),
-            ("sec-ch-ua-mobile", "?0"),
-            ("sec-ch-ua-platform", "\"Windows\""),
-            ("sec-fetch-dest", "empty"),
-            ("sec-fetch-mode", "cors"),
-            ("sec-fetch-site", "same-origin"),
-            ("x-debug-options", "bugReporterEnabled"),
-        ] {
-            headers.insert(name, HeaderValue::from_static(value));
-        }
-        headers.insert(
-            "x-super-properties",
-            HeaderValue::from_str(&properties::super_properties()).map_err(|_| Error::Decode)?,
-        );
-        headers.insert(
-            "x-discord-locale",
-            HeaderValue::from_static(properties::LOCALE),
-        );
-        headers.insert(
-            "x-discord-timezone",
-            HeaderValue::from_str(&properties::timezone()).map_err(|_| Error::Decode)?,
-        );
         let client = Client::builder()
             .default_headers(headers)
             .cookie_store(true)
@@ -103,6 +76,38 @@ impl Rest {
         }
         Ok(response)
     }
+}
+
+pub(super) fn client_headers() -> Result<HeaderMap, Error> {
+    let mut headers = HeaderMap::new();
+    headers.insert(USER_AGENT, HeaderValue::from_static(properties::USER_AGENT));
+    for (name, value) in [
+        ("accept", "*/*"),
+        ("accept-language", properties::ACCEPT_LANGUAGE),
+        ("priority", "u=1, i"),
+        ("sec-ch-ua", properties::SEC_CH_UA),
+        ("sec-ch-ua-mobile", "?0"),
+        ("sec-ch-ua-platform", "\"Windows\""),
+        ("sec-fetch-dest", "empty"),
+        ("sec-fetch-mode", "cors"),
+        ("sec-fetch-site", "same-origin"),
+        ("x-debug-options", "bugReporterEnabled"),
+    ] {
+        headers.insert(name, HeaderValue::from_static(value));
+    }
+    headers.insert(
+        "x-super-properties",
+        HeaderValue::from_str(&properties::super_properties()).map_err(|_| Error::Decode)?,
+    );
+    headers.insert(
+        "x-discord-locale",
+        HeaderValue::from_static(properties::LOCALE),
+    );
+    headers.insert(
+        "x-discord-timezone",
+        HeaderValue::from_str(&properties::timezone()).map_err(|_| Error::Decode)?,
+    );
+    Ok(headers)
 }
 
 const ACK_BULK_LIMIT: usize = 100;
