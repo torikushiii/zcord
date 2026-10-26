@@ -198,6 +198,7 @@ impl DiscordApp {
                     card.user_id == user_id && card.guild_id == guild_id
                 }) && kind == ProfileKind::Modal {
                     card.modal_request_pending = false;
+                    cx.notify();
                 }
                 match result {
                     Ok(Ok(profile)) => app.profile_loaded(user_id, guild_id, kind, profile, cx),
