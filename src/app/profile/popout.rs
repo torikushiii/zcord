@@ -374,7 +374,7 @@ pub(super) fn display_names(
                 }))
                 .children(profile.and_then(|profile| badges(app, card, profile, palette, cx))),
         )
-        .when(!large, |this| {
+        .when(!large && card.user_id != app.store.current_user_id, |this| {
             this.children(profile.and_then(|profile| mutuals_line(app, profile, palette, cx)))
         })
 }
