@@ -6,7 +6,7 @@ Zed's GPUI, and [gpui-component](https://github.com/zeronsh/gpui-component). It 
 Linux and macOS, but Windows is the platform it is made and tested for.
 
 zcord aims to look and feel like the official desktop client while starting faster and using
-far less memory. Text chat is the focus today; voice comes later.
+far less memory. Text chat is the focus; voice is newer and still rough.
 
 > [!IMPORTANT]
 > Third-party clients are against Discord's Terms of Service, and accounts can be disabled for
@@ -29,12 +29,15 @@ far less memory. Text chat is the focus today; voice comes later.
 - **Home:** friends, direct messages, group DMs, and message requests.
 - **Navigation:** quick switcher (`Ctrl K` / `Ctrl T`), smooth scrolling, `Esc` to jump to the
   latest message.
+- **Voice:** join server voice channels, see who's in them and who's speaking, mute and
+  deafen. Calls are end-to-end encrypted with Discord's DAVE protocol.
 - **Login:** QR code from the Discord mobile app, or a token.
 - **Comfort:** custom title bar, Discord's zoom levels (`Ctrl +` / `Ctrl -` / `Ctrl 0`), and the
   window size, position and zoom are remembered. Uses Discord's gg sans font if you place it in
   `%APPDATA%\zcord\fonts` (it can't be bundled), otherwise Noto Sans.
 
-**Planned:** voice and video calls, and screen sharing. Until then, use the official client for those.
+**Planned:** DM and group calls, video, Go Live and screen sharing. Until then, use the official
+client for those.
 
 ## Logging in
 
@@ -78,7 +81,9 @@ get it back.
 ## Building
 
 There are no prebuilt downloads yet. On Windows you need Visual Studio Build Tools (MSVC and
-the Windows SDK) and Rust's stable MSVC toolchain from [rustup](https://rustup.rs).
+the Windows SDK), [CMake](https://cmake.org/download/) on `PATH` for the bundled Opus codec
+(the Windows installer has an "Add CMake to the PATH" option), and Rust's stable MSVC toolchain from
+[rustup](https://rustup.rs).
 
 ```powershell
 git clone https://github.com/torikushiii/zcord

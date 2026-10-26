@@ -34,6 +34,7 @@ impl DiscordApp {
 
     pub(crate) fn log_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.disconnect();
+        crate::settings::update(cx, |settings| settings.voice_channel = None);
         if let Err(error) = credentials::clear() {
             log::warn!("{error}");
         }
@@ -62,6 +63,8 @@ impl DiscordApp {
         self.members_timer = None;
         self.status_expiry = None;
         self.status_expiry_timer = None;
+        self.voice.call = None;
+        self.voice.speaking.clear();
     }
 
     pub(super) fn connect(&mut self, token: String, window: &mut Window, cx: &mut Context<Self>) {

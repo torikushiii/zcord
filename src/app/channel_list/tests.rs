@@ -218,9 +218,9 @@ fn banner_hover_survives_sync_but_resets_on_server_change_or_banner_removal() {
         hash: "banner".into(),
     };
     let now = Instant::now();
-    rows.sync_with_banner(Some(&first), Some(banner.clone()), 100);
+    rows.sync_with_banner(Some(&first), Some(banner.clone()), 100, |_| 0, None);
     rows.banner_hover.set(true, now);
-    rows.sync_with_banner(Some(&first), Some(banner.clone()), 100);
+    rows.sync_with_banner(Some(&first), Some(banner.clone()), 100, |_| 0, None);
     assert_eq!(rows.banner_hover.opacity(now + BANNER_HOVER_FADE), 1.);
 
     let second = guild(2, 1);
@@ -228,10 +228,10 @@ fn banner_hover_survives_sync_but_resets_on_server_change_or_banner_removal() {
         guild_id: second.id,
         hash: "other_banner".into(),
     };
-    rows.sync_with_banner(Some(&second), Some(second_banner), 100);
+    rows.sync_with_banner(Some(&second), Some(second_banner), 100, |_| 0, None);
     assert_eq!(rows.banner_hover.opacity(now + BANNER_HOVER_FADE), 0.);
     rows.banner_hover.set(true, now);
-    rows.sync_with_banner(Some(&second), None, 100);
+    rows.sync_with_banner(Some(&second), None, 100, |_| 0, None);
     assert_eq!(rows.banner_hover.opacity(now + BANNER_HOVER_FADE), 0.);
 }
 
@@ -246,6 +246,8 @@ fn banner_header_becomes_solid_at_the_same_scroll_position_at_every_zoom() {
             hash: "banner".into(),
         }),
         100,
+        |_| 0,
+        None,
     );
     assert_eq!(rows.rows[0], Row::Banner);
     for zoom in [1., 1.25, 1.5] {
@@ -264,7 +266,7 @@ fn banner_header_becomes_solid_at_the_same_scroll_position_at_every_zoom() {
         });
         assert_eq!(rows.header_solidity(rem_size), Some(1.));
     }
-    rows.sync_with_banner(Some(&guild), None, 100);
+    rows.sync_with_banner(Some(&guild), None, 100, |_| 0, None);
     assert_eq!(rows.header_solidity(px(16.)), None);
 }
 
@@ -294,10 +296,16 @@ impl Render for Sidebar {
             list(self.rows.state.clone(), move |index, _, cx| {
                 let sidebar = entity.read(cx);
                 sidebar.rendered.borrow_mut().push(index);
-                row_content(Some(&sidebar.guild), sidebar.rows.rows[index], 101, 1.)
-                    .id(("row", index))
-                    .debug_selector(move || format!("row-{index}"))
-                    .into_any_element()
+                row_content(
+                    Some(&sidebar.guild),
+                    sidebar.rows.rows[index],
+                    101,
+                    1.,
+                    None,
+                )
+                .id(("row", index))
+                .debug_selector(move || format!("row-{index}"))
+                .into_any_element()
             })
             .size_full()
             .py_2(),

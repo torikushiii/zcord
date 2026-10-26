@@ -7,7 +7,7 @@ use gpui::{prelude::*, *};
 use gpui_component::tooltip::Tooltip;
 
 use crate::{
-    app::{DiscordApp, home, member_list, message_body::label, profile},
+    app::{DiscordApp, home, member_list, message_body::label, profile, voice},
     media::animated,
     media::images::{self, ImageSpec},
     store::{Channel, ChannelKind, Guild, Status, StatusEmoji, User},
@@ -34,7 +34,15 @@ enum Row {
     Banner,
     Shortcuts,
     Category(usize),
-    Channel { category: usize, channel: usize },
+    Channel {
+        category: usize,
+        channel: usize,
+    },
+    VoiceMember {
+        category: usize,
+        channel: usize,
+        index: usize,
+    },
 }
 
 struct Fold {
@@ -126,7 +134,7 @@ impl Rows {
 
     #[cfg(test)]
     pub fn sync(&mut self, guild: Option<&Guild>, selected_channel_id: u64) {
-        self.sync_with_banner(guild, None, selected_channel_id);
+        self.sync_with_banner(guild, None, selected_channel_id, |_| 0, None);
     }
 
     /// Returns whether the category is now collapsed.
@@ -165,6 +173,8 @@ impl Rows {
         guild: Option<&Guild>,
         banner: Option<ImageSpec>,
         selected_channel_id: u64,
+        voice_members: impl Fn(u64) -> usize,
+        voice_channel_id: Option<u64>,
     ) {
         let now = Instant::now();
         let mut rows = Vec::new();
@@ -183,14 +193,22 @@ impl Rows {
             }
             // Collapsing channels stay listed until they have folded away.
             let collapsed = self.collapsed.contains(&group.id) && !self.folding(group.id, now);
-            rows.extend(
-                (0..group.channels.len())
-                    // Discord keeps the selected channel visible under a collapsed category.
-                    .filter(|&channel| {
-                        !collapsed || group.channels[channel].id == selected_channel_id
-                    })
-                    .map(|channel| Row::Channel { category, channel }),
-            );
+            for (channel, entry) in group.channels.iter().enumerate() {
+                // Discord keeps the selected and the joined voice channel visible under a
+                // collapsed category.
+                let joined = voice_channel_id == Some(entry.id);
+                if collapsed && entry.id != selected_channel_id && !joined {
+                    continue;
+                }
+                rows.push(Row::Channel { category, channel });
+                if entry.kind == ChannelKind::Voice && (!collapsed || joined) {
+                    rows.extend((0..voice_members(entry.id)).map(|index| Row::VoiceMember {
+                        category,
+                        channel,
+                        index,
+                    }));
+                }
+            }
         }
         let guild_id = guild.map(|guild| guild.id);
         if self.guild_id != guild_id || banner.is_none() {
@@ -281,12 +299,40 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
                         .guild()
                         .and_then(|guild| guild.categories.get(category))
                         .and_then(|category| category.channels.get(channel))
-                        .filter(|channel| channel.kind.is_selectable())
-                        .map(|channel| channel.id),
+                        .filter(|channel| {
+                            channel.kind.is_selectable() || channel.kind == ChannelKind::Voice
+                        })
+                        .map(|channel| (channel.id, channel.kind)),
                     _ => None,
                 };
+                if let Row::VoiceMember {
+                    category,
+                    channel,
+                    index,
+                } = row
+                {
+                    let guild_id = app.selected_guild_id;
+                    let member = app
+                        .guild()
+                        .and_then(|guild| guild.categories.get(category))
+                        .and_then(|category| category.channels.get(channel))
+                        .and_then(|channel| {
+                            app.store
+                                .voice_members(guild_id, channel.id)
+                                .into_iter()
+                                .nth(index)
+                        });
+                    return match member {
+                        Some(member) => {
+                            voice::member_row(app, guild_id, &member, cx).into_any_element()
+                        }
+                        None => div().into_any_element(),
+                    };
+                }
                 let group = match row {
-                    Row::Category(category) | Row::Channel { category, .. } => {
+                    Row::Category(category)
+                    | Row::Channel { category, .. }
+                    | Row::VoiceMember { category, .. } => {
                         app.guild().and_then(|guild| guild.categories.get(category))
                     }
                     _ => None,
@@ -315,22 +361,33 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
                     return banner_row(app.channel_rows.banner.as_ref(), cx).into_any_element();
                 }
                 let entity = app.entity.clone();
-                row_content(app.guild(), row, app.selected_channel_id, openness)
-                    .id(("channel-list-row", index))
-                    .map(|this| match (channel, category) {
-                        (Some(id), _) => this.on_click(move |_, window, cx| {
-                            entity
-                                .update(cx, |app, cx| app.select_channel(id, window, cx))
-                                .ok();
-                        }),
-                        (None, Some(id)) => this.on_click(move |_, _, cx| {
-                            entity
-                                .update(cx, |app, cx| app.toggle_category(id, cx))
-                                .ok();
-                        }),
-                        (None, None) => this,
-                    })
-                    .into_any_element()
+                row_content(
+                    app.guild(),
+                    row,
+                    app.selected_channel_id,
+                    openness,
+                    app.voice.joined(),
+                )
+                .id(("channel-list-row", index))
+                .map(|this| match (channel, category) {
+                    (Some((id, ChannelKind::Voice)), _) => this.on_click(move |_, _, cx| {
+                        entity
+                            .update(cx, |app, cx| app.join_voice(app.selected_guild_id, id, cx))
+                            .ok();
+                    }),
+                    (Some((id, _)), _) => this.on_click(move |_, window, cx| {
+                        entity
+                            .update(cx, |app, cx| app.select_channel(id, window, cx))
+                            .ok();
+                    }),
+                    (None, Some(id)) => this.on_click(move |_, _, cx| {
+                        entity
+                            .update(cx, |app, cx| app.toggle_category(id, cx))
+                            .ok();
+                    }),
+                    (None, None) => this,
+                })
+                .into_any_element()
             })
             .flex_1()
             .min_h_0()
@@ -533,9 +590,15 @@ fn banner_row(spec: Option<&ImageSpec>, cx: &App) -> impl IntoElement + use<> {
         .children(image)
 }
 
-fn row_content(guild: Option<&Guild>, row: Row, selected: u64, openness: f32) -> Div {
+fn row_content(
+    guild: Option<&Guild>,
+    row: Row,
+    selected: u64,
+    openness: f32,
+    voice: Option<voice::Joined>,
+) -> Div {
     let content = match row {
-        Row::Banner => div().into_any_element(),
+        Row::Banner | Row::VoiceMember { .. } => div().into_any_element(),
         Row::Shortcuts => div()
             .child(shortcut_row("events", "calendar", "Events"))
             .child(shortcut_row("boosts", "gem", "Server Boosts"))
@@ -590,10 +653,10 @@ fn row_content(guild: Option<&Guild>, row: Row, selected: u64, openness: f32) ->
                     div()
                         .flex_none()
                         .h(rpx(CHANNEL_HEIGHT + CHANNEL_GAP))
-                        .child(channel_row(channel, selected == channel.id)),
+                        .child(channel_row(channel, selected == channel.id, voice)),
                 )
                 .into_any_element(),
-            Some(channel) => channel_row(channel, selected == channel.id).into_any_element(),
+            Some(channel) => channel_row(channel, selected == channel.id, voice).into_any_element(),
             None => div().into_any_element(),
         },
     };
@@ -618,8 +681,13 @@ fn shortcut_row(id: &'static str, icon: &str, label: &'static str) -> impl IntoE
         .child(label)
 }
 
-fn channel_row(channel: &Channel, selected: bool) -> impl IntoElement + use<> {
+fn channel_row(
+    channel: &Channel,
+    selected: bool,
+    voice: Option<voice::Joined>,
+) -> impl IntoElement + use<> {
     let id = channel.id;
+    let joined = voice.filter(|voice| voice.channel_id == id);
     let mentions = channel.mentions;
     let new_posts = channel.new_posts;
     let unread = (channel.unread || mentions > 0 || new_posts > 0) && !selected;
@@ -684,12 +752,14 @@ fn channel_row(channel: &Channel, selected: bool) -> impl IntoElement + use<> {
         .text_size(rpx(16.))
         .font_weight(FontWeight::MEDIUM)
         .cursor_pointer()
-        .text_color(rgb(if selected || unread {
+        .text_color(rgb(if selected || unread || joined.is_some() {
             theme::STRONG
         } else {
             theme::MUTED
         }))
-        .when(unread, |this| this.font_weight(FontWeight::SEMIBOLD))
+        .when(unread || joined.is_some(), |this| {
+            this.font_weight(FontWeight::SEMIBOLD)
+        })
         .when(selected, |this| this.bg(rgb(theme::SELECTED)))
         .when(!selected, |this| {
             this.hover(|style| style.bg(rgb(theme::HOVER)).text_color(rgb(theme::TEXT)))
@@ -707,7 +777,9 @@ fn channel_row(channel: &Channel, selected: bool) -> impl IntoElement + use<> {
             )
         })
         .child({
-            let color = if selected || unread {
+            let color = if joined.is_some() {
+                theme::GREEN
+            } else if selected || unread {
                 theme::STRONG
             } else {
                 theme::FAINT
@@ -735,6 +807,14 @@ fn channel_row(channel: &Channel, selected: bool) -> impl IntoElement + use<> {
                 .child(label(("channel-name", id), &channel.name)),
         )
         .children(badge)
+        .children(joined.and_then(|joined| joined.elapsed).map(|elapsed| {
+            div()
+                .flex_none()
+                .text_size(rpx(12.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(theme::GREEN))
+                .child(voice::format_elapsed(elapsed))
+        }))
         .when(selected, |this| {
             this.child(theme::icon("user-plus", 14., theme::MUTED))
                 .child(theme::icon("settings", 14., theme::MUTED))
@@ -846,20 +926,25 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 cx,
             )
         });
-    div()
+    let voice = &app.voice;
+    let (mic, mic_color, mic_tip) = if voice.self_mute || voice.self_deaf {
+        ("mic-off", theme::RED, "Unmute")
+    } else {
+        ("mic", theme::TEXT, "Mute")
+    };
+    let (deafen, deafen_color, deafen_tip) = if voice.self_deaf {
+        ("headphone-off", theme::RED, "Undeafen")
+    } else {
+        ("headphones", theme::TEXT, "Deafen")
+    };
+    let account = div()
         .relative()
         .flex()
         .flex_none()
         .items_center()
         .gap_2()
         .h(rpx(USER_PANEL_HEIGHT))
-        .m_2()
         .px(rpx(6.))
-        .rounded(rpx(8.))
-        .overflow_hidden()
-        .bg(rgb(theme::ELEVATED))
-        .border_1()
-        .border_color(rgb(theme::BORDER))
         .children(nameplate)
         .children(user.map(|user| {
             div()
@@ -915,8 +1000,26 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                         .child(account_subtitle(app, user, cx)),
                 )
         }))
-        .child(theme::icon_button("mic", "mic", 20., theme::TEXT))
-        .child(theme::icon_button("deafen", "headphones", 20., theme::TEXT))
+        .child(
+            theme::icon_button("mic", mic, 20., mic_color)
+                .tooltip(move |window, cx| Tooltip::new(mic_tip).build(window, cx))
+                .on_click({
+                    let entity = app.entity.clone();
+                    move |_, _, cx| {
+                        entity.update(cx, |app, cx| app.toggle_self_mute(cx)).ok();
+                    }
+                }),
+        )
+        .child(
+            theme::icon_button("deafen", deafen, 20., deafen_color)
+                .tooltip(move |window, cx| Tooltip::new(deafen_tip).build(window, cx))
+                .on_click({
+                    let entity = app.entity.clone();
+                    move |_, _, cx| {
+                        entity.update(cx, |app, cx| app.toggle_self_deaf(cx)).ok();
+                    }
+                }),
+        )
         .child(
             theme::icon_button("user-settings", "settings", 20., theme::TEXT)
                 .tooltip(|window, cx| Tooltip::new("User Settings").build(window, cx))
@@ -943,7 +1046,19 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                             .ok();
                     }
                 }),
-        )
+        );
+    div()
+        .flex()
+        .flex_col()
+        .flex_none()
+        .m_2()
+        .rounded(rpx(8.))
+        .overflow_hidden()
+        .bg(rgb(theme::ELEVATED))
+        .border_1()
+        .border_color(rgb(theme::BORDER))
+        .children(voice::panel(app))
+        .child(account)
 }
 
 /// Settings menu above the user panel's gear button. Rendered from the overlay view because

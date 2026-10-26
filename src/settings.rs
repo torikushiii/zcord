@@ -30,6 +30,12 @@ pub struct Settings {
     pub video_audio: Option<VideoAudio>,
     #[serde(default)]
     pub gif_provider: GifProvider,
+    #[serde(default)]
+    pub voice_channel: Option<SavedChannel>,
+    #[serde(default)]
+    pub voice_mute: bool,
+    #[serde(default)]
+    pub voice_deaf: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]

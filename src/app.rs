@@ -29,6 +29,7 @@ mod titlebar;
 mod typing;
 mod video;
 mod views;
+mod voice;
 
 use crate::discord::{self, Event, FatalError, OutgoingMessage, OutgoingReply, Session};
 use login::LoginForm;
@@ -193,6 +194,7 @@ pub struct DiscordApp {
     member_layout: member_list::Layout,
     member_subscription: Option<(u64, u64, Vec<(u32, u32)>)>,
     pub(crate) live: bool,
+    pub(crate) voice: voice::Voice,
     pub(crate) reconnecting: bool,
     session: Option<Session>,
     pending_token: Option<String>,
@@ -326,6 +328,7 @@ impl DiscordApp {
             member_layout: member_list::Layout::default(),
             member_subscription: None,
             live: false,
+            voice: voice::Voice::from_settings(cx),
             reconnecting: false,
             session: None,
             pending_token: None,
@@ -546,6 +549,7 @@ impl DiscordApp {
                 self.screen = Screen::Login(form);
                 cx.notify();
             }
+            Event::Voice(event) => self.handle_voice_event(event, cx),
             Event::Reconnecting => {
                 self.reconnecting = true;
                 cx.notify();
@@ -589,8 +593,12 @@ impl DiscordApp {
                     Event::MessageDelete { id, .. } => self.forget_message(*id, cx),
                     _ => {}
                 }
+                let supplemental = matches!(event, Event::ReadySupplemental(_));
                 let change = self.store.apply(event);
                 self.apply_change(change, window, cx);
+                if supplemental {
+                    self.restore_voice(cx);
+                }
             }
         }
     }
@@ -683,7 +691,22 @@ impl DiscordApp {
             .find(|guild| guild.id == self.selected_guild_id);
         let banner = guild.and_then(|guild| self.store.guild_banner(guild.id));
         let selected = self.thread_parent().unwrap_or(self.selected_channel_id);
-        self.channel_rows.sync_with_banner(guild, banner, selected);
+        let guild_id = self.selected_guild_id;
+        let store = &self.store;
+        let joined = self
+            .voice
+            .call
+            .as_ref()
+            .filter(|call| call.guild_id == guild_id)
+            .map(|call| call.channel_id);
+        self.channel_rows.sync_with_banner(
+            guild,
+            banner,
+            selected,
+            |channel_id| store.voice_members(guild_id, channel_id).len(),
+            joined,
+        );
+        self.request_voice_members();
     }
 
     pub(crate) fn is_loading(&self, channel_id: u64) -> bool {
