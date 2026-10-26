@@ -211,6 +211,10 @@ impl Session {
         }
     }
 
+    pub fn request_voice_start_times(&self, guild_id: u64) {
+        self.command(commands::voice_start_times(guild_id));
+    }
+
     pub fn join_voice(&self, guild_id: u64, channel_id: u64) {
         let payload = self.inner.voice.join(guild_id, channel_id);
         self.voice_command(payload);

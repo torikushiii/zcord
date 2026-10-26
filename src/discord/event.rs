@@ -33,6 +33,8 @@ pub enum Event {
     GuildDelete { id: u64 },
     MessageAck { channel_id: u64, message_id: u64 },
     VoiceStateUpdate(Box<model::VoiceState>),
+    ChannelInfo(model::ChannelInfo),
+    VoiceChannelStartTimeUpdate(model::VoiceChannelStartTimeUpdate),
     Voice(VoiceEvent),
     Reconnecting,
     Resumed,

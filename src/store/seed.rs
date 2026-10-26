@@ -282,6 +282,7 @@ impl Store {
             favorite_gifs: Vec::new(),
             rail_order: vec![1, 2, 3, 4, 5, 6],
             social: social::Social::default(),
+            voice_start_times: HashMap::new(),
             permission_cache: RefCell::new(HashMap::new()),
         };
         for guild in &mut store.guilds {

@@ -1,5 +1,6 @@
 use super::*;
 use crate::discord::model;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum VoiceActivity {
@@ -18,6 +19,48 @@ pub struct VoiceMember {
 }
 
 impl Store {
+    /// The ongoing channel session, independent of this client's voice connection.
+    pub fn voice_started_at(&self, guild_id: u64, channel_id: u64) -> Option<SystemTime> {
+        let seconds = *self.voice_start_times.get(&(guild_id, channel_id))?;
+        UNIX_EPOCH.checked_add(Duration::from_secs(seconds))
+    }
+
+    pub(super) fn channel_info(&mut self, info: model::ChannelInfo) -> Change {
+        let mut change = Change::None;
+        for channel in info.channels {
+            if self.voice_start_time_update(info.guild_id, channel.id, channel.voice_start_time)
+                == Change::VoiceTimers
+            {
+                change = Change::VoiceTimers;
+            }
+        }
+        change
+    }
+
+    pub(super) fn voice_start_time_update(
+        &mut self,
+        guild_id: u64,
+        channel_id: u64,
+        start: Option<Option<u64>>,
+    ) -> Change {
+        if !self.guild_indices.contains_key(&guild_id) {
+            return Change::None;
+        }
+        let Some(start) = start else {
+            return Change::None;
+        };
+        let key = (guild_id, channel_id);
+        let changed = match start {
+            Some(start) => self.voice_start_times.insert(key, start) != Some(start),
+            None => self.voice_start_times.remove(&key).is_some(),
+        };
+        if changed {
+            Change::VoiceTimers
+        } else {
+            Change::None
+        }
+    }
+
     pub(super) fn apply_supplemental_voice(&mut self, update: &model::ReadySupplemental) -> bool {
         for user in &update.users {
             self.register_author(user);
@@ -68,6 +111,11 @@ impl Store {
         let Some(guild) = source.guilds.iter_mut().find(|guild| guild.id == guild_id) else {
             return Change::None;
         };
+        let previous_channel = guild
+            .voice_states
+            .iter()
+            .find(|existing| existing.user_id == state.user_id)
+            .and_then(|existing| existing.channel_id);
         match state.channel_id {
             Some(_) => {
                 if let Some(existing) = guild
@@ -85,6 +133,14 @@ impl Store {
                     .voice_states
                     .retain(|existing| existing.user_id != state.user_id);
             }
+        }
+        if let Some(channel_id) = previous_channel
+            && !guild
+                .voice_states
+                .iter()
+                .any(|state| state.channel_id == Some(channel_id))
+        {
+            self.voice_start_times.remove(&(guild_id, channel_id));
         }
         Change::Structure
     }

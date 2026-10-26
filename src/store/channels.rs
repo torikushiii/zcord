@@ -289,6 +289,8 @@ impl Store {
     }
 
     pub(super) fn channel_delete(&mut self, id: u64) -> Change {
+        self.voice_start_times
+            .retain(|(_, channel), _| *channel != id);
         self.clear_message_info(id);
         let mut guild_id = None;
         if let Some(source) = &mut self.source {

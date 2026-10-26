@@ -556,6 +556,7 @@ impl DiscordApp {
             }
             Event::Resumed => {
                 self.reconnecting = false;
+                self.refresh_voice_start_times();
                 self.member_subscription = None;
                 self.typing.clear();
                 cx.notify();
@@ -572,6 +573,7 @@ impl DiscordApp {
                 let reconnect = matches!(self.screen, Screen::Chat);
                 self.member_subscription = None;
                 self.store.apply(event);
+                self.refresh_voice_start_times();
                 self.arm_status_expiry_timer(cx);
                 self.sync_channel_rows();
                 self.screen = Screen::Chat;
@@ -614,6 +616,10 @@ impl DiscordApp {
         let len = self.channel().map_or(0, |channel| channel.messages.len());
         match change {
             Change::None => return,
+            Change::VoiceTimers => {
+                self.views.channel_list.update(cx, |_, cx| cx.notify());
+                return;
+            }
             Change::MessageInserted { channel_id, index }
                 if channel_id == self.selected_channel_id =>
             {

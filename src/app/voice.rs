@@ -12,7 +12,7 @@ use crate::{
     app::{DiscordApp, message_body::label},
     discord::VoiceEvent,
     settings::SavedChannel,
-    store::VoiceMember,
+    store::{Store, VoiceMember},
     theme::{self, rpx},
 };
 
@@ -55,10 +55,12 @@ pub(crate) struct Joined {
 }
 
 impl Voice {
-    pub(crate) fn joined(&self) -> Option<Joined> {
+    pub(crate) fn joined(&self, store: &Store) -> Option<Joined> {
         self.call.as_ref().map(|call| Joined {
             channel_id: call.channel_id,
-            elapsed: call.connected_at.map(|at| at.elapsed()),
+            elapsed: store
+                .voice_started_at(call.guild_id, call.channel_id)
+                .map(|at| at.elapsed().unwrap_or_default()),
         })
     }
 
@@ -118,7 +120,6 @@ pub(crate) struct Call {
     pub(crate) guild_id: u64,
     pub(crate) channel_id: u64,
     pub(crate) connected: bool,
-    pub(crate) connected_at: Option<Instant>,
     pub(crate) encryption: Encryption,
     pings: Vec<PingSample>,
     server: Option<String>,
@@ -141,7 +142,6 @@ impl Call {
             guild_id,
             channel_id,
             connected: false,
-            connected_at: None,
             encryption: Encryption::Pending,
             pings: Vec::new(),
             server: None,
@@ -155,6 +155,14 @@ impl Call {
 }
 
 impl DiscordApp {
+    pub(super) fn refresh_voice_start_times(&self) {
+        if let Some(call) = &self.voice.call
+            && let Some(session) = self.session.as_ref().filter(|_| self.live)
+        {
+            session.request_voice_start_times(call.guild_id);
+        }
+    }
+
     pub(crate) fn join_voice(&mut self, guild_id: u64, channel_id: u64, cx: &mut Context<Self>) {
         if !self.store.can_connect_voice(guild_id, channel_id)
             || self
@@ -368,7 +376,6 @@ impl DiscordApp {
                     .filter(|call| call.channel_id == channel_id);
                 let mut call = Call::new(guild_id, channel_id);
                 if let Some(previous) = previous {
-                    call.connected_at = previous.connected_at;
                     call.encryption = previous.encryption;
                     call.pings = previous.pings;
                 }
@@ -381,17 +388,16 @@ impl DiscordApp {
                 match &mut voice.call {
                     Some(call) if call.channel_id == channel_id => {
                         call.connected = true;
-                        call.connected_at.get_or_insert_with(Instant::now);
                     }
                     _ => {
                         voice.call = Some(Call {
                             connected: true,
-                            connected_at: Some(Instant::now()),
                             ..Call::new(guild_id, channel_id)
                         })
                     }
                 }
                 self.start_call_clock(cx);
+                self.refresh_voice_start_times();
                 remember_channel(
                     Some(SavedChannel {
                         guild_id,
@@ -1042,5 +1048,66 @@ fn blend(from: u32, to: u32, t: f32) -> Rgba {
         g: from.g + (to.g - from.g) * t,
         b: from.b + (to.b - from.b) * t,
         a: 1.,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::discord::{Event, model};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn store_with_start(start: Option<u64>) -> Store {
+        let ready =
+            serde_json::from_str(include_str!("../../discord/fixtures/ready.json")).unwrap();
+        let mut store = Store::from_ready(ready);
+        store.apply(Event::VoiceChannelStartTimeUpdate(
+            model::VoiceChannelStartTimeUpdate {
+                guild_id: 200,
+                id: 2005,
+                voice_start_time: Some(start),
+            },
+        ));
+        store
+    }
+
+    #[test]
+    fn new_voice_connections_use_the_existing_server_session_duration() {
+        let start = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - 2400;
+        let store = store_with_start(Some(start));
+        for _ in 0..2 {
+            let voice = Voice {
+                call: Some(Call::new(200, 2005)),
+                ..Voice::default()
+            };
+            let joined = voice.joined(&store).unwrap();
+            assert_eq!(joined.channel_id, 2005);
+            assert!(joined.elapsed.unwrap() >= Duration::from_secs(2400));
+        }
+    }
+
+    #[test]
+    fn unknown_session_is_not_replaced_with_a_personal_stopwatch() {
+        let voice = Voice {
+            call: Some(Call::new(200, 2005)),
+            ..Voice::default()
+        };
+        assert_eq!(voice.joined(&store_with_start(None)).unwrap().elapsed, None);
+        let future = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 86400;
+        assert_eq!(
+            voice
+                .joined(&store_with_start(Some(future)))
+                .unwrap()
+                .elapsed,
+            Some(Duration::ZERO)
+        );
     }
 }

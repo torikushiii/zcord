@@ -71,6 +71,7 @@ impl Store {
     }
 
     pub(super) fn guild_delete(&mut self, id: u64) -> Change {
+        self.voice_start_times.retain(|(guild, _), _| *guild != id);
         self.social.guilds.remove(&id);
         self.rail_order.retain(|guild| *guild != id);
         if let Some(source) = &mut self.source {
