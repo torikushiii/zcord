@@ -26,7 +26,9 @@ pub(super) fn cards(app: &DiscordApp, message: &Message, cx: &App) -> Vec<AnyEle
             let key = message.id.wrapping_mul(4).wrapping_add(index as u64);
             match app.invite(&code) {
                 InviteState::Loading => frame(key).child(loading()).into_any_element(),
-                InviteState::Invalid => frame(key).child(invalid()).into_any_element(),
+                InviteState::Invalid => frame(key)
+                    .child(invalid(message.author_id == app.store.current_user_id))
+                    .into_any_element(),
                 InviteState::Ready(invite) => card(app, key, &invite, cx),
             }
         })
@@ -57,23 +59,60 @@ fn loading() -> Div {
         .child("Resolving invite…")
 }
 
-fn invalid() -> Div {
+fn invalid(sent: bool) -> Div {
+    let lead = if sent {
+        "You sent an invite, but"
+    } else {
+        "You received an invite, but"
+    };
     div()
         .p(rpx(16.))
         .child(
             div()
-                .text_size(rpx(16.))
-                .line_height(rpx(20.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::RED))
-                .child("Invalid Invite"),
+                .text_size(rpx(12.))
+                .line_height(rpx(16.))
+                .text_color(rgb(theme::MUTED))
+                .child(lead),
         )
         .child(
             div()
-                .mt(rpx(4.))
-                .text_size(rpx(14.))
-                .text_color(rgb(theme::MUTED))
-                .child("Try sending a new invite!"),
+                .flex()
+                .items_center()
+                .gap(rpx(16.))
+                .mt(rpx(12.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .justify_center()
+                        .size(rpx(48.))
+                        .rounded(rpx(10.))
+                        .border_1()
+                        .border_color(rgba(theme::RED << 8 | 0x1A))
+                        .bg(rgba(theme::RED << 8 | 0x14))
+                        .child(theme::icon("mail-filled", 24., theme::RED)),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .text_size(rpx(16.))
+                                .line_height(rpx(20.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(rgb(theme::RED))
+                                .child("Invalid Invite"),
+                        )
+                        .child(
+                            div()
+                                .mt(rpx(2.))
+                                .text_size(rpx(14.))
+                                .line_height(rpx(18.))
+                                .text_color(rgb(theme::MUTED))
+                                .child("Try sending a new invite"),
+                        ),
+                ),
         )
 }
 
