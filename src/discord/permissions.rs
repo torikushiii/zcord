@@ -4,6 +4,9 @@ pub const VIEW_CHANNEL: u64 = 1 << 10;
 pub const SEND_MESSAGES: u64 = 1 << 11;
 pub const MANAGE_MESSAGES: u64 = 1 << 13;
 pub const USE_EXTERNAL_EMOJIS: u64 = 1 << 18;
+pub const CONNECT: u64 = 1 << 20;
+#[allow(dead_code)]
+pub const SPEAK: u64 = 1 << 21;
 const ADMINISTRATOR: u64 = 1 << 3;
 
 fn apply_overwrites(

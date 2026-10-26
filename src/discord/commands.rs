@@ -7,6 +7,13 @@ pub(super) struct Command {
     pub members: bool,
 }
 
+pub(super) fn voice_state(payload: Value) -> Command {
+    Command {
+        payload,
+        members: false,
+    }
+}
+
 pub(super) fn subscription(guild_id: u64, channel_id: u64, ranges: &[(u32, u32)]) -> Command {
     let ranges: Vec<_> = ranges
         .iter()

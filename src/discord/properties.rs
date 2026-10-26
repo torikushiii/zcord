@@ -64,7 +64,7 @@ fn launch() -> &'static Launch {
     })
 }
 
-fn uuid_v4() -> String {
+pub(super) fn uuid_v4() -> String {
     let mut bytes: [u8; 16] = rand::random();
     bytes[6] = (bytes[6] & 0x0F) | 0x40;
     bytes[8] = (bytes[8] & 0x3F) | 0x80;

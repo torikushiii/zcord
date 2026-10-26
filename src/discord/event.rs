@@ -32,9 +32,20 @@ pub enum Event {
     GuildEmojisUpdate(model::GuildEmojisUpdate),
     GuildDelete { id: u64 },
     MessageAck { channel_id: u64, message_id: u64 },
+    VoiceStateUpdate(Box<model::VoiceState>),
+    Voice(VoiceEvent),
     Reconnecting,
     Resumed,
     Fatal(FatalError),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VoiceEvent {
+    Connecting { guild_id: u64, channel_id: u64 },
+    Connected { guild_id: u64, channel_id: u64 },
+    Disconnected { reason: Option<String> },
+    Speaking { user_id: u64, speaking: bool },
+    PrivacyCode(Option<String>),
 }
 
 #[derive(Debug)]

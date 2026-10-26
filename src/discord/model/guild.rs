@@ -32,6 +32,8 @@ pub struct Guild {
     pub members: Option<Vec<Member>>,
     #[serde(default, deserialize_with = "optional_entries")]
     pub emojis: Option<Vec<GuildEmoji>>,
+    #[serde(default, deserialize_with = "entries")]
+    pub voice_states: Vec<VoiceState>,
     #[serde(default)]
     pub unavailable: Option<bool>,
 }
@@ -63,6 +65,12 @@ impl Guild {
             .cloned()
             .flatten()
     }
+    pub fn fill_voice_state_guilds(&mut self) {
+        for state in &mut self.voice_states {
+            state.guild_id = Some(self.id);
+        }
+    }
+
     pub fn merge(&mut self, update: &Self) {
         if let Some(name) = update
             .properties
@@ -105,6 +113,9 @@ impl Guild {
         }
         if update.emojis.is_some() {
             self.emojis.clone_from(&update.emojis);
+        }
+        if !update.voice_states.is_empty() {
+            self.voice_states.clone_from(&update.voice_states);
         }
         if update.unavailable.is_some() {
             self.unavailable = update.unavailable;

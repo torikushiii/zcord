@@ -1,4 +1,5 @@
-use super::commands::{Command, Commands};
+use super::commands::{Command, Commands, voice_state};
+use super::voice::VoiceManager;
 use super::{Control, Event, FatalError, Inner, Secret, model, properties};
 use flate2::{Decompress, FlushDecompress};
 use futures::{SinkExt, StreamExt, channel::mpsc::UnboundedSender};
@@ -177,6 +178,7 @@ pub(super) async fn run(
     owner: Weak<Inner>,
     receiver: tokio::sync::mpsc::UnboundedReceiver<(u64, Command)>,
     generation: Arc<AtomicU64>,
+    voice: VoiceManager,
 ) {
     let mut commands = CommandReceiver {
         receiver,
@@ -186,6 +188,7 @@ pub(super) async fn run(
         let _ = sender.unbounded_send(Event::Fatal(FatalError::Other(
             "Could not initialize REST client".into(),
         )));
+        voice.shutdown();
         close_session(&owner, Control::Shutdown);
         return;
     }
@@ -203,6 +206,7 @@ pub(super) async fn run(
             &mut state,
             &mut ignored,
             &mut commands,
+            &voice,
         )
         .await;
         commands.disconnected();
@@ -214,6 +218,7 @@ pub(super) async fn run(
                 } else {
                     Control::Shutdown
                 };
+                voice.shutdown();
                 close_session(&owner, control);
                 let _ = sender.unbounded_send(Event::Fatal(error));
                 return;
@@ -242,6 +247,7 @@ pub(super) async fn run(
             }
         }
     }
+    voice.shutdown();
     if *shutdown.borrow() == Control::InvalidToken {
         let _ = sender.unbounded_send(Event::Fatal(FatalError::InvalidToken));
     }
@@ -293,6 +299,7 @@ async fn attempt(
     state: &mut State,
     ignored: &mut HashSet<String>,
     commands: &mut CommandReceiver,
+    voice: &VoiceManager,
 ) -> Outcome {
     let url = if state.can_resume() {
         state.resume_url.as_deref().unwrap_or(GATEWAY)
@@ -319,6 +326,7 @@ async fn attempt(
         state,
         ignored,
         commands,
+        voice,
     )
     .await;
     commands.disconnected();
@@ -360,6 +368,7 @@ async fn drive(
     state: &mut State,
     ignored: &mut HashSet<String>,
     commands: &mut CommandReceiver,
+    voice: &VoiceManager,
 ) -> Outcome {
     let mut outgoing = Commands::new();
     let mut decoder = Decoder::new();
@@ -496,6 +505,10 @@ async fn drive(
                                     ready.resume_gateway_url.as_deref().and_then(resume_url);
                                 healthy = true;
                                 commands.ready();
+                                voice.gateway_ready(ready.user.id, &ready.session_id, true);
+                                if let Some(payload) = voice.take_pending_op4() {
+                                    outgoing.push(true, voice_state(payload));
+                                }
                                 log::info!(
                                     "Gateway ready: {} guilds, {} users",
                                     ready.guilds.len(),
@@ -521,8 +534,40 @@ async fn drive(
                     } else if kind == "RESUMED" {
                         healthy = true;
                         commands.ready();
+                        if let Some(payload) = voice.take_pending_op4() {
+                            outgoing.push(true, voice_state(payload));
+                        }
                         if sender.unbounded_send(Event::Resumed).is_err() {
                             return Outcome::Stop;
+                        }
+                    } else if kind == "VOICE_STATE_UPDATE" {
+                        let session_id = payload
+                            .d
+                            .get("session_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned);
+                        match serde_json::from_value::<model::VoiceState>(payload.d.clone()) {
+                            Ok(state) => {
+                                voice.voice_state(&state, session_id);
+                                if sender
+                                    .unbounded_send(Event::VoiceStateUpdate(Box::new(state)))
+                                    .is_err()
+                                {
+                                    return Outcome::Stop;
+                                }
+                            }
+                            Err(error) => log::warn!("Skipping malformed voice state: {error}"),
+                        }
+                    } else if kind == "VOICE_SERVER_UPDATE" {
+                        let guild_id = payload.d.get("guild_id").and_then(model::id_value);
+                        let token = payload.d.get("token").and_then(Value::as_str);
+                        if let (Some(guild_id), Some(token)) = (guild_id, token) {
+                            let endpoint = payload
+                                .d
+                                .get("endpoint")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned);
+                            voice.voice_server(guild_id, Secret(token.to_owned()), endpoint);
                         }
                     } else if let Some(event) = dispatch(kind, payload.d, ignored) {
                         if sender.unbounded_send(event).is_err() {
@@ -648,6 +693,7 @@ mod tests {
                     receiver,
                     generation,
                 },
+                &VoiceManager::default(),
             ),
         )
         .await
@@ -765,6 +811,7 @@ mod tests {
                     receiver: command_receiver,
                     generation: Arc::new(AtomicU64::new(0)),
                 },
+                &VoiceManager::default(),
             ),
         )
         .await
@@ -817,6 +864,7 @@ mod tests {
                     receiver: command_receiver,
                     generation: Arc::new(AtomicU64::new(0)),
                 },
+                &VoiceManager::default(),
             ),
         )
         .await

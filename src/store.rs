@@ -14,6 +14,7 @@ mod social;
 #[cfg(test)]
 mod tests;
 mod view;
+mod voice;
 
 use crate::discord::{self, model, settings_proto};
 use crate::media::images::ImageSpec;
@@ -27,6 +28,7 @@ use mapping::{
 use seed::SEED_START;
 use std::{cell::RefCell, collections::HashMap};
 pub use view::*;
+pub use voice::VoiceMember;
 
 pub struct Store {
     pub guilds: Vec<Guild>,
@@ -258,8 +260,18 @@ impl Store {
 
     fn apply_inner(&mut self, event: discord::Event) -> Change {
         use discord::Event;
+        let supplemental_voice = match &event {
+            Event::ReadySupplemental(update) => self.apply_supplemental_voice(update),
+            _ => false,
+        };
         let event = match self.apply_social(event) {
-            Ok(change) => return change,
+            Ok(change) => {
+                return if supplemental_voice {
+                    Change::Structure
+                } else {
+                    change
+                };
+            }
             Err(event) => event,
         };
         match event {
@@ -292,7 +304,16 @@ impl Store {
                 Change::Structure
             }
             Event::TypingStart(typing) => self.typing_start(typing),
-            Event::GuildUpsert(update) => self.guild_upsert(update),
+            Event::GuildUpsert(update) => {
+                if let Some(source) = &mut self.source
+                    && (update.unavailable == Some(false) || !update.voice_states.is_empty())
+                    && let Some(guild) = source.guilds.iter_mut().find(|g| g.id == update.id)
+                {
+                    guild.voice_states.clone_from(&update.voice_states);
+                }
+                self.guild_upsert(update)
+            }
+            Event::VoiceStateUpdate(state) => self.voice_state_update(*state),
             Event::GuildEmojisUpdate(update) => self.guild_emojis_update(update),
             Event::GuildDelete { id } => self.guild_delete(id),
             Event::ThreadListSync(sync) => self.thread_list_sync(sync),
