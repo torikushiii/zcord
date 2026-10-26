@@ -154,7 +154,7 @@ pub(super) fn header(
         .into_any_element()
 }
 
-fn banner(card: &ProfileCard, layout: &Layout, cx: &App) -> impl IntoElement {
+fn banner(card: &ProfileCard, layout: &Layout, cx: &App) -> AnyElement {
     let profile = card.profile.as_deref();
     let spec = profile.and_then(|p| {
         let member_banner = p.guild_member.as_ref().and_then(|m| m.banner.clone());
@@ -195,12 +195,17 @@ fn banner(card: &ProfileCard, layout: &Layout, cx: &App) -> impl IntoElement {
         .or_else(|| profile?.user_profile.as_ref()?.accent_color)
         .or_else(|| card.theme().map(|theme| theme.primary))
         .unwrap_or(theme::SELECTED);
-    div()
+    let banner = div()
         .w_full()
         .h(rpx(layout.banner))
         .rounded_t(corner)
         .bg(rgb(color))
-        .children(image)
+        .children(image);
+    if card.loading() {
+        pulse(banner, "profile-banner-pulse", card.user_id).into_any_element()
+    } else {
+        banner.into_any_element()
+    }
 }
 
 fn status_bubble(
@@ -404,6 +409,7 @@ fn popout_body(
             })),
             cx,
         ))
+        .children(card.loading().then(|| skeleton(card.user_id)))
         .children(bio(app, card, true, cx))
         .children(board::popout_widget(app, card, cx))
         .children(
@@ -411,6 +417,51 @@ fn popout_body(
                 .or_else(|| user.and_then(|user| playing(user, palette))),
         )
         .children(roles(app, card))
+}
+
+/// Stands in for the bio and roles while a profile nobody has opened before is fetched.
+fn skeleton(user_id: u64) -> impl IntoElement {
+    let bar = |width: DefiniteLength, height: f32| {
+        div()
+            .w(width)
+            .h(rpx(height))
+            .rounded(rpx(height / 2.))
+            .bg(rgb(theme::SELECTED))
+    };
+    let pill = |width: f32| bar(rpx(width).into(), 20.);
+    let content = div()
+        .flex()
+        .flex_col()
+        .gap(rpx(8.))
+        .child(bar(relative(1.), 12.))
+        .child(bar(relative(0.85), 12.))
+        .child(bar(relative(0.55), 12.))
+        .child(div().h(rpx(4.)))
+        .child(bar(rpx(48.).into(), 12.))
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap(rpx(4.))
+                .child(pill(72.))
+                .child(pill(56.))
+                .child(pill(88.)),
+        );
+    pulse(content, "profile-skeleton-pulse", user_id)
+}
+
+fn pulse<E: IntoElement + Styled + 'static>(
+    element: E,
+    key: &'static str,
+    user_id: u64,
+) -> AnimationElement<E> {
+    element.with_animation(
+        (key, user_id),
+        Animation::new(Duration::from_millis(1200))
+            .repeat()
+            .with_easing(pulsating_between(0.45, 1.)),
+        |this, delta| this.opacity(delta),
+    )
 }
 
 pub(super) fn bio(

@@ -164,6 +164,11 @@ struct Layout {
 }
 
 impl ProfileCard {
+    /// Nothing cached for this user yet and the profile request is still out.
+    fn loading(&self) -> bool {
+        self.profile.is_none() && self.modal_request_pending
+    }
+
     fn theme(&self) -> Option<ProfileTheme> {
         ProfileTheme::resolve(self.profile.as_deref(), self.avatar_theme)
     }
