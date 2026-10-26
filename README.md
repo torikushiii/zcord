@@ -4,36 +4,85 @@ zcord is just a fun project that I created to see how far I can recreate Discord
 as closely as possible using [zui](https://github.com/zeronsh/zui), zeronsh's fork of
 Zed's GPUI, and [gpui-component](https://github.com/zeronsh/gpui-component).
 
-> [!WARNING]
-> zcord logs in with a user account token. Third-party clients are against Discord's Terms of
-> Service and accounts can be banned for using them. Use an account you can afford to lose.
+> [!IMPORTANT]
+> Third-party clients are against Discord's Terms of Service, and accounts can be disabled for
+> using them. zcord is also early and incomplete, so expect bugs and missing features. It tries
+> hard to look like the official client, but there is no guarantee.
+> **Use it at your own risk**, ideally on an account you can afford to lose.
 
-## Build and run on Windows
+## Logging in
 
-Prerequisites: Visual Studio Build Tools with MSVC and the Windows SDK, plus rustup's stable
-MSVC toolchain.
+### QR code (recommended)
 
-```powershell
-$env:CARGO_TARGET_DIR = "C:\cargo-target\zcord"   # keep build output off network shares
-$env:RUST_LOG = "zcord=info"                       # optional: connection logs in the console
-cargo run
-```
+1. Start zcord. The login screen shows a QR code next to the token field.
+2. In the Discord mobile app, open **Settings → Scan QR Code** and scan it.
+3. Confirm on your phone.
 
-For scroll timing diagnostics, set `$env:RUST_LOG = "zcord=info,zcord::perf=debug"` before
-launching. While smooth scrolling, the console reports callback gaps and scroll-event
-dispatch times, summarized once per second and when scrolling settles. The same target also
-reports per-view render rates (`renders/s`) for root, rail, channels, header, messages,
-composer, members and overlays, once per second while views render. These are CPU-side
-timings, not GPU timings; large gaps with short dispatch times need further frame profiling.
+This gives zcord its own login session, which appears in **Settings → Devices** and can be
+removed there without affecting your other devices. The QR code is hidden when the window is
+too narrow; widen it to see the code.
 
-Paste your account token on the login screen. It is stored in Windows Credential Manager
-(entry `zcord`) and sent only to Discord. The gear button in the user panel logs out and
+### Token
+
+Paste a user token into the token field and press **Log In**. A token belongs to the session
+it came from, so if you copy it from a browser and later log out of that browser, zcord is
+logged out too. Prefer QR login when you can.
+
+Either way, the token is stored in the system credential store (Windows Credential Manager,
+entry `zcord`) and is only ever sent to Discord. The gear button in the user panel logs out and
 removes it.
 
-## Font
+## Avoiding the spam filter
 
-zcord uses Discord's font, gg sans, when it can find it, and the bundled Noto Sans otherwise.
-gg sans can't be shipped with zcord; to use it, put its `.ttf`/`.otf` files in
-`%APPDATA%\zcord\fonts` (`~/.config/zcord/fonts` on Linux) or install them system-wide.
-Scripts neither font covers (CJK, Arabic, Thai, emoji, …) use the system's fallback fonts.
+zcord identifies itself to Discord as the official Windows desktop app: same request headers,
+same gateway handshake, and no client-mod flags. It only makes the background requests the
+official client makes. Discord still flags third-party clients more often than its own, so on
+accounts you care about, do these in the official client instead:
 
+- Joining or leaving servers
+- Starting new DMs with people you haven't talked to
+- Adding or removing friends
+- Editing your profile or account settings
+- Repeatedly restarting or reconnecting in a short time
+
+If your account does get disabled, you can usually
+[appeal](https://support.discord.com/hc/en-us/requests/new?ticket_form_id=360000029731) and
+get it back.
+
+## Building
+
+There are no prebuilt downloads yet. On Windows you need Visual Studio Build Tools (MSVC and
+the Windows SDK) and Rust's stable MSVC toolchain from [rustup](https://rustup.rs).
+
+```powershell
+git clone https://github.com/torikushiii/zcord
+cd zcord
+cargo run --release
+```
+
+If the repository lives on a network share, point `CARGO_TARGET_DIR` at a local folder such as
+`C:\cargo-target\zcord` to keep build output off the share.
+
+## Troubleshooting
+
+Run zcord from a terminal with logging enabled to see why it disconnected or failed:
+
+```powershell
+$env:RUST_LOG = "zcord=info"
+cargo run --release
+```
+
+Logs never contain your token. "Invalid token" means Discord ended that login session, so log
+in again. Please include the log output when reporting a bug.
+
+For scrolling and rendering performance, `$env:RUST_LOG = "zcord=info,zcord::perf=debug"`
+reports per-second scroll timing and per-view render rates. These are CPU-side timings only.
+
+Settings are kept in `%APPDATA%\zcord\settings.json`, and downloaded images are cached in
+`%LOCALAPPDATA%\zcord`.
+
+## License
+
+zcord is licensed under the [GNU General Public License v3.0 only](LICENSE).
+
+zcord is not affiliated with or endorsed by Discord Inc.
