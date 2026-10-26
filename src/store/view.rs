@@ -146,21 +146,27 @@ impl Decoration {
 
 impl User {
     pub fn avatar_spec(&self) -> ImageSpec {
-        if let Some(hash) = &self.avatar {
-            return ImageSpec::Avatar {
-                user_id: self.id,
-                hash: hash.clone(),
-            };
-        }
-        let index = self
-            .discriminator
-            .as_deref()
-            .filter(|value| *value != "0")
-            .and_then(|value| value.parse::<u64>().ok())
-            .map(|value| value % 5)
-            .unwrap_or((self.id >> 22) % 6) as u8;
-        ImageSpec::DefaultAvatar { index }
+        avatar_spec(
+            self.id,
+            self.avatar.as_deref(),
+            self.discriminator.as_deref(),
+        )
     }
+}
+
+pub fn avatar_spec(user_id: u64, avatar: Option<&str>, discriminator: Option<&str>) -> ImageSpec {
+    if let Some(hash) = avatar {
+        return ImageSpec::Avatar {
+            user_id,
+            hash: hash.to_owned(),
+        };
+    }
+    let index = discriminator
+        .filter(|value| *value != "0")
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(|value| value % 5)
+        .unwrap_or((user_id >> 22) % 6) as u8;
+    ImageSpec::DefaultAvatar { index }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
