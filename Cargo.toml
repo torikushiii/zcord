@@ -58,6 +58,12 @@ debug = false
 lto = "thin"
 strip = "symbols"
 
+# Slower to build; used for installers and published builds.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+
 [build-dependencies]
 winresource = "0.1"
 
