@@ -13,7 +13,7 @@ use crate::{
     },
     media::animated,
     media::images::{self, ImageSpec},
-    store::{Folder, Guild, RailEntry},
+    store::{Folder, Guild, RailEntry, VoiceActivity},
     theme::{self, rpx},
 };
 
@@ -234,6 +234,7 @@ fn guild_item(app: &DiscordApp, guild: &Guild, cx: &App, morphs: Option<Instant>
             morphs,
         ))
         .children(corner_badge(guild.mentions))
+        .children(app.store.guild_voice_activity(id).map(voice_badge))
 }
 
 fn guild_icon(
@@ -434,6 +435,26 @@ fn corner_badge(count: u32) -> Option<impl IntoElement> {
             .right(rpx(8.))
             .child(theme::badge(count, theme::BG))
     })
+}
+
+fn voice_badge(activity: VoiceActivity) -> impl IntoElement {
+    // The speaker glyph only fills the left two thirds of its box, so it needs a larger
+    // size to look as heavy as the monitor.
+    let (icon, size) = match activity {
+        VoiceActivity::Voice => ("volume-1-filled", 15.),
+        VoiceActivity::Streaming => ("monitor-filled", 12.),
+    };
+    div()
+        .absolute()
+        .top(rpx(-4.))
+        .right(rpx(8.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(rpx(20.))
+        .rounded_full()
+        .bg(rgb(theme::BG))
+        .child(theme::icon(icon, size, theme::STRONG))
 }
 
 fn tooltip(key: u64, label: &str) -> impl IntoElement {
