@@ -67,6 +67,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "library",
     "lock",
     "mail",
+    "mail-filled",
     "megaphone",
     "message-circle",
     "message-square",
