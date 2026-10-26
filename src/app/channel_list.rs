@@ -366,7 +366,7 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
                     row,
                     app.selected_channel_id,
                     openness,
-                    app.voice.joined(),
+                    app.voice.joined(&app.store),
                 )
                 .id(("channel-list-row", index))
                 .map(|this| match (channel, category) {

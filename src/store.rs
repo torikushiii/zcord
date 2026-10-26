@@ -57,6 +57,7 @@ pub struct Store {
     favorite_gifs: Vec<settings_proto::FavoriteGif>,
     rail_order: Vec<u64>,
     social: social::Social,
+    voice_start_times: HashMap<(u64, u64), u64>,
     permission_cache: RefCell<HashMap<u64, u64>>,
 }
 
@@ -163,6 +164,7 @@ pub enum Change {
         guild_id: Option<u64>,
     },
     FavoriteGifs,
+    VoiceTimers,
 }
 
 impl Store {
@@ -235,6 +237,7 @@ impl Store {
             favorite_gifs: Vec::new(),
             rail_order,
             social: social::Social::default(),
+            voice_start_times: HashMap::new(),
             permission_cache: RefCell::new(HashMap::new()),
         };
         store.init_social();
@@ -314,6 +317,10 @@ impl Store {
                 self.guild_upsert(update)
             }
             Event::VoiceStateUpdate(state) => self.voice_state_update(*state),
+            Event::ChannelInfo(info) => self.channel_info(info),
+            Event::VoiceChannelStartTimeUpdate(update) => {
+                self.voice_start_time_update(update.guild_id, update.id, update.voice_start_time)
+            }
             Event::GuildEmojisUpdate(update) => self.guild_emojis_update(update),
             Event::GuildDelete { id } => self.guild_delete(id),
             Event::ThreadListSync(sync) => self.thread_list_sync(sync),

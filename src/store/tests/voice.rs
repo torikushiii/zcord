@@ -1,5 +1,14 @@
 use super::*;
 use crate::discord::{Event, model};
+use std::time::{Duration, UNIX_EPOCH};
+
+fn session_start(channel_id: u64, start: Option<u64>) -> Event {
+    Event::VoiceChannelStartTimeUpdate(model::VoiceChannelStartTimeUpdate {
+        guild_id: 200,
+        id: channel_id,
+        voice_start_time: Some(start),
+    })
+}
 
 fn state(guild: u64, channel: Option<u64>, user: u64) -> model::VoiceState {
     serde_json::from_value(json!({
@@ -125,4 +134,113 @@ fn guild_voice_activity_prefers_streaming() {
         store.apply(Event::VoiceStateUpdate(Box::new(state(200, None, user))));
     }
     assert_eq!(store.guild_voice_activity(200), None);
+}
+
+#[test]
+fn voice_session_snapshot_and_updates_preserve_missing_fields() {
+    let mut store = Store::from_ready(ready_with_voice());
+    let snapshot = json!({"guild_id":"200","channels":[
+        {"id":"2005","voice_start_time":1770000000},
+        {"id":"2006","voice_start_time":1770000010}
+    ]});
+    assert_eq!(
+        store.apply(Event::ChannelInfo(
+            serde_json::from_value(snapshot.clone()).unwrap()
+        )),
+        Change::VoiceTimers
+    );
+    assert_eq!(
+        store.voice_started_at(200, 2005),
+        Some(UNIX_EPOCH + Duration::from_secs(1770000000))
+    );
+    assert_eq!(
+        store.apply(Event::ChannelInfo(
+            serde_json::from_value(snapshot).unwrap()
+        )),
+        Change::None
+    );
+
+    let status_only = json!({"guild_id":"200","channels":[{"id":"2005","status":"Chatting"}]});
+    assert_eq!(
+        store.apply(Event::ChannelInfo(
+            serde_json::from_value(status_only).unwrap(),
+        )),
+        Change::None
+    );
+    assert!(store.voice_started_at(200, 2005).is_some());
+    assert_eq!(store.apply(session_start(2005, None)), Change::VoiceTimers);
+    assert_eq!(store.voice_started_at(200, 2005), None);
+    assert!(store.voice_started_at(200, 2006).is_some());
+    assert_eq!(
+        store.apply(session_start(2005, Some(1770000100))),
+        Change::VoiceTimers
+    );
+    let omitted = json!({"guild_id":"200","id":"2005"});
+    assert_eq!(
+        store.apply(Event::VoiceChannelStartTimeUpdate(
+            serde_json::from_value(omitted).unwrap()
+        )),
+        Change::None
+    );
+    assert_eq!(
+        store.voice_started_at(200, 2005),
+        Some(UNIX_EPOCH + Duration::from_secs(1770000100))
+    );
+}
+
+#[test]
+fn voice_session_survives_rejoining_and_resets_when_last_member_leaves() {
+    let mut store = Store::from_ready(ready_with_voice());
+    store.apply(session_start(2005, Some(1770000000)));
+    let original = store.voice_started_at(200, 2005);
+
+    store.apply(Event::VoiceStateUpdate(Box::new(state(200, None, 1))));
+    assert_eq!(store.voice_started_at(200, 2005), original);
+    store.apply(Event::VoiceStateUpdate(Box::new(state(200, Some(2005), 1))));
+    assert_eq!(store.voice_started_at(200, 2005), original);
+
+    store.apply(Event::VoiceStateUpdate(Box::new(state(200, Some(2006), 1))));
+    assert_eq!(store.voice_started_at(200, 2005), original);
+    store.apply(Event::VoiceStateUpdate(Box::new(state(200, None, 2))));
+    assert_eq!(store.voice_started_at(200, 2005), None);
+
+    store.apply(Event::VoiceStateUpdate(Box::new(state(200, Some(2005), 1))));
+    assert_eq!(store.voice_started_at(200, 2005), None);
+    store.apply(session_start(2005, Some(1770000200)));
+    assert_ne!(store.voice_started_at(200, 2005), original);
+}
+
+#[test]
+fn voice_session_is_refetched_after_ready_instead_of_using_local_join_time() {
+    let snapshot = json!({"guild_id":"200","channels":[
+        {"id":"2005","voice_start_time":1770000000}
+    ]});
+    let mut store = Store::from_ready(ready_with_voice());
+    store.apply(Event::ChannelInfo(
+        serde_json::from_value(snapshot.clone()).unwrap(),
+    ));
+    let original = store.voice_started_at(200, 2005);
+
+    store.apply(Event::Ready(Box::new(ready_with_voice())));
+    assert_eq!(store.voice_started_at(200, 2005), None);
+    store.apply(Event::ChannelInfo(
+        serde_json::from_value(snapshot).unwrap(),
+    ));
+    assert_eq!(store.voice_started_at(200, 2005), original);
+}
+
+#[test]
+fn deleting_voice_channels_and_guilds_clears_session_timestamps() {
+    let mut store = Store::from_ready(ready_with_voice());
+    store.apply(session_start(2005, Some(1770000000)));
+    store.apply(session_start(2006, Some(1770000000)));
+    store.apply(Event::ChannelDelete { id: 2005 });
+    assert_eq!(store.voice_started_at(200, 2005), None);
+    assert!(store.voice_started_at(200, 2006).is_some());
+    store.apply(Event::GuildDelete { id: 200 });
+    assert_eq!(store.voice_started_at(200, 2006), None);
+    assert_eq!(
+        store.apply(session_start(2006, Some(1770000000))),
+        Change::None
+    );
 }

@@ -72,6 +72,10 @@ pub(super) fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) 
             "CHANNEL_DELETE" | "THREAD_DELETE" => {
                 id(&value, "id").map(|id| Event::ChannelDelete { id })
             }
+            "CHANNEL_INFO" => serde_json::from_value(value).ok().map(Event::ChannelInfo),
+            "VOICE_CHANNEL_START_TIME_UPDATE" => serde_json::from_value(value)
+                .ok()
+                .map(Event::VoiceChannelStartTimeUpdate),
             "RELATIONSHIP_ADD" => serde_json::from_value(value)
                 .ok()
                 .map(|r| Event::RelationshipAdd(Box::new(r))),
@@ -125,6 +129,57 @@ pub(super) fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn voice_session_timestamps_dispatch_with_missing_and_null_fields() {
+        let mut ignored = HashSet::new();
+        let event = dispatch(
+            "CHANNEL_INFO",
+            json!({"guild_id":"7","channels":[
+                {"id":"8","voice_start_time":1770000000},
+                {"id":"9","voice_start_time":null},
+                {"id":"10","status":"Chatting"}
+            ]}),
+            &mut ignored,
+        );
+        let Some(Event::ChannelInfo(info)) = event else {
+            panic!("expected channel info");
+        };
+        assert_eq!(info.guild_id, 7);
+        assert_eq!(info.channels.len(), 3);
+        assert_eq!(info.channels[0].id, 8);
+        assert_eq!(info.channels[0].voice_start_time, Some(Some(1770000000)));
+        assert_eq!(info.channels[1].voice_start_time, Some(None));
+        assert_eq!(info.channels[2].voice_start_time, None);
+
+        for (value, expected) in [
+            (
+                json!({"id":"8","guild_id":"7","voice_start_time":1770000000}),
+                Some(Some(1770000000)),
+            ),
+            (
+                json!({"id":"8","guild_id":"7","voice_start_time":null}),
+                Some(None),
+            ),
+            (json!({"id":"8","guild_id":"7"}), None),
+        ] {
+            let event = dispatch("VOICE_CHANNEL_START_TIME_UPDATE", value, &mut ignored);
+            assert!(matches!(
+                event,
+                Some(Event::VoiceChannelStartTimeUpdate(update))
+                    if update.id == 8 && update.guild_id == 7 && update.voice_start_time == expected
+            ));
+        }
+        assert!(
+            dispatch(
+                "CHANNEL_INFO",
+                json!({"guild_id":"bad","channels":[]}),
+                &mut ignored,
+            )
+            .is_none()
+        );
+        assert!(ignored.is_empty());
+    }
 
     #[test]
     fn typing_start_dispatches_with_member() {

@@ -14,6 +14,15 @@ pub(super) fn voice_state(payload: Value) -> Command {
     }
 }
 
+pub(super) fn voice_start_times(guild_id: u64) -> Command {
+    Command {
+        members: false,
+        payload: json!({"op":43,"d":{
+            "guild_id":guild_id.to_string(),"fields":["voice_start_time"]
+        }}),
+    }
+}
+
 pub(super) fn subscription(guild_id: u64, channel_id: u64, ranges: &[(u32, u32)]) -> Command {
     let ranges: Vec<_> = ranges
         .iter()
@@ -105,6 +114,19 @@ impl Commands {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn voice_start_times_requests_server_session_timestamps() {
+        let command = voice_start_times(123);
+        assert!(!command.members);
+        assert_eq!(
+            command.payload,
+            json!({"op":43,"d":{"guild_id":"123","fields":["voice_start_time"]}})
+        );
+        let mut queue = Commands::new();
+        queue.push(true, command);
+        assert_eq!(queue.pop().unwrap()["op"], 43);
+    }
 
     #[test]
     fn payloads_chunking_and_not_ready_drop() {
