@@ -331,7 +331,7 @@ impl Render for OverlaysView {
             .children(emoji_picker::render(app, window, cx))
             .children(gif_picker::render(app, window, cx))
             .children(channel_list::account_menu(app))
-            .children(voice::noise_menu(app, cx))
+            .children(voice::menu(app, cx))
             .children(switcher::render(app, cx))
             .children(crate::media::player::fullscreen(app, cx))
             .into_any_element()

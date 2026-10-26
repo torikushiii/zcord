@@ -44,7 +44,7 @@ const GROUP_MINUTES: u32 = 7;
 const GUTTER: f32 = 72.;
 const BOTTOM_SPACER: f32 = 24.;
 const STICKER_SIZE: f32 = 160.;
-const LINK: u32 = 0x00A8FC;
+pub(crate) const LINK: u32 = 0x00A8FC;
 const DIALOG_ENTER: Duration = Duration::from_millis(200);
 
 #[cfg(test)]
