@@ -31,6 +31,28 @@ impl DiscordApp {
         }
     }
 
+    pub(super) fn request_voice_members(&mut self) {
+        let Some(session) = self.session.clone().filter(|_| self.live) else {
+            return;
+        };
+        let guild_id = self.selected_guild_id;
+        let Some(guild) = self.guild() else {
+            return;
+        };
+        let ids: Vec<u64> = guild
+            .categories
+            .iter()
+            .flat_map(|category| &category.channels)
+            .filter(|channel| channel.kind == crate::store::ChannelKind::Voice)
+            .flat_map(|channel| self.store.voice_members(guild_id, channel.id))
+            .map(|member| member.user_id)
+            .collect();
+        let missing = self.store.missing_members(guild_id, ids);
+        if !missing.is_empty() {
+            session.request_members(guild_id, missing);
+        }
+    }
+
     pub(super) fn sync_member_rows(&mut self) {
         self.member_layout.sync(
             &self.member_rows,

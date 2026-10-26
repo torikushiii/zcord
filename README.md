@@ -52,7 +52,9 @@ get it back.
 ## Building
 
 There are no prebuilt downloads yet. On Windows you need Visual Studio Build Tools (MSVC and
-the Windows SDK) and Rust's stable MSVC toolchain from [rustup](https://rustup.rs).
+the Windows SDK), [CMake](https://cmake.org/download/) on `PATH` for the bundled Opus codec
+(the Windows installer has an "Add CMake to the PATH" option), and Rust's stable MSVC toolchain from
+[rustup](https://rustup.rs).
 
 ```powershell
 git clone https://github.com/torikushiii/zcord

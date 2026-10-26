@@ -85,6 +85,31 @@ pub fn member_avatar(
     animate: bool,
     cx: &App,
 ) -> impl IntoElement + use<> {
+    member_avatar_with(store, guild_id, user_id, size, status, animate, true, cx)
+}
+
+/// Discord leaves avatar decorations off small avatars such as voice channel members.
+pub fn undecorated_member_avatar(
+    store: &Store,
+    guild_id: u64,
+    user_id: u64,
+    size: f32,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    member_avatar_with(store, guild_id, user_id, size, None, false, false, cx)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn member_avatar_with(
+    store: &Store,
+    guild_id: u64,
+    user_id: u64,
+    size: f32,
+    status: Option<(Status, u32)>,
+    animate: bool,
+    decorated: bool,
+    cx: &App,
+) -> impl IntoElement + use<> {
     let user = store.user(user_id);
     let spec = store
         .member_avatar_spec(guild_id, user_id)
@@ -99,6 +124,7 @@ pub fn member_avatar(
         image,
         store
             .member_decoration(guild_id, user_id)
+            .filter(|_| decorated)
             .and_then(|data| decoration(user_id, data, size, animate, notch, cx)),
     )
 }
