@@ -86,3 +86,6 @@ png = "=0.18.1"
 # The unused HPKE libcrux backend pins a vulnerable AEAD dependency in 0.6.1.
 # Keep the upstream fix pinned until OpenMLS supports a fixed registry release.
 hpke-rs-libcrux = { git = "https://github.com/celabshq/hpke-rs", rev = "654df20e5c2e6657f0ac17f2a903f179bb97a5ae" }
+# image-webp 0.2.4 omits the transparent-frame disposal fix from PR #171.
+# Keep the decoder pinned to the upstream fix until it reaches a registry release.
+image-webp = { git = "https://github.com/image-rs/image-webp", rev = "5139e991e5f8d54ac3635cfc988ebb41d5fd4b3f" }
