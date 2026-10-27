@@ -1054,13 +1054,13 @@ fn blend(from: u32, to: u32, t: f32) -> Rgba {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{Call, Duration, Store, Voice};
     use crate::discord::{Event, model};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn store_with_start(start: Option<u64>) -> Store {
         let ready =
-            serde_json::from_str(include_str!("../../discord/fixtures/ready.json")).unwrap();
+            serde_json::from_str(include_str!("../discord/fixtures/ready.json")).unwrap();
         let mut store = Store::from_ready(ready);
         store.apply(Event::VoiceChannelStartTimeUpdate(
             model::VoiceChannelStartTimeUpdate {
