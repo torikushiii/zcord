@@ -15,6 +15,7 @@ const SAVE_DELAY: Duration = Duration::from_millis(500);
 
 static CLOCK_24H: AtomicBool = AtomicBool::new(false);
 static GIF_AUTOPLAY: AtomicBool = AtomicBool::new(true);
+static SMOOTH_SCROLL: AtomicBool = AtomicBool::new(true);
 static EMOJI_ANIMATION: AtomicBool = AtomicBool::new(true);
 static LINK_PREVIEWS: AtomicBool = AtomicBool::new(true);
 static CHAT_FONT_SIZE: AtomicU32 = AtomicU32::new(16.0f32.to_bits());
@@ -57,6 +58,8 @@ pub struct Settings {
     pub voice_sensitivity: Option<f32>,
     #[serde(default)]
     pub gif_autoplay_off: bool,
+    #[serde(default)]
+    pub smooth_scroll_off: bool,
     #[serde(default)]
     pub emoji_animation_off: bool,
     #[serde(default)]
@@ -155,6 +158,16 @@ pub fn set_gif_autoplay(cx: &mut App, on: bool) {
 
 pub fn gif_autoplay() -> bool {
     GIF_AUTOPLAY.load(Ordering::Relaxed)
+}
+
+pub fn set_smooth_scroll(cx: &mut App, on: bool) {
+    SMOOTH_SCROLL.store(on, Ordering::Relaxed);
+    update(cx, |settings| settings.smooth_scroll_off = !on);
+    cx.refresh_windows();
+}
+
+pub fn smooth_scroll() -> bool {
+    SMOOTH_SCROLL.load(Ordering::Relaxed)
 }
 
 pub fn set_emoji_animation(cx: &mut App, on: bool) {
@@ -365,6 +378,11 @@ mod tests {
         GIF_AUTOPLAY.store(true, Ordering::Relaxed);
         assert!(gif_autoplay());
 
+        SMOOTH_SCROLL.store(false, Ordering::Relaxed);
+        assert!(!smooth_scroll());
+        SMOOTH_SCROLL.store(true, Ordering::Relaxed);
+        assert!(smooth_scroll());
+
         EMOJI_ANIMATION.store(false, Ordering::Relaxed);
         assert!(!emoji_animation());
         EMOJI_ANIMATION.store(true, Ordering::Relaxed);
@@ -405,6 +423,7 @@ mod tests {
         assert!(settings.voice_output_volume.is_none());
         assert!(settings.voice_sensitivity.is_none());
         assert!(!settings.gif_autoplay_off);
+        assert!(!settings.smooth_scroll_off);
         assert!(!settings.emoji_animation_off);
         assert!(!settings.link_previews_off);
         assert!(settings.chat_font_size.is_none());

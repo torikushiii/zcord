@@ -46,6 +46,7 @@ fn main() {
             settings::set_clock_24h(cx, saved.clock_24h);
             settings::set_reduce_motion(cx, saved.reduce_motion);
             settings::set_gif_autoplay(cx, !saved.gif_autoplay_off);
+            settings::set_smooth_scroll(cx, !saved.smooth_scroll_off);
             settings::set_emoji_animation(cx, !saved.emoji_animation_off);
             settings::set_link_previews(cx, !saved.link_previews_off);
             settings::set_chat_font_size(cx, saved.chat_font_size.unwrap_or(16.0));

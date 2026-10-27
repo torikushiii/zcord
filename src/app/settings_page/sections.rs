@@ -187,11 +187,22 @@ fn accessibility(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> AnyElem
         ));
     section(
         "Motion",
-        vec![row(
-            "Reduced Motion",
-            Some("Turns off popup, hover and avatar animations."),
-            toggle.into_any_element(),
-        )],
+        vec![
+            row(
+                "Reduced Motion",
+                Some("Turns off popup, hover and avatar animations."),
+                toggle.into_any_element(),
+            ),
+            toggle_row(
+                app,
+                settings,
+                "settings-smooth-scroll",
+                "Smooth Scrolling",
+                "Mouse-wheel scrolling glides like a browser. Reduced Motion turns it off.",
+                crate::settings::smooth_scroll(),
+                crate::settings::set_smooth_scroll,
+            ),
+        ],
     )
 }
 
