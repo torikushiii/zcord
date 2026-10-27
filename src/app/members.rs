@@ -102,6 +102,7 @@ impl DiscordApp {
                 }
                 user.custom_status = None;
                 user.activity = None;
+                user.activity_kind = None;
                 user.playing = false;
                 app.status_expiry = None;
                 app.status_expiry_timer = None;

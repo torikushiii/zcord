@@ -316,6 +316,9 @@ pub(super) fn display_names(
         .and_then(|p| p.pronouns.clone())
         .filter(|p| !p.is_empty())
         .or_else(|| profile?.user_profile.as_ref()?.pronouns.clone())
+        // Discord renders pronouns as one line of HTML text, so newlines padding them out
+        // collapse to spaces there.
+        .map(|p| p.split_whitespace().collect::<Vec<_>>().join(" "))
         .filter(|p| !p.is_empty());
     let name_style = app.store.member_name_style(guild_id, card.user_id);
     let dot = || {
@@ -379,9 +382,12 @@ pub(super) fn display_names(
                 }))
                 .children(profile.and_then(|profile| badges(app, card, profile, palette, cx))),
         )
-        .when(!large && card.user_id != app.store.current_user_id, |this| {
-            this.children(profile.and_then(|profile| mutuals_line(app, profile, palette, cx)))
-        })
+        .when(
+            !large && card.user_id != app.store.current_user_id,
+            |this| {
+                this.children(profile.and_then(|profile| mutuals_line(app, profile, palette, cx)))
+            },
+        )
 }
 
 fn popout_body(
@@ -409,14 +415,19 @@ fn popout_body(
             })),
             cx,
         ))
-        .children(card.loading().then(|| skeleton(card.user_id)))
-        .children(bio(app, card, true, cx))
-        .children(board::popout_widget(app, card, cx))
-        .children(
-            board::popout_playing(app, card, cx)
-                .or_else(|| user.and_then(|user| playing(user, palette))),
-        )
-        .children(roles(app, card))
+        .map(|this| {
+            if card.loading() {
+                return this.child(skeleton(card.user_id));
+            }
+            this.children(bio(app, card, true, cx))
+                .children(board::popout_widget(app, card, cx))
+                .children(
+                    board::popout_playing(app, card, cx)
+                        .or_else(|| user.and_then(|user| playing(user, palette))),
+                )
+                .children(board::listening(app, card, false, cx))
+                .children(roles(app, card))
+        })
 }
 
 /// Stands in for the bio and roles while a profile nobody has opened before is fetched.
@@ -477,11 +488,34 @@ pub(super) fn bio(
         .filter(|bio| !bio.trim().is_empty())
         .or_else(|| profile.user_profile.as_ref()?.bio.clone())
         .filter(|bio| !bio.trim().is_empty())?;
-    let parsed = app.parsed(card.user_id, &text);
+    Some(
+        div()
+            .text_size(rpx(14.))
+            .line_height(rpx(18.))
+            .text_color(rgb(palette.strong))
+            .when(clamped, |this| {
+                this.max_h(rpx(18. * BIO_LINES as f32)).overflow_hidden()
+            })
+            .child(markdown(app, card, card.user_id, &text, cx))
+            .into_any_element(),
+    )
+}
+
+/// Profile text Discord renders as markdown (the bio, some widget fields), in the card's colours.
+/// `id` keys the parse cache, so give each field its own.
+pub(super) fn markdown(
+    app: &DiscordApp,
+    card: &ProfileCard,
+    id: u64,
+    text: &str,
+    cx: &App,
+) -> AnyElement {
+    let palette = card.palette();
+    let parsed = app.parsed(id, text);
     let context = BodyContext {
         store: &app.store,
         guild_id: card.guild_id.unwrap_or(0),
-        message_id: card.user_id,
+        message_id: id,
         revealed: &app.revealed_spoilers,
         entity: app.entity.clone(),
         colors: BodyColors {
@@ -491,17 +525,7 @@ pub(super) fn bio(
             link: palette.light.then_some(0x154C8A),
         },
     };
-    Some(
-        div()
-            .text_size(rpx(14.))
-            .line_height(rpx(18.))
-            .text_color(rgb(palette.strong))
-            .when(clamped, |this| {
-                this.max_h(rpx(18. * BIO_LINES as f32)).overflow_hidden()
-            })
-            .child(render_body(&parsed.blocks, false, false, &context, cx))
-            .into_any_element(),
-    )
+    render_body(&parsed.blocks, false, false, &context, cx).into_any_element()
 }
 
 pub(super) fn playing(user: &User, palette: ProfilePalette) -> Option<AnyElement> {

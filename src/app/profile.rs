@@ -54,6 +54,8 @@ const BACKDROP_OPACITY: f32 = 0.3;
 const BACKDROP_HEIGHT: f32 = 280.;
 const EFFECT_TICK: Duration = Duration::from_millis(100);
 const ENTER: Duration = Duration::from_millis(180);
+/// Longest the popout shows its skeleton waiting for data before showing what it has.
+const POPOUT_WAIT: Duration = Duration::from_millis(1500);
 const EFFECT_HEIGHT_RATIO: f32 = 880. / 450.;
 const EFFECT_MAX_PX: u32 = 1200;
 const THEME_OVERLAY: f32 = 0.6;
@@ -104,8 +106,11 @@ pub(crate) struct ProfileCard {
     modal: bool,
     profile: Option<Arc<model::Profile>>,
     pub(crate) games: HashMap<u64, Arc<model::Game>>,
+    games_pending: HashSet<u64>,
     pub(crate) applications: HashMap<u64, Arc<model::PublicApplication>>,
+    applications_pending: HashSet<u64>,
     pub(crate) identities: Option<Arc<model::ApplicationIdentities>>,
+    identities_pending: bool,
     pub(crate) outbox: Option<Arc<model::Outbox>>,
     pub(crate) wishlist: Option<Arc<model::Wishlist>>,
     pub(crate) note: Option<String>,
@@ -113,7 +118,11 @@ pub(crate) struct ProfileCard {
     hovered_badge: Option<usize>,
     /// `(widget id, game id)` of the Board cover under the pointer, for its name tooltip.
     pub(crate) hovered_cover: Option<(u64, u64)>,
+    /// Whether the pointer is over each rich-presence image (indexed by `ArtSlot`), for their
+    /// `large_text`/`small_text` tooltips. A small image sits on its large one, so both can be.
+    pub(crate) hovered_art: [bool; 4],
     pub(crate) widget_configs: HashMap<u64, Arc<model::WidgetConfig>>,
+    widget_configs_pending: HashSet<u64>,
     board_requested: bool,
     modal_request_pending: bool,
     details_requested: bool,
@@ -126,6 +135,8 @@ pub(crate) struct ProfileCard {
     avatar_theme_source: Option<ImageSpec>,
     effect: Option<Arc<model::CollectibleProduct>>,
     frame: Option<Arc<model::CollectibleProduct>>,
+    /// Effect and frame SKUs still being fetched.
+    cosmetics_pending: HashSet<u64>,
     opened: Instant,
     /// Set when every effect layer has decoded; all layers share this clock.
     effect_started: RefCell<Option<Instant>>,
@@ -140,6 +151,14 @@ pub(crate) struct ProfileCard {
     /// when it happened.
     pub(crate) widget_toggles: HashMap<u64, (u64, Instant)>,
     _tasks: Vec<Task<()>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArtSlot {
+    Large,
+    Small,
+    ListeningLarge,
+    ListeningSmall,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -164,9 +183,25 @@ struct Layout {
 }
 
 impl ProfileCard {
-    /// Nothing cached for this user yet and the profile request is still out.
     fn loading(&self) -> bool {
-        self.profile.is_none() && self.modal_request_pending
+        if self.modal {
+            self.profile.is_none() && self.modal_request_pending
+        } else {
+            !self.ready()
+        }
+    }
+
+    /// Everything the popout draws has arrived (or failed), so it can fill in at once
+    /// instead of growing as each request lands. `POPOUT_WAIT` caps the wait.
+    fn ready(&self) -> bool {
+        let settled = !self.modal_request_pending
+            && !self.identities_pending
+            && self.games_pending.is_empty()
+            && self.applications_pending.is_empty()
+            && self.widget_configs_pending.is_empty()
+            && self.cosmetics_pending.is_empty()
+            && !(self.avatar_theme_source.is_some() && self.avatar_theme.is_none());
+        settled || self.opened.elapsed() >= POPOUT_WAIT
     }
 
     fn theme(&self) -> Option<ProfileTheme> {
@@ -183,10 +218,14 @@ impl ProfileCard {
         mut application_ids: Vec<u64>,
         cx: &mut Context<DiscordApp>,
     ) {
-        application_ids.retain(|id| !self.applications.contains_key(id));
+        application_ids.retain(|id| {
+            !self.applications.contains_key(id) && !self.applications_pending.contains(id)
+        });
         if application_ids.is_empty() {
             return;
         }
+        let pending: HashSet<u64> = application_ids.iter().copied().collect();
+        self.applications_pending.extend(pending.iter().copied());
         let (user_id, guild_id) = (self.user_id, self.guild_id);
         let metadata_session = session.clone();
         let request = Tokio::spawn(cx, async move {
@@ -197,16 +236,13 @@ impl ProfileCard {
                 Ok(Ok(applications)) => applications,
                 Ok(Err(error)) => {
                     log::warn!("Could not load profile applications for user {user_id}: {error}");
-                    return;
+                    Vec::new()
                 }
                 Err(error) => {
                     log::warn!("Profile applications task failed for user {user_id}: {error}");
-                    return;
+                    Vec::new()
                 }
             };
-            if applications.is_empty() {
-                return;
-            }
             this.update(cx, |app, cx| {
                 let Some(card) = app
                     .profile
@@ -215,6 +251,11 @@ impl ProfileCard {
                 else {
                     return;
                 };
+                card.applications_pending.retain(|id| !pending.contains(id));
+                if applications.is_empty() {
+                    cx.notify();
+                    return;
+                }
                 for application in applications {
                     card.applications.insert(application.id, application);
                 }
@@ -232,10 +273,12 @@ impl ProfileCard {
         mut game_ids: Vec<u64>,
         cx: &mut Context<DiscordApp>,
     ) {
-        game_ids.retain(|id| !self.games.contains_key(id));
+        game_ids.retain(|id| !self.games.contains_key(id) && !self.games_pending.contains(id));
         if game_ids.is_empty() {
             return;
         }
+        let pending: HashSet<u64> = game_ids.iter().copied().collect();
+        self.games_pending.extend(pending.iter().copied());
         let (user_id, guild_id) = (self.user_id, self.guild_id);
         let metadata_session = session.clone();
         let request = Tokio::spawn(cx, async move { session.games(&game_ids).await });
@@ -244,16 +287,13 @@ impl ProfileCard {
                 Ok(Ok(games)) => games,
                 Ok(Err(error)) => {
                     log::warn!("Could not load profile games for user {user_id}: {error}");
-                    return;
+                    Vec::new()
                 }
                 Err(error) => {
                     log::warn!("Profile games task failed for user {user_id}: {error}");
-                    return;
+                    Vec::new()
                 }
             };
-            if games.is_empty() {
-                return;
-            }
             this.update(cx, |app, cx| {
                 let Some(card) = app
                     .profile
@@ -262,6 +302,11 @@ impl ProfileCard {
                 else {
                     return;
                 };
+                card.games_pending.retain(|id| !pending.contains(id));
+                if games.is_empty() {
+                    cx.notify();
+                    return;
+                }
                 for game in games {
                     card.games.insert(game.id, game);
                 }
@@ -271,6 +316,60 @@ impl ProfileCard {
             })
             .ok();
         }));
+    }
+
+    fn load_widget_configs(
+        &mut self,
+        session: Session,
+        mut application_ids: Vec<u64>,
+        cx: &mut Context<DiscordApp>,
+    ) {
+        application_ids.retain(|id| {
+            !self.widget_configs.contains_key(id) && !self.widget_configs_pending.contains(id)
+        });
+        if application_ids.is_empty() {
+            return;
+        }
+        self.widget_configs_pending
+            .extend(application_ids.iter().copied());
+        let (user_id, guild_id) = (self.user_id, self.guild_id);
+        for application_id in application_ids {
+            let session = session.clone();
+            let request = Tokio::spawn(
+                cx,
+                async move { session.widget_config(application_id).await },
+            );
+            self._tasks.push(cx.spawn(async move |this, cx| {
+                let config = match request.await {
+                    Ok(Ok(config)) => config,
+                    Ok(Err(error)) => {
+                        log::warn!(
+                            "Could not load widget config for application {application_id}: {error}"
+                        );
+                        None
+                    }
+                    Err(error) => {
+                        log::warn!("Profile widget config task failed for user {user_id}: {error}");
+                        None
+                    }
+                };
+                this.update(cx, |app, cx| {
+                    let Some(card) = app
+                        .profile
+                        .as_mut()
+                        .filter(|card| card.user_id == user_id && card.guild_id == guild_id)
+                    else {
+                        return;
+                    };
+                    card.widget_configs_pending.remove(&application_id);
+                    if let Some(config) = config {
+                        card.widget_configs.insert(application_id, config);
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }));
+        }
     }
 
     /// Partner applications and their games can have different IDs; follow both directions.

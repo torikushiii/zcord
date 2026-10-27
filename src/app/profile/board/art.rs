@@ -75,6 +75,41 @@ pub(super) fn widget_art(
     })
 }
 
+pub(super) fn personal_art(
+    user_id: u64,
+    image: &PersonalImage,
+    size: f32,
+    radius: f32,
+    cx: &App,
+) -> Option<AnyElement> {
+    let spec = |animated| ImageSpec::Media {
+        url: format!(
+            "https://cdn.discordapp.com/widget-assets/{user_id}/{}?format=webp",
+            image.file_id
+        ),
+        width: 0,
+        height: 0,
+        animated,
+    };
+    let pixels = theme::image_px(size);
+    if image.is_animated
+        && let Some(frames) = animated::resolve(&spec(true), pixels, cx)
+    {
+        return Some(
+            animated::image(frames)
+                .size_full()
+                .rounded(rpx(radius))
+                .object_fit(ObjectFit::Cover)
+                .id(("profile-personal-art", image.file_id))
+                .into_any_element(),
+        );
+    }
+    Some(still_art(
+        images::resolve(&spec(false), pixels, cx)?,
+        radius,
+    ))
+}
+
 pub(super) fn media(url: &str, size: f32, cx: &App) -> Option<Arc<Path>> {
     let spec = ImageSpec::Media {
         url: url.to_owned(),

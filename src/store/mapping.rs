@@ -402,6 +402,7 @@ pub(super) fn map_user(user: &model::User) -> User {
         tag: user.primary_guild.as_ref().and_then(guild_tag),
         playing: false,
         activity: None,
+        activity_kind: None,
         game: None,
         listening: None,
         custom_status: None,

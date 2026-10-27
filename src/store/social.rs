@@ -119,7 +119,7 @@ fn custom_status_from_presence(activities: &[model::Activity]) -> Option<CustomS
         })
 }
 
-pub(super) fn activity(activities: &[model::Activity]) -> Option<(String, bool)> {
+pub(super) fn activity(activities: &[model::Activity]) -> Option<(String, bool, Option<u8>)> {
     for activity in activities.iter().filter(|a| a.kind == 4) {
         let emoji = activity
             .emoji
@@ -127,16 +127,23 @@ pub(super) fn activity(activities: &[model::Activity]) -> Option<(String, bool)>
             .filter(|e| e.id.is_none())
             .and_then(|e| e.name.as_deref());
         if let Some(text) = custom_text(activity.state.as_deref().unwrap_or_default(), emoji) {
-            return Some((text, false));
+            return Some((text, false, None));
         }
     }
     let activity = playing_activity(activities)?;
     let verb = activity_verb(activity.kind)?;
     let name = activity_name(activity);
-    Some(if verb.is_empty() {
-        (name.to_owned(), true)
+    let displayed = match activity.status_display_type {
+        Some(1) => activity_text(activity.state.as_deref()),
+        Some(2) => activity_text(activity.details.as_deref()),
+        _ => None,
+    };
+    Some(if let Some(text) = displayed {
+        (text, verb.is_empty(), Some(activity.kind))
+    } else if verb.is_empty() {
+        (name.to_owned(), true, Some(activity.kind))
     } else {
-        (format!("{verb} {name}"), false)
+        (format!("{verb} {name}"), false, Some(activity.kind))
     })
 }
 
@@ -160,6 +167,7 @@ fn game_activity(activity: &model::Activity) -> GameActivity {
     GameActivity {
         name: activity.name.clone(),
         application_id: activity.application_id,
+        kind: activity.kind,
         platform,
         embedded,
         playable,
@@ -169,6 +177,11 @@ fn game_activity(activity: &model::Activity) -> GameActivity {
             .and_then(|timestamps| timestamps.start)
             .or(activity.created_at)
             .and_then(|start| UNIX_EPOCH.checked_add(Duration::from_millis(start))),
+        ends_at: activity
+            .timestamps
+            .as_ref()
+            .and_then(|timestamps| timestamps.end)
+            .and_then(|end| UNIX_EPOCH.checked_add(Duration::from_millis(end))),
         details: activity_text(activity.details.as_deref()),
         state: activity_text(activity.state.as_deref()),
         large_image: activity_image(
@@ -656,9 +669,10 @@ impl Store {
         }
         if let Some(activities) = &presence.activities {
             let current = activity(activities);
-            let playing = current.as_ref().is_some_and(|(_, playing)| *playing);
+            let playing = current.as_ref().is_some_and(|(_, playing, _)| *playing);
             user.playing = playing;
-            user.activity = current.map(|(text, _)| text);
+            user.activity_kind = current.as_ref().and_then(|(_, _, kind)| *kind);
+            user.activity = current.map(|(text, _, _)| text);
             // A custom status takes the activity line, but the game still shows on the profile.
             user.game = playing_activity(activities)
                 .filter(|activity| activity.kind == 0)
@@ -710,6 +724,7 @@ impl Store {
         if !partial || settings.is_some_and(|s| s.custom_status_present) {
             let custom = settings.and_then(|s| s.custom_status.as_ref());
             user.playing = false;
+            user.activity_kind = None;
             user.activity = custom.and_then(|s| {
                 custom_text(&s.text, (s.emoji_id == 0).then_some(s.emoji_name.as_str()))
             });

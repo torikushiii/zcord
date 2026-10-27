@@ -33,6 +33,8 @@ pub struct Presence {
 pub struct Activity {
     #[serde(default, rename = "type")]
     pub kind: u8,
+    #[serde(default, deserialize_with = "default_value")]
+    pub status_display_type: Option<u8>,
     #[serde(default)]
     pub name: String,
     #[serde(default)]
@@ -73,6 +75,8 @@ pub struct ActivityAssets {
 pub struct ActivityTimestamps {
     #[serde(default, deserialize_with = "optional_id")]
     pub start: Option<u64>,
+    #[serde(default, deserialize_with = "optional_id")]
+    pub end: Option<u64>,
 }
 
 #[derive(Clone, Default, Deserialize)]

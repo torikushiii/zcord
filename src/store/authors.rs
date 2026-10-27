@@ -63,9 +63,11 @@ impl Store {
         if let Some(existing) = self.users.get(&user.id) {
             mapped.status = existing.status;
             mapped.activity.clone_from(&existing.activity);
+            mapped.activity_kind = existing.activity_kind;
             mapped.custom_status.clone_from(&existing.custom_status);
             mapped.playing = existing.playing;
             mapped.game.clone_from(&existing.game);
+            mapped.listening.clone_from(&existing.listening);
             mapped.role_color = existing.role_color;
             if user.primary_guild.is_none() {
                 mapped.tag.clone_from(&existing.tag);

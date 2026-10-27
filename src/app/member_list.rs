@@ -319,9 +319,7 @@ fn activity_line(user: &User, online: bool) -> Option<impl IntoElement> {
             .text_size(rpx(12.))
             .line_height(rpx(16.))
             .text_color(rgb(theme::MUTED))
-            .when(user.playing, |this| {
-                this.child(theme::icon("gamepad-2", 14., theme::GREEN))
-            })
+            .children(theme::activity_icon(user).map(|icon| theme::icon(icon, 14., theme::GREEN)))
             .child(
                 div()
                     .flex_1()

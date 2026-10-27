@@ -528,14 +528,14 @@ fn dm_avatar(app: &DiscordApp, dm: &PrivateChannel, ring: u32, cx: &App) -> AnyE
     }
 }
 
-fn subtitle(app: &DiscordApp, dm: &PrivateChannel) -> Option<(String, bool)> {
+fn subtitle(app: &DiscordApp, dm: &PrivateChannel) -> Option<(String, Option<&'static str>)> {
     if dm.group {
         let members = dm.recipient_ids.len() + 1;
-        return Some((format!("{members} Members"), false));
+        return Some((format!("{members} Members"), None));
     }
     let user = app.store.user(*dm.recipient_ids.first()?)?;
     let text = user.activity.clone().filter(|_| user.status.is_online())?;
-    Some((text, user.playing))
+    Some((text, theme::activity_icon(user)))
 }
 
 fn dm_row(
@@ -624,7 +624,7 @@ fn dm_row(
                         )
                         .children(tag),
                 )
-                .children(subtitle.map(|(text, playing)| {
+                .children(subtitle.map(|(text, icon)| {
                     div()
                         .flex()
                         .items_center()
@@ -633,9 +633,7 @@ fn dm_row(
                         .text_size(rpx(12.))
                         .line_height(rpx(16.))
                         .text_color(rgb(theme::MUTED))
-                        .when(playing, |this| {
-                            this.child(theme::icon("gamepad-2", 14., theme::GREEN))
-                        })
+                        .children(icon.map(|icon| theme::icon(icon, 14., theme::GREEN)))
                         .child(
                             div()
                                 .flex_1()
@@ -876,7 +874,9 @@ fn friend_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement + us
     let name = app.store.friend_name(user_id);
     let username = user.map(|user| user.username.clone()).unwrap_or_default();
     let status = user.map_or(Status::Offline, |user| user.status);
-    let playing = user.is_some_and(|user| user.playing && user.status.is_online());
+    let icon = user
+        .filter(|user| user.status.is_online())
+        .and_then(theme::activity_icon);
     let line = status_text(user, kind);
     let tag = user
         .and_then(|user| user.tag.as_ref())
@@ -953,9 +953,7 @@ fn friend_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement + us
                         .text_size(rpx(14.))
                         .line_height(rpx(18.))
                         .text_color(rgb(theme::MUTED))
-                        .when(playing, |this| {
-                            this.child(theme::icon("gamepad-2", 14., theme::GREEN))
-                        })
+                        .children(icon.map(|icon| theme::icon(icon, 14., theme::GREEN)))
                         .child(
                             div()
                                 .flex_1()
@@ -1031,16 +1029,17 @@ fn active_card(
             .into_any_element()
     };
     // `presence_art` and the app icon fill their parent, so each needs a sized box.
-    let icon = div()
-        .flex_none()
-        .size(rpx(ACTIVE_ICON))
-        .child(if listening && game.name == "Spotify" {
-            theme::icon("connections/spotify", ACTIVE_ICON, SPOTIFY_GREEN).into_any_element()
-        } else {
-            app_icon(ACTIVE_ICON)
-                .or_else(|| presence(ACTIVE_ICON, "active-icon"))
-                .unwrap_or_else(|| fallback(ACTIVE_ICON))
-        });
+    let icon =
+        div()
+            .flex_none()
+            .size(rpx(ACTIVE_ICON))
+            .child(if listening && game.name == "Spotify" {
+                theme::icon("connections/spotify", ACTIVE_ICON, SPOTIFY_GREEN).into_any_element()
+            } else {
+                app_icon(ACTIVE_ICON)
+                    .or_else(|| presence(ACTIVE_ICON, "active-icon"))
+                    .unwrap_or_else(|| fallback(ACTIVE_ICON))
+            });
     let art = div()
         .flex_none()
         .size(rpx(ACTIVE_ART))

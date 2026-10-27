@@ -1,5 +1,8 @@
-use super::art::{activity_art, app_asset, current_art, media, presence_art, widget_art};
+use super::art::{
+    activity_art, app_asset, current_art, media, personal_art, presence_art, widget_art,
+};
 use super::*;
+use crate::app::profile::popout::markdown;
 
 pub(in crate::app::profile) fn board_panel(
     app: &DiscordApp,
@@ -15,7 +18,7 @@ pub(in crate::app::profile) fn board_panel(
         .children(widgets.filter_map(|widget| {
             let (title, games) = match &widget.data {
                 WidgetData::Application { application_id } => {
-                    return Some(application_widget(card, *application_id, palette, cx));
+                    return Some(application_widget(app, card, *application_id, palette, cx));
                 }
                 WidgetData::FavoriteGames { games } => ("Favorite Game", games),
                 WidgetData::CurrentGames { games } => ("Games in Rotation", games),
@@ -29,6 +32,16 @@ pub(in crate::app::profile) fn board_panel(
                     return (!games.is_empty()).then(|| {
                         covers_widget(app, card, widget.id, "Want to Play", games, palette, cx)
                     });
+                }
+                WidgetData::Personal { header, sections } => {
+                    return Some(personal_widget(
+                        card,
+                        widget.id,
+                        header.as_deref(),
+                        sections,
+                        palette,
+                        cx,
+                    ));
                 }
                 WidgetData::Unknown => return None,
             };
@@ -430,6 +443,7 @@ struct Tile {
 }
 
 fn application_widget(
+    app: &DiscordApp,
     card: &ProfileCard,
     application_id: u64,
     palette: ProfilePalette,
@@ -490,10 +504,17 @@ fn application_widget(
                 .map(|item| Tile {
                     name: item.name.as_ref().and_then(resolve),
                     description: item.description.as_ref().and_then(resolve),
-                    image: item
-                        .image
-                        .as_ref()
-                        .and_then(|image| art(image, TILE_IMAGE, 8.)),
+                    image: item.image.as_ref().and_then(|image| {
+                        widget_image_art(
+                            application_id,
+                            image,
+                            profile,
+                            TILE_IMAGE,
+                            8.,
+                            "profile-widget-tile",
+                            cx,
+                        )
+                    }),
                 })
                 .collect(),
         ),
@@ -530,6 +551,20 @@ fn application_widget(
     let hero = config
         .and_then(|config| config.hero.as_ref())
         .and_then(|hero| widget_hero(application_id, hero, profile, cx));
+    // `widget_top_contained` layouts show their image as a square tile beside the text instead.
+    let contained = config
+        .and_then(|config| config.contained.as_ref())
+        .and_then(|image| {
+            widget_image_art(
+                application_id,
+                image,
+                profile,
+                CONTAINED_IMAGE,
+                8.,
+                "profile-widget-contained",
+                cx,
+            )
+        });
     let key = application_id;
     widget_card(palette)
         .child(
@@ -537,7 +572,20 @@ fn application_widget(
                 .relative()
                 .min_h(rpx(HERO_HEIGHT))
                 .p(rpx(18.))
+                .when(contained.is_some(), |this| {
+                    this.pr(rpx(18. + CONTAINED_IMAGE + 16.))
+                })
                 .children(hero)
+                .children(contained.map(|image| {
+                    div()
+                        .absolute()
+                        .top(rpx(18.))
+                        .right(rpx(18.))
+                        .size(rpx(CONTAINED_IMAGE))
+                        .rounded(rpx(8.))
+                        .bg(palette.hover)
+                        .child(image)
+                }))
                 .child(
                     div()
                         .relative()
@@ -579,7 +627,14 @@ fn application_widget(
                         .text_size(rpx(14.))
                         .line_height(rpx(18.))
                         .text_color(rgb(palette.text))
-                        .child(label(("profile-app-subtitle", key ^ index as u64), &text))
+                        // Apps fill subtitles with markdown, e.g. Example Music App's `[@name](profile url)`.
+                        .child(markdown(
+                            app,
+                            card,
+                            key.wrapping_add(index as u64 + 1),
+                            &text,
+                            cx,
+                        ))
                         .children(
                             subtitle
                                 .icon
@@ -753,6 +808,105 @@ fn hero_art(art: AnyElement, aspect: f32) -> AnyElement {
         .into_any_element()
 }
 
+/// A user-built card: an optional header, a wide cover image with a caption, and a grid of
+/// titled images laid out like an application widget's collection.
+fn personal_widget(
+    card: &ProfileCard,
+    widget_id: u64,
+    header: Option<&str>,
+    sections: &[PersonalSection],
+    palette: ProfilePalette,
+    cx: &App,
+) -> AnyElement {
+    let user_id = card.user_id;
+    let mut body = Vec::new();
+    for (index, section) in sections.iter().enumerate() {
+        let key = widget_id ^ (index as u64 + 1) << 32;
+        match section {
+            PersonalSection::Cover {
+                title,
+                subtitle,
+                image,
+            } => {
+                let art = image.as_ref().and_then(|image| {
+                    let aspect = hero_aspect(image.width, image.height);
+                    let art = personal_art(user_id, image, PERSONAL_COVER, 8., cx)?;
+                    Some(
+                        div()
+                            .w_full()
+                            .aspect_ratio(aspect)
+                            .rounded(rpx(8.))
+                            .bg(palette.hover)
+                            .overflow_hidden()
+                            .child(art),
+                    )
+                });
+                if art.is_none() && title.is_none() && subtitle.is_none() {
+                    continue;
+                }
+                body.push(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(rpx(4.))
+                        .px(rpx(18.))
+                        .children(art)
+                        .children(title.as_ref().map(|title| {
+                            div()
+                                .mt(rpx(8.))
+                                .text_size(rpx(16.))
+                                .line_height(rpx(20.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(palette.strong))
+                                .child(label(("profile-personal-title", key), title))
+                        }))
+                        .children(subtitle.as_ref().map(|subtitle| {
+                            div()
+                                .text_size(rpx(14.))
+                                .line_height(rpx(18.))
+                                .text_color(rgb(palette.text))
+                                .child(label(("profile-personal-subtitle", key), subtitle))
+                        }))
+                        .into_any_element(),
+                );
+            }
+            PersonalSection::Fields { fields } if !fields.is_empty() => {
+                let tiles = fields
+                    .iter()
+                    .map(|field| Tile {
+                        name: field.title.clone(),
+                        description: field.description.clone(),
+                        image: field
+                            .image
+                            .as_ref()
+                            .and_then(|image| personal_art(user_id, image, TILE_IMAGE, 8., cx)),
+                    })
+                    .collect();
+                body.push(collection(key, tiles, palette).into_any_element());
+            }
+            PersonalSection::Fields { .. } | PersonalSection::Unknown => {}
+        }
+    }
+    widget_card(palette)
+        .pt(rpx(18.))
+        .gap(rpx(2.))
+        .when(header.is_none() && body.is_empty(), |this| {
+            this.pb(rpx(18.))
+        })
+        .children(header.map(|header| {
+            div()
+                .px(rpx(18.))
+                .pb(rpx(16.))
+                .text_size(rpx(14.))
+                .line_height(rpx(18.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(palette.strong))
+                .child(label(("profile-personal-header", widget_id), header))
+        }))
+        .children(body)
+        .into_any_element()
+}
+
 fn collection(key: u64, tiles: Vec<Tile>, palette: ProfilePalette) -> impl IntoElement {
     let mut tiles = tiles.into_iter().enumerate();
     let mut rows = Vec::new();
@@ -835,21 +989,61 @@ pub(super) fn stat_name(name: &str) -> String {
 }
 
 /// The popout's compact take on the first game-account widget; the full card lives on the Board.
+enum Popout<'a> {
+    Application(u64),
+    Personal(u64, &'a Option<String>, &'a [PersonalSection]),
+    Games,
+}
+
 pub(in crate::app::profile) fn popout_widget(
     app: &DiscordApp,
     card: &ProfileCard,
     cx: &App,
 ) -> Option<AnyElement> {
     let palette = card.palette();
-    let application_id =
-        card.profile
-            .as_ref()?
-            .widgets
-            .iter()
-            .find_map(|widget| match widget.data {
-                WidgetData::Application { application_id } => Some(application_id),
-                _ => None,
-            })?;
+    let profile = card.profile.as_ref()?;
+    // Discord summarises the first Board widget it can show in the popout, in Board order:
+    // game lists become the Game Collection row, and application widgets count only when their
+    // config has a `mini_profile` surface.
+    let application_id = profile
+        .widgets
+        .iter()
+        .find_map(|widget| match &widget.data {
+            WidgetData::Application { application_id }
+                if card
+                    .widget_configs
+                    .get(application_id)
+                    .is_some_and(|config| config.mini.is_some()) =>
+            {
+                Some(Popout::Application(*application_id))
+            }
+            WidgetData::Personal { header, sections } => {
+                Some(Popout::Personal(widget.id, header, sections))
+            }
+            WidgetData::FavoriteGames { games }
+            | WidgetData::CurrentGames { games }
+            | WidgetData::PlayedGames { games }
+            | WidgetData::WantToPlayGames { games }
+                if !games.is_empty() =>
+            {
+                Some(Popout::Games)
+            }
+            _ => None,
+        });
+    let application_id = match application_id? {
+        Popout::Application(application_id) => application_id,
+        Popout::Personal(widget_id, header, sections) => {
+            return Some(popout_personal(
+                app,
+                card,
+                widget_id,
+                header.as_deref(),
+                sections,
+                cx,
+            ));
+        }
+        Popout::Games => return game_collection(app, card, profile, palette, cx),
+    };
     let application = card.applications.get(&application_id);
     let config = card.widget_configs.get(&application_id);
     let profile = card
@@ -882,8 +1076,7 @@ pub(in crate::app::profile) fn popout_widget(
             cx,
         )
     };
-    // The popout uses the config's `mini_profile` surface; older configs only have the Board's
-    // `widget_top`, so fall back to its title and hero.
+    // The mini surface may leave out its text or image; the Board's `widget_top` fills them in.
     let mini = config.and_then(|config| config.mini.as_ref());
     let title = mini
         .and_then(|mini| mini.text.as_ref())
@@ -1024,6 +1217,173 @@ pub(in crate::app::profile) fn popout_widget(
                         .border_color(palette.border),
                 )
             })
+            .into_any_element(),
+    )
+}
+
+fn popout_personal(
+    app: &DiscordApp,
+    card: &ProfileCard,
+    widget_id: u64,
+    header: Option<&str>,
+    sections: &[PersonalSection],
+    cx: &App,
+) -> AnyElement {
+    let palette = card.palette();
+    let cover = sections.iter().find_map(|section| match section {
+        PersonalSection::Cover {
+            image: Some(image), ..
+        } => personal_art(card.user_id, image, POPOUT_COVER_WIDTH, 4., cx),
+        _ => None,
+    });
+    let entity = app.entity.clone();
+    div()
+        .flex()
+        .items_center()
+        .gap(rpx(8.))
+        .p(rpx(8.))
+        .rounded(rpx(8.))
+        .bg(palette.panel)
+        .border_1()
+        .border_color(palette.border)
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .gap(rpx(4.))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(rpx(4.))
+                        .min_w_0()
+                        .children(header.map(|header| {
+                            div()
+                                .truncate()
+                                .text_size(rpx(14.))
+                                .line_height(rpx(18.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(rgb(palette.strong))
+                                .child(label(("profile-popout-personal", widget_id), header))
+                        })),
+                )
+                .child(
+                    div()
+                        .id(("profile-popout-personal-view", widget_id))
+                        .text_size(rpx(12.))
+                        .line_height(rpx(16.))
+                        .text_color(rgb(palette.text))
+                        .cursor_pointer()
+                        .hover(|style| style.underline())
+                        .on_click(move |_, _, cx| {
+                            entity.update(cx, |app, cx| app.open_full_profile(cx)).ok();
+                        })
+                        .child("View Widget"),
+                ),
+        )
+        .children(cover.map(|cover| {
+            div()
+                .flex_none()
+                .w(rpx(POPOUT_COVER_WIDTH))
+                .h(rpx(POPOUT_COVER_HEIGHT))
+                .rounded(rpx(4.))
+                .overflow_hidden()
+                .child(cover)
+        }))
+        .into_any_element()
+}
+
+/// The popout sums up the Board's game lists as one row of icons.
+fn game_collection(
+    app: &DiscordApp,
+    card: &ProfileCard,
+    profile: &crate::discord::model::Profile,
+    palette: ProfilePalette,
+    cx: &App,
+) -> Option<AnyElement> {
+    let ids = super::widget_game_ids(profile);
+    if ids.is_empty() {
+        return None;
+    }
+    // Discord showed 3 icons and "+13" for 17 games, so the count leaves out one more than shown.
+    let hidden = ids.len().saturating_sub(COLLECTION_SHOWN + 1);
+    let shown = if hidden == 0 {
+        ids.len().min(COLLECTION_SHOWN + 1)
+    } else {
+        COLLECTION_SHOWN
+    };
+    let tile = || {
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .size(rpx(COLLECTION_ICON))
+            .rounded(rpx(4.))
+            .bg(palette.hover)
+            .overflow_hidden()
+    };
+    let icons = ids[..shown].iter().map(|id| {
+        let icon = card
+            .games
+            .get(id)
+            .and_then(|game| app_asset(*id, game.icon_hash.as_deref()?, COLLECTION_ICON, cx));
+        tile()
+            .children(icon.map(|path| {
+                img(path)
+                    .size_full()
+                    .rounded(rpx(4.))
+                    .object_fit(ObjectFit::Cover)
+            }))
+            .into_any_element()
+    });
+    let entity = app.entity.clone();
+    Some(
+        div()
+            .id(("profile-popout-collection", card.user_id))
+            .flex()
+            .items_center()
+            .gap(rpx(8.))
+            .p(rpx(8.))
+            .rounded(rpx(8.))
+            .bg(palette.panel)
+            .border_1()
+            .border_color(palette.border)
+            .cursor_pointer()
+            .on_click(move |_, _, cx| {
+                entity.update(cx, |app, cx| app.open_full_profile(cx)).ok();
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(rpx(12.))
+                    .line_height(rpx(16.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(palette.strong))
+                    .child("Game Collection"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .gap(rpx(4.))
+                    .children(icons)
+                    .when(hidden > 0, |this| {
+                        this.child(
+                            tile()
+                                .bg(palette.button)
+                                .text_size(rpx(12.))
+                                .line_height(rpx(16.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(palette.strong))
+                                .child(format!("+{hidden}")),
+                        )
+                    }),
+            )
             .into_any_element(),
     )
 }

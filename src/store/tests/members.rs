@@ -360,6 +360,97 @@ fn presence_game_activity_tracks_playing_and_clears() {
 }
 
 #[test]
+fn presence_listening_activity_keeps_kind_and_timestamps() {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let mut store = Store::from_ready(ready());
+    let presence: model::Presence = serde_json::from_value(json!({
+        "user_id": "2",
+        "activities": [{
+            "type": 2,
+            "name": "YouTube Music",
+            "timestamps": {
+                "start": 1700000000000u64,
+                "end": 1700000300000u64
+            }
+        }]
+    }))
+    .unwrap();
+    store.apply(Event::PresenceUpdate(Box::new(presence)));
+    let listening = store.user(2).unwrap().listening.clone().unwrap();
+    assert_eq!(listening.kind, 2);
+    assert_eq!(
+        listening.started_at,
+        Some(UNIX_EPOCH + Duration::from_millis(1_700_000_000_000))
+    );
+    assert_eq!(
+        listening.ends_at,
+        Some(UNIX_EPOCH + Duration::from_millis(1_700_000_300_000))
+    );
+}
+
+#[test]
+fn presence_status_display_type_selects_the_status_field() {
+    let mut store = Store::from_ready(ready());
+    let mut apply = |activity: serde_json::Value| {
+        let presence: model::Presence = serde_json::from_value(json!({
+            "user_id": "2",
+            "activities": [activity]
+        }))
+        .unwrap();
+        store.apply(Event::PresenceUpdate(Box::new(presence)));
+        let user = store.user(2).unwrap();
+        (user.activity.clone(), user.activity_kind, user.playing)
+    };
+
+    let (activity, kind, playing) = apply(json!({
+        "type": 2,
+        "name": "YouTube Music",
+        "state": "Laur",
+        "details": "Colorful Universe",
+        "status_display_type": 1
+    }));
+    assert_eq!(activity.as_deref(), Some("Laur"));
+    assert_eq!(kind, Some(2));
+    assert!(!playing);
+
+    let (activity, kind, playing) = apply(json!({
+        "type": 2,
+        "name": "YouTube Music",
+        "state": "Laur",
+        "details": "Colorful Universe",
+        "status_display_type": 2
+    }));
+    assert_eq!(activity.as_deref(), Some("Colorful Universe"));
+    assert_eq!(kind, Some(2));
+    assert!(!playing);
+
+    let (activity, kind, playing) = apply(json!({
+        "type": 2,
+        "name": "YouTube Music"
+    }));
+    assert_eq!(activity.as_deref(), Some("Listening to YouTube Music"));
+    assert_eq!(kind, Some(2));
+    assert!(!playing);
+
+    let (activity, kind, playing) = apply(json!({
+        "type": 0,
+        "name": "Example Game"
+    }));
+    assert_eq!(activity.as_deref(), Some("Example Game"));
+    assert_eq!(kind, Some(0));
+    assert!(playing);
+
+    let (activity, kind, playing) = apply(json!({
+        "type": 4,
+        "state": "custom status"
+    }));
+    assert_eq!(activity.as_deref(), Some("custom status"));
+    assert_eq!(kind, None);
+    assert!(!playing);
+}
+
+#[test]
 fn presence_game_activity_maps_rich_assets_and_text() {
     let mut store = Store::from_ready(ready());
     let mut apply = |activity: serde_json::Value| {

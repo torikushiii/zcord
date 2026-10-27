@@ -60,6 +60,7 @@ pub struct User {
     pub tag: Option<GuildTag>,
     pub playing: bool,
     pub activity: Option<String>,
+    pub activity_kind: Option<u8>,
     pub game: Option<GameActivity>,
     pub listening: Option<GameActivity>,
     pub custom_status: Option<CustomStatus>,
@@ -74,12 +75,15 @@ pub struct User {
 pub struct GameActivity {
     pub name: String,
     pub application_id: Option<u64>,
+    /// Raw activity type (0 playing, 2 listening, ...).
+    pub kind: u8,
     pub platform: Option<String>,
     /// An embedded Discord Activity (`flags & (1 << 8)` or platform "embedded").
     pub embedded: bool,
     /// The activity advertises a Play action (`flags & (1 << 5)`).
     pub playable: bool,
     pub started_at: Option<SystemTime>,
+    pub ends_at: Option<SystemTime>,
     pub details: Option<String>,
     pub state: Option<String>,
     pub large_image: Option<ActivityImage>,
