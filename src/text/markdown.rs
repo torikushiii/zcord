@@ -519,6 +519,17 @@ struct Delimiters {
 }
 
 impl Delimiters {
+    /// Whether an unclosed `character` run is waiting for its closer.
+    fn waiting(&self, character: char, doubled: bool) -> bool {
+        let group = match character {
+            '*' => 0,
+            '_' => 2,
+            '~' => 4,
+            _ => 6,
+        };
+        self.heads[group].is_some() || (doubled && self.heads[group + 1].is_some())
+    }
+
     fn run(
         &mut self,
         atoms: &mut Vec<Atom>,
@@ -791,9 +802,30 @@ fn tokenize(text: &str, links: bool) -> Vec<Atom> {
                 atom_text(&mut atoms, "<");
             }
         } else if links && (rest.starts_with("https://") || rest.starts_with("http://")) {
-            let size = rest
+            let mut size = rest
                 .find(|c: char| c.is_whitespace() || c == '<')
                 .unwrap_or(rest.len());
+            // Discord matches `**…**` and friends before autolinks, so a URL wrapped in
+            // formatting ends where the closing run starts. An underscore only closes at a word
+            // boundary, so `_` inside a URL path stays part of it.
+            let candidate = &rest[..size];
+            if let Some((close, _)) = candidate.char_indices().find(|&(index, c)| {
+                matches!(c, '*' | '_' | '~' | '|')
+                    // Check a run only once; repeatedly scanning its tail would be quadratic.
+                    && (index == 0 || candidate.as_bytes()[index - 1] != c as u8)
+                    && delimiters.waiting(
+                        c,
+                        candidate.as_bytes().get(index + 1) == Some(&(c as u8)),
+                    )
+                    && (c != '_'
+                        || !candidate[index..]
+                            .trim_start_matches('_')
+                            .chars()
+                            .next()
+                            .is_some_and(word_char))
+            }) {
+                size = close;
+            }
             let url = trim_url(&rest[..size]);
             if valid_url(url) {
                 atoms.push(Atom::Url(url.to_owned()));
@@ -1779,6 +1811,43 @@ mod tests {
                 link: Some("https://target.example".to_owned()),
                 ..text("https://label.example")
             }]
+        );
+    }
+
+    #[test]
+    fn markdown_formatting_around_bare_urls_closes_before_them() {
+        let bold = spans("**https://irlcat.com**");
+        assert_eq!(bold.len(), 1);
+        assert!(bold[0].style.bold);
+        assert_eq!(
+            bold[0].kind,
+            SpanKind::Text("https://irlcat.com".to_owned())
+        );
+        assert_eq!(bold[0].link.as_deref(), Some("https://irlcat.com"));
+
+        let path = spans("_hi https://a.example/foo_bar");
+        assert_eq!(
+            path.last().and_then(|span| span.link.as_deref()),
+            Some("https://a.example/foo_bar")
+        );
+    }
+
+    #[test]
+    fn bare_urls_keep_single_delimiters_inside_double_formatting() {
+        for (marker, url) in [
+            ("**", "https://a.example/a*b"),
+            ("||", "https://a.example/a|b"),
+            ("~~", "https://a.example/a~b"),
+        ] {
+            let parsed = spans(&format!("{marker}{url}{marker}"));
+            assert_eq!(parsed.len(), 1);
+            assert_eq!(parsed[0].link.as_deref(), Some(url));
+        }
+        let url = format!("https://a.example/{}end", "_".repeat(4096));
+        let parsed = spans(&format!("_hi {url}"));
+        assert_eq!(
+            parsed.last().and_then(|span| span.link.as_deref()),
+            Some(url.as_str())
         );
     }
 
