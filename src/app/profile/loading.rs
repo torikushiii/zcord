@@ -17,15 +17,20 @@ impl DiscordApp {
             modal: false,
             profile: None,
             games: HashMap::new(),
+            games_pending: HashSet::new(),
             applications: HashMap::new(),
+            applications_pending: HashSet::new(),
             identities: None,
+            identities_pending: false,
             outbox: None,
             wishlist: None,
             note: None,
             badge_details: None,
             hovered_badge: None,
             hovered_cover: None,
+            hovered_art: [false; 4],
             widget_configs: HashMap::new(),
+            widget_configs_pending: HashSet::new(),
             board_requested: false,
             modal_request_pending: false,
             details_requested: false,
@@ -38,6 +43,7 @@ impl DiscordApp {
             avatar_theme_source: None,
             effect: None,
             frame: None,
+            cosmetics_pending: HashSet::new(),
             opened: Instant::now(),
             effect_started: RefCell::new(None),
             tab: Tab::Activity,
@@ -59,6 +65,13 @@ impl DiscordApp {
         self.load_profile(ProfileKind::Modal, cx);
         self.prefetch_profile_details(cx);
         self.start_profile_game_timer(cx);
+        if let Some(card) = &mut self.profile {
+            // Redraw when the wait runs out so the skeleton gives way to whatever has arrived.
+            card._tasks.push(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(POPOUT_WAIT).await;
+                this.update(cx, |_, cx| cx.notify()).ok();
+            }));
+        }
         cx.notify();
     }
 
@@ -100,6 +113,22 @@ impl DiscordApp {
     pub(super) fn open_profile_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
         self.open_full_profile(cx);
         self.select_profile_tab(tab, cx);
+    }
+
+    pub(crate) fn hover_profile_art(
+        &mut self,
+        slot: ArtSlot,
+        hovered: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(card) = &mut self.profile else {
+            return;
+        };
+        let state = &mut card.hovered_art[slot as usize];
+        if *state != hovered {
+            *state = hovered;
+            self.views.overlays.update(cx, |_, cx| cx.notify());
+        }
     }
 
     pub(crate) fn hover_profile_cover(
@@ -250,6 +279,7 @@ impl DiscordApp {
         }
         // Start independent resources now, not after the full profile response or a tab switch.
         if card.identities.is_none() {
+            card.identities_pending = true;
             let session = session.clone();
             let request = Tokio::spawn(
                 cx,
@@ -257,18 +287,18 @@ impl DiscordApp {
             );
             card._tasks.push(cx.spawn(async move |this, cx| {
                 let identities = match request.await {
-                    Ok(Ok(identities)) => identities,
+                    Ok(Ok(identities)) => Some(identities),
                     Ok(Err(error)) => {
                         log::warn!(
                             "Could not load application identities for user {user_id}: {error}"
                         );
-                        return;
+                        None
                     }
                     Err(error) => {
                         log::warn!(
                             "Application identities task failed for user {user_id}: {error}"
                         );
-                        return;
+                        None
                     }
                 };
                 this.update(cx, |app, cx| {
@@ -279,7 +309,10 @@ impl DiscordApp {
                     else {
                         return;
                     };
-                    card.identities = Some(identities);
+                    card.identities_pending = false;
+                    if identities.is_some() {
+                        card.identities = identities;
+                    }
                     cx.notify();
                 })
                 .ok();
@@ -386,43 +419,8 @@ impl DiscordApp {
         }
         // The activity accessory needs the current game's config even when that app has no
         // Board widget; `details_requested` above keeps this to one request per card.
-        if let Some(application_id) = game_ids.first().copied()
-            && !card.widget_configs.contains_key(&application_id)
-        {
-            let accessory_session = session.clone();
-            let request = Tokio::spawn(cx, async move {
-                accessory_session.widget_config(application_id).await
-            });
-            card._tasks.push(cx.spawn(async move |this, cx| {
-                let config = match request.await {
-                    Ok(Ok(Some(config))) => config,
-                    Ok(Ok(None)) => return,
-                    Ok(Err(error)) => {
-                        log::warn!(
-                            "Could not load activity accessory config for application {application_id}: {error}"
-                        );
-                        return;
-                    }
-                    Err(error) => {
-                        log::warn!(
-                            "Activity accessory config task failed for user {user_id}: {error}"
-                        );
-                        return;
-                    }
-                };
-                this.update(cx, |app, cx| {
-                    let Some(card) = app
-                        .profile
-                        .as_mut()
-                        .filter(|card| card.user_id == user_id && card.guild_id == guild_id)
-                    else {
-                        return;
-                    };
-                    card.widget_configs.insert(application_id, config);
-                    cx.notify();
-                })
-                .ok();
-            }));
+        if let Some(application_id) = game_ids.first().copied() {
+            card.load_widget_configs(session.clone(), vec![application_id], cx);
         }
         card.load_games(session.clone(), game_ids, cx);
         card.load_applications(session.clone(), application_ids, cx);
@@ -482,12 +480,13 @@ impl DiscordApp {
             .and_then(frame_of)
             .or_else(|| profile.user_profile.as_ref().and_then(frame_of));
         let load_board = kind == ProfileKind::Modal && !card.board_requested;
-        let mut game_ids = if load_board {
+        let popout = kind == ProfileKind::Popout;
+        let mut game_ids = if load_board || popout {
             widget_game_ids(&profile)
         } else {
             Vec::new()
         };
-        let widget_application_ids = if load_board {
+        let widget_application_ids = if load_board || popout {
             widget_application_ids(&profile)
         } else {
             Vec::new()
@@ -565,21 +564,24 @@ impl DiscordApp {
             .into_iter()
             .chain(frame.map(|sku| (sku, false)))
         {
+            if !card.cosmetics_pending.insert(sku_id) {
+                continue;
+            }
             let session = session.clone();
             let request =
                 Tokio::spawn(cx, async move { session.collectible_product(sku_id).await });
             card._tasks.push(cx.spawn(async move |this, cx| {
                 let product = match request.await {
-                    Ok(Ok(product)) => product,
+                    Ok(Ok(product)) => Some(product),
                     Ok(Err(error)) => {
                         log::warn!(
                             "Could not load profile cosmetic {sku_id} for user {user_id}: {error}"
                         );
-                        return;
+                        None
                     }
                     Err(error) => {
                         log::warn!("Profile cosmetic task failed for user {user_id}: {error}");
-                        return;
+                        None
                     }
                 };
                 this.update(cx, |app, cx| {
@@ -590,10 +592,11 @@ impl DiscordApp {
                     else {
                         return;
                     };
-                    if is_effect {
-                        card.effect = Some(product);
-                    } else {
-                        card.frame = Some(product);
+                    card.cosmetics_pending.remove(&sku_id);
+                    match product {
+                        Some(product) if is_effect => card.effect = Some(product),
+                        Some(product) => card.frame = Some(product),
+                        None => {}
                     }
                     cx.notify();
                 })
@@ -625,49 +628,11 @@ impl DiscordApp {
             // Board metadata is independent of the user's activity history.
             card.load_applications(session.clone(), application_ids, cx);
             card.load_games(session.clone(), game_ids, cx);
-            let config_ids: Vec<_> = widget_application_ids
-                .into_iter()
-                .filter(|id| !card.widget_configs.contains_key(id))
-                .collect();
-            if !config_ids.is_empty() {
-                let session = session.clone();
-                card._tasks.push(cx.spawn(async move |this, cx| {
-                    for application_id in config_ids {
-                        let session = session.clone();
-                        let request = Tokio::spawn(cx, async move {
-                            session.widget_config(application_id).await
-                        });
-                        let config = match request.await {
-                            Ok(Ok(Some(config))) => config,
-                            Ok(Ok(None)) => continue,
-                            Ok(Err(error)) => {
-                                log::warn!(
-                                    "Could not load widget config for application {application_id}: {error}"
-                                );
-                                continue;
-                            }
-                            Err(error) => {
-                                log::warn!(
-                                    "Profile widget config task failed for user {user_id}: {error}"
-                                );
-                                return;
-                            }
-                        };
-                        this.update(cx, |app, cx| {
-                            let Some(card) = app
-                                .profile
-                                .as_mut()
-                                .filter(|card| card.user_id == user_id && card.guild_id == guild_id)
-                            else {
-                                return;
-                            };
-                            card.widget_configs.insert(application_id, config);
-                            cx.notify();
-                        })
-                        .ok();
-                    }
-                }));
-            }
+            card.load_widget_configs(session.clone(), widget_application_ids, cx);
+        } else if popout {
+            card.load_applications(session.clone(), widget_application_ids.clone(), cx);
+            card.load_widget_configs(session.clone(), widget_application_ids, cx);
+            card.load_games(session.clone(), game_ids, cx);
         }
         card.load_linked_metadata(session, cx);
         self.prefetch_profile_images(cx);
@@ -681,11 +646,12 @@ impl DiscordApp {
             return;
         };
         if card.game_timer_started
-            || !self
-                .store
-                .user(card.user_id)
-                .and_then(|user| user.game.as_ref())
-                .is_some_and(|game| game.started_at.is_some())
+            || !self.store.user(card.user_id).is_some_and(|user| {
+                [&user.game, &user.listening]
+                    .into_iter()
+                    .flatten()
+                    .any(|activity| activity.started_at.is_some())
+            })
         {
             return;
         }

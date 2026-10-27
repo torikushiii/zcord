@@ -19,13 +19,14 @@ pub(in crate::app::profile) fn activity(
         .as_ref()
         .map_or(&[][..], |outbox| outbox.entries.as_slice());
     let current = game.and_then(|game| current_entry(game, outbox, now));
+    let listening = listening(app, card, true, cx);
     let entries: Vec<_> = outbox
         .iter()
         .filter(|entry| !matches!(entry.kind, OutboxKind::Unknown))
         // The live entry for the game being played is the current-activity card instead.
         .filter(|entry| !current.is_some_and(|current| current.id == entry.id && live(entry, now)))
         .collect();
-    if game.is_none() && entries.is_empty() {
+    if game.is_none() && listening.is_none() && entries.is_empty() {
         return None;
     }
     let heading = |text: &'static str| {
@@ -41,14 +42,19 @@ pub(in crate::app::profile) fn activity(
             .flex()
             .flex_col()
             .gap(rpx(24.))
-            .children(game.map(|game| {
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(rpx(10.))
-                    .child(heading("Current activity"))
-                    .child(current_game(card, game, current, palette, cx))
-            }))
+            .when(game.is_some() || listening.is_some(), |this| {
+                this.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(rpx(10.))
+                        .child(heading("Current activity"))
+                        .children(
+                            game.map(|game| current_game(app, card, game, current, palette, cx)),
+                        )
+                        .children(listening),
+                )
+            })
             .when(!entries.is_empty(), |this| {
                 this.child(
                     div()
@@ -68,6 +74,7 @@ pub(in crate::app::profile) fn activity(
 }
 
 fn current_game(
+    app: &DiscordApp,
     card: &ProfileCard,
     game: &GameActivity,
     entry: Option<&OutboxEntry>,
@@ -104,6 +111,14 @@ fn current_game(
             cx,
         )
     });
+    let large_text = game
+        .large_image
+        .as_ref()
+        .and_then(|image| image.text.as_ref());
+    let small_text = game
+        .small_image
+        .as_ref()
+        .and_then(|image| image.text.as_ref());
     let elapsed = game
         .started_at
         .and_then(|started| SystemTime::now().duration_since(started).ok())
@@ -134,7 +149,7 @@ fn current_game(
                 .flex()
                 .items_center()
                 .gap(rpx(14.))
-                .child(
+                .child(art_tooltip(
                     div()
                         .relative()
                         .flex()
@@ -158,17 +173,27 @@ fn current_game(
                                 .and_then(|theme| theme.modal_background().as_solid())
                                 .unwrap_or_else(|| rgb(theme::BG).into())
                                 .blend(palette.panel);
-                            div()
-                                .absolute()
-                                .right(rpx(-8.))
-                                .bottom(rpx(-8.))
-                                .size(rpx(CURRENT_BADGE + 8.))
-                                .p(rpx(4.))
-                                .rounded_full()
-                                .bg(backdrop)
-                                .child(badge)
+                            art_tooltip(
+                                div()
+                                    .absolute()
+                                    .right(rpx(-8.))
+                                    .bottom(rpx(-8.))
+                                    .size(rpx(CURRENT_BADGE + 8.))
+                                    .p(rpx(4.))
+                                    .rounded_full()
+                                    .bg(backdrop)
+                                    .child(badge),
+                                app,
+                                card,
+                                ArtSlot::Small,
+                                small_text,
+                            )
                         })),
-                )
+                    app,
+                    card,
+                    ArtSlot::Large,
+                    large_text,
+                ))
                 .child(
                     div()
                         .flex()
@@ -394,6 +419,14 @@ pub(in crate::app::profile) fn popout_playing(
             cx,
         )
     });
+    let large_text = game
+        .large_image
+        .as_ref()
+        .and_then(|image| image.text.as_ref());
+    let small_text = game
+        .small_image
+        .as_ref()
+        .and_then(|image| image.text.as_ref());
     let elapsed = game
         .started_at
         .and_then(|started| SystemTime::now().duration_since(started).ok())
@@ -425,7 +458,7 @@ pub(in crate::app::profile) fn popout_playing(
                     .flex()
                     .items_center()
                     .gap(rpx(12.))
-                    .child(
+                    .child(art_tooltip(
                         div()
                             .relative()
                             .flex_none()
@@ -441,19 +474,34 @@ pub(in crate::app::profile) fn popout_playing(
                                     .child(theme::icon("gamepad-2", 28., palette.muted)),
                             })
                             // Discord rings the small image in the card colour so it sits on
-                            // the large one's corner.
+                            // the large one's corner. The panel is translucent, so composite it
+                            // over the popout surface or the artwork shows through the ring.
                             .children(badge.map(|badge| {
-                                div()
-                                    .absolute()
-                                    .right(rpx(-4.))
-                                    .bottom(rpx(-4.))
-                                    .size(rpx(POPOUT_BADGE + 4.))
-                                    .p(rpx(2.))
-                                    .rounded_full()
-                                    .bg(palette.panel)
-                                    .child(badge)
+                                let surface = card
+                                    .theme()
+                                    .map_or(theme::ELEVATED, |theme| theme.surface());
+                                let ring = Hsla::from(rgb(surface)).blend(palette.panel);
+                                art_tooltip(
+                                    div()
+                                        .absolute()
+                                        .right(rpx(-4.))
+                                        .bottom(rpx(-4.))
+                                        .size(rpx(POPOUT_BADGE + 4.))
+                                        .p(rpx(2.))
+                                        .rounded_full()
+                                        .bg(ring)
+                                        .child(badge),
+                                    app,
+                                    card,
+                                    ArtSlot::Small,
+                                    small_text,
+                                )
                             })),
-                    )
+                        app,
+                        card,
+                        ArtSlot::Large,
+                        large_text,
+                    ))
                     .child(
                         div()
                             .flex()
@@ -510,6 +558,224 @@ pub(in crate::app::profile) fn popout_playing(
 }
 
 /// Discord's elapsed-time clock: "6:10", "1:02:03".
+/// `modal` sizes the card like the full profile's current-game card.
+pub(in crate::app::profile) fn listening(
+    app: &DiscordApp,
+    card: &ProfileCard,
+    modal: bool,
+    cx: &App,
+) -> Option<AnyElement> {
+    let palette = card.palette();
+    let (art_size, badge_size, padding, radius, gap) = if modal {
+        (CURRENT_ART, CURRENT_BADGE, 14., 12., 14.)
+    } else {
+        (POPOUT_ART, POPOUT_BADGE, 8., 8., 12.)
+    };
+    let listening = app
+        .store
+        .user(card.user_id)
+        .and_then(|user| user.listening.as_ref())?;
+    let art = listening.large_image.as_ref().and_then(|image| {
+        presence_art(
+            &image.url,
+            art_size,
+            8.,
+            ("profile-popout-listening-art", card.user_id),
+            cx,
+        )
+    });
+    let badge = listening.small_image.as_ref().and_then(|image| {
+        presence_art(
+            &image.url,
+            badge_size,
+            badge_size,
+            ("profile-popout-listening-badge", card.user_id),
+            cx,
+        )
+    });
+    let large_text = listening
+        .large_image
+        .as_ref()
+        .and_then(|image| image.text.as_ref());
+    let small_text = listening
+        .small_image
+        .as_ref()
+        .and_then(|image| image.text.as_ref());
+    let progress = listening
+        .started_at
+        .zip(listening.ends_at)
+        .and_then(|(start, end)| {
+            let total = end
+                .duration_since(start)
+                .ok()
+                .filter(|total| !total.is_zero())?;
+            let elapsed = SystemTime::now()
+                .duration_since(start)
+                .unwrap_or_default()
+                .min(total);
+            Some((elapsed, total))
+        });
+    let ring = if modal {
+        card.theme()
+            .and_then(|theme| theme.modal_background().as_solid())
+            .unwrap_or_else(|| rgb(theme::BG).into())
+    } else {
+        let surface = card
+            .theme()
+            .map_or(theme::ELEVATED, |theme| theme.surface());
+        Hsla::from(rgb(surface))
+    }
+    .blend(palette.panel);
+    let (ring_offset, ring_width) = if modal { (8., 4.) } else { (4., 2.) };
+    let elapsed = listening
+        .started_at
+        .and_then(|started| SystemTime::now().duration_since(started).ok())
+        .map(clock);
+    let mono = cx.theme().mono_font_family.clone();
+    Some(
+        div()
+            .flex()
+            .flex_col()
+            .gap(rpx(8.))
+            .p(rpx(padding))
+            .rounded(rpx(radius))
+            .bg(palette.panel)
+            .child(
+                div()
+                    .truncate()
+                    .text_size(rpx(12.))
+                    .line_height(rpx(16.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(palette.text))
+                    .child(label(
+                        ("profile-popout-listening-heading", card.user_id),
+                        &format!("Listening to {}", listening.name),
+                    )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(rpx(gap))
+                    .child(art_tooltip(
+                        div()
+                            .relative()
+                            .flex_none()
+                            .size(rpx(art_size))
+                            .rounded(rpx(8.))
+                            .map(|this| match art {
+                                Some(art) => this.child(art),
+                                None => this
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .bg(palette.hover)
+                                    .child(theme::icon("music", 28., palette.muted)),
+                            })
+                            .children(badge.map(|badge| {
+                                art_tooltip(
+                                    div()
+                                        .absolute()
+                                        .right(rpx(-ring_offset))
+                                        .bottom(rpx(-ring_offset))
+                                        .size(rpx(badge_size + ring_width * 2.))
+                                        .p(rpx(ring_width))
+                                        .rounded_full()
+                                        .bg(ring)
+                                        .child(badge),
+                                    app,
+                                    card,
+                                    ArtSlot::ListeningSmall,
+                                    small_text,
+                                )
+                            })),
+                        app,
+                        card,
+                        ArtSlot::ListeningLarge,
+                        large_text,
+                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(rpx(2.))
+                            .children(listening.details.as_ref().map(|details| {
+                                div()
+                                    .truncate()
+                                    .text_size(rpx(16.))
+                                    .line_height(rpx(20.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(palette.strong))
+                                    .child(label(
+                                        ("profile-popout-listening-track", card.user_id),
+                                        details,
+                                    ))
+                            }))
+                            .children(listening.state.as_ref().map(|state| {
+                                div()
+                                    .truncate()
+                                    .text_size(rpx(13.))
+                                    .line_height(rpx(16.))
+                                    .text_color(rgb(palette.text))
+                                    .child(label(
+                                        ("profile-popout-listening-artist", card.user_id),
+                                        state,
+                                    ))
+                            }))
+                            .children(progress.map(|(elapsed, total)| {
+                                let fraction = elapsed.as_secs_f32() / total.as_secs_f32();
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(rpx(4.))
+                                    .mt(rpx(4.))
+                                    .child(
+                                        div()
+                                            .h(rpx(4.))
+                                            .w_full()
+                                            .rounded_full()
+                                            .bg(palette.hover)
+                                            .child(
+                                                div()
+                                                    .h_full()
+                                                    .w(relative(fraction))
+                                                    .rounded_full()
+                                                    .bg(rgb(palette.strong)),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .justify_between()
+                                            .text_size(rpx(12.))
+                                            .line_height(rpx(16.))
+                                            .font_family(mono.clone())
+                                            .text_color(rgb(palette.text))
+                                            .child(clock(elapsed))
+                                            .child(clock(total)),
+                                    )
+                            }))
+                            // Without an end time Discord counts up like a game session.
+                            .when(progress.is_none(), |this| {
+                                this.children(elapsed.map(|elapsed| {
+                                    div()
+                                        .flex()
+                                        .text_size(rpx(13.))
+                                        .line_height(rpx(16.))
+                                        .child(
+                                            activity_badge("music", elapsed, theme::GREEN)
+                                                .font_family(mono.clone()),
+                                        )
+                                }))
+                            }),
+                    ),
+            )
+            .into_any_element(),
+    )
+}
+
 pub(super) fn clock(elapsed: Duration) -> String {
     let seconds = elapsed.as_secs();
     let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
@@ -765,4 +1031,38 @@ fn plural(count: i64, unit: &str) -> String {
     } else {
         format!("{count} {unit}s")
     }
+}
+
+/// Shows the presence image's hover text (`large_text`/`small_text`) above it, as Discord does.
+/// The small image sits on the large one, so its tooltip takes precedence.
+fn art_tooltip(
+    art: Div,
+    app: &DiscordApp,
+    card: &ProfileCard,
+    slot: ArtSlot,
+    text: Option<&String>,
+) -> AnyElement {
+    let Some(text) = text.filter(|text| !text.is_empty()) else {
+        return art.into_any_element();
+    };
+    let hovered = card.hovered_art;
+    let shown = match slot {
+        ArtSlot::Large => hovered[0] && !hovered[1],
+        ArtSlot::ListeningLarge => hovered[2] && !hovered[3],
+        ArtSlot::Small | ArtSlot::ListeningSmall => hovered[slot as usize],
+    };
+    let entity = app.entity.clone();
+    art.id(match slot {
+        ArtSlot::Large => "profile-art-large",
+        ArtSlot::Small => "profile-art-small",
+        ArtSlot::ListeningLarge => "profile-art-listening-large",
+        ArtSlot::ListeningSmall => "profile-art-listening-small",
+    })
+    .on_hover(move |hovered, _, cx| {
+        entity
+            .update(cx, |app, cx| app.hover_profile_art(slot, *hovered, cx))
+            .ok();
+    })
+    .when(shown, |this| this.child(theme::tooltip_above(text.clone())))
+    .into_any_element()
 }

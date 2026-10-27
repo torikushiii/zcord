@@ -3,6 +3,9 @@ use super::frame::framed;
 use super::popout::{bio, display_names, header, member_since, playing, roles, section};
 use super::*;
 
+/// The Wishlist tab is hidden for now; its panel and loading stay in place.
+const WISHLIST_TAB: bool = false;
+
 pub(super) fn profile_close_button(palette: ProfilePalette) -> Stateful<Div> {
     let (background, hover) = if palette.light {
         (hsla(0., 0., 1., 0.6), hsla(0., 0., 1., 0.85))
@@ -256,7 +259,7 @@ fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &App) -> AnyElement {
         .map(|count| count as usize)
         .or_else(|| (!mutual_friends.is_empty()).then_some(mutual_friends.len()));
     let has_board = board::has_board(card);
-    let has_wishlist = board::has_wishlist(card);
+    let has_wishlist = WISHLIST_TAB && board::has_wishlist(card);
     let current = match card.tab {
         Tab::Board if !has_board => Tab::Activity,
         Tab::Wishlist if !has_wishlist => Tab::Activity,

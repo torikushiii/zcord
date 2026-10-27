@@ -161,6 +161,7 @@ fn wishlist_decodes_items_and_skips_malformed_entries() {
     assert_eq!(item.application_id, Some(1191169081999360040));
     assert_eq!(item.thumbnail_asset_id, Some(1191169312686080095));
     assert_eq!(item.card_image_asset_id, Some(1191169316880384096));
+    assert!(item.collectible.is_none());
     let price = item.price.as_ref().unwrap();
     assert_eq!(
         (price.amount, price.currency.as_str(), price.exponent),
@@ -171,6 +172,66 @@ fn wishlist_decodes_items_and_skips_malformed_entries() {
         wishlist.applications[0].cover_image.as_deref(),
         Some("f0000000000000000000000000000025")
     );
+}
+
+#[test]
+fn wishlist_decodes_collectible_items() {
+    let wishlist: Wishlist = serde_json::from_value(json!({
+        "id": "1191169174274048062",
+        "wishlist_items": [{
+            "sku_id": "1191169077805056039",
+            "sku_product_line": 7,
+            "sku_name": "Sample Avatar Decoration",
+            "is_owned": false,
+            "collectibles_item": {
+                "type": 0,
+                "sku_id": "1191169077805056039",
+                "asset": "a_f0000000000000000000000000000029",
+                "label": "Sample green decoration"
+            },
+            "bundle_items": null,
+            "sku": {
+                "id": "1191169077805056039",
+                "type": 2,
+                "product_line": 7,
+                "application_id": "1191169010696192023",
+                "name": "Sample Avatar Decoration",
+                "thumbnail_asset_id": null,
+                "price": {
+                    "amount": 599,
+                    "currency": "usd",
+                    "currency_exponent": 2
+                }
+            }
+        }],
+        "applications": []
+    }))
+    .unwrap();
+    let item = &wishlist.items[0];
+    let collectible = item.collectible.as_ref().unwrap();
+    assert_eq!(collectible.kind, 0);
+    assert_eq!(
+        collectible.asset.as_deref(),
+        Some("a_f0000000000000000000000000000029")
+    );
+    assert_eq!(collectible.label.as_deref(), Some("Sample green decoration"));
+    let price = item.price.as_ref().unwrap();
+    assert_eq!(
+        (price.amount, price.currency.as_str(), price.exponent),
+        (599, "usd", 2)
+    );
+}
+
+#[test]
+fn wishlist_collectible_preserves_non_decoration_types() {
+    for kind in [1, 2] {
+        let collectible: WishlistCollectible = serde_json::from_value(json!({
+            "type": kind,
+            "asset": "synthetic-asset"
+        }))
+        .unwrap();
+        assert_eq!(collectible.kind, kind);
+    }
 }
 
 #[test]
@@ -483,7 +544,7 @@ fn profile_widgets_decode_per_entry() {
             },
             {"id": "11", "data": {"type": "application", "application_id": "30"}},
             {"id": "12", "data": {"type": "application", "application_id": "not-an-id"}},
-            {"id": "13", "data": {"type": "personal"}},
+            {"id": "13", "data": {"type": "unrecognized_widget"}},
             {
                 "id": "14",
                 "data": {
@@ -491,7 +552,7 @@ fn profile_widgets_decode_per_entry() {
                     "games": [{"game_id": "21"}, {"game_id": "22"}]
                 }
             },
-            {"data": {"type": "personal"}}
+            {"data": {"type": "unrecognized_widget"}}
         ]
     }))
     .unwrap();
@@ -514,6 +575,111 @@ fn profile_widgets_decode_per_entry() {
         games.iter().map(|game| game.game_id).collect::<Vec<_>>(),
         [21, 22]
     );
+}
+
+#[test]
+fn profile_personal_widget_decodes_sections() {
+    let profile: Profile = serde_json::from_value(json!({
+        "user": {"id": "1", "username": "synthetic"},
+        "widgets": [{
+            "id": "10",
+            "data": {
+                "type": "personal",
+                "header": "アキバ",
+                "sections": [
+                    {
+                        "type": "cover",
+                        "title": "",
+                        "subtitle": "",
+                        "image": {
+                            "file_id": "1",
+                            "width": 2400,
+                            "height": 888,
+                            "is_animated": false
+                        }
+                    },
+                    {
+                        "type": "fields",
+                        "fields": [{
+                            "title": "",
+                            "description": "",
+                            "image": {
+                                "file_id": "2",
+                                "width": 256,
+                                "height": 256,
+                                "is_animated": false
+                            }
+                        }]
+                    }
+                ]
+            }
+        }]
+    }))
+    .unwrap();
+    let WidgetData::Personal { header, sections } = &profile.widgets[0].data else {
+        panic!("personal widget was not decoded");
+    };
+    assert_eq!(header.as_deref(), Some("アキバ"));
+    assert_eq!(sections.len(), 2);
+    let PersonalSection::Cover {
+        title,
+        subtitle,
+        image,
+    } = &sections[0]
+    else {
+        panic!("cover section was not decoded");
+    };
+    assert!(title.is_none());
+    assert!(subtitle.is_none());
+    let image = image.as_ref().expect("cover image");
+    assert_eq!(image.file_id, 1);
+    assert_eq!((image.width, image.height), (Some(2400), Some(888)));
+    assert!(!image.is_animated);
+
+    let PersonalSection::Fields { fields } = &sections[1] else {
+        panic!("fields section was not decoded");
+    };
+    assert_eq!(fields.len(), 1);
+    assert!(fields[0].title.is_none());
+    assert!(fields[0].description.is_none());
+    let image = fields[0].image.as_ref().expect("field image");
+    assert_eq!(image.file_id, 2);
+    assert_eq!((image.width, image.height), (Some(256), Some(256)));
+}
+
+#[test]
+fn profile_personal_widget_drops_malformed_sections() {
+    let profile: Profile = serde_json::from_value(json!({
+        "user": {"id": "1", "username": "synthetic"},
+        "widgets": [{
+            "id": "10",
+            "data": {
+                "type": "personal",
+                "header": "",
+                "sections": [
+                    {"type": "cover", "title": "Kept", "subtitle": null},
+                    {"type": "fields", "fields": "nope"}
+                ]
+            }
+        }]
+    }))
+    .unwrap();
+    let WidgetData::Personal { header, sections } = &profile.widgets[0].data else {
+        panic!("personal widget was not decoded");
+    };
+    assert!(header.is_none());
+    assert_eq!(sections.len(), 1);
+    let PersonalSection::Cover {
+        title,
+        subtitle,
+        image,
+    } = &sections[0]
+    else {
+        panic!("cover section was not decoded");
+    };
+    assert_eq!(title.as_deref(), Some("Kept"));
+    assert!(subtitle.is_none());
+    assert!(image.is_none());
 }
 
 #[test]
@@ -797,6 +963,48 @@ fn application_identity_stats_include_primary_values() {
             Some(2200)
         ))
     );
+}
+
+#[test]
+fn application_identity_dynamic_image_stats() {
+    let identities: ApplicationIdentities = serde_json::from_value(json!({
+        "identities": [{
+            "application_id": "7",
+            "profile": {
+                "data": {
+                    "dynamic": [
+                        {"type": 1, "name": "username", "value": "synthetic"},
+                        {"type": 2, "name": "level", "value": 56.0},
+                        {
+                            "type": 3,
+                            "name": "avatar",
+                            "value": {
+                                "id": "1",
+                                "url": "https://example.com/a.png?x=1",
+                                "proxy_url": "https://images-ext-1.discordapp.net/external/abc/%3Fx%3D1/https/example.com/a.png",
+                                "width": 128,
+                                "height": 128,
+                                "content_type": "image/png"
+                            }
+                        }
+                    ]
+                }
+            }
+        }]
+    }))
+    .unwrap();
+    let profile = identities.identities[0].profile.as_ref().unwrap();
+    assert_eq!(
+        profile.image("avatar"),
+        Some((
+            "https://images-ext-1.discordapp.net/external/abc/%3Fx%3D1/https/example.com/a.png",
+            Some(128),
+            Some(128)
+        ))
+    );
+    let stat = |name: &str| profile.stats.iter().find(|stat| stat.name == name).unwrap();
+    assert_eq!(stat("username").value, StatValue::Text("synthetic".into()));
+    assert_eq!(stat("level").value, StatValue::Number(56.0));
 }
 
 #[test]
@@ -1203,12 +1411,12 @@ fn widget_collections_sort_items_and_skip_empty_ones() {
     );
     assert_eq!(
         config.collection[1].image,
-        Some(WidgetAsset {
+        Some(WidgetImage::Asset(WidgetAsset {
             asset_id: 300,
             width: 120,
             height: 80,
             animated: true
-        })
+        }))
     );
     assert_eq!(
         config.collection[2].name,
@@ -1216,6 +1424,70 @@ fn widget_collections_sort_items_and_skip_empty_ones() {
     );
     assert!(config.collection[2].description.is_none() && config.collection[2].image.is_none());
     assert!(config.stats.is_empty());
+}
+
+#[test]
+fn widget_configs_parse_data_collection_images_and_contained_top_image() {
+    let configs = parse_featured_widget_configs(json!({
+        "configs": {
+            "300": [{
+                "application_id": "300",
+                "surfaces": {
+                    "widget_top": {
+                        "layout": "widget_top_contained",
+                        "components": {
+                            "contained_image": {"fields": {"image": {
+                                "value_type": "data",
+                                "presentation_type": "image",
+                                "value": "avatar"
+                            }}},
+                            "title": {"fields": {"text": {
+                                "value_type": "data",
+                                "value": "username"
+                            }}}
+                        }
+                    },
+                    "widget_bottom": {
+                        "layout": "widget_bottom_collection",
+                        "components": {
+                            "item_1": {"fields": {
+                                "description": {
+                                    "value_type": "data",
+                                    "presentation_type": "text",
+                                    "value": "title_1_desc"
+                                },
+                                "image": {
+                                    "value_type": "data",
+                                    "presentation_type": "image",
+                                    "value": "title_1_icon"
+                                },
+                                "name": {
+                                    "value_type": "data",
+                                    "presentation_type": "text",
+                                    "value": "title_1_name"
+                                }
+                            }}
+                        }
+                    }
+                }
+            }]
+        }
+    }));
+    let config = configs.get(&300).unwrap();
+    assert_eq!(
+        config.contained,
+        Some(WidgetImage::Data {
+            key: "avatar".into(),
+            fallback: None
+        })
+    );
+    assert_eq!(
+        config.collection[0].image,
+        Some(WidgetImage::Data {
+            key: "title_1_icon".into(),
+            fallback: None
+        })
+    );
 }
 
 #[test]

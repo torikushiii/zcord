@@ -341,8 +341,55 @@ pub enum WidgetData {
         #[serde(deserialize_with = "snowflake")]
         application_id: u64,
     },
+    Personal {
+        #[serde(default, deserialize_with = "empty_string_none")]
+        header: Option<String>,
+        #[serde(default, deserialize_with = "entries")]
+        sections: Vec<PersonalSection>,
+    },
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PersonalSection {
+    Cover {
+        #[serde(default, deserialize_with = "empty_string_none")]
+        title: Option<String>,
+        #[serde(default, deserialize_with = "empty_string_none")]
+        subtitle: Option<String>,
+        #[serde(default, deserialize_with = "default_value")]
+        image: Option<PersonalImage>,
+    },
+    Fields {
+        #[serde(default, deserialize_with = "personal_fields")]
+        fields: Vec<PersonalField>,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct PersonalField {
+    #[serde(default, deserialize_with = "empty_string_none")]
+    pub title: Option<String>,
+    #[serde(default, deserialize_with = "empty_string_none")]
+    pub description: Option<String>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub image: Option<PersonalImage>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct PersonalImage {
+    #[serde(deserialize_with = "snowflake")]
+    pub file_id: u64,
+    #[serde(default, deserialize_with = "default_value")]
+    pub width: Option<u32>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub height: Option<u32>,
+    #[serde(default)]
+    pub is_animated: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -368,6 +415,22 @@ fn steam_app_id<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Er
             Value::Number(id) => Some(id.to_string()),
             _ => None,
         }))
+}
+
+fn empty_string_none<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    let value = Value::deserialize(d)?;
+    Ok(value
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned))
+}
+
+fn personal_fields<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<PersonalField>, D::Error> {
+    let value = Value::deserialize(d)?;
+    let Value::Array(entries) = value else {
+        return Err(serde::de::Error::custom("personal fields must be an array"));
+    };
+    Ok(parse_entries(Value::Array(entries)))
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -463,6 +526,17 @@ pub struct WishlistItem {
     pub card_image_asset_id: Option<u64>,
     pub card_background_asset_id: Option<u64>,
     pub price: Option<SkuPrice>,
+    pub collectible: Option<WishlistCollectible>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct WishlistCollectible {
+    #[serde(default, rename = "type")]
+    pub kind: u8,
+    #[serde(default, deserialize_with = "default_value")]
+    pub asset: Option<String>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub label: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for WishlistItem {
@@ -501,6 +575,8 @@ impl<'de> Deserialize<'de> for WishlistItem {
             #[serde(default, deserialize_with = "default_value")]
             is_owned: bool,
             #[serde(default, deserialize_with = "default_value")]
+            collectibles_item: Option<WishlistCollectible>,
+            #[serde(default, deserialize_with = "default_value")]
             sku: Option<RawSku>,
         }
         let raw = Raw::deserialize(d)?;
@@ -529,6 +605,7 @@ impl<'de> Deserialize<'de> for WishlistItem {
                     .card_background_image_asset_id
             }),
             price: sku.and_then(|sku| sku.price),
+            collectible: raw.collectibles_item,
         })
     }
 }
@@ -652,7 +729,7 @@ pub struct IdentityStat {
 pub enum StatValue {
     Text(String),
     Number(f64),
-    /// `primary` stats can hold an image object; `url` is its `proxy_url` (or `url`).
+    /// An image object (`primary` values or `dynamic` type 3); `url` is its `proxy_url` (or `url`).
     Image {
         url: String,
         width: Option<u32>,
@@ -679,10 +756,12 @@ impl From<RawIdentityStat> for IdentityStat {
                     .or_else(|| raw.value.as_str().and_then(|value| value.parse().ok()))
                     .unwrap_or_default(),
             ),
-            _ => StatValue::Text(match raw.value {
-                Value::String(text) => text,
-                other => other.to_string(),
-            }),
+            _ => match &raw.value {
+                Value::String(text) => StatValue::Text(text.clone()),
+                Value::Object(_) => primary_stat_value(&raw.value)
+                    .unwrap_or_else(|| StatValue::Text(raw.value.to_string())),
+                other => StatValue::Text(other.to_string()),
+            },
         };
         Self {
             name: raw.name,
@@ -891,6 +970,8 @@ pub struct WidgetConfig {
     pub subtitles: Vec<WidgetSubtitle>,
     /// `widget_top.components.hero_image.fields.image`: an uploaded asset or an identity-data key.
     pub hero: Option<WidgetImage>,
+    /// `widget_top.components.contained_image.fields.image`.
+    pub contained: Option<WidgetImage>,
     /// `widget_bottom` stats in numeric order (stat_2 before stat_10).
     pub stats: Vec<WidgetStat>,
     /// `widget_bottom` collection items in numeric order (item_2 before item_10).
@@ -962,7 +1043,7 @@ pub struct WidgetStat {
 pub struct WidgetItem {
     pub name: Option<WidgetText>,
     pub description: Option<WidgetText>,
-    pub image: Option<WidgetAsset>,
+    pub image: Option<WidgetImage>,
 }
 
 pub fn parse_featured_widget_configs(value: Value) -> HashMap<u64, WidgetConfig> {
@@ -1066,6 +1147,12 @@ fn widget_config_from_value(application_id: u64, config: &Value) -> WidgetConfig
         .and_then(|hero| hero.get("fields"))
         .and_then(|fields| fields.get("image"))
         .and_then(|image| widget_image(image, &assets));
+    let contained = top
+        .and_then(|top| top.get("components"))
+        .and_then(|components| components.get("contained_image"))
+        .and_then(|contained| contained.get("fields"))
+        .and_then(|fields| fields.get("image"))
+        .and_then(|image| widget_image(image, &assets));
     let stats = bottom
         .filter(|bottom| {
             bottom.get("layout").and_then(Value::as_str) == Some("widget_bottom_stats")
@@ -1111,7 +1198,7 @@ fn widget_config_from_value(application_id: u64, config: &Value) -> WidgetConfig
                         .and_then(widget_text);
                     let image = fields
                         .and_then(|fields| fields.get("image"))
-                        .and_then(|image| widget_asset(image, &assets));
+                        .and_then(|image| widget_image(image, &assets));
                     if name.is_none() && description.is_none() && image.is_none() {
                         return None;
                     }
@@ -1138,6 +1225,7 @@ fn widget_config_from_value(application_id: u64, config: &Value) -> WidgetConfig
         title,
         subtitles,
         hero,
+        contained,
         stats,
         collection,
         mini,

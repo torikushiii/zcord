@@ -9,13 +9,13 @@ use chrono::{DateTime, Utc};
 use gpui::{prelude::*, *};
 use gpui_component::{ActiveTheme, tooltip::Tooltip};
 
-use super::{ProfileCard, ProfilePalette};
+use super::{ArtSlot, ProfileCard, ProfilePalette};
 use crate::{
     app::{DISCORD_EPOCH_MS, DiscordApp, message_body::label},
     discord::model::{
-        Game, IdentityProfile, ListenedTrack, OutboxEntry, OutboxKind, OutboxTrait,
-        PublicApplication, SkuPrice, StatValue, WidgetAsset, WidgetData, WidgetGame, WidgetImage,
-        WidgetText, Wishlist, WishlistItem,
+        Game, IdentityProfile, ListenedTrack, OutboxEntry, OutboxKind, OutboxTrait, PersonalImage,
+        PersonalSection, PublicApplication, SkuPrice, StatValue, WidgetAsset, WidgetData,
+        WidgetGame, WidgetImage, WidgetText, Wishlist, WishlistItem,
     },
     media::animated,
     media::images::{self, ImageSpec},
@@ -31,7 +31,7 @@ mod tests;
 mod widgets;
 mod wishlist;
 use super::{widget_application_ids, widget_game_ids};
-pub(super) use activity::{activity, popout_playing};
+pub(super) use activity::{activity, listening, popout_playing};
 pub(crate) use art::presence_art;
 pub(super) use widgets::{board_panel, popout_widget, prefetch_images};
 pub(super) use wishlist::wishlist_panel;
@@ -46,9 +46,15 @@ const CURRENT_BADGE: f32 = 32.;
 const POPOUT_ART: f32 = 60.;
 const POPOUT_BADGE: f32 = 24.;
 const POPOUT_HERO: f32 = 65.;
+const COLLECTION_ICON: f32 = 24.;
+const POPOUT_COVER_WIDTH: f32 = 104.;
+const POPOUT_COVER_HEIGHT: f32 = 42.;
+const COLLECTION_SHOWN: usize = 3;
 const HERO_WIDTH: f32 = 240.;
 const HERO_HEIGHT: f32 = 160.;
 const TILE_IMAGE: f32 = 48.;
+const CONTAINED_IMAGE: f32 = 96.;
+const PERSONAL_COVER: f32 = 480.;
 /// Share of the hero's width that fades in from transparent at its left edge.
 const HERO_FADE: f32 = 0.6;
 /// Detailed game lists collapse to two entries; cover grids show the full collection.
@@ -60,6 +66,9 @@ const COVERS_PER_ROW: usize = 4;
 pub(super) const WIDGET_TOGGLE: Duration = Duration::from_millis(250);
 const WISHLIST_GAP: f32 = 16.;
 const WISHLIST_BADGE: f32 = 26.;
+const WISHLIST_AVATAR: f32 = 64.;
+/// Discord draws avatar decorations 1.2x the avatar's size.
+const DECORATION_SCALE: f32 = 1.2;
 const SHOP_MENU_ENTER: Duration = Duration::from_millis(150);
 const MARATHON_SECONDS: u64 = 3 * 60 * 60;
 

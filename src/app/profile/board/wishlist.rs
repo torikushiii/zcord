@@ -41,7 +41,7 @@ pub(in crate::app::profile) fn wishlist_panel(
                 wishlist
                     .items
                     .iter()
-                    .map(|item| wishlist_tile(wishlist, item, palette, cx)),
+                    .map(|item| wishlist_tile(app, card, wishlist, item, palette, cx)),
             ),
         )
         .into_any_element()
@@ -188,6 +188,8 @@ fn shop_menu(
 }
 
 fn wishlist_tile(
+    app: &DiscordApp,
+    card: &ProfileCard,
     wishlist: &Wishlist,
     item: &WishlistItem,
     palette: ProfilePalette,
@@ -224,6 +226,65 @@ fn wishlist_tile(
         (Some(price), false) => format!("{} · {}", item.name, sku_price(price)),
         (None, false) => item.name.clone(),
     };
+    // Shop avatar decorations have no store art; preview them on the wishlist owner's avatar.
+    let decoration = item
+        .collectible
+        .as_ref()
+        .filter(|collectible| collectible.kind == 0)
+        .and_then(|collectible| collectible.asset.clone())
+        .map(|asset| {
+            let pixels = theme::image_px(WISHLIST_AVATAR * DECORATION_SCALE);
+            let animated = asset.starts_with("a_").then(|| {
+                let spec = ImageSpec::AvatarDecoration {
+                    asset: asset.clone(),
+                    animated: true,
+                };
+                animated::resolve(&spec, pixels, cx)
+            });
+            let art = match animated.flatten() {
+                Some(frames) => Some(
+                    animated::image(frames)
+                        .id(("profile-wishlist-decoration", item.sku_id))
+                        .size_full()
+                        .into_any_element(),
+                ),
+                None => {
+                    let spec = ImageSpec::AvatarDecoration {
+                        asset,
+                        animated: false,
+                    };
+                    images::resolve(&spec, pixels, cx)
+                        .map(|path| img(path).size_full().into_any_element())
+                }
+            };
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .relative()
+                        .size(rpx(WISHLIST_AVATAR))
+                        .child(theme::undecorated_member_avatar(
+                            &app.store,
+                            card.guild_id.unwrap_or(0),
+                            card.user_id,
+                            WISHLIST_AVATAR,
+                            cx,
+                        ))
+                        .children(art.map(|art| {
+                            let frame = WISHLIST_AVATAR * DECORATION_SCALE;
+                            div()
+                                .absolute()
+                                .left(rpx((WISHLIST_AVATAR - frame) / 2.))
+                                .top(rpx((WISHLIST_AVATAR - frame) / 2.))
+                                .size(rpx(frame))
+                                .child(art)
+                        })),
+                )
+        });
     div()
         .id(("profile-wishlist-item", item.sku_id))
         .relative()
@@ -232,6 +293,7 @@ fn wishlist_tile(
         .rounded(rpx(12.))
         .bg(palette.hover)
         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+        .children(decoration)
         .children(layers.into_iter().map(|path| {
             img(path)
                 .absolute()

@@ -235,6 +235,18 @@ fn decoration(
     )
 }
 
+/// The icon Discord puts before a user's activity line: a gamepad while playing, a note while
+/// listening.
+pub fn activity_icon(user: &User) -> Option<&'static str> {
+    if user.playing {
+        Some("gamepad-2")
+    } else if user.activity_kind == Some(2) {
+        Some("music")
+    } else {
+        None
+    }
+}
+
 pub fn display_name(text: &str, style: Option<&NameStyle>, fallback: u32) -> AnyElement {
     let colors: Vec<Rgba> = style
         .map(|style| style.colors.iter().map(|color| rgb(*color)).collect())
