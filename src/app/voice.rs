@@ -1059,8 +1059,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn store_with_start(start: Option<u64>) -> Store {
-        let ready =
-            serde_json::from_str(include_str!("../discord/fixtures/ready.json")).unwrap();
+        let ready = serde_json::from_str(include_str!("../discord/fixtures/ready.json")).unwrap();
         let mut store = Store::from_ready(ready);
         store.apply(Event::VoiceChannelStartTimeUpdate(
             model::VoiceChannelStartTimeUpdate {

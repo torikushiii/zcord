@@ -43,10 +43,21 @@ pub enum Event {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum VoiceEvent {
-    Connecting { guild_id: u64, channel_id: u64 },
-    Connected { guild_id: u64, channel_id: u64 },
-    Disconnected { reason: Option<String> },
-    Speaking { user_id: u64, speaking: bool },
+    Connecting {
+        guild_id: u64,
+        channel_id: u64,
+    },
+    Connected {
+        guild_id: u64,
+        channel_id: u64,
+    },
+    Disconnected {
+        reason: Option<String>,
+    },
+    Speaking {
+        user_id: u64,
+        speaking: bool,
+    },
     PrivacyCode(Option<String>),
     /// Round trip of the voice gateway's heartbeat, in milliseconds.
     Ping(u32),

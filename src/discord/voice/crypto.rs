@@ -169,7 +169,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn outgoing_packet_decrypts_with_independent_aes_gcm_rtpsize() {
         const KEY: [u8; KEY_LEN] = [0x42; KEY_LEN];
