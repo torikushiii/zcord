@@ -8,11 +8,11 @@ use gpui_component::ElementExt;
 
 use super::{
     EMBED_HORIZONTAL_INSET, EMBED_MEDIA, EMBED_WIDTH, card_content_width, component_container,
-    description_text, embed_card, fit, single_gallery_frame,
+    description_text, embed_card, embed_content_width, field_grid, fit, single_gallery_frame,
 };
 use crate::{
     app::rich_text::{Piece, PieceStyle, rich_text},
-    store::{Embed, EmbedKind, Media},
+    store::{Embed, EmbedField, EmbedKind, Media},
     theme::rpx,
 };
 
@@ -167,6 +167,139 @@ fn text_only_and_side_thumbnail_cards_keep_the_existing_width_limit(cx: &mut Tes
     assert!(card.size.width <= px(EMBED_WIDTH));
     assert_eq!(thumbnail.size.width, px(80.));
     assert!(thumbnail.right() < card.right());
+}
+
+fn inline_field_embed() -> Embed {
+    Embed {
+        kind: EmbedKind::Rich,
+        url: None,
+        color: Some(0xED4245),
+        provider: None,
+        author: None,
+        title: None,
+        description: None,
+        fields: [
+            ("Current Stamina", "360 / 360", true),
+            ("UID", "123456789", true),
+            ("Rank", "60", true),
+            ("Region", "Example", false),
+        ]
+        .into_iter()
+        .map(|(name, value, inline)| EmbedField {
+            name: name.into(),
+            value: value.into(),
+            inline,
+        })
+        .collect(),
+        components: Vec::new(),
+        thumbnail: None,
+        images: Vec::new(),
+        video: None,
+        footer: None,
+        timestamp: None,
+    }
+}
+
+#[test]
+fn fields_resolve_a_readable_width_with_or_without_a_thumbnail() {
+    let mut embed = inline_field_embed();
+    for thumbnail in [false, true] {
+        assert_eq!(
+            embed_content_width(&embed, thumbnail, None),
+            Some(EMBED_WIDTH - EMBED_HORIZONTAL_INSET)
+        );
+    }
+    embed.fields.clear();
+    assert_eq!(embed_content_width(&embed, true, None), None);
+    assert_eq!(
+        embed_content_width(&embed, false, Some((400., 225.))),
+        Some(400.)
+    );
+}
+
+struct InlineFieldLayout {
+    width: f32,
+}
+
+impl Render for InlineFieldLayout {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let embed = inline_field_embed();
+        let grid = field_grid(&embed.fields, |index, field| {
+            let selector = format!("inline-field-{index}");
+            div()
+                .flex()
+                .flex_col()
+                .gap(rpx(2.))
+                .text_size(rpx(14.))
+                .line_height(rpx(18.))
+                .debug_selector(move || selector.clone())
+                .child(rich_text(
+                    ("field-name", index),
+                    vec![Piece::text(field.name.clone(), PieceStyle::default())],
+                ))
+                .child(
+                    div()
+                        .debug_selector(move || format!("inline-value-{index}"))
+                        .child(rich_text(
+                            ("field-value", index),
+                            vec![Piece::text(field.value.clone(), PieceStyle::default())],
+                        )),
+                )
+                .into_any_element()
+        });
+        div().w(rpx(self.width)).child(
+            embed_card(embed.color, embed_content_width(&embed, true, None))
+                .debug_selector(|| "inline-card".into())
+                .child(
+                    div()
+                        .flex()
+                        .gap(rpx(16.))
+                        .w_full()
+                        .child(div().flex().flex_col().flex_1().min_w_0().child(grid))
+                        .child(
+                            div()
+                                .flex_none()
+                                .size(rpx(80.))
+                                .debug_selector(|| "inline-thumbnail".into()),
+                        ),
+                ),
+        )
+    }
+}
+
+#[gpui::test]
+fn inline_fields_keep_identifiers_intact_and_reflow_in_a_narrow_card(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let (view, cx) = cx.add_window_view(|_, _| InlineFieldLayout { width: 600. });
+    for width in [600., 360.] {
+        view.update(cx, |view, cx| {
+            view.width = width;
+            cx.notify();
+        });
+        for zoom in [1., 1.25, 1.5] {
+            cx.update(|window, cx| {
+                window.set_rem_size(px(16. * zoom));
+                window.refresh();
+                let _ = window.draw(cx);
+            });
+            let card = cx.debug_bounds("inline-card").unwrap();
+            let thumbnail = cx.debug_bounds("inline-thumbnail").unwrap();
+            let uid = cx.debug_bounds("inline-value-1").unwrap();
+            let first = cx.debug_bounds("inline-field-0").unwrap();
+            let third = cx.debug_bounds("inline-field-2").unwrap();
+            let region = cx.debug_bounds("inline-field-3").unwrap();
+            assert!(card.size.width <= px(width.min(EMBED_WIDTH) * zoom + 1.));
+            assert!((uid.size.height - px(18. * zoom)).abs() <= px(1.));
+            assert!(uid.right() + px(15. * zoom) <= thumbnail.left());
+            assert!(thumbnail.right() < card.right());
+            assert!(region.top() > third.bottom());
+            if width == 600. {
+                assert!((first.top() - third.top()).abs() <= px(1.));
+            } else {
+                assert!(third.top() > first.bottom());
+            }
+        }
+    }
 }
 
 #[gpui::test]
