@@ -31,6 +31,7 @@ pub(super) mod metrics {
 #[derive(Clone)]
 pub enum Action {
     OpenUrl(SharedString),
+    OpenUserProfile(u64),
     RevealSpoiler(u16),
     InspectEmoji {
         id: u64,
@@ -199,6 +200,7 @@ struct Fonts {
     base: Font,
     mono: SharedString,
     color: Hsla,
+    underline: Option<UnderlineStyle>,
     font_size: Pixels,
     line_height: Pixels,
     emoji_size: Pixels,
@@ -232,11 +234,18 @@ impl Fonts {
             font,
             color,
             background_color: None,
-            underline: underline.then(|| UnderlineStyle {
-                thickness: px(1.),
-                color: Some(color),
-                wavy: false,
-            }),
+            underline: if underline {
+                Some(UnderlineStyle {
+                    thickness: px(1.),
+                    color: Some(color),
+                    wavy: false,
+                })
+            } else {
+                self.underline.map(|mut style| {
+                    style.color = Some(style.color.unwrap_or(color));
+                    style
+                })
+            },
             strikethrough: style.strikethrough.then(|| StrikethroughStyle {
                 thickness: px(1.),
                 color: Some(color),
@@ -320,6 +329,7 @@ fn layout_fingerprint(
     fonts.base.hash(&mut hasher);
     fonts.mono.hash(&mut hasher);
     fonts.color.hash(&mut hasher);
+    fonts.underline.hash(&mut hasher);
     fonts.font_size.hash(&mut hasher);
     fonts.line_height.hash(&mut hasher);
     fonts.emoji_size.hash(&mut hasher);
@@ -928,6 +938,7 @@ impl Element for RichText {
             base: text_style.font(),
             mono: cx.theme().mono_font_family.clone(),
             color: text_style.color,
+            underline: text_style.underline,
             font_size: text_style.font_size.to_pixels(rem_size),
             line_height: self.line_height.map_or_else(
                 || text_style.line_height_in_pixels(rem_size),
@@ -1171,9 +1182,6 @@ impl Element for RichText {
             .iter()
             .find(|(hitbox, _)| hitbox.is_hovered(window))
             .map(|(_, piece)| *piece);
-        for (hitbox, _) in &prepaint.hitboxes {
-            window.set_cursor_style(CursorStyle::PointingHand, hitbox);
-        }
         let pieces = self.pieces.clone();
         let group_of = |piece: usize| {
             let style = &pieces[piece].style;
@@ -1280,6 +1288,10 @@ impl Element for RichText {
 
         if let Some(selection) = &interaction.selection {
             selection.listen(window);
+        }
+        // Later cursor registrations override the selectable text's general I-beam.
+        for (hitbox, _) in &prepaint.hitboxes {
+            window.set_cursor_style(CursorStyle::PointingHand, hitbox);
         }
         if prepaint.hitboxes.is_empty() {
             return;

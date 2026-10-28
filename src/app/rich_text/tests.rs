@@ -21,11 +21,56 @@ fn fonts(window: &Window, cx: &App) -> Fonts {
         base: style.font(),
         mono: cx.theme().mono_font_family.clone(),
         color: style.color,
+        underline: style.underline,
         font_size: px(14.),
         line_height: px(20.),
         emoji_size: px(20.),
         emoji_gap: None,
     }
+}
+
+#[gpui::test]
+fn emoji_name_text_inherits_hover_underline_and_invalidates_cached_runs(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let cx = cx.add_empty_window();
+    cx.update(|window, cx| {
+        let mut fonts = fonts(window, cx);
+        for name in [
+            "Example\u{1f343}",
+            "\u{1f408}Test \u{1f496}(\u{9fb4}\u{2180}\u{25e1}\u{2180}\u{9fb4})\u{1f49d} \u{d14c}\u{c2a4}\u{d2b8} (\u{25e1}\u{203f}\u{25e1}\u{1f338})\u{1f408}",
+        ] {
+            let pieces = crate::app::message_body::emoji_pieces(name, &PieceStyle::default());
+            assert!(pieces.iter().any(|piece| matches!(piece.content, Content::Emoji(..))));
+            fonts.underline = None;
+            let plain = layout_fingerprint(&pieces, &fonts, false, true, None);
+            let normal = fonts.run(&PieceStyle::default(), name.len(), false);
+            assert!(normal.underline.is_none());
+            let normal_layout = LayoutCache::new(false, true, None)
+                .get(&pieces, &fonts, Some(px(240.)), window);
+
+            fonts.underline = Some(gpui::UnderlineStyle {
+                thickness: px(1.),
+                color: None,
+                wavy: false,
+            });
+            let hovered = fonts.run(&PieceStyle::default(), name.len(), false);
+            let underline = hovered.underline.expect("emoji name inherits the parent underline");
+            assert_eq!(underline.color, Some(normal.color));
+            assert_eq!(hovered.font, normal.font);
+            assert_ne!(plain, layout_fingerprint(&pieces, &fonts, false, true, None));
+
+            let mut cache = LayoutCache::new(false, true, None);
+            let layout = cache.get(&pieces, &fonts, Some(px(240.)), window);
+            assert_eq!(normal_layout.size, layout.size, "underlining must not shift the name");
+            for piece in &pieces {
+                if let Content::Text(text) = &piece.content {
+                    assert!(fonts.run(&piece.style, text.len(), false).underline.is_some());
+                }
+            }
+            fonts.underline = None;
+            assert_eq!(plain, layout_fingerprint(&pieces, &fonts, false, true, None));
+        }
+    });
 }
 
 #[gpui::test]
@@ -591,4 +636,100 @@ fn custom_emoji_hover_and_click_preserve_drag_selection(cx: &mut TestAppContext)
         );
     });
     assert!(hovers.borrow().last().is_some_and(|event| !event.hovered));
+}
+
+struct ClickableMention {
+    opened: Rc<RefCell<Vec<u64>>>,
+}
+
+impl Render for ClickableMention {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let opened = self.opened.clone();
+        div()
+            .size_full()
+            .child(gpui_base::TextSelectionLayer)
+            .child(
+                super::rich_text(
+                    "clickable-mention",
+                    vec![Piece::text(
+                        "@ExampleUser",
+                        PieceStyle {
+                            chip: Some(super::Chip::Mention { color: None }),
+                            nowrap: true,
+                            group: 0x8000_0001,
+                            action: Some(super::Action::OpenUserProfile(42)),
+                            ..Default::default()
+                        },
+                    )],
+                )
+                .line_height(rems(2.))
+                .selectable()
+                .on_action(move |action, _, _| {
+                    let super::Action::OpenUserProfile(id) = action else {
+                        panic!("expected a user profile action");
+                    };
+                    opened.borrow_mut().push(*id);
+                }),
+            )
+    }
+}
+
+#[gpui::test]
+fn user_mention_left_click_preserves_drag_selection(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let (_, cx) = cx.add_window_view(|_, _| ClickableMention {
+        opened: opened.clone(),
+    });
+    draw(cx);
+    let inside = point(px(1.), px(12.));
+    let outside = point(px(240.), px(12.));
+    cx.simulate_mouse_move(inside, None, gpui::Modifiers::none());
+    cx.simulate_mouse_down(inside, gpui::MouseButton::Right, gpui::Modifiers::none());
+    cx.simulate_mouse_up(inside, gpui::MouseButton::Right, gpui::Modifiers::none());
+    assert!(
+        opened.borrow().is_empty(),
+        "only left click opens a profile"
+    );
+
+    cx.simulate_click(inside, gpui::Modifiers::none());
+    assert_eq!(&*opened.borrow(), &[42]);
+
+    cx.simulate_mouse_down(inside, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_move(
+        outside,
+        Some(gpui::MouseButton::Left),
+        gpui::Modifiers::none(),
+    );
+    cx.simulate_mouse_up(outside, gpui::MouseButton::Left, gpui::Modifiers::none());
+    assert_eq!(
+        &*opened.borrow(),
+        &[42],
+        "a selection drag must not open a profile"
+    );
+    cx.update(|window, cx| {
+        assert_eq!(
+            gpui_base::TextSelection::selected_text(window, cx),
+            "@ExampleUser"
+        );
+    });
+
+    cx.simulate_mouse_move(inside, None, gpui::Modifiers::none());
+    cx.simulate_mouse_down(inside, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_move(
+        outside,
+        Some(gpui::MouseButton::Left),
+        gpui::Modifiers::none(),
+    );
+    cx.simulate_mouse_move(
+        inside,
+        Some(gpui::MouseButton::Left),
+        gpui::Modifiers::none(),
+    );
+    cx.simulate_mouse_up(inside, gpui::MouseButton::Left, gpui::Modifiers::none());
+    assert_eq!(
+        &*opened.borrow(),
+        &[42],
+        "returning to the chip must not restore a cancelled click"
+    );
 }

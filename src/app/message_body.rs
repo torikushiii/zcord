@@ -53,6 +53,14 @@ impl BodyContext<'_> {
         let message_id = self.message_id;
         move |action, window, cx| match action {
             Action::OpenUrl(url) => cx.open_url(url),
+            Action::OpenUserProfile(user_id) => {
+                let position = window.mouse_position() + point(px(16.), px(-40.));
+                entity
+                    .update(cx, |app, cx| {
+                        app.open_profile(*user_id, position, Anchor::TopLeft, cx)
+                    })
+                    .ok();
+            }
             Action::RevealSpoiler(index) => {
                 entity
                     .update(cx, |app, cx| app.reveal_spoiler(message_id, *index, cx))
@@ -527,6 +535,9 @@ fn span_pieces(
         }
         SpanKind::UserMention(id) => {
             chip(Chip::Mention { color: None }, &mut style);
+            if style.action.is_none() {
+                style.action = Some(Action::OpenUserProfile(*id));
+            }
             let name = store
                 .member_name(context.guild_id, *id)
                 .unwrap_or("unknown-user");
@@ -718,12 +729,153 @@ fn collect_inline(blocks: &[Block], spans: &mut Vec<Span>) {
 
 #[cfg(test)]
 mod tests {
-    use super::has_emoji;
+    use std::collections::HashSet;
+
+    use gpui::{TestAppContext, WeakEntity};
+
+    use super::{
+        Action, BodyColors, BodyContext, Chip, Content, DiscordApp, Span, SpanKind, Store, Style,
+        has_emoji, span_pieces,
+    };
 
     #[test]
     fn ascii_keycap_bases_and_digits_are_not_emoji() {
         for value in ["#1 * 0123456789", "#staff", "*star*", "general"] {
             assert!(!has_emoji(value), "{value:?}");
         }
+    }
+
+    #[gpui::test]
+    fn user_mentions_target_their_ids_even_when_unknown(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let store = Store::seed();
+            let mut context = BodyContext {
+                store: &store,
+                guild_id: 1,
+                message_id: 10,
+                revealed: &HashSet::new(),
+                entity: WeakEntity::<DiscordApp>::new_invalid(),
+                colors: BodyColors::default(),
+            };
+            for (guild_id, id, name) in [
+                (1, 2, "@Demo Two"),
+                (0, 2, "@Demo User Two"),
+                (1, u64::MAX, "@unknown-user"),
+            ] {
+                context.guild_id = guild_id;
+                let span = Span {
+                    kind: SpanKind::UserMention(id),
+                    style: Style::default(),
+                    link: None,
+                };
+                let pieces = span_pieces(&span, false, &context, 1, cx);
+                assert_eq!(pieces.len(), 1);
+                let piece = &pieces[0];
+                assert!(matches!(&piece.content, Content::Text(text) if &**text == name));
+                assert!(
+                    matches!(piece.style.action, Some(Action::OpenUserProfile(target)) if target == id)
+                );
+                assert!(matches!(
+                    piece.style.chip,
+                    Some(Chip::Mention { color: None })
+                ));
+                assert!(piece.style.nowrap);
+                assert_eq!(piece.style.group, 0x8000_0001);
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn user_mentions_preserve_spoiler_and_link_precedence(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let store = Store::seed();
+            let mut context = BodyContext {
+                store: &store,
+                guild_id: 1,
+                message_id: 10,
+                revealed: &HashSet::new(),
+                entity: WeakEntity::<DiscordApp>::new_invalid(),
+                colors: BodyColors::default(),
+            };
+            let mut span = Span {
+                kind: SpanKind::UserMention(2),
+                style: Style {
+                    spoiler: Some(3),
+                    ..Default::default()
+                },
+                link: None,
+            };
+            for link in [None, Some("https://example.com".to_owned())] {
+                span.link = link;
+                let pieces = span_pieces(&span, false, &context, 1, cx);
+                assert!(matches!(
+                    pieces[0].style.action,
+                    Some(Action::RevealSpoiler(3))
+                ));
+                assert!(matches!(
+                    pieces[0].style.chip,
+                    Some(Chip::Spoiler { revealed: false })
+                ));
+            }
+
+            let revealed = HashSet::from([(10, 3)]);
+            context.revealed = &revealed;
+            let pieces = span_pieces(&span, false, &context, 1, cx);
+            assert!(
+                matches!(&pieces[0].style.action, Some(Action::OpenUrl(url)) if &**url == "https://example.com")
+            );
+            span.link = None;
+            let pieces = span_pieces(&span, false, &context, 1, cx);
+            assert!(matches!(
+                pieces[0].style.action,
+                Some(Action::OpenUserProfile(2))
+            ));
+            assert!(matches!(
+                pieces[0].style.chip,
+                Some(Chip::Mention { color: None })
+            ));
+
+            span.style.spoiler = None;
+            span.link = Some("https://example.com".to_owned());
+            let pieces = span_pieces(&span, false, &context, 1, cx);
+            assert!(
+                matches!(&pieces[0].style.action, Some(Action::OpenUrl(url)) if &**url == "https://example.com")
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn other_mention_chips_do_not_open_user_profiles(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let store = Store::seed();
+            let context = BodyContext {
+                store: &store,
+                guild_id: 1,
+                message_id: 10,
+                revealed: &HashSet::new(),
+                entity: WeakEntity::<DiscordApp>::new_invalid(),
+                colors: BodyColors::default(),
+            };
+            for kind in [
+                SpanKind::RoleMention(1001),
+                SpanKind::RoleMention(u64::MAX),
+                SpanKind::ChannelMention(100),
+                SpanKind::Everyone,
+                SpanKind::Here,
+                SpanKind::Command {
+                    name: "help".into(),
+                    id: 42,
+                },
+            ] {
+                let span = Span {
+                    kind,
+                    style: Style::default(),
+                    link: None,
+                };
+                let pieces = span_pieces(&span, false, &context, 1, cx);
+                assert!(pieces[0].style.action.is_none());
+                assert!(matches!(pieces[0].style.chip, Some(Chip::Mention { .. })));
+            }
+        });
     }
 }
