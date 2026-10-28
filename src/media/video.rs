@@ -132,9 +132,7 @@ mod animation {
         }
         let numerator = u64::from(numerator);
         let denominator = u64::from(denominator);
-        let for_rate = numerator
-            .div_ceil(denominator * u64::from(MAX_FPS))
-            .max(1) as usize;
+        let for_rate = numerator.div_ceil(denominator * u64::from(MAX_FPS)).max(1) as usize;
         let max_stride = (numerator / denominator / u64::from(MIN_FPS)).max(1) as usize;
         (for_size <= max_stride).then_some(for_size.max(for_rate))
     }
@@ -158,11 +156,8 @@ mod animation {
                 samples[next].0
             } else {
                 let (timestamp, duration) = samples[next - 1];
-                timestamp.saturating_add(
-                    duration
-                        .filter(|duration| *duration > 0)
-                        .unwrap_or(average),
-                )
+                timestamp
+                    .saturating_add(duration.filter(|duration| *duration > 0).unwrap_or(average))
             };
             let ticks = end.saturating_sub(samples[index].0).max(200_000);
             let nanos = (ticks as u128 * 100).min(u128::from(u64::MAX)) as u64;
@@ -332,7 +327,9 @@ mod platform {
                 Some(Entry::Failed) => return None,
                 Some(Entry::Pending { requested, wanted }) => {
                     *requested = now;
-                    *wanted.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = now;
+                    *wanted
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = now;
                     true
                 }
                 None => false,
@@ -385,9 +382,7 @@ mod platform {
         }
         cx.spawn(async move |cx| {
             loop {
-                cx.background_executor()
-                    .timer(HEARTBEAT_INTERVAL)
-                    .await;
+                cx.background_executor().timer(HEARTBEAT_INTERVAL).await;
                 let busy = {
                     let mut state = cache.borrow_mut();
                     if state.needs_heartbeat() {
@@ -416,19 +411,14 @@ mod platform {
                     break;
                 };
                 let stale = match state.entries.get(&key) {
-                    Some(Entry::Pending { requested, .. }) => {
-                        requested.elapsed() > STALE_AFTER
-                    }
+                    Some(Entry::Pending { requested, .. }) => requested.elapsed() > STALE_AFTER,
                     _ => true,
                 };
                 if !stale {
                     break;
                 }
                 state.queue.pop_front();
-                if matches!(
-                    state.entries.get(&key),
-                    Some(Entry::Pending { .. })
-                ) {
+                if matches!(state.entries.get(&key), Some(Entry::Pending { .. })) {
                     state.entries.remove(&key);
                 }
                 dropped += 1;
@@ -446,9 +436,10 @@ mod platform {
                                 .entries
                                 .iter()
                                 .filter_map(|(key, entry)| match entry {
-                                    Entry::Ready { image, used, seen, .. }
-                                        if Arc::strong_count(image) == 1
-                                            && seen.elapsed() >= VISIBLE_GRACE =>
+                                    Entry::Ready {
+                                        image, used, seen, ..
+                                    } if Arc::strong_count(image) == 1
+                                        && seen.elapsed() >= VISIBLE_GRACE =>
                                     {
                                         Some((key.clone(), *used))
                                     }
@@ -597,8 +588,7 @@ mod platform {
         if !still_wanted(stamp) {
             return Ok(DecodeOutcome::Cancelled);
         }
-        decode_frames(path, size)
-            .map(|(image, bytes)| DecodeOutcome::Decoded(image, bytes))
+        decode_frames(path, size).map(|(image, bytes)| DecodeOutcome::Decoded(image, bytes))
     }
 
     fn decode_frames(path: &Path, size: u32) -> Result<(Arc<RenderImage>, usize)> {
@@ -650,14 +640,9 @@ mod platform {
         }
         let mut layout = current_layout(&reader, stream)?;
         let estimated = estimated_frames(duration, rate);
-        let (mut target, mut stride) = output_target(
-            layout.crop.width,
-            layout.crop.height,
-            size,
-            estimated,
-            rate,
-        )
-        .context("invalid output dimensions")?;
+        let (mut target, mut stride) =
+            output_target(layout.crop.width, layout.crop.height, size, estimated, rate)
+                .context("invalid output dimensions")?;
         let mut frame_bytes = target.0 as usize * target.1 as usize * 4;
         let mut frame_limit = MAX_FRAMES.min(MAX_CLIP / frame_bytes);
         let mut pixels = Vec::new();
@@ -688,14 +673,9 @@ mod platform {
             {
                 layout = current_layout(&reader, stream)?;
                 if pixels.is_empty() {
-                    (target, stride) = output_target(
-                        layout.crop.width,
-                        layout.crop.height,
-                        size,
-                        estimated,
-                        rate,
-                    )
-                    .context("invalid output dimensions")?;
+                    (target, stride) =
+                        output_target(layout.crop.width, layout.crop.height, size, estimated, rate)
+                            .context("invalid output dimensions")?;
                     frame_bytes = target.0 as usize * target.1 as usize * 4;
                     frame_limit = MAX_FRAMES.min(MAX_CLIP / frame_bytes);
                 }
@@ -1003,10 +983,7 @@ mod tests {
         assert!(wanted(now, now));
         assert!(wanted(now - STALE_AFTER + Duration::from_millis(1), now));
         assert!(wanted(now - STALE_AFTER, now));
-        assert!(!wanted(
-            now - STALE_AFTER - Duration::from_millis(1),
-            now
-        ));
+        assert!(!wanted(now - STALE_AFTER - Duration::from_millis(1), now));
         let stamp = Mutex::new(now - STALE_AFTER - Duration::from_millis(1));
         assert!(!still_wanted(&stamp));
         *stamp.lock().unwrap() = Instant::now();

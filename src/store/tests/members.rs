@@ -907,10 +907,8 @@ fn presence_custom_status_keeps_custom_emoji_without_text() {
 #[test]
 fn own_presence_without_custom_status_keeps_the_configured_status() {
     let mut store = Store::from_ready(ready());
-    let proto = settings_fixtures::status_fixture(
-        Some("online"),
-        Some(("working", 0, "\u{1f3ae}", 0)),
-    );
+    let proto =
+        settings_fixtures::status_fixture(Some("online"), Some(("working", 0, "\u{1f3ae}", 0)));
     store.apply(Event::SettingsUpdate(Box::new(model::SettingsUpdate {
         settings: model::SettingsProto { kind: 1, proto },
         partial: true,
