@@ -1,6 +1,7 @@
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
+    rc::Rc,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -11,7 +12,7 @@ use gpui_tokio::Tokio;
 use crate::{
     app::{
         DISCORD_EPOCH_MS, DiscordApp,
-        message_body::{BodyColors, BodyContext, label, render_body, wrapped_label},
+        message_body::{BodyColors, BodyContext, label, render_body},
     },
     discord::{ProfileKind, Session, model},
     media::animated,
@@ -20,6 +21,7 @@ use crate::{
     theme::{self, WithoutTextSelection, rpx},
 };
 
+mod account_logic;
 #[cfg(test)]
 mod activity_tests;
 mod avatar_colors;
@@ -32,6 +34,7 @@ mod modal;
 mod mutuals;
 mod palette;
 mod popout;
+pub(crate) use account_logic::{AccountAction, account_action};
 pub(crate) use board::presence_art;
 use loading::{widget_application_ids, widget_game_ids};
 use modal::modal;
@@ -39,6 +42,8 @@ use palette::{ProfilePalette, ProfileTheme};
 use popout::popout;
 
 const POPOUT_WIDTH: f32 = 300.;
+/// Gap between the account panel and the popout above it, in CSS pixels.
+const ACCOUNT_GAP: f32 = 8.;
 const MODAL_WIDTH: f32 = 962.;
 const MODAL_HEIGHT: f32 = 800.;
 const MODAL_MARGIN: f32 = 48.;
@@ -59,13 +64,11 @@ const POPOUT_WAIT: Duration = Duration::from_millis(1500);
 const EFFECT_HEIGHT_RATIO: f32 = 880. / 450.;
 const EFFECT_MAX_PX: u32 = 1200;
 const THEME_OVERLAY: f32 = 0.6;
-const SURFACE_HIGHEST: u32 = 0x26262C;
 const MAX_VISIBLE_BADGES: usize = 6;
 const BADGE_ART: f32 = 96.;
 const MUTUAL_ICON: f32 = 20.;
 /// Each stacked mutual icon starts 4px before the previous one ends.
 const MUTUAL_STEP: f32 = MUTUAL_ICON - 4.;
-const STATUS_OVERLAP: f32 = 10.;
 /// Example questions Discord shows in your own empty status bubble.
 const STATUS_PROMPTS: [&str; 6] = [
     "Best thing you ate this week?",
@@ -77,6 +80,10 @@ const STATUS_PROMPTS: [&str; 6] = [
 ];
 const THEME_BORDER: f32 = 2.;
 const BIO_LINES: usize = 3;
+
+/// Live window-space bounds of the bottom account strip, recorded by the channel list on
+/// prepaint and shared with the popout opened from it.
+pub(crate) type AccountPanelBounds = Rc<Cell<Option<Bounds<Pixels>>>>;
 
 struct ActivityPrompt {
     heading: bool,
@@ -101,6 +108,7 @@ const ACTIVITY_PROMPTS: [ActivityPrompt; 3] = [
 pub(crate) struct ProfileCard {
     user_id: u64,
     guild_id: Option<u64>,
+    origin: ProfileOrigin,
     position: Point<Pixels>,
     anchor: Anchor,
     modal: bool,
@@ -153,6 +161,13 @@ pub(crate) struct ProfileCard {
     _tasks: Vec<Task<()>>,
 }
 
+enum ProfileOrigin {
+    /// A member avatar or name; keeps its guild context and click-derived position.
+    Member,
+    /// The bottom account strip; uses the global profile and follows the strip's bounds.
+    Account(AccountPanelBounds),
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ArtSlot {
     Large,
@@ -178,11 +193,48 @@ struct Layout {
     ring: f32,
     padding: f32,
     status_left: f32,
+    status_right: f32,
+    status_overlap: f32,
     header_min: f32,
     corner: f32,
 }
 
 impl ProfileCard {
+    /// Account popouts show account actions instead of server nickname and roles.
+    pub(crate) fn is_account(&self) -> bool {
+        matches!(&self.origin, ProfileOrigin::Account(_))
+    }
+
+    /// `overflow` is the frame overflow in CSS pixels, from `frame::frame_overflow`.
+    pub(crate) fn popout_position(&self, window: &Window, overflow: &Edges<f32>) -> Point<Pixels> {
+        let ProfileOrigin::Account(panel) = &self.origin else {
+            return self.position;
+        };
+        let Some(panel) = panel.get() else {
+            return self.position;
+        };
+        account_popout_position(panel, overflow, window.rem_size())
+    }
+
+    /// Reserves the frame's top overflow, the 12px viewport margin and the native client inset.
+    /// `None` for member popouts or before the account strip has painted.
+    pub(crate) fn account_max_height(
+        &self,
+        window: &Window,
+        overflow: &Edges<f32>,
+    ) -> Option<Pixels> {
+        let ProfileOrigin::Account(panel) = &self.origin else {
+            return None;
+        };
+        let panel = panel.get()?;
+        Some(account_available_height(
+            panel,
+            overflow,
+            window.rem_size(),
+            window.client_inset().unwrap_or(px(0.)),
+        ))
+    }
+
     fn loading(&self) -> bool {
         if self.modal {
             self.profile.is_none() && self.modal_request_pending
@@ -397,6 +449,34 @@ impl ProfileCard {
     }
 }
 
+fn account_popout_position(
+    panel: Bounds<Pixels>,
+    overflow: &Edges<f32>,
+    rem_size: Pixels,
+) -> Point<Pixels> {
+    let scale = |css: f32| rpx(css).to_pixels(rem_size);
+    point(
+        panel.left() + scale(overflow.left),
+        panel.top() - scale(ACCOUNT_GAP) - scale(overflow.bottom),
+    )
+}
+
+fn account_available_height(
+    panel: Bounds<Pixels>,
+    overflow: &Edges<f32>,
+    rem_size: Pixels,
+    client_inset: Pixels,
+) -> Pixels {
+    let scale = |css: f32| rpx(css).to_pixels(rem_size);
+    (panel.top()
+        - scale(ACCOUNT_GAP)
+        - scale(overflow.bottom)
+        - scale(overflow.top)
+        - px(12.)
+        - client_inset)
+        .max(px(0.))
+}
+
 impl Layout {
     fn popout(themed: bool) -> Self {
         let inset = if themed { THEME_BORDER } else { 0. };
@@ -408,6 +488,8 @@ impl Layout {
             ring: 6.,
             padding: 16.,
             status_left: 105.,
+            status_right: 12.,
+            status_overlap: 7.,
             // Banner + lower half of the avatar + ring + 8px breathing room; the
             // body's own 4px top padding brings the name 12px below the ring.
             header_min: 105. + 40. + 6. + 8. - inset,
@@ -424,6 +506,8 @@ impl Layout {
             ring: 8.,
             padding: 32.,
             status_left: 32. + 120. + 20.,
+            status_right: 16.,
+            status_overlap: 8.,
             header_min: 140. + 60. + 20.,
             corner: MODAL_CARD_RADIUS,
         }
@@ -447,6 +531,29 @@ pub fn opener(
         entity
             .update(cx, |app, cx| {
                 app.open_profile(user_id, position, anchor, cx)
+            })
+            .ok();
+    }
+}
+
+pub fn account_opener(
+    app: &DiscordApp,
+    user_id: u64,
+    panel: AccountPanelBounds,
+) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
+    let entity = app.entity.clone();
+    move |_, window, cx| {
+        cx.stop_propagation();
+        // The panel paints before it can be clicked, so this is only a fallback for an
+        // unpainted panel; never place the account popout at the pointer.
+        let rem_size = window.rem_size();
+        let position = panel.get().map_or_else(
+            || point(px(0.), window.viewport_size().height),
+            |panel| account_popout_position(panel, &Edges::<f32>::default(), rem_size),
+        );
+        entity
+            .update(cx, |app, cx| {
+                app.open_account_profile(user_id, position, panel.clone(), cx)
             })
             .ok();
     }
@@ -561,14 +668,14 @@ fn effect_layers(card: &ProfileCard, width: f32, cx: &App) -> Vec<AnyElement> {
 #[cfg(test)]
 mod tests {
     use super::{
-        EffectLoad, THEME_OVERLAY, effect_start,
+        EffectLoad, THEME_OVERLAY, account_available_height, account_popout_position, effect_start,
         loading::outbox_application_ids,
         modal::{modal_backdrop_corners, profile_close_button},
         palette::{ProfilePalette, ProfileTheme, blend, contrast},
         settle_effect_layers,
     };
     use crate::discord::model;
-    use gpui::{px, rgb};
+    use gpui::{Bounds, Edges, point, px, rgb, size};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -590,6 +697,81 @@ mod tests {
         assert_eq!(
             effect_start(&mut started, now + Duration::from_secs(1)),
             now
+        );
+    }
+
+    #[test]
+    fn account_popout_sits_above_the_panel_and_clears_frame_overflow() {
+        let panel = Bounds {
+            origin: point(px(8.), px(600.)),
+            size: size(px(287.), px(58.)),
+        };
+        let overflow = Edges {
+            top: 0.,
+            right: 4.,
+            bottom: 12.,
+            left: 4.,
+        };
+        assert_eq!(
+            account_popout_position(panel, &overflow, px(16.)),
+            point(px(12.), px(580.))
+        );
+        // The gap and overflow scale with zoom just like the card.
+        assert_eq!(
+            account_popout_position(panel, &overflow, px(24.)),
+            point(px(14.), px(570.))
+        );
+        // Without a frame only the zoomed gap separates the card from the panel.
+        assert_eq!(
+            account_popout_position(panel, &Edges::default(), px(16.)),
+            point(px(8.), px(592.))
+        );
+    }
+
+    #[test]
+    fn account_max_height_reserves_frame_overflow_gap_margin_and_zoom() {
+        let panel = Bounds {
+            origin: point(px(8.), px(600.)),
+            size: size(px(287.), px(58.)),
+        };
+        let overflow = Edges {
+            top: 10.,
+            right: 4.,
+            bottom: 12.,
+            left: 4.,
+        };
+        // No frame: 600 - 8px gap - 12px viewport margin.
+        assert_eq!(
+            account_available_height(panel, &Edges::default(), px(16.), px(0.)),
+            px(580.)
+        );
+        // 600 - 8 - 12 - 10 - 12.
+        assert_eq!(
+            account_available_height(panel, &overflow, px(16.), px(0.)),
+            px(558.)
+        );
+        // At 1.5x zoom: 600 - 12 - 18 - 15 - 12.
+        assert_eq!(
+            account_available_height(panel, &overflow, px(24.), px(0.)),
+            px(543.)
+        );
+        // The native inset is subtracted once, outside the zoomed lengths.
+        assert_eq!(
+            account_available_height(panel, &overflow, px(16.), px(6.)),
+            px(552.)
+        );
+        // The result never goes negative near the top of the window.
+        assert_eq!(
+            account_available_height(
+                Bounds {
+                    origin: point(px(8.), px(10.)),
+                    size: size(px(287.), px(58.)),
+                },
+                &Edges::default(),
+                px(16.),
+                px(0.),
+            ),
+            px(0.)
         );
     }
 

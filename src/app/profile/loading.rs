@@ -8,10 +8,44 @@ impl DiscordApp {
         anchor: Anchor,
         cx: &mut Context<Self>,
     ) {
-        let guild_id = (self.selected_guild_id != 0).then_some(self.selected_guild_id);
+        self.open_profile_at(user_id, position, anchor, ProfileOrigin::Member, cx);
+    }
+
+    /// The strip's live bounds keep the popout above it as the window resizes.
+    pub(crate) fn open_account_profile(
+        &mut self,
+        user_id: u64,
+        position: Point<Pixels>,
+        panel: AccountPanelBounds,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_profile_at(
+            user_id,
+            position,
+            Anchor::BottomLeft,
+            ProfileOrigin::Account(panel),
+            cx,
+        );
+    }
+
+    fn open_profile_at(
+        &mut self,
+        user_id: u64,
+        position: Point<Pixels>,
+        anchor: Anchor,
+        origin: ProfileOrigin,
+        cx: &mut Context<Self>,
+    ) {
+        let guild_id = match &origin {
+            ProfileOrigin::Account(_) => None,
+            ProfileOrigin::Member => {
+                (self.selected_guild_id != 0).then_some(self.selected_guild_id)
+            }
+        };
         self.profile = Some(ProfileCard {
             user_id,
             guild_id,
+            origin,
             position,
             anchor,
             modal: false,

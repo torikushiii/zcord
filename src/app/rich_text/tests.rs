@@ -2,12 +2,13 @@ use std::{rc::Rc, sync::Arc};
 
 use gpui::{
     App, Bounds, Context, Hsla, ImageSource, Pixels, Render, SharedString, TestAppContext, Window,
-    black, div, point, prelude::*, px, size, white,
+    black, div, point, prelude::*, px, rems, size, white,
 };
 use gpui_component::ActiveTheme;
 
 use super::{
-    Content, EmojiSource, Fonts, LayoutCache, Line, Piece, PieceStyle, layout_fingerprint, metrics,
+    Content, EmojiSource, Fonts, LayoutCache, Line, Piece, PieceStyle, emoji_inset,
+    layout_fingerprint, metrics,
 };
 
 fn fonts(window: &Window, cx: &App) -> Fonts {
@@ -19,6 +20,7 @@ fn fonts(window: &Window, cx: &App) -> Fonts {
         font_size: px(14.),
         line_height: px(20.),
         emoji_size: px(20.),
+        emoji_gap: None,
     }
 }
 
@@ -32,7 +34,7 @@ fn repeated_sizing_probes_share_shaped_words_and_layouts(cx: &mut TestAppContext
             "short words in a long post ".repeat(100),
             PieceStyle::default(),
         )];
-        let mut cache = LayoutCache::new(true, false);
+        let mut cache = LayoutCache::new(true, false, None);
         metrics::SHAPES.set(0);
         metrics::LAYOUTS.set(0);
         let first = cache.get(&pieces, &fonts, Some(px(120.)), window);
@@ -59,7 +61,7 @@ fn positive_widths_still_wrap_unbroken_unicode_without_losing_text(cx: &mut Test
         let fonts = fonts(window, cx);
         let text = "longword\u{e9}".repeat(20);
         let pieces = [Piece::text(text.clone(), PieceStyle::default())];
-        let mut cache = LayoutCache::new(true, false);
+        let mut cache = LayoutCache::new(true, false, None);
         let intrinsic = cache.get(&pieces, &fonts, Some(px(0.)), window);
         assert_eq!(intrinsic.lines.len(), 1);
         let wrapped = cache.get(&pieces, &fonts, Some(px(80.)), window);
@@ -135,6 +137,193 @@ fn visible_lines_follow_the_scrolled_origin_and_include_glyph_overhang() {
     assert!(!line.visible(point(px(0.), px(20.)), mask, px(14.)));
     assert!(line.visible(point(px(0.), px(-110.)), mask, px(14.)));
     assert!(!line.visible(point(px(0.), px(-140.)), mask, px(14.)));
+}
+
+fn ellipsis_count(layout: &super::Layout) -> usize {
+    layout
+        .lines
+        .iter()
+        .flat_map(|line| &line.fragments)
+        .filter(|fragment| fragment.shaped.is_some() && fragment.range.is_empty())
+        .count()
+}
+
+fn fragment_for(layout: &super::Layout, piece: usize) -> &super::Fragment {
+    layout
+        .lines
+        .iter()
+        .flat_map(|line| &line.fragments)
+        .find(|fragment| fragment.piece == piece)
+        .expect("fragment for piece")
+}
+
+#[test]
+fn new_builders_are_opt_in() {
+    let default = super::rich_text("default", vec![]);
+    assert!(default.line_clamp.is_none());
+    assert!(default.emoji_gap.is_none());
+
+    let configured = super::rich_text("configured", vec![])
+        .line_clamp(2)
+        .emoji_gap(rems(0.25));
+    assert_eq!(configured.line_clamp, Some(2));
+    assert_eq!(configured.emoji_gap, Some(rems(0.25)));
+}
+
+#[gpui::test]
+fn line_clamp_keeps_two_lines_and_ellipsizes_only_hidden_content(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let cx = cx.add_empty_window();
+    cx.update(|window, cx| {
+        let fonts = fonts(window, cx);
+        let pieces = [Piece::text(
+            "one two three four five six seven eight nine ten ".repeat(4),
+            PieceStyle::default(),
+        )];
+        let mut cache = LayoutCache::new(true, false, Some(2));
+        let layout = cache.get(&pieces, &fonts, Some(px(80.)), window);
+        assert_eq!(layout.lines.len(), 2);
+        assert_eq!(layout.size.height, fonts.line_height * 2.);
+        assert!(layout.size.width <= px(80.));
+        assert_eq!(ellipsis_count(&layout), 1);
+        let last = layout.lines.last().unwrap().fragments.last().unwrap();
+        assert!(last.shaped.is_some() && last.range.is_empty());
+        assert!(last.x + last.width <= px(80.));
+    });
+}
+
+#[gpui::test]
+fn line_clamp_does_not_ellipsize_when_content_fits_exactly(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let cx = cx.add_empty_window();
+    cx.update(|window, cx| {
+        let fonts = fonts(window, cx);
+        let pieces = [Piece::text("one\ntwo", PieceStyle::default())];
+        let mut cache = LayoutCache::new(true, false, Some(2));
+        let layout = cache.get(&pieces, &fonts, Some(px(200.)), window);
+        assert_eq!(layout.lines.len(), 2);
+        assert_eq!(ellipsis_count(&layout), 0);
+    });
+}
+
+#[gpui::test]
+fn line_clamp_respects_cjk_boundaries_and_empty_trailing_lines(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let cx = cx.add_empty_window();
+    cx.update(|window, cx| {
+        let fonts = fonts(window, cx);
+        let text = "日本語".repeat(40);
+        let pieces = [Piece::text(text.clone(), PieceStyle::default())];
+        let mut cache = LayoutCache::new(true, false, Some(2));
+        let layout = cache.get(&pieces, &fonts, Some(px(60.)), window);
+        assert_eq!(layout.lines.len(), 2);
+        assert_eq!(ellipsis_count(&layout), 1);
+        for fragment in layout.lines.iter().flat_map(|line| &line.fragments) {
+            if fragment.range.is_empty() {
+                continue;
+            }
+            assert!(text.is_char_boundary(fragment.range.start));
+            assert!(text.is_char_boundary(fragment.range.end));
+        }
+
+        // A trailing newline produces an empty extra line, but hiding it is not content.
+        let pieces = [Piece::text("one\n", PieceStyle::default())];
+        let mut cache = LayoutCache::new(true, false, Some(1));
+        let layout = cache.get(&pieces, &fonts, Some(px(200.)), window);
+        assert_eq!(layout.lines.len(), 1);
+        assert_eq!(ellipsis_count(&layout), 0);
+
+        // Zero is a valid zero-height clamp and must not underflow the last-line logic.
+        let mut cache = LayoutCache::new(true, false, Some(0));
+        let layout = cache.get(&pieces, &fonts, Some(px(200.)), window);
+        assert!(layout.lines.is_empty());
+        assert_eq!(layout.size.height, px(0.));
+    });
+}
+
+#[gpui::test]
+fn line_clamp_hides_emoji_on_later_lines(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let cx = cx.add_empty_window();
+    cx.update(|window, cx| {
+        let fonts = fonts(window, cx);
+        let pieces = [
+            Piece::text("visible\nhidden ", PieceStyle::default()),
+            Piece {
+                content: Content::Emoji(None, "\u{1f600}".into()),
+                style: PieceStyle::default(),
+            },
+        ];
+        let mut cache = LayoutCache::new(true, false, Some(1));
+        let layout = cache.get(&pieces, &fonts, Some(px(200.)), window);
+        assert_eq!(layout.lines.len(), 1);
+        assert!(
+            !layout
+                .lines
+                .iter()
+                .flat_map(|line| &line.fragments)
+                .any(|fragment| fragment.piece == 1)
+        );
+        assert_eq!(ellipsis_count(&layout), 1);
+    });
+}
+
+#[gpui::test]
+fn explicit_emoji_gap_is_trailing_and_default_slot_is_unchanged(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let cx = cx.add_empty_window();
+    cx.update(|window, cx| {
+        let fonts = fonts(window, cx);
+        let pieces = [
+            Piece::text("a", PieceStyle::default()),
+            Piece {
+                content: Content::Emoji(None, "\u{1f600}".into()),
+                style: PieceStyle::default(),
+            },
+            Piece::text("b", PieceStyle::default()),
+        ];
+        let mut cache = LayoutCache::new(false, false, None);
+        let layout = cache.get(&pieces, &fonts, None, window);
+        let emoji = fragment_for(&layout, 1);
+        assert_eq!(
+            emoji.width,
+            fonts.emoji_size + fonts.font_size * 0.1,
+            "legacy slot width"
+        );
+        let legacy_inset = emoji_inset(emoji.width, fonts.emoji_size, false);
+        assert_eq!(legacy_inset, (emoji.width - fonts.emoji_size) / 2.);
+        assert!(legacy_inset > px(0.));
+        assert_eq!(emoji_inset(emoji.width, fonts.emoji_size, true), px(0.));
+
+        let mut gapped = fonts.clone();
+        gapped.emoji_gap = Some(px(4.));
+        let mut cache = LayoutCache::new(false, false, None);
+        let layout = cache.get(&pieces, &gapped, None, window);
+        let emoji = fragment_for(&layout, 1);
+        assert_eq!(emoji.width, gapped.emoji_size + px(4.));
+        assert_eq!(emoji_inset(emoji.width, gapped.emoji_size, true), px(0.));
+    });
+}
+
+#[gpui::test]
+fn line_clamp_and_emoji_gap_invalidate_the_layout_fingerprint(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let cx = cx.add_empty_window();
+    cx.update(|window, cx| {
+        let fonts = fonts(window, cx);
+        let pieces = [Piece::text("one two", PieceStyle::default())];
+        let base = layout_fingerprint(&pieces, &fonts, true, false, None);
+        assert_ne!(
+            base,
+            layout_fingerprint(&pieces, &fonts, true, false, Some(2))
+        );
+        let mut gapped = fonts.clone();
+        gapped.emoji_gap = Some(px(4.));
+        assert_ne!(
+            base,
+            layout_fingerprint(&pieces, &gapped, true, false, None)
+        );
+    });
 }
 
 struct TextCase {
@@ -258,8 +447,14 @@ fn emoji_image_loading_does_not_invalidate_layout(cx: &mut TestAppContext) {
             content: Content::Emoji(image.map(EmojiSource::Still), "\u{1f600}".into()),
             style: PieceStyle::default(),
         };
-        let loading = layout_fingerprint(&[piece(None)], &fonts, true, false);
-        let loaded = layout_fingerprint(&[piece(Some("emoji.png".into()))], &fonts, true, false);
+        let loading = layout_fingerprint(&[piece(None)], &fonts, true, false, None);
+        let loaded = layout_fingerprint(
+            &[piece(Some("emoji.png".into()))],
+            &fonts,
+            true,
+            false,
+            None,
+        );
         assert_eq!(loading, loaded);
     });
 }
