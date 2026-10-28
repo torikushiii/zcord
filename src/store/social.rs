@@ -2,7 +2,7 @@ use super::*;
 use crate::media::images::ImageSpec;
 use std::{
     collections::HashSet,
-    time::{Duration, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 const EMBEDDED_ACTIVITY_FLAG: u64 = 1 << 8;
@@ -17,6 +17,8 @@ pub(super) struct Social {
     /// Server members whose presence Discord chose to send in READY_SUPPLEMENTAL; with
     /// friends, these are who the official client's Active Now draws from.
     pub supplemental_presences: HashSet<u64>,
+    /// The current user's custom status from settings; a live presence status still wins.
+    own_custom_status: Option<CustomStatus>,
 }
 
 #[derive(Default)]
@@ -117,6 +119,32 @@ fn custom_status_from_presence(activities: &[model::Activity]) -> Option<CustomS
                 expires_at: None,
             })
         })
+}
+
+fn show_custom_status(user: &mut User, status: &CustomStatus) {
+    let emoji = match &status.emoji {
+        Some(StatusEmoji::Unicode(emoji)) => Some(emoji.as_str()),
+        _ => None,
+    };
+    user.playing = false;
+    user.activity_kind = None;
+    user.activity = custom_text(status.text.as_deref().unwrap_or_default(), emoji);
+    user.custom_status = Some(status.clone());
+}
+
+/// Whether a live custom status is the same status as the settings-configured one. Custom
+/// emoji compare by id; their name and animation come from the live record.
+fn same_custom_status(a: &CustomStatus, b: &CustomStatus) -> bool {
+    a.text == b.text
+        && match (a.emoji.as_ref(), b.emoji.as_ref()) {
+            (None, None) => true,
+            (Some(StatusEmoji::Unicode(a)), Some(StatusEmoji::Unicode(b))) => a == b,
+            (
+                Some(StatusEmoji::Custom { id: a_id, .. }),
+                Some(StatusEmoji::Custom { id: b_id, .. }),
+            ) => a_id == b_id,
+            _ => false,
+        }
 }
 
 pub(super) fn activity(activities: &[model::Activity]) -> Option<(String, bool, Option<u8>)> {
@@ -658,6 +686,11 @@ impl Store {
         else {
             return;
         };
+        let own_custom = if id == self.current_user_id {
+            self.social.own_custom_status.clone()
+        } else {
+            None
+        };
         let user = self.users.entry(id).or_insert_with(|| {
             map_user(&model::User {
                 id,
@@ -682,7 +715,29 @@ impl Store {
                 .iter()
                 .find(|activity| activity.kind == 2)
                 .map(game_activity);
-            user.custom_status = custom_status_from_presence(activities);
+            if let Some(mut custom) = custom_status_from_presence(activities) {
+                let same_as_settings = own_custom
+                    .as_ref()
+                    .is_some_and(|configured| same_custom_status(&custom, configured));
+                if same_as_settings {
+                    // Presence omits the expiry, but its emoji name and animation are newer.
+                    custom.expires_at = own_custom.as_ref().and_then(|status| status.expires_at);
+                    self.social.own_custom_status = Some(custom.clone());
+                } else if own_custom.is_some() {
+                    self.social.own_custom_status = None;
+                }
+                user.custom_status = Some(custom);
+            } else if let Some(configured) = own_custom {
+                if !configured.is_expired(SystemTime::now()) {
+                    // Sessions and presence often omit the custom activity that settings still hold.
+                    show_custom_status(user, &configured);
+                } else {
+                    // The expired value stays stored so a later live echo still matches it.
+                    user.custom_status = None;
+                }
+            } else {
+                user.custom_status = None;
+            }
         }
     }
 
@@ -722,13 +777,19 @@ impl Store {
             };
         }
         if !partial || settings.is_some_and(|s| s.custom_status_present) {
-            let custom = settings.and_then(|s| s.custom_status.as_ref());
-            user.playing = false;
-            user.activity_kind = None;
-            user.activity = custom.and_then(|s| {
-                custom_text(&s.text, (s.emoji_id == 0).then_some(s.emoji_name.as_str()))
-            });
-            user.custom_status = custom.map(custom_status_from_settings);
+            let custom = settings
+                .and_then(|s| s.custom_status.as_ref())
+                .map(custom_status_from_settings);
+            match &custom {
+                Some(custom) => show_custom_status(user, custom),
+                None => {
+                    user.playing = false;
+                    user.activity_kind = None;
+                    user.activity = None;
+                    user.custom_status = None;
+                }
+            }
+            self.social.own_custom_status = custom;
         }
     }
 

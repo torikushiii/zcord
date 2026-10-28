@@ -905,6 +905,67 @@ fn presence_custom_status_keeps_custom_emoji_without_text() {
 }
 
 #[test]
+fn own_presence_without_custom_status_keeps_the_configured_status() {
+    let mut store = Store::from_ready(ready());
+    let proto = settings_fixtures::status_fixture(
+        Some("online"),
+        Some(("working", 0, "\u{1f3ae}", 0)),
+    );
+    store.apply(Event::SettingsUpdate(Box::new(model::SettingsUpdate {
+        settings: model::SettingsProto { kind: 1, proto },
+        partial: true,
+    })));
+
+    let game: model::Presence = serde_json::from_value(json!({
+        "user_id":"1",
+        "status":"online",
+        "activities":[{"type":0,"name":"Visual Studio Code"}]
+    }))
+    .unwrap();
+    store.apply(Event::PresenceUpdate(Box::new(game)));
+    let user = store.user(1).unwrap();
+    assert_eq!(
+        user.custom_status.as_ref().and_then(|s| s.text.as_deref()),
+        Some("working")
+    );
+    assert_eq!(user.activity.as_deref(), Some("\u{1f3ae} working"));
+    assert_eq!(user.game.as_ref().unwrap().name, "Visual Studio Code");
+
+    let empty: model::Presence = serde_json::from_value(json!({
+        "user_id":"1",
+        "activities":[]
+    }))
+    .unwrap();
+    store.apply(Event::PresenceUpdate(Box::new(empty)));
+    assert!(store.user(1).unwrap().custom_status.is_some());
+
+    // With no settings custom status, presence still owns the status and can clear it.
+    let mut store = Store::from_ready(ready());
+    let custom: model::Presence = serde_json::from_value(json!({
+        "user_id":"1",
+        "activities":[{"type":4,"state":"hello"}]
+    }))
+    .unwrap();
+    store.apply(Event::PresenceUpdate(Box::new(custom)));
+    assert_eq!(
+        store
+            .user(1)
+            .unwrap()
+            .custom_status
+            .as_ref()
+            .and_then(|s| s.text.as_deref()),
+        Some("hello")
+    );
+    let empty: model::Presence = serde_json::from_value(json!({
+        "user_id":"1",
+        "activities":[]
+    }))
+    .unwrap();
+    store.apply(Event::PresenceUpdate(Box::new(empty)));
+    assert!(store.user(1).unwrap().custom_status.is_none());
+}
+
+#[test]
 fn user_update_merges_partial_payload_and_returns_members_change() {
     let mut store = Store::from_ready(ready());
     let avatar = store.user(1).unwrap().avatar.clone();

@@ -173,6 +173,356 @@ fn settings_custom_status_maps_custom_and_unicode_emoji() {
 }
 
 #[test]
+fn ready_and_sessions_keep_configured_own_custom_status() {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    const EXPIRES_AT_MS: u64 = 4_102_444_800_000;
+    let mut payload = ready();
+    payload.user_settings_proto = Some(settings_fixtures::status_fixture(
+        Some("idle"),
+        Some(("working", 42, "party", EXPIRES_AT_MS)),
+    ));
+    payload.sessions = model::parse_entries(json!([{
+        "session_id": "all",
+        "status": "idle",
+        "activities": []
+    }]));
+    let mut store = Store::from_ready(ready());
+    store.apply(Event::Ready(Box::new(payload)));
+
+    let expires_at = Some(UNIX_EPOCH + Duration::from_millis(EXPIRES_AT_MS));
+    let user = store.user(1).unwrap();
+    assert!(user.status == Status::Idle);
+    assert_eq!(user.activity.as_deref(), Some("working"));
+    let status = user.custom_status.as_ref().unwrap();
+    assert_eq!(status.text.as_deref(), Some("working"));
+    assert!(matches!(
+        &status.emoji,
+        Some(StatusEmoji::Custom {
+            id: 42,
+            name,
+            animated: false
+        }) if name == "party"
+    ));
+    assert_eq!(status.expires_at, expires_at);
+
+    // A game-only session update keeps the configured status while updating the game.
+    store.apply(Event::SessionsReplace(model::parse_entries(json!([{
+        "session_id": "all",
+        "status": "online",
+        "activities": [{"type": 0, "name": "Visual Studio Code"}]
+    }]))));
+    let user = store.user(1).unwrap();
+    assert!(user.status == Status::Online);
+    assert_eq!(user.game.as_ref().unwrap().name, "Visual Studio Code");
+    assert_eq!(user.activity.as_deref(), Some("working"));
+    assert!(!user.playing);
+    assert_eq!(user.custom_status.as_ref().unwrap().expires_at, expires_at);
+
+    // Listening-only session updates keep it too.
+    store.apply(Event::SessionsReplace(model::parse_entries(json!([{
+        "session_id": "all",
+        "activities": [{"type": 2, "name": "Spotify"}]
+    }]))));
+    let user = store.user(1).unwrap();
+    assert_eq!(user.listening.as_ref().unwrap().name, "Spotify");
+    assert!(user.game.is_none());
+    assert_eq!(user.custom_status.as_ref().unwrap().expires_at, expires_at);
+
+    // Empty activities clear game/listening but not the settings-owned status.
+    store.apply(Event::SessionsReplace(model::parse_entries(json!([{
+        "session_id": "all",
+        "activities": []
+    }]))));
+    let user = store.user(1).unwrap();
+    assert!(user.game.is_none());
+    assert!(user.listening.is_none());
+    assert_eq!(user.custom_status.as_ref().unwrap().expires_at, expires_at);
+    assert_eq!(
+        user.custom_status.as_ref().unwrap().text.as_deref(),
+        Some("working")
+    );
+    assert!(matches!(
+        &user.custom_status.as_ref().unwrap().emoji,
+        Some(StatusEmoji::Custom { id: 42, .. })
+    ));
+    assert_eq!(user.activity.as_deref(), Some("working"));
+}
+
+#[test]
+fn authoritative_settings_clear_own_custom_status_across_sessions() {
+    let mut store = Store::from_ready(ready());
+    let set =
+        settings_fixtures::status_fixture(Some("online"), Some(("working", 0, "\u{1f3ae}", 0)));
+    store.apply(Event::SettingsUpdate(Box::new(model::SettingsUpdate {
+        settings: model::SettingsProto { kind: 1, proto: set },
+        partial: true,
+    })));
+    assert!(store.user(1).unwrap().custom_status.is_some());
+
+    // A full settings response without the custom-status field clears it.
+    let clear = settings_fixtures::status_fixture(Some("idle"), None);
+    store.apply(Event::SettingsUpdate(Box::new(model::SettingsUpdate {
+        settings: model::SettingsProto {
+            kind: 1,
+            proto: clear,
+        },
+        partial: false,
+    })));
+    assert!(store.user(1).unwrap().custom_status.is_none());
+    store.apply(Event::SessionsReplace(model::parse_entries(json!([{
+        "session_id": "all",
+        "status": "idle",
+        "activities": [{"type": 0, "name": "Visual Studio Code"}]
+    }]))));
+    let user = store.user(1).unwrap();
+    assert!(user.custom_status.is_none());
+    assert_eq!(user.game.as_ref().unwrap().name, "Visual Studio Code");
+
+    // A partial update that omits the custom-status field preserves the known value...
+    let set =
+        settings_fixtures::status_fixture(Some("online"), Some(("back", 0, "\u{1f3ae}", 0)));
+    store.apply(Event::SettingsUpdate(Box::new(model::SettingsUpdate {
+        settings: model::SettingsProto { kind: 1, proto: set },
+        partial: true,
+    })));
+    let omit = settings_fixtures::status_fixture(Some("dnd"), None);
+    store.apply(Event::SettingsUpdate(Box::new(model::SettingsUpdate {
+        settings: model::SettingsProto {
+            kind: 1,
+            proto: omit,
+        },
+        partial: true,
+    })));
+    assert!(store.user(1).unwrap().custom_status.is_some());
+    assert_eq!(
+        store
+            .user(1)
+            .unwrap()
+            .custom_status
+            .as_ref()
+            .and_then(|s| s.text.as_deref()),
+        Some("back")
+    );
+
+    // ...while an explicit empty/expired custom-status value clears it again.
+    let clear = settings_fixtures::status_fixture(None, Some(("expired", 0, "", 1)));
+    store.apply(Event::SettingsUpdate(Box::new(model::SettingsUpdate {
+        settings: model::SettingsProto {
+            kind: 1,
+            proto: clear,
+        },
+        partial: true,
+    })));
+    assert!(store.user(1).unwrap().custom_status.is_none());
+    store.apply(Event::SessionsReplace(model::parse_entries(json!([{
+        "session_id": "all",
+        "activities": []
+    }]))));
+    assert!(store.user(1).unwrap().custom_status.is_none());
+}
+
+#[test]
+fn session_custom_status_is_used_when_no_settings_status_is_known() {
+    let mut store = Store::from_ready(ready());
+    store.apply(Event::SessionsReplace(model::parse_entries(json!([{
+        "session_id": "all",
+        "activities": [{"type": 4, "state": "hello"}]
+    }]))));
+    assert_eq!(
+        store
+            .user(1)
+            .unwrap()
+            .custom_status
+            .as_ref()
+            .and_then(|s| s.text.as_deref()),
+        Some("hello")
+    );
+}
+
+#[test]
+fn expired_configured_custom_status_is_not_restored_by_sessions_or_echoes() {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    let mut store = Store::from_ready(ready());
+    let expired = crate::discord::settings_proto::StatusSettings {
+        status: Some("online".into()),
+        custom_status_present: true,
+        custom_status: Some(crate::discord::settings_proto::CustomStatus {
+            text: "old".into(),
+            emoji_id: 0,
+            emoji_name: String::new(),
+            expires_at_ms: 1,
+        }),
+    };
+    store.apply_own_status(Some(&expired), false);
+    let expires_at = Some(UNIX_EPOCH + Duration::from_millis(1));
+    assert_eq!(
+        store
+            .user(1)
+            .unwrap()
+            .custom_status
+            .as_ref()
+            .unwrap()
+            .expires_at,
+        expires_at
+    );
+
+    // A live echo of the same expired status keeps the expiry instead of becoming immortal.
+    let echo: model::Presence = serde_json::from_value(json!({
+        "user_id":"1",
+        "activities":[{"type":4,"state":"old"}]
+    }))
+    .unwrap();
+    store.apply(Event::PresenceUpdate(Box::new(echo)));
+    let status = store.user(1).unwrap().custom_status.as_ref().unwrap();
+    assert_eq!(status.expires_at, expires_at);
+    assert!(status.is_expired(SystemTime::now()));
+
+    // Game-only snapshots must clear it and expose the real activity line.
+    let game: model::Presence = serde_json::from_value(json!({
+        "user_id":"1",
+        "status":"online",
+        "activities":[{"type":0,"name":"Visual Studio Code"}]
+    }))
+    .unwrap();
+    store.apply(Event::PresenceUpdate(Box::new(game)));
+    let user = store.user(1).unwrap();
+    assert!(user.custom_status.is_none());
+    assert_eq!(user.game.as_ref().unwrap().name, "Visual Studio Code");
+    assert_eq!(user.activity.as_deref(), Some("Visual Studio Code"));
+    assert!(user.playing);
+
+    let listening: model::Presence = serde_json::from_value(json!({
+        "user_id":"1",
+        "activities":[{"type":2,"name":"Spotify"}]
+    }))
+    .unwrap();
+    store.apply(Event::PresenceUpdate(Box::new(listening)));
+    let user = store.user(1).unwrap();
+    assert!(user.custom_status.is_none());
+    assert_eq!(user.listening.as_ref().unwrap().name, "Spotify");
+    assert_eq!(user.activity.as_deref(), Some("Listening to Spotify"));
+    assert!(!user.playing);
+
+    // Empty snapshots leave no imported custom status/activity behind either.
+    let empty: model::Presence = serde_json::from_value(json!({
+        "user_id":"1",
+        "activities":[]
+    }))
+    .unwrap();
+    store.apply(Event::PresenceUpdate(Box::new(empty)));
+    let user = store.user(1).unwrap();
+    assert!(user.custom_status.is_none());
+    assert!(user.activity.is_none());
+    assert!(!user.playing);
+}
+
+#[test]
+fn identical_live_custom_status_keeps_configured_expiry_and_emoji_animation() {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    const EXPIRES_AT_MS: u64 = 4_102_444_800_000;
+    let mut store = Store::from_ready(ready());
+    let configured = crate::discord::settings_proto::StatusSettings {
+        status: Some("online".into()),
+        custom_status_present: true,
+        custom_status: Some(crate::discord::settings_proto::CustomStatus {
+            text: "working".into(),
+            emoji_id: 42,
+            emoji_name: "party".into(),
+            expires_at_ms: EXPIRES_AT_MS,
+        }),
+    };
+    store.apply_own_status(Some(&configured), false);
+
+    let presence: model::Presence = serde_json::from_value(json!({
+        "user_id":"1",
+        "activities":[{
+            "type":4,
+            "state":"working",
+            "emoji":{"id":"42","name":"renamed","animated":true}
+        }]
+    }))
+    .unwrap();
+    store.apply(Event::PresenceUpdate(Box::new(presence)));
+    let status = store.user(1).unwrap().custom_status.as_ref().unwrap();
+    assert_eq!(
+        status.expires_at,
+        Some(UNIX_EPOCH + Duration::from_millis(EXPIRES_AT_MS))
+    );
+    assert!(matches!(
+        &status.emoji,
+        Some(StatusEmoji::Custom {
+            id: 42,
+            name,
+            animated: true
+        }) if name == "renamed"
+    ));
+
+    // A following game-only snapshot keeps the same live emoji metadata and expiry.
+    let game: model::Presence = serde_json::from_value(json!({
+        "user_id":"1",
+        "activities":[{"type":0,"name":"Visual Studio Code"}]
+    }))
+    .unwrap();
+    store.apply(Event::PresenceUpdate(Box::new(game)));
+    let user = store.user(1).unwrap();
+    let status = user.custom_status.as_ref().unwrap();
+    assert_eq!(
+        status.expires_at,
+        Some(UNIX_EPOCH + Duration::from_millis(EXPIRES_AT_MS))
+    );
+    assert!(matches!(
+        &status.emoji,
+        Some(StatusEmoji::Custom {
+            id: 42,
+            name,
+            animated: true
+        }) if name == "renamed"
+    ));
+    assert_eq!(user.game.as_ref().unwrap().name, "Visual Studio Code");
+    assert_eq!(user.activity.as_deref(), Some("working"));
+    assert!(!user.playing);
+}
+
+#[test]
+fn different_live_custom_status_supersedes_the_configured_fallback() {
+    let mut store = Store::from_ready(ready());
+    let configured = crate::discord::settings_proto::StatusSettings {
+        status: Some("online".into()),
+        custom_status_present: true,
+        custom_status: Some(crate::discord::settings_proto::CustomStatus {
+            text: "old".into(),
+            emoji_id: 0,
+            emoji_name: String::new(),
+            expires_at_ms: 4_102_444_800_000,
+        }),
+    };
+    store.apply_own_status(Some(&configured), false);
+
+    let live: model::Presence = serde_json::from_value(json!({
+        "user_id":"1",
+        "activities":[{"type":4,"state":"new"}]
+    }))
+    .unwrap();
+    store.apply(Event::PresenceUpdate(Box::new(live)));
+    let live = store.user(1).unwrap().custom_status.as_ref().unwrap();
+    assert_eq!(live.text.as_deref(), Some("new"));
+    assert!(live.expires_at.is_none());
+
+    // Once a different live status has superseded the settings value, an absent custom
+    // activity must not resurrect the old configured status.
+    store.apply(Event::SessionsReplace(model::parse_entries(json!([{
+        "session_id": "all",
+        "activities": []
+    }]))));
+    let user = store.user(1).unwrap();
+    assert!(user.custom_status.is_none());
+    assert!(user.activity.is_none());
+}
+
+#[test]
 fn open_at_settings_without_new_fields_load() {
     let settings: crate::settings::Settings = serde_json::from_str(
         r#"{"zoom":4,"window":{"x":1.0,"y":2.0,"width":800.0,"height":600.0,"maximized":false}}"#,
