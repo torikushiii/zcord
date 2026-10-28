@@ -1,7 +1,10 @@
 use gpui::{Context, IntoElement, Render, TestAppContext, Window, div, prelude::*, px};
 
-use super::message::attachment_reply_preview;
-use crate::theme::rpx;
+use super::message::{attachment_reply_preview, passive_reply_pieces};
+use crate::{
+    app::rich_text::{Action, Chip, Content, Piece, PieceStyle},
+    theme::{self, rpx},
+};
 
 #[test]
 fn local_first_unread_matches_the_full_scan_with_placeholders() {
@@ -41,6 +44,79 @@ fn local_first_unread_matches_the_full_scan_with_placeholders() {
             }
         }
     }
+}
+
+#[test]
+fn reply_links_keep_their_colors_and_formatting_without_hover_actions() {
+    for color in [None, Some(gpui::rgb(0x123456).into())] {
+        for underline in [false, true] {
+            let style = PieceStyle {
+                color,
+                underline,
+                italic: true,
+                action: Some(Action::OpenUrl("https://example.test".into())),
+                ..Default::default()
+            };
+            let pieces = passive_reply_pieces(vec![Piece::text("example", style.clone())]);
+            let preview = &pieces[0];
+            assert!(matches!(&preview.content, Content::Text(text) if &**text == "example"));
+            assert_eq!(
+                preview.style.color,
+                Some(color.unwrap_or_else(|| gpui::rgb(theme::LINK).into()))
+            );
+            assert_eq!(preview.style.underline, underline);
+            assert!(preview.style.italic);
+            assert!(preview.style.action.is_none());
+            assert!(matches!(style.action, Some(Action::OpenUrl(_))));
+        }
+    }
+}
+
+#[test]
+fn reply_mentions_spoilers_and_emoji_stay_passive_without_losing_their_appearance() {
+    let pieces = passive_reply_pieces(vec![
+        Piece::text(
+            "@ExampleUser",
+            PieceStyle {
+                chip: Some(Chip::Mention { color: None }),
+                group: 1,
+                action: Some(Action::OpenUserProfile(42)),
+                ..Default::default()
+            },
+        ),
+        Piece::text(
+            "hidden",
+            PieceStyle {
+                chip: Some(Chip::Spoiler { revealed: false }),
+                group: 2,
+                action: Some(Action::RevealSpoiler(2)),
+                ..Default::default()
+            },
+        ),
+        Piece {
+            content: Content::Emoji(None, ":wave:".into()),
+            style: PieceStyle {
+                action: Some(Action::InspectEmoji {
+                    id: 43,
+                    name: "wave".into(),
+                    animated: true,
+                }),
+                ..Default::default()
+            },
+        },
+    ]);
+    assert!(pieces.iter().all(|piece| piece.style.action.is_none()));
+    assert!(matches!(
+        pieces[0].style.chip,
+        Some(Chip::Mention { color: None })
+    ));
+    assert_eq!(pieces[0].style.group, 1);
+    assert!(matches!(
+        pieces[1].style.chip,
+        Some(Chip::Spoiler { revealed: false })
+    ));
+    assert_eq!(pieces[1].style.group, 2);
+    assert!(matches!(&pieces[2].content, Content::Emoji(None, text) if &**text == ":wave:"));
 }
 
 struct AttachmentReply {
