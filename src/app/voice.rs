@@ -116,6 +116,15 @@ pub(crate) enum Encryption {
     On(String),
 }
 
+impl Encryption {
+    fn privacy_code(&self) -> Option<&str> {
+        match self {
+            Self::On(code) if !code.trim().is_empty() => Some(code),
+            _ => None,
+        }
+    }
+}
+
 pub(crate) struct Call {
     pub(crate) guild_id: u64,
     pub(crate) channel_id: u64,
@@ -307,6 +316,16 @@ impl DiscordApp {
     }
 
     fn select_details_tab(&mut self, tab: DetailsTab, cx: &mut Context<Self>) {
+        if tab == DetailsTab::Privacy
+            && self
+                .voice
+                .call
+                .as_ref()
+                .and_then(|call| call.encryption.privacy_code())
+                .is_none()
+        {
+            return;
+        }
         self.voice.details_tab = tab;
         cx.notify();
     }
@@ -462,7 +481,12 @@ impl DiscordApp {
             VoiceEvent::PrivacyCode(code) => {
                 if let Some(call) = &mut voice.call {
                     call.encryption = code.map_or(Encryption::Off, Encryption::On);
+                    if call.encryption.privacy_code().is_none() {
+                        voice.details_tab = DetailsTab::Connection;
+                    }
                 }
+                voice.privacy_copied = false;
+                voice.privacy_copied_reset = None;
                 cx.notify();
                 return;
             }

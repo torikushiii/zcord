@@ -21,32 +21,48 @@ pub(super) fn card(
     closing: bool,
     cx: &App,
 ) -> Stateful<Div> {
+    let code = call.encryption.privacy_code();
+    let tab = if code.is_some() {
+        tab
+    } else {
+        DetailsTab::Connection
+    };
     // Both tabs lay out in the same grid cell, the hidden one invisible, so the popup keeps
     // the taller tab's height and switching tabs never resizes it.
     let privacy_shown = tab == DetailsTab::Privacy;
     let cell = |content: AnyElement, shown: bool| {
         div()
+            .min_w_0()
+            .w_full()
             .col_start(1)
             .row_start(1)
             .child(content)
             .when(!shown, |this| this.invisible())
     };
     let body = div()
+        .min_w_0()
+        .w_full()
         .grid()
         .grid_cols(1)
         .grid_rows(1)
         .child(cell(connection(call).into_any_element(), !privacy_shown))
-        .child(cell(
-            privacy(app, call, closing, cx).into_any_element(),
-            privacy_shown,
-        ));
+        .children(code.map(|code| {
+            cell(
+                privacy(app, code, closing, cx).into_any_element(),
+                privacy_shown,
+            )
+        }));
     menu_frame("voice-details")
         .w(rpx(WIDTH))
-        .child(tabs(app, tab, closing))
+        .min_w_0()
+        .whitespace_normal()
+        .child(tabs(app, tab, code.is_some(), closing))
         .child(
             div()
                 .flex()
                 .flex_col()
+                .min_w_0()
+                .w_full()
                 .gap(rpx(12.))
                 .p(rpx(16.))
                 .child(body)
@@ -54,7 +70,12 @@ pub(super) fn card(
         )
 }
 
-fn tabs(app: &DiscordApp, selected: DetailsTab, closing: bool) -> impl IntoElement {
+fn tabs(
+    app: &DiscordApp,
+    selected: DetailsTab,
+    privacy_available: bool,
+    closing: bool,
+) -> impl IntoElement {
     let tab = |id: &'static str, label: &'static str, tab: DetailsTab| {
         let active = selected == tab;
         let entity = app.entity.clone();
@@ -99,7 +120,9 @@ fn tabs(app: &DiscordApp, selected: DetailsTab, closing: bool) -> impl IntoEleme
             "Connection",
             DetailsTab::Connection,
         ))
-        .child(tab("voice-details-privacy", "Privacy", DetailsTab::Privacy))
+        .when(privacy_available, |this| {
+            this.child(tab("voice-details-privacy", "Privacy", DetailsTab::Privacy))
+        })
 }
 
 fn connection(call: &Call) -> impl IntoElement {
@@ -314,11 +337,8 @@ fn linked_text(
     .on_click(vec![range], move |_, _, cx| cx.open_url(url))
 }
 
-fn privacy(app: &DiscordApp, call: &Call, closing: bool, cx: &App) -> impl IntoElement {
-    let code = match &call.encryption {
-        Encryption::On(code) => Some(code.clone()),
-        _ => None,
-    };
+fn privacy(app: &DiscordApp, code: &str, closing: bool, cx: &App) -> impl IntoElement {
+    let groups = code_groups(code);
     let intro = linked_text(
         "voice-privacy-learn-more",
         "A new code is generated when people join or leave this call. ",
@@ -326,41 +346,19 @@ fn privacy(app: &DiscordApp, call: &Call, closing: bool, cx: &App) -> impl IntoE
         "",
         E2EE_ARTICLE,
     );
-    let codes = match code.as_deref() {
-        Some(code) => code_grid(code, cx).into_any_element(),
-        None => div()
-            .flex()
-            .items_center()
-            .justify_center()
-            .h(rpx(156.))
-            .px(rpx(16.))
-            .rounded(rpx(8.))
-            .bg(black())
-            .text_size(rpx(14.))
-            .line_height(rpx(18.))
-            .text_center()
-            .text_color(rgb(theme::MUTED))
-            .child(match &call.encryption {
-                Encryption::Off => {
-                    "This call isn't end-to-end encrypted, so it has no privacy code."
-                }
-                Encryption::Pending if call.connected => {
-                    "The privacy code appears once end-to-end encryption is set up, which needs \
-                     someone else in the call."
-                }
-                _ => "Connecting to voice…",
-            })
-            .into_any_element(),
-    };
     div()
         .flex()
         .flex_col()
+        .min_w_0()
+        .w_full()
         .gap(rpx(12.))
         .child(
             div()
                 .flex_none()
                 .flex()
                 .flex_col()
+                .min_w_0()
+                .w_full()
                 .gap(rpx(4.))
                 .child(
                     div()
@@ -372,17 +370,21 @@ fn privacy(app: &DiscordApp, call: &Call, closing: bool, cx: &App) -> impl IntoE
                 )
                 .child(
                     div()
+                        .min_w_0()
+                        .w_full()
                         .text_size(rpx(12.))
                         .line_height(rpx(16.))
                         .text_color(rgb(theme::MUTED))
                         .child(intro),
                 ),
         )
-        .child(codes)
-        .children(code.map(|code| copy_button(app, code, closing)))
+        .child(code_grid(&groups, cx))
+        .child(copy_button(app, groups.join(" "), closing))
         .child(
             div()
                 .flex_none()
+                .min_w_0()
+                .w_full()
                 .pt(rpx(12.))
                 .border_t_1()
                 .border_color(rgba(theme::BORDER))
@@ -396,23 +398,29 @@ fn privacy(app: &DiscordApp, call: &Call, closing: bool, cx: &App) -> impl IntoE
         )
 }
 
-/// Discord lays the 30-digit code out as two rows of three five-digit groups.
-fn code_grid(code: &str, cx: &App) -> impl IntoElement {
+fn code_groups(code: &str) -> Vec<String> {
     let digits: Vec<char> = code.chars().filter(|c| !c.is_whitespace()).collect();
-    let groups: Vec<String> = digits
+    digits
         .chunks(5)
         .map(|chunk| chunk.iter().collect())
-        .collect();
+        .collect()
+}
+
+/// Discord lays the 30-digit code out as two rows of three five-digit groups.
+fn code_grid(groups: &[String], cx: &App) -> Div {
     let mono = cx.theme().mono_font_family.clone();
     let row = |groups: &[String]| {
         div()
             .flex()
             .flex_1()
+            .min_w_0()
+            .w_full()
             .items_center()
             .children(groups.iter().map(|group| {
                 div()
                     .flex()
                     .flex_1()
+                    .min_w_0()
                     .justify_center()
                     .font_family(mono.clone())
                     .text_size(rpx(14.))
@@ -425,6 +433,8 @@ fn code_grid(code: &str, cx: &App) -> impl IntoElement {
     let mut grid = div()
         .flex()
         .flex_col()
+        .min_w_0()
+        .w_full()
         .h(rpx(156.))
         .px(rpx(16.))
         .py(rpx(24.))
@@ -486,6 +496,8 @@ fn encryption_footer(encryption: &Encryption, connected: bool) -> impl IntoEleme
     div()
         .flex()
         .items_center()
+        .min_w_0()
+        .w_full()
         .gap(rpx(6.))
         .px(rpx(8.))
         .py(rpx(6.))
@@ -495,6 +507,44 @@ fn encryption_footer(encryption: &Encryption, connected: bool) -> impl IntoEleme
         .line_height(rpx(16.))
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(color))
-        .child(theme::icon("lock", 12., color))
-        .child(text)
+        .child(theme::icon("lock", 12., color).flex_none())
+        .child(div().flex_1().min_w_0().child(text))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Encryption, code_groups};
+
+    #[test]
+    fn privacy_is_unavailable_until_a_nonempty_code_arrives() {
+        for encryption in [
+            Encryption::Pending,
+            Encryption::Off,
+            Encryption::On(String::new()),
+            Encryption::On(" \t\n".into()),
+        ] {
+            assert_eq!(encryption.privacy_code(), None);
+        }
+        let encryption = Encryption::On("012345678901234567890123456789".into());
+        assert_eq!(
+            encryption.privacy_code(),
+            Some("012345678901234567890123456789")
+        );
+    }
+
+    #[test]
+    fn display_and_clipboard_share_five_digit_groups_with_leading_zeroes() {
+        let groups = code_groups("012345678901234567890123456789");
+        assert_eq!(
+            groups,
+            ["01234", "56789", "01234", "56789", "01234", "56789"]
+        );
+        assert_eq!(groups.join(" "), "01234 56789 01234 56789 01234 56789");
+    }
+
+    #[test]
+    fn existing_whitespace_does_not_change_display_or_copied_groups() {
+        let groups = code_groups("01234\t56789 01234\n56789\u{2003}01234 56789");
+        assert_eq!(groups.join(" "), "01234 56789 01234 56789 01234 56789");
+    }
 }
