@@ -4,6 +4,7 @@ mod composer;
 mod connection;
 mod embeds;
 mod emoji_picker;
+mod expression_info;
 mod forum;
 mod forum_actions;
 mod gif_picker;
@@ -218,7 +219,7 @@ pub struct DiscordApp {
     pub(crate) revealed_spoilers: HashSet<(u64, u16)>,
     pub(crate) hovered_rail: Option<u64>,
     pub(crate) hovered_add_reaction: Option<u64>,
-    pub(crate) hovered_sticker: Option<(u64, u64)>,
+    pub(crate) expression_info: expression_info::State,
     pub(crate) player: Option<Player>,
     pub(crate) video_fullscreen: Option<Fullscreen>,
     jump: Option<JumpScroll>,
@@ -353,7 +354,7 @@ impl DiscordApp {
             revealed_spoilers: HashSet::new(),
             hovered_rail: None,
             hovered_add_reaction: None,
-            hovered_sticker: None,
+            expression_info: expression_info::State::default(),
             player: None,
             video_fullscreen: None,
             jump: None,
@@ -929,6 +930,9 @@ impl Render for DiscordApp {
         div()
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(|app, _: &JumpToPresent, window, cx| app.escape(window, cx)))
+            .on_scroll_wheel(cx.listener(|app, _, _, cx| {
+                app.close_expression_info(cx);
+            }))
             .on_action(cx.listener(|app, _: &MarkGuildRead, _, cx| app.mark_guild_read(cx)))
             .on_action(cx.listener(|app, _: &ComposerUp, window, cx| app.composer_up(window, cx)))
             .on_action(cx.listener(|app, _: &QuickSwitch, window, cx| {

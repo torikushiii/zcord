@@ -7,6 +7,7 @@ use gpui_component::ActiveTheme;
 use crate::{
     app::{
         DiscordApp,
+        expression_info::{Expression, HoverOwner},
         rich_text::{Action, Chip, Content, EmojiSource, Piece, PieceStyle, rich_text},
     },
     media::animated,
@@ -50,11 +51,23 @@ impl BodyContext<'_> {
     fn handler(&self) -> impl Fn(&Action, &mut Window, &mut App) + 'static {
         let entity = self.entity.clone();
         let message_id = self.message_id;
-        move |action, _, cx| match action {
+        move |action, window, cx| match action {
             Action::OpenUrl(url) => cx.open_url(url),
             Action::RevealSpoiler(index) => {
                 entity
                     .update(cx, |app, cx| app.reveal_spoiler(message_id, *index, cx))
+                    .ok();
+            }
+            Action::InspectEmoji { id, name, animated } => {
+                let expression = Expression::Emoji {
+                    id: *id,
+                    name: name.to_string(),
+                    animated: *animated,
+                };
+                entity
+                    .update(cx, |app, cx| {
+                        app.open_expression_info(expression, window.mouse_position(), cx)
+                    })
                     .ok();
             }
         }
@@ -316,6 +329,7 @@ fn inline(
     cx: &App,
 ) -> crate::app::rich_text::RichText {
     *counter += 1;
+    let block = *counter;
     let id = ("body", (context.message_id << 8) ^ u64::from(*counter));
     let mut pieces = spans_to_pieces(spans, jumbo, context, counter, cx);
     if edited {
@@ -329,9 +343,31 @@ fn inline(
             },
         ));
     }
+    let entity = context.entity.clone();
+    let message_id = context.message_id;
     rich_text(id, pieces)
         .selectable()
         .on_action(context.handler())
+        .on_action_hover(move |hover, _, cx| {
+            let Action::InspectEmoji { id, name, animated } = hover.action else {
+                return;
+            };
+            entity
+                .update(cx, |app, cx| {
+                    app.set_expression_hover(
+                        HoverOwner::Emoji(message_id, block, hover.piece),
+                        Expression::Emoji {
+                            id,
+                            name: name.to_string(),
+                            animated,
+                        },
+                        hover.bounds,
+                        hover.hovered,
+                        cx,
+                    );
+                })
+                .ok();
+        })
 }
 
 pub fn spans_to_pieces(
@@ -531,6 +567,13 @@ fn span_pieces(
             animated: is_animated,
             name,
         } => {
+            if style.action.is_none() {
+                style.action = Some(Action::InspectEmoji {
+                    id: *id,
+                    name: name.clone().into(),
+                    animated: *is_animated,
+                });
+            }
             let size = theme::image_px(if jumbo { 48. } else { 22. });
             let source = if *is_animated {
                 animated::resolve(

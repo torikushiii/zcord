@@ -45,6 +45,7 @@ impl DiscordApp {
     }
 
     pub(super) fn disconnect(&mut self) {
+        self.expression_info.reset();
         self.settings_page = None;
         if let Some(session) = self.session.take() {
             session.shutdown();

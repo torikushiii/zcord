@@ -220,6 +220,9 @@ impl DiscordApp {
     }
 
     pub(super) fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_expression_info(cx) {
+            return;
+        }
         if self.close_quick_switcher(window, cx) {
             return;
         }

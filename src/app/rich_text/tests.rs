@@ -1,4 +1,8 @@
-use std::{rc::Rc, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::Arc,
+};
 
 use gpui::{
     App, Bounds, Context, Hsla, ImageSource, Pixels, Render, SharedString, TestAppContext, Window,
@@ -494,4 +498,97 @@ fn loaded_emoji_paints_with_a_cached_layout(cx: &mut TestAppContext) {
     draw(cx);
     assert!(metrics::EMOJIS.get() > 0);
     assert_eq!(metrics::SHAPES.get(), 0);
+}
+
+struct InspectableEmoji {
+    image: Arc<gpui::RenderImage>,
+    clicks: Rc<Cell<usize>>,
+    hovers: Rc<RefCell<Vec<super::ActionHover>>>,
+}
+
+impl Render for InspectableEmoji {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let clicks = self.clicks.clone();
+        let hovers = self.hovers.clone();
+        div()
+            .size_full()
+            .child(gpui_base::TextSelectionLayer)
+            .child(
+                super::rich_text(
+                    "inspectable-emoji",
+                    vec![Piece {
+                        content: Content::Emoji(
+                            Some(EmojiSource::Still(ImageSource::Render(self.image.clone()))),
+                            ":wave:".into(),
+                        ),
+                        style: PieceStyle {
+                            action: Some(super::Action::InspectEmoji {
+                                id: 42,
+                                name: "wave".into(),
+                                animated: false,
+                            }),
+                            ..Default::default()
+                        },
+                    }],
+                )
+                .emoji_size(rems(2.))
+                .line_height(rems(2.))
+                .selectable()
+                .on_action(move |action, _, _| {
+                    assert!(matches!(action, super::Action::InspectEmoji { id: 42, .. }));
+                    clicks.set(clicks.get() + 1);
+                })
+                .on_action_hover(move |event, _, _| hovers.borrow_mut().push(event)),
+            )
+    }
+}
+
+#[gpui::test]
+fn custom_emoji_hover_and_click_preserve_drag_selection(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let clicks = Rc::new(Cell::new(0));
+    let hovers = Rc::new(RefCell::new(Vec::new()));
+    let image = Arc::new(gpui::RenderImage::new(
+        [image::Frame::new(image::RgbaImage::from_pixel(
+            2,
+            2,
+            image::Rgba([255; 4]),
+        ))]
+        .into_iter()
+        .collect::<Vec<_>>(),
+    ));
+    let (_, cx) = cx.add_window_view(|_, _| InspectableEmoji {
+        image,
+        clicks: clicks.clone(),
+        hovers: hovers.clone(),
+    });
+    draw(cx);
+    let inside = point(px(12.), px(12.));
+    let outside = point(px(80.), px(12.));
+    cx.simulate_mouse_move(outside, None, gpui::Modifiers::none());
+    cx.simulate_mouse_move(inside, None, gpui::Modifiers::none());
+    assert!(hovers.borrow().last().is_some_and(|event| {
+        event.hovered && event.piece == 0 && event.bounds.contains(&inside)
+    }));
+    cx.simulate_click(inside, gpui::Modifiers::none());
+    assert_eq!(clicks.get(), 1);
+    cx.simulate_mouse_down(inside, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_move(
+        outside,
+        Some(gpui::MouseButton::Left),
+        gpui::Modifiers::none(),
+    );
+    cx.simulate_mouse_up(outside, gpui::MouseButton::Left, gpui::Modifiers::none());
+    assert_eq!(
+        clicks.get(),
+        1,
+        "a selection drag must not open the emoji card"
+    );
+    cx.update(|window, cx| {
+        assert_eq!(
+            gpui_base::TextSelection::selected_text(window, cx),
+            ":wave:"
+        );
+    });
+    assert!(hovers.borrow().last().is_some_and(|event| !event.hovered));
 }

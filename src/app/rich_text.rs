@@ -32,6 +32,11 @@ pub(super) mod metrics {
 pub enum Action {
     OpenUrl(SharedString),
     RevealSpoiler(u16),
+    InspectEmoji {
+        id: u64,
+        name: SharedString,
+        animated: bool,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -83,6 +88,14 @@ impl Piece {
 }
 
 type ActionHandler = Rc<dyn Fn(&Action, &mut Window, &mut App)>;
+type ActionHoverHandler = Rc<dyn Fn(ActionHover, &mut Window, &mut App)>;
+
+pub struct ActionHover {
+    pub action: Action,
+    pub piece: usize,
+    pub hovered: bool,
+    pub bounds: Bounds<Pixels>,
+}
 
 pub struct RichText {
     id: ElementId,
@@ -96,6 +109,7 @@ pub struct RichText {
     truncate: bool,
     selectable: bool,
     on_action: Option<ActionHandler>,
+    on_action_hover: Option<ActionHoverHandler>,
 }
 
 pub fn rich_text(id: impl Into<ElementId>, pieces: Vec<Piece>) -> RichText {
@@ -111,6 +125,7 @@ pub fn rich_text(id: impl Into<ElementId>, pieces: Vec<Piece>) -> RichText {
         truncate: false,
         selectable: false,
         on_action: None,
+        on_action_hover: None,
     }
 }
 
@@ -161,6 +176,14 @@ impl RichText {
 
     pub fn on_action(mut self, handler: impl Fn(&Action, &mut Window, &mut App) + 'static) -> Self {
         self.on_action = Some(Rc::new(handler));
+        self
+    }
+
+    pub fn on_action_hover(
+        mut self,
+        handler: impl Fn(ActionHover, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_action_hover = Some(Rc::new(handler));
         self
     }
 }
@@ -1046,6 +1069,40 @@ impl Element for RichText {
                         window.insert_hitbox(fragment_bounds, HitboxBehavior::Normal),
                         fragment.piece,
                     ));
+                    if let (Some(handler), Some(action)) =
+                        (&self.on_action_hover, &piece.style.action)
+                    {
+                        let handler = handler.clone();
+                        let action = action.clone();
+                        let piece = fragment.piece;
+                        let mut hover = div()
+                            .id(("action-hover", hitboxes.len()))
+                            .w(fragment_bounds.size.width)
+                            .h(fragment_bounds.size.height)
+                            .on_hover(move |hovered, window, cx| {
+                                handler(
+                                    ActionHover {
+                                        action: action.clone(),
+                                        piece,
+                                        hovered: *hovered,
+                                        bounds: fragment_bounds,
+                                    },
+                                    window,
+                                    cx,
+                                );
+                            })
+                            .into_any_element();
+                        hover.prepaint_as_root(
+                            fragment_bounds.origin,
+                            size(
+                                AvailableSpace::Definite(fragment_bounds.size.width),
+                                AvailableSpace::Definite(fragment_bounds.size.height),
+                            ),
+                            window,
+                            cx,
+                        );
+                        emojis.push(hover);
+                    }
                 }
                 let hidden = matches!(piece.style.chip, Some(Chip::Spoiler { revealed: false }));
                 if let Content::Emoji(Some(source), _) = &piece.content

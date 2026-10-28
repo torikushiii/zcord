@@ -15,8 +15,8 @@ use gpui::{prelude::*, *};
 
 use crate::{
     app::{
-        DiscordApp, channel_list, chat, emoji_picker, gif_picker, guild_rail, home, lightbox,
-        member_list, profile, settings_page, switcher, voice,
+        DiscordApp, channel_list, chat, emoji_picker, expression_info, gif_picker, guild_rail,
+        home, lightbox, member_list, profile, settings_page, switcher, voice,
     },
     theme::rpx,
 };
@@ -342,6 +342,7 @@ impl Render for OverlaysView {
             .children(settings_page::render(app, window, cx))
             .children(chat::delete_dialog(app, cx))
             .children(profile::render(app, window, cx))
+            .children(expression_info::render(app, window, cx))
             .children(lightbox::render(app, window, cx))
             .children(emoji_picker::render(app, window, cx))
             .children(gif_picker::render(app, window, cx))

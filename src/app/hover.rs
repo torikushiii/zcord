@@ -20,27 +20,6 @@ impl DiscordApp {
         }
     }
 
-    pub(crate) fn set_sticker_hover(
-        &mut self,
-        message_id: u64,
-        sticker_id: u64,
-        hovered: bool,
-        cx: &mut Context<Self>,
-    ) {
-        let key = (message_id, sticker_id);
-        let next = if hovered {
-            Some(key)
-        } else if self.hovered_sticker == Some(key) {
-            None
-        } else {
-            return;
-        };
-        if self.hovered_sticker != next {
-            self.hovered_sticker = next;
-            cx.notify();
-        }
-    }
-
     pub(crate) fn set_message_hover(
         &mut self,
         message_id: u64,
