@@ -4,6 +4,7 @@ use super::rows::is_system;
 use super::*;
 use crate::app::display_name::{self, Surface};
 use crate::app::message_body::render_body_scaled;
+use crate::app::rich_text::{Action, Piece};
 
 pub(in crate::app) fn body_context<'a>(app: &'a DiscordApp, message_id: u64) -> BodyContext<'a> {
     BodyContext {
@@ -251,6 +252,17 @@ fn sticker_reply_preview(name: &str) -> Div {
         )
 }
 
+pub(super) fn passive_reply_pieces(mut pieces: Vec<Piece>) -> Vec<Piece> {
+    for piece in &mut pieces {
+        if matches!(&piece.style.action, Some(Action::OpenUrl(_))) {
+            piece.style.color.get_or_insert(rgb(LINK).into());
+        }
+        // The whole preview jumps to the message; its contents aren't separate controls.
+        piece.style.action = None;
+    }
+    pieces
+}
+
 fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) -> AnyElement {
     let spine = div()
         .absolute()
@@ -277,7 +289,8 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
             let parsed = app.parsed(reply.message_id, &reply.content);
             let context = body_context(app, reply.message_id);
             let mut counter = 0;
-            let pieces = preview_pieces(&parsed.blocks, &context, &mut counter, cx);
+            let pieces =
+                passive_reply_pieces(preview_pieces(&parsed.blocks, &context, &mut counter, cx));
             let preview: AnyElement = if pieces.is_empty() {
                 if let Some(name) = &reply.sticker {
                     sticker_reply_preview(name).into_any_element()
