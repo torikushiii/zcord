@@ -566,9 +566,29 @@ fn origin<'a>(app: &'a DiscordApp, expression: &Expression) -> Option<&'a Guild>
     }
 }
 
-fn explanation(app: &DiscordApp, expression: &Expression, joined_guild: Option<u64>) -> String {
-    let location = joined_guild.map(|id| {
-        if id == app.selected_guild_id {
+fn server_explanation(expression: &Expression, discoverable: Option<bool>) -> &'static str {
+    match (expression, discoverable) {
+        (Expression::Sticker(_), Some(false)) => "This sticker is from an invite-only server.",
+        (Expression::Sticker(_), Some(true)) => "This sticker is from a discoverable server.",
+        (Expression::Sticker(_), None) => {
+            "This sticker is from a server that is either invite-only or unavailable."
+        }
+        (Expression::Emoji { .. }, Some(false)) => "This emoji is from an invite-only server.",
+        (Expression::Emoji { .. }, Some(true)) => "This emoji is from a discoverable server.",
+        (Expression::Emoji { .. }, None) => {
+            "This emoji is from a server that is either invite-only or unavailable."
+        }
+    }
+}
+
+fn explanation(
+    app: &DiscordApp,
+    expression: &Expression,
+    source: Option<&stickers::Source<'_>>,
+) -> String {
+    let discoverable = source.and_then(|source| source.discoverable);
+    let location = source.filter(|source| source.joined).map(|source| {
+        if source.id == app.selected_guild_id {
             "this server"
         } else {
             "one of your servers"
@@ -577,7 +597,7 @@ fn explanation(app: &DiscordApp, expression: &Expression, joined_guild: Option<u
     match expression {
         Expression::Emoji { id, .. } => {
             let Some((guild, emoji)) = app.store.emoji_origin(*id) else {
-                return "This custom emoji's server isn't available.".to_owned();
+                return server_explanation(expression, discoverable).to_owned();
             };
             let access =
                 app.store
@@ -607,15 +627,27 @@ fn explanation(app: &DiscordApp, expression: &Expression, joined_guild: Option<u
                 Some(details) if details.kind == 1 || details.pack_id.is_some() => {
                     "This sticker is from a Discord sticker pack.".to_owned()
                 }
-                Some(details) if details.guild_id.is_some() => {
-                    "This sticker is from a server you haven't joined.".to_owned()
-                }
-                _ if app.expression_info.sticker_guild(sticker.id).is_some() => {
-                    "This sticker is from a server you haven't joined.".to_owned()
-                }
-                _ => "Learn more about this sticker and where it's from.".to_owned(),
+                _ => server_explanation(expression, discoverable).to_owned(),
             }
         }
+    }
+}
+
+fn fallback_information(state: &State, expression: &Expression) -> Option<&'static str> {
+    let Expression::Sticker(sticker) = expression else {
+        return None;
+    };
+    if state
+        .sticker_details(sticker.id)
+        .is_some_and(|details| details.kind == 1 || details.pack_id.is_some())
+    {
+        Some("Discord sticker pack")
+    } else if matches!(state.stickers.get(&sticker.id), Some(Load::Pending))
+        || matches!(state.guilds.get(&sticker.id), Some(Load::Pending))
+    {
+        Some("Loading sticker information...")
+    } else {
+        None
     }
 }
 
@@ -651,42 +683,18 @@ fn info_card(app: &DiscordApp, popout: &Popout, window: &Window, cx: &App) -> An
                         .text_size(rpx(14.))
                         .line_height(rpx(20.))
                         .text_color(rgb(theme::TEXT))
-                        .child(explanation(
-                            app,
-                            expression,
-                            source
-                                .as_ref()
-                                .filter(|source| source.joined)
-                                .map(|source| source.id),
-                        )),
+                        .child(explanation(app, expression, source.as_ref())),
                 ),
         );
     let body = if let Some(source) = source {
-        stickers::source_card(app, popout, &source, cx)
+        Some(stickers::source_card(app, popout, &source, cx))
     } else {
-        let text = match expression {
-            Expression::Sticker(sticker) => match app.expression_info.sticker_details(sticker.id) {
-                Some(details) if details.kind == 1 || details.pack_id.is_some() => {
-                    "Discord sticker pack"
-                }
-                _ if matches!(
-                    app.expression_info.stickers.get(&sticker.id),
-                    Some(Load::Pending)
-                ) || matches!(
-                    app.expression_info.guilds.get(&sticker.id),
-                    Some(Load::Pending)
-                ) =>
-                {
-                    "Loading sticker information..."
-                }
-                _ => "Server information unavailable",
-            },
-            Expression::Emoji { .. } => "Server information unavailable",
-        };
-        div()
-            .text_color(rgb(theme::MUTED))
-            .child(text)
-            .into_any_element()
+        fallback_information(&app.expression_info, expression).map(|text| {
+            div()
+                .text_color(rgb(theme::MUTED))
+                .child(text)
+                .into_any_element()
+        })
     };
     let max_height =
         (window.viewport_size().height - px(24.) - window.client_inset().unwrap_or(px(0.)) * 2.)
@@ -707,7 +715,7 @@ fn info_card(app: &DiscordApp, popout: &Popout, window: &Window, cx: &App) -> An
         .line_height(rpx(20.))
         .text_color(rgb(theme::TEXT))
         .child(header)
-        .child(div().p(rpx(16.)).child(body))
+        .children(body.map(|body| div().p(rpx(16.)).child(body)))
         .into_any_element()
 }
 
@@ -766,7 +774,10 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
 
 #[cfg(test)]
 mod tests {
-    use super::{CACHE_LIMIT, Expression, HoverOwner, Load, Popout, State, reserve_load};
+    use super::{
+        CACHE_LIMIT, Expression, HoverOwner, Load, Popout, State, fallback_information,
+        reserve_load, server_explanation,
+    };
     use crate::{discord::model, store::Sticker};
     use gpui::{Bounds, point, px, size};
     use serde_json::json;
@@ -778,6 +789,64 @@ mod tests {
             name: "wave".to_owned(),
             animated: true,
         }
+    }
+
+    #[test]
+    fn server_explanations_distinguish_unknown_private_and_public_origins() {
+        let sticker = Expression::Sticker(Sticker {
+            id: 42,
+            name: "wave".into(),
+            format: 1,
+        });
+        for (expression, kind) in [(sticker, "sticker"), (emoji(43), "emoji")] {
+            assert_eq!(
+                server_explanation(&expression, None),
+                format!("This {kind} is from a server that is either invite-only or unavailable.")
+            );
+            assert_eq!(
+                server_explanation(&expression, Some(false)),
+                format!("This {kind} is from an invite-only server.")
+            );
+            assert_eq!(
+                server_explanation(&expression, Some(true)),
+                format!("This {kind} is from a discoverable server.")
+            );
+        }
+    }
+
+    #[test]
+    fn missing_server_details_have_no_unavailable_footer_but_keep_loading_and_pack_labels() {
+        let sticker = Expression::Sticker(Sticker {
+            id: 42,
+            name: "wave".into(),
+            format: 1,
+        });
+        let mut state = State::default();
+        assert_eq!(fallback_information(&state, &emoji(43)), None);
+        assert_eq!(fallback_information(&state, &sticker), None);
+        state.stickers.insert(42, Load::Pending);
+        assert_eq!(
+            fallback_information(&state, &sticker),
+            Some("Loading sticker information...")
+        );
+        state.stickers.insert(42, Load::Failed);
+        assert_eq!(fallback_information(&state, &sticker), None);
+        state.guilds.insert(42, Load::Pending);
+        assert_eq!(
+            fallback_information(&state, &sticker),
+            Some("Loading sticker information...")
+        );
+        state.guilds.insert(42, Load::Failed);
+        assert_eq!(fallback_information(&state, &sticker), None);
+        let pack = serde_json::from_value(json!({
+            "id": "42", "name": "wave", "type": 1, "format_type": 1, "pack_id": "100"
+        }))
+        .unwrap();
+        state.stickers.insert(42, Load::Ready(pack));
+        assert_eq!(
+            fallback_information(&state, &sticker),
+            Some("Discord sticker pack")
+        );
     }
 
     #[test]
