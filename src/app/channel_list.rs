@@ -331,10 +331,12 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
                                 .voice_members(guild_id, channel.id)
                                 .into_iter()
                                 .nth(index)
+                                .map(|member| (channel.id, member))
                         });
                     return match member {
-                        Some(member) => {
-                            voice::member_row(app, guild_id, &member, cx).into_any_element()
+                        Some((channel_id, member)) => {
+                            voice::member_row(app, guild_id, channel_id, &member, cx)
+                                .into_any_element()
                         }
                         None => div().into_any_element(),
                     };
