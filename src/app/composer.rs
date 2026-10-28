@@ -238,6 +238,14 @@ impl DiscordApp {
         if self.close_lightbox(cx) {
             return;
         }
+        if self
+            .profile
+            .as_ref()
+            .is_some_and(|card| card.more_menu_open)
+        {
+            self.set_profile_menu(false, cx);
+            return;
+        }
         if self.close_profile(cx) {
             return;
         }

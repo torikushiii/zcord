@@ -53,6 +53,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "connections/xbox",
     "connections/youtube",
     "discord",
+    "ellipsis",
     "external-link",
     "file",
     "flame",

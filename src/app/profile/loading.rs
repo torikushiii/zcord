@@ -42,51 +42,37 @@ impl DiscordApp {
                 (self.selected_guild_id != 0).then_some(self.selected_guild_id)
             }
         };
-        self.profile = Some(ProfileCard {
-            user_id,
-            guild_id,
-            origin,
-            position,
-            anchor,
-            modal: false,
-            profile: None,
-            games: HashMap::new(),
-            games_pending: HashSet::new(),
-            applications: HashMap::new(),
-            applications_pending: HashSet::new(),
-            identities: None,
-            identities_pending: false,
-            outbox: None,
-            wishlist: None,
-            note: None,
-            badge_details: None,
-            hovered_badge: None,
-            hovered_cover: None,
-            hovered_art: [false; 4],
-            widget_configs: HashMap::new(),
-            widget_configs_pending: HashSet::new(),
-            board_requested: false,
-            modal_request_pending: false,
-            details_requested: false,
-            wishlist_requested: false,
-            note_requested: false,
-            shop_menu_open: false,
-            game_timer_started: false,
-            effect_timer_started: false,
-            avatar_theme: None,
-            avatar_theme_source: None,
-            effect: None,
-            frame: None,
-            cosmetics_pending: HashSet::new(),
-            opened: Instant::now(),
-            effect_started: RefCell::new(None),
-            tab: Tab::Activity,
-            status_prompt: rand::random::<usize>() % STATUS_PROMPTS.len(),
-            activity_prompt: rand::random::<usize>() % ACTIVITY_PROMPTS.len(),
-            expanded_widgets: HashSet::new(),
-            widget_toggles: HashMap::new(),
-            _tasks: Vec::new(),
-        });
+        self.profile = Some(ProfileCard::new(
+            user_id, guild_id, position, anchor, origin,
+        ));
+        self.load_profile_scope(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn set_profile_menu(&mut self, open: bool, cx: &mut Context<Self>) {
+        if let Some(card) = &mut self.profile
+            && card.more_menu_open != open
+        {
+            card.more_menu_open = open;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn switch_profile_scope(&mut self, cx: &mut Context<Self>) {
+        let Some(card) = &mut self.profile else {
+            return;
+        };
+        if card.switch_scope() {
+            self.load_profile_scope(cx);
+        }
+        cx.notify();
+    }
+
+    fn load_profile_scope(&mut self, cx: &mut Context<Self>) {
+        let Some(card) = &self.profile else {
+            return;
+        };
+        let (user_id, guild_id) = (card.user_id, card.guild_id);
         // The full response also covers the popout; avoid fetching both variants on a cold open.
         if let Some(profile) = self
             .session
@@ -106,7 +92,6 @@ impl DiscordApp {
                 this.update(cx, |_, cx| cx.notify()).ok();
             }));
         }
-        cx.notify();
     }
 
     pub(crate) fn open_full_profile(&mut self, cx: &mut Context<Self>) {
@@ -481,6 +466,14 @@ impl DiscordApp {
         profile: Arc<model::Profile>,
         cx: &mut Context<Self>,
     ) {
+        if !self
+            .profile
+            .as_ref()
+            .is_some_and(|card| card.user_id == user_id && card.guild_id == guild_id)
+        {
+            return;
+        }
+        let profile = scoped_profile(profile, guild_id);
         self.store.absorb_profile(guild_id, &profile);
         let game = self.store.user(user_id).and_then(|user| user.game.clone());
         let Some(session) = self.session.clone() else {
@@ -765,6 +758,110 @@ impl DiscordApp {
             .ok();
         }));
     }
+}
+
+impl ProfileCard {
+    pub(super) fn new(
+        user_id: u64,
+        guild_id: Option<u64>,
+        position: Point<Pixels>,
+        anchor: Anchor,
+        origin: ProfileOrigin,
+    ) -> Self {
+        Self {
+            user_id,
+            guild_id,
+            source_guild_id: guild_id,
+            more_menu_open: false,
+            scope_snapshots: HashMap::new(),
+            origin,
+            position,
+            anchor,
+            modal: false,
+            profile: None,
+            games: HashMap::new(),
+            games_pending: HashSet::new(),
+            applications: HashMap::new(),
+            applications_pending: HashSet::new(),
+            identities: None,
+            identities_pending: false,
+            outbox: None,
+            wishlist: None,
+            note: None,
+            badge_details: None,
+            hovered_badge: None,
+            hovered_cover: None,
+            hovered_art: [false; 4],
+            widget_configs: HashMap::new(),
+            widget_configs_pending: HashSet::new(),
+            board_requested: false,
+            modal_request_pending: false,
+            details_requested: false,
+            wishlist_requested: false,
+            note_requested: false,
+            shop_menu_open: false,
+            game_timer_started: false,
+            effect_timer_started: false,
+            avatar_theme: None,
+            avatar_theme_source: None,
+            effect: None,
+            frame: None,
+            cosmetics_pending: HashSet::new(),
+            opened: Instant::now(),
+            effect_started: RefCell::new(None),
+            tab: Tab::Activity,
+            status_prompt: rand::random::<usize>() % STATUS_PROMPTS.len(),
+            activity_prompt: rand::random::<usize>() % ACTIVITY_PROMPTS.len(),
+            expanded_widgets: HashSet::new(),
+            widget_toggles: HashMap::new(),
+            _tasks: Vec::new(),
+        }
+    }
+
+    pub(super) fn switch_scope(&mut self) -> bool {
+        self.more_menu_open = false;
+        let Some(source_guild_id) = self.source_guild_id else {
+            return false;
+        };
+        if let Some(profile) = &self.profile {
+            self.scope_snapshots.insert(self.guild_id, profile.clone());
+        }
+        let guild_id = self.guild_id.is_none().then_some(source_guild_id);
+        let mut next = Self::new(
+            self.user_id,
+            guild_id,
+            self.position,
+            self.anchor,
+            self.origin.clone(),
+        );
+        next.source_guild_id = self.source_guild_id;
+        next.modal = self.modal;
+        next.tab = self.tab;
+        next.status_prompt = self.status_prompt;
+        next.activity_prompt = self.activity_prompt;
+        next.scope_snapshots = std::mem::take(&mut self.scope_snapshots);
+        next.profile = next.scope_snapshots.get(&guild_id).cloned().or_else(|| {
+            // A guild response includes the main profile; keep it usable offline too.
+            self.profile
+                .as_ref()
+                .filter(|_| guild_id.is_none())
+                .map(|profile| scoped_profile(profile.clone(), None))
+        });
+        // Dropping the old card cancels its callbacks, even after switching back to that scope.
+        *self = next;
+        true
+    }
+}
+
+fn scoped_profile(mut profile: Arc<model::Profile>, guild_id: Option<u64>) -> Arc<model::Profile> {
+    if guild_id.is_none()
+        && (profile.guild_member.is_some() || profile.guild_member_profile.is_some())
+    {
+        let profile = Arc::make_mut(&mut profile);
+        profile.guild_member = None;
+        profile.guild_member_profile = None;
+    }
+    profile
 }
 
 pub(super) fn guild_profile(profile: &model::Profile) -> Option<&model::UserProfile> {
