@@ -7,6 +7,7 @@ use reqwest::{
 use serde::Serialize;
 use serde_json::Value;
 use std::{collections::HashMap, time::Duration};
+mod expressions;
 mod gifs;
 mod messages;
 mod profiles;

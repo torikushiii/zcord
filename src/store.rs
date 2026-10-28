@@ -2,6 +2,7 @@ mod account;
 mod authors;
 mod channels;
 mod emoji;
+mod expressions;
 mod forum;
 mod guilds;
 mod home;
@@ -332,6 +333,7 @@ impl Store {
                 self.voice_start_time_update(update.guild_id, update.id, update.voice_start_time)
             }
             Event::GuildEmojisUpdate(update) => self.guild_emojis_update(update),
+            Event::GuildStickersUpdate(update) => self.guild_stickers_update(update),
             Event::GuildDelete { id } => self.guild_delete(id),
             Event::ThreadListSync(sync) => self.thread_list_sync(sync),
             Event::ChannelUpsert(update) => self.channel_upsert(update),

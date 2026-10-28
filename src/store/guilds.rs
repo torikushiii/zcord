@@ -70,6 +70,22 @@ impl Store {
         }
     }
 
+    pub(super) fn guild_stickers_update(&mut self, update: model::GuildStickersUpdate) -> Change {
+        let Some(stickers) = update.stickers else {
+            return Change::None;
+        };
+        let Some(guild) = self
+            .source
+            .as_mut()
+            .and_then(|source| source.guilds.iter_mut().find(|g| g.id == update.guild_id))
+        else {
+            return Change::None;
+        };
+        guild.stickers = Some(stickers);
+        // Sticker catalogs live only in source metadata; no view rebuild is needed.
+        Change::Structure
+    }
+
     pub(super) fn guild_delete(&mut self, id: u64) -> Change {
         self.voice_start_times.retain(|(guild, _), _| *guild != id);
         self.social.guilds.remove(&id);

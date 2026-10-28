@@ -11,6 +11,7 @@ use serde_json::json;
 mod account;
 mod channels;
 mod embeds;
+mod expressions;
 mod invites;
 mod members;
 mod messages;

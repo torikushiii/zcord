@@ -11,6 +11,7 @@ mod ready;
 mod relationship;
 mod serde_helpers;
 mod settings;
+mod sticker;
 mod user;
 mod voice;
 
@@ -27,6 +28,7 @@ pub use ready::*;
 pub use relationship::*;
 pub use serde_helpers::*;
 pub use settings::*;
+pub use sticker::*;
 pub use user::*;
 pub use voice::*;
 
