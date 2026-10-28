@@ -27,9 +27,10 @@ pub(super) fn request_invites(app: &Entity<DiscordApp>, index: usize, cx: &mut A
 }
 
 pub(super) fn render_row(app: &DiscordApp, index: usize, cx: &App) -> AnyElement {
-    let Some(messages) = app.channel().map(|channel| &channel.messages) else {
+    let Some(channel) = app.channel() else {
         return div().into_any_element();
     };
+    let messages = &channel.messages;
     let Some(message) = messages.get(index) else {
         return div().into_any_element();
     };
@@ -44,9 +45,9 @@ pub(super) fn render_row(app: &DiscordApp, index: usize, cx: &App) -> AnyElement
             && !is_system(message.kind)
     });
     let start = index == 0 && app.history_complete.contains(&app.selected_channel_id);
-    let first_unread = app.unread_since.is_some_and(|since| {
-        message.id > since && previous.map_or(start, |previous| previous.id <= since)
-    });
+    let first_unread = app
+        .unread_since
+        .is_some_and(|since| is_first_unread(messages, index, since, start));
     div()
         .w_full()
         .when(start, |this| this.children(welcome(app, cx)))
@@ -64,6 +65,18 @@ pub(super) fn render_row(app: &DiscordApp, index: usize, cx: &App) -> AnyElement
         })
         .child(render_message(app, message, grouped, false, cx))
         .into_any_element()
+}
+
+pub(super) fn is_first_unread(messages: &[Message], index: usize, since: u64, start: bool) -> bool {
+    let message = &messages[index];
+    (index > 0 || start)
+        && message.delivery == Delivery::Sent
+        && message.id > since
+        && messages[..index]
+            .iter()
+            .rev()
+            .find(|previous| previous.delivery == Delivery::Sent)
+            .is_none_or(|previous| previous.id <= since)
 }
 
 pub(super) fn is_system(kind: u8) -> bool {

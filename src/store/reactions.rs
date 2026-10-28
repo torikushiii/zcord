@@ -45,10 +45,7 @@ impl Store {
         else {
             return Change::None;
         };
-        let Ok(index) = channel
-            .messages
-            .binary_search_by_key(&message_id, |message| message.id)
-        else {
+        let Some(index) = channel.message_index(message_id) else {
             return Change::None;
         };
         update(&mut channel.messages[index].reactions);
@@ -62,10 +59,7 @@ impl Store {
         emoji: &ReactionEmoji,
     ) -> Option<bool> {
         let channel = self.network_channel(channel_id)?;
-        let index = channel
-            .messages
-            .binary_search_by_key(&message_id, |message| message.id)
-            .ok()?;
+        let index = channel.message_index(message_id)?;
         channel.messages[index]
             .reactions
             .iter()
@@ -86,10 +80,7 @@ impl Store {
         else {
             return Change::None;
         };
-        let Ok(index) = channel
-            .messages
-            .binary_search_by_key(&message_id, |message| message.id)
-        else {
+        let Some(index) = channel.message_index(message_id) else {
             return Change::None;
         };
         let reactions = &mut channel.messages[index].reactions;

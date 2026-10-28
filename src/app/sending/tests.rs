@@ -1,0 +1,65 @@
+use super::PendingSends;
+use crate::app::ReplyTarget;
+
+#[test]
+fn staged_sends_cannot_be_bypassed_when_another_response_marks_present() {
+    let mut sends = PendingSends::default();
+    assert!(sends.should_stage(10, false, false));
+    sends.push(10, "A".into(), None);
+    assert!(sends.should_stage(10, true, true));
+    sends.push(10, "B".into(), None);
+    assert!(
+        sends.should_stage(10, true, false),
+        "the backlog itself is a barrier"
+    );
+    sends.push(10, "C".into(), None);
+    let flushed = sends.take_channel(10);
+    assert_eq!(
+        flushed
+            .iter()
+            .map(|entry| entry.1.as_str())
+            .collect::<Vec<_>>(),
+        ["A", "B", "C"]
+    );
+    assert!(
+        sends.take_channel(10).is_empty(),
+        "a refresh must dispatch each send only once"
+    );
+    assert!(!sends.should_stage(10, true, false));
+}
+
+#[test]
+fn failed_refresh_retains_content_and_retries_join_the_tail_without_blocking_other_channels() {
+    let mut sends = PendingSends::default();
+    let reply = ReplyTarget {
+        message_id: 99,
+        author_id: 2,
+        mention: false,
+    };
+    sends.push(10, "A".into(), Some(reply));
+    sends.push(20, "Other".into(), None);
+    // A failed refresh does not drain the queue. A later submission initiates another
+    // refresh even when an unrelated response already set at_present.
+    assert!(sends.should_stage(10, true, false));
+    sends.push(10, "B".into(), None);
+    sends.push(10, "Retry".into(), Some(reply));
+    assert!(!sends.should_stage(30, true, false));
+    assert!(
+        sends.should_stage(30, true, true),
+        "refreshing alone is also a barrier"
+    );
+    let other = sends.take_channel(20);
+    assert_eq!(other[0].1, "Other");
+    let flushed = sends.take_channel(10);
+    assert_eq!(
+        flushed
+            .iter()
+            .map(|entry| entry.1.as_str())
+            .collect::<Vec<_>>(),
+        ["A", "B", "Retry"]
+    );
+    let retained = flushed[0].2.as_ref().unwrap();
+    assert_eq!(retained.message_id, 99);
+    assert!(!retained.mention);
+    assert_eq!(flushed[2].2.as_ref().unwrap().message_id, 99);
+}

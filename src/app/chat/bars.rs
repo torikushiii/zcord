@@ -14,15 +14,12 @@ pub(super) fn new_messages_bar(
     }
     let since = app.unread_since?;
     let channel = app.channel()?;
-    let index = channel
-        .messages
-        .iter()
-        .position(|message| message.id > since)?;
+    let index = channel.first_unread_index(since)?;
     if app.messages.item_is_above_viewport(index) != Some(true) {
         return None;
     }
     let truncated = index == 0 && !app.history_complete.contains(&channel.id);
-    let count = channel.messages.len() - index;
+    let count = channel.unread_message_count(since);
     let timestamp = channel.messages[index].timestamp;
     let today = chrono::Local::now().date_naive();
     let since_text = if (

@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::Delivery;
 
 impl DiscordApp {
     pub(super) fn reset_messages(&mut self, count: usize) {
@@ -15,9 +16,10 @@ impl DiscordApp {
         self.unread_bar = false;
         let channel_id = self.selected_channel_id;
         let needs_present = self.live
-            && self.channel().is_some_and(|channel| {
-                !channel.messages_loaded || !self.store.at_present(channel.id)
-            });
+            && (self.pending_sends.has_channel(channel_id)
+                || self.channel().is_some_and(|channel| {
+                    !channel.messages_loaded || !self.store.at_present(channel.id)
+                }));
         self.messages.set_follow_mode(FollowMode::Tail);
         if needs_present {
             self.pending_present.insert(channel_id);
@@ -28,12 +30,10 @@ impl DiscordApp {
     }
 
     pub(super) fn scroll_to_unread(&self, since: u64) {
-        let Some(index) = self.channel().and_then(|channel| {
-            channel
-                .messages
-                .iter()
-                .position(|message| message.id > since)
-        }) else {
+        let Some(index) = self
+            .channel()
+            .and_then(|channel| channel.first_unread_index(since))
+        else {
             return;
         };
         self.messages.scroll_to(ListOffset {
@@ -236,7 +236,7 @@ impl DiscordApp {
         let Some(newest) = self
             .channel()
             .filter(|channel| channel.messages_loaded)
-            .and_then(|channel| channel.messages.last())
+            .and_then(|channel| channel.newest_history_message())
             .map(|message| message.id)
         else {
             return;
@@ -262,12 +262,18 @@ impl DiscordApp {
                             .iter()
                             .find(|guild| guild.channel(channel_id).is_some())
                             .and_then(|guild| guild.channel(channel_id))
-                            .and_then(|channel| channel.messages.last())
+                            .and_then(|channel| channel.newest_history_message())
                             .map(|message| message.id);
                         if current_newest != Some(newest) {
                             cx.notify();
                             return;
                         }
+                        let optimistic = app.channel().is_some_and(|channel| {
+                            channel
+                                .messages
+                                .iter()
+                                .any(|message| message.delivery != Delivery::Sent)
+                        });
                         let inserted =
                             app.store
                                 .append_messages(channel_id, messages, MESSAGE_PAGE);
@@ -277,9 +283,17 @@ impl DiscordApp {
                                 let len = app.channel().map_or(0, |channel| channel.messages.len());
                                 let index = len - inserted;
                                 app.messages.splice(index..index, inserted);
-                                app.messages
-                                    .remeasure_items(index.saturating_sub(1)..(index + 1).min(len));
+                                app.messages.remeasure_items(if optimistic {
+                                    0..len
+                                } else {
+                                    index.saturating_sub(1)..(index + 1).min(len)
+                                });
                             }
+                        }
+                        // A page may confirm an optimistic row without increasing the count.
+                        if optimistic && inserted == 0 && app.selected_channel_id == channel_id {
+                            let len = app.channel().map_or(0, |channel| channel.messages.len());
+                            app.messages.remeasure_items(0..len);
                         }
                     }
                     Ok(Err(error)) => log::warn!("Could not load newer messages: {error}"),
@@ -300,7 +314,7 @@ impl DiscordApp {
         let Some(oldest) = self
             .channel()
             .filter(|channel| channel.messages_loaded)
-            .and_then(|channel| channel.messages.first())
+            .and_then(|channel| channel.oldest_history_message())
             .map(|message| message.id)
         else {
             return;
@@ -334,7 +348,7 @@ impl DiscordApp {
                             .iter()
                             .find(|guild| guild.channel(channel_id).is_some())
                             .and_then(|guild| guild.channel(channel_id))
-                            .and_then(|channel| channel.messages.first())
+                            .and_then(|channel| channel.oldest_history_message())
                             .map(|message| message.id);
                         if current_oldest != Some(oldest) {
                             cx.notify();
@@ -344,6 +358,12 @@ impl DiscordApp {
                         if complete {
                             app.history_complete.insert(channel_id);
                         }
+                        let optimistic = app.channel().is_some_and(|channel| {
+                            channel
+                                .messages
+                                .iter()
+                                .any(|message| message.delivery != Delivery::Sent)
+                        });
                         let inserted = app.store.prepend_messages(channel_id, messages);
                         if complete && inserted == 0 && app.selected_channel_id == channel_id {
                             app.messages.remeasure_items(0..1);
@@ -352,8 +372,17 @@ impl DiscordApp {
                             app.request_missing_members(channel_id);
                             if app.selected_channel_id == channel_id {
                                 app.messages.splice(0..0, inserted);
-                                app.messages.remeasure_items(inserted..inserted + 1);
+                                let len = app.channel().map_or(0, |channel| channel.messages.len());
+                                app.messages.remeasure_items(if optimistic {
+                                    0..len
+                                } else {
+                                    inserted..inserted + 1
+                                });
                             }
+                        }
+                        if optimistic && inserted == 0 && app.selected_channel_id == channel_id {
+                            let len = app.channel().map_or(0, |channel| channel.messages.len());
+                            app.messages.remeasure_items(0..len);
                         }
                     }
                     Ok(Err(error)) => {

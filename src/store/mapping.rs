@@ -305,6 +305,7 @@ pub(super) fn map_stickers(stickers: &[model::Sticker]) -> Vec<Sticker> {
 pub(super) fn map_message(message: &model::Message) -> Option<Message> {
     Some(Message {
         id: message.id,
+        send_order: None,
         author_id: message.author.id,
         timestamp: local_timestamp(&message.timestamp)?,
         delivery: Delivery::Sent,

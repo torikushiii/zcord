@@ -421,6 +421,7 @@ fn seed_messages(
         timestamp = timestamp.plus_minutes(gap);
         messages.push(Message {
             id: *next_message_id,
+            send_order: None,
             author_id,
             timestamp,
             delivery: Delivery::Sent,
