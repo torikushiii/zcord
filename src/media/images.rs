@@ -269,6 +269,15 @@ pub(crate) fn trusted_video_url(raw: &str) -> Option<String> {
     Some(url.into())
 }
 
+fn avif_proxy_image(spec: &ImageSpec, url: &reqwest::Url) -> bool {
+    matches!(spec, ImageSpec::Attachment { .. } | ImageSpec::Media { .. })
+        && allowed_url(url)
+        && url
+            .path()
+            .rsplit_once('.')
+            .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("avif"))
+}
+
 fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
     if let ImageSpec::Animated { still } = spec {
         still.animated()?;
@@ -454,51 +463,63 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
         return None;
     }
     url.set_fragment(None);
+    let avif = avif_proxy_image(spec, &url);
+    if avif && url.host_str() == Some("cdn.discordapp.com") {
+        url.set_host(Some("media.discordapp.net")).ok()?;
+    }
     if let ImageSpec::Attachment { width, height, .. }
     | ImageSpec::Media { width, height, .. }
     | ImageSpec::VideoPoster { width, height, .. } = spec
     {
         let poster = matches!(spec, ImageSpec::VideoPoster { .. });
         let longest = (*width).max(*height);
-        if *width == 0 || *height == 0 {
+        let dimensions = if *width == 0 || *height == 0 {
             if matches!(
                 spec,
                 ImageSpec::Attachment { .. } | ImageSpec::VideoPoster { .. }
             ) {
                 return None;
             }
-            let params: Vec<_> = url
-                .query_pairs()
-                .filter(|(key, _)| !matches!(key.as_ref(), "width" | "height" | "size"))
-                .map(|(key, value)| (key.into_owned(), value.into_owned()))
-                .collect();
-            url.set_query(None);
-            if !params.is_empty() {
-                url.query_pairs_mut().extend_pairs(params);
-            }
-            if matches!(spec, ImageSpec::Media { animated: true, .. }) {
-                url.query_pairs_mut().append_pair("animated", "true");
-            }
-            return Some(url);
-        }
-        let target = size.min(longest);
-        let width = (u64::from(*width) * u64::from(target) / u64::from(longest)).max(1);
-        let height = (u64::from(*height) * u64::from(target) / u64::from(longest)).max(1);
+            None
+        } else {
+            let target = size.min(longest);
+            let width = (u64::from(*width) * u64::from(target) / u64::from(longest)).max(1);
+            let height = (u64::from(*height) * u64::from(target) / u64::from(longest)).max(1);
+            Some((width, height))
+        };
         let params: Vec<_> = url
             .query_pairs()
             .filter(|(key, _)| {
-                !matches!(key.as_ref(), "width" | "height" | "size") && !(poster && key == "format")
+                !matches!(key.as_ref(), "width" | "height" | "size")
+                    && !((poster || avif) && key == "format")
+                    && !(avif && key == "animated")
             })
             .map(|(key, value)| (key.into_owned(), value.into_owned()))
             .collect();
-        // The media proxy keeps the original format (and GIF animation); WebP conversion isn't
-        // documented as guaranteed. https://docs.discord.food/reference#media-proxy-parameters
         url.set_query(None);
-        url.query_pairs_mut()
-            .extend_pairs(params)
-            .append_pair("width", &width.to_string())
-            .append_pair("height", &height.to_string());
-        if matches!(spec, ImageSpec::Media { animated: true, .. }) {
+        if !params.is_empty() {
+            url.query_pairs_mut().extend_pairs(params);
+        }
+        if let Some((width, height)) = dimensions {
+            url.query_pairs_mut()
+                .append_pair("width", &width.to_string())
+                .append_pair("height", &height.to_string());
+        }
+        if avif {
+            // The media proxy keeps the original format (and GIF animation) unless `format` is set.
+            // AVIF isn't decoded locally, so it is requested as WebP with `animated` explicit.
+            // https://docs.discord.food/reference#media-proxy-parameters
+            let animated = !matches!(
+                spec,
+                ImageSpec::Media {
+                    animated: false,
+                    ..
+                }
+            );
+            url.query_pairs_mut()
+                .append_pair("format", "webp")
+                .append_pair("animated", if animated { "true" } else { "false" });
+        } else if matches!(spec, ImageSpec::Media { animated: true, .. }) {
             url.query_pairs_mut().append_pair("animated", "true");
         }
         if poster {
@@ -541,12 +562,8 @@ fn first_frame_png(bytes: &[u8], size: u32) -> Option<Vec<u8>> {
         };
         let width = scaled(image.width());
         let height = scaled(image.height());
-        image = image::imageops::resize(
-            &image,
-            width,
-            height,
-            image::imageops::FilterType::Triangle,
-        );
+        image =
+            image::imageops::resize(&image, width, height, image::imageops::FilterType::Triangle);
     }
     let mut png = Vec::new();
     image::codecs::png::PngEncoder::new(&mut png)
@@ -579,8 +596,19 @@ fn still_spec(spec: &ImageSpec) -> bool {
 fn file_name(spec: &ImageSpec, size: u32) -> String {
     let mut hasher = DefaultHasher::new();
     spec.hash(&mut hasher);
+    if let ImageSpec::Attachment { url, .. } | ImageSpec::Media { url, .. } = spec
+        && let Ok(url) = reqwest::Url::parse(url)
+        && avif_proxy_image(spec, &url)
+    {
+        // Downloads and decoded frames share this key; bypass pre-conversion cache entries.
+        "avif-proxy-webp-v1".hash(&mut hasher);
+    }
     let suffix = if still_spec(spec) { "-still" } else { "" };
-    format!("{:016x}{suffix}-{}.img", hasher.finish(), rounded_size(size))
+    format!(
+        "{:016x}{suffix}-{}.img",
+        hasher.finish(),
+        rounded_size(size)
+    )
 }
 
 enum Entry {
@@ -624,7 +652,11 @@ pub fn init(cx: &mut App) {
     }
     let directories = dirs::cache_dir().map(|dir| {
         let root = dir.join("zcord");
-        (root.join("images"), root.join("videos"), root.join("frames"))
+        (
+            root.join("images"),
+            root.join("videos"),
+            root.join("frames"),
+        )
     });
     let client = reqwest::Client::builder()
         .user_agent(crate::discord::USER_AGENT)
@@ -632,23 +664,24 @@ pub fn init(cx: &mut App) {
         .timeout(Duration::from_secs(45))
         .build()
         .ok();
-    let service = directories
-        .zip(client)
-        .map(|((directory, video_directory, frames_directory), client)| {
-            Arc::new(Service {
-                client,
-                directory,
-                video_directory,
-                frames_directory,
-                permits: Semaphore::new(6),
-                video_permits: Semaphore::new(2),
-                initialized: OnceCell::new(),
-                image_written: AtomicU64::new(0),
-                video_written: AtomicU64::new(0),
-                frames_written: AtomicU64::new(0),
-                pruning: Arc::new(AtomicBool::new(false)),
-            })
-        });
+    let service =
+        directories
+            .zip(client)
+            .map(|((directory, video_directory, frames_directory), client)| {
+                Arc::new(Service {
+                    client,
+                    directory,
+                    video_directory,
+                    frames_directory,
+                    permits: Semaphore::new(6),
+                    video_permits: Semaphore::new(2),
+                    initialized: OnceCell::new(),
+                    image_written: AtomicU64::new(0),
+                    video_written: AtomicU64::new(0),
+                    frames_written: AtomicU64::new(0),
+                    pruning: Arc::new(AtomicBool::new(false)),
+                })
+            });
     if let Some(service) = service.clone() {
         Tokio::spawn(cx, async move {
             service.initialize().await;
@@ -674,7 +707,11 @@ pub(crate) fn download_service(cx: &App) -> Option<Arc<Service>> {
 fn cache_directories() -> Option<(PathBuf, PathBuf, PathBuf)> {
     dirs::cache_dir().map(|dir| {
         let root = dir.join("zcord");
-        (root.join("images"), root.join("videos"), root.join("frames"))
+        (
+            root.join("images"),
+            root.join("videos"),
+            root.join("frames"),
+        )
     })
 }
 
@@ -1606,6 +1643,180 @@ mod tests {
     }
 
     #[test]
+    fn avif_images_use_proxy_webp_with_explicit_animation_and_preserve_signatures() {
+        for host in [
+            "images-ext-1.discordapp.net",
+            "images-ext-123.discordapp.net",
+            "media.discordapp.net",
+            "cdn.discordapp.com",
+        ] {
+            let path = if host == "cdn.discordapp.com" {
+                "/attachments/1/2/image.AVIF"
+            } else {
+                "/external/signature/%3Furl%3Dhttps%3A%2F%2Fexample.com%2Fclip.mp4/https/example.com/convert.AVIF"
+            };
+            let raw = format!(
+                "https://{host}{path}?ex=expires&is=issued&hm=signature&token=a%2Fb%2Bc&quality=lossless&width=1&height=2&size=3&format=avif&format=avif&animated=false&animated=false#fragment"
+            );
+            for animated in [false, true] {
+                for (width, height) in [(914, 1280), (0, 0), (914, 0), (0, 1280)] {
+                    let spec = ImageSpec::Media {
+                        url: raw.clone(),
+                        width,
+                        height,
+                        animated,
+                    };
+                    let url = image_url(&spec, 500).unwrap();
+                    let expected_host = if host == "cdn.discordapp.com" {
+                        "media.discordapp.net"
+                    } else {
+                        host
+                    };
+                    assert_eq!(url.host_str(), Some(expected_host));
+                    assert_eq!(url.path(), path);
+                    assert!(url.fragment().is_none());
+                    let sizing = if width != 0 && height != 0 {
+                        "&width=365&height=512"
+                    } else {
+                        ""
+                    };
+                    assert_eq!(
+                        url.query().unwrap(),
+                        format!(
+                            "ex=expires&is=issued&hm=signature&token=a%2Fb%2Bc&quality=lossless{sizing}&format=webp&animated={animated}"
+                        )
+                    );
+                    assert!(matches!(&spec, ImageSpec::Media { url, .. } if url == &raw));
+                    assert_eq!(still_spec(&spec), !animated);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn avif_attachments_preserve_animation_and_other_formats_keep_their_urls() {
+        let attachment = ImageSpec::Attachment {
+            id: 1,
+            url: "https://media.discordapp.net/attachments/1/2/image.avif?ex=signature".into(),
+            width: 400,
+            height: 200,
+        };
+        assert_eq!(
+            image_url(&attachment, 100).unwrap().as_str(),
+            "https://media.discordapp.net/attachments/1/2/image.avif?ex=signature&width=128&height=64&format=webp&animated=true"
+        );
+        assert!(!still_spec(&attachment));
+
+        for extension in ["gif", "webp", "png", "jpg", "avif.png"] {
+            let raw = format!(
+                "https://images-ext-1.discordapp.net/external/image.{extension}?token=keep&format={extension}"
+            );
+            let spec = ImageSpec::Media {
+                url: raw.clone(),
+                width: 400,
+                height: 200,
+                animated: true,
+            };
+            assert_eq!(
+                image_url(&spec, 100).unwrap().as_str(),
+                format!("{raw}&width=128&height=64&animated=true")
+            );
+        }
+        let raw = "https://media.discordapp.net/external/image.png?source=image.avif";
+        let spec = ImageSpec::Media {
+            url: raw.into(),
+            width: 0,
+            height: 0,
+            animated: false,
+        };
+        assert_eq!(image_url(&spec, 64).unwrap().as_str(), raw);
+        let video = ImageSpec::Video {
+            url: "https://media.discordapp.net/attachments/1/2/image.avif?format=avif&width=1"
+                .into(),
+            width: 400,
+            height: 200,
+        };
+        assert_eq!(
+            image_url(&video, 100).unwrap().as_str(),
+            "https://media.discordapp.net/attachments/1/2/image.avif?format=avif&width=1"
+        );
+    }
+
+    #[test]
+    fn avif_conversion_bypasses_legacy_download_and_frame_cache_names_only() {
+        fn legacy_name(spec: &ImageSpec, size: u32) -> String {
+            let mut hasher = DefaultHasher::new();
+            spec.hash(&mut hasher);
+            let suffix = if still_spec(spec) { "-still" } else { "" };
+            format!(
+                "{:016x}{suffix}-{}.img",
+                hasher.finish(),
+                rounded_size(size)
+            )
+        }
+
+        let service = Service {
+            client: reqwest::Client::new(),
+            directory: "images".into(),
+            video_directory: "videos".into(),
+            frames_directory: "frames".into(),
+            permits: Semaphore::new(6),
+            video_permits: Semaphore::new(2),
+            initialized: OnceCell::new(),
+            image_written: AtomicU64::new(0),
+            video_written: AtomicU64::new(0),
+            frames_written: AtomicU64::new(0),
+            pruning: Arc::new(AtomicBool::new(false)),
+        };
+        for animated in [false, true] {
+            let spec = ImageSpec::Media {
+                url: "https://images-ext-1.discordapp.net/external/image.avif".into(),
+                width: 400,
+                height: 200,
+                animated,
+            };
+            assert_ne!(file_name(&spec, 100), legacy_name(&spec, 100));
+            assert_eq!(file_name(&spec, 100), file_name(&spec, 128));
+            assert_eq!(
+                service.frames_path(&spec, 100),
+                Path::new("frames").join(file_name(&spec, 100))
+            );
+            assert_ne!(
+                service.frames_path(&spec, 100),
+                Path::new("frames").join(legacy_name(&spec, 100))
+            );
+        }
+        let attachment = ImageSpec::Attachment {
+            id: 1,
+            url: "https://cdn.discordapp.com/attachments/1/2/image.avif".into(),
+            width: 400,
+            height: 200,
+        };
+        assert_ne!(file_name(&attachment, 100), legacy_name(&attachment, 100));
+        for spec in [
+            ImageSpec::Media {
+                url: "https://media.discordapp.net/external/image.gif".into(),
+                width: 400,
+                height: 200,
+                animated: true,
+            },
+            ImageSpec::Video {
+                url: "https://media.discordapp.net/external/image.avif".into(),
+                width: 400,
+                height: 200,
+            },
+            ImageSpec::VideoPoster {
+                id: 1,
+                url: "https://media.discordapp.net/external/image.avif".into(),
+                width: 400,
+                height: 200,
+            },
+        ] {
+            assert_eq!(file_name(&spec, 100), legacy_name(&spec, 100));
+        }
+    }
+
+    #[test]
     fn external_proxy_hosts_and_unknown_media_dimensions() {
         for host in [
             "images-ext-1.discordapp.net",
@@ -1977,6 +2188,11 @@ mod tests {
     fn hostile_urls_and_cache_names() {
         for url in [
             "https://evil.example/x.png",
+            "https://evil.example/image.avif",
+            "http://media.discordapp.net/image.avif",
+            "https://images-ext-1.discordapp.net.evil.test/image.avif",
+            "https://user:pass@cdn.discordapp.com/image.avif",
+            "https://media.discordapp.net:444/image.avif",
             "http://cdn.discordapp.com/a.png",
             "https://cdn.discordapp.com.evil.example/a",
             "https://user@cdn.discordapp.com/a",
