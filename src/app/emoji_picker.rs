@@ -470,7 +470,7 @@ fn choice_name(choice: &EmojiChoice) -> &str {
 }
 
 /// Resolves an emoji through the image service. The footer uses this path for
-/// its single animated preview; the grid uses [`emoji_grid_image`] instead.
+/// its single animated preview; other previews use [`emoji_preview_image`] instead.
 fn emoji_image(choice: &EmojiChoice, size: f32, animate: bool, cx: &App) -> AnyElement {
     let image: Option<ImageSource> = match choice {
         EmojiChoice::Custom(custom) => images::resolve(
@@ -487,14 +487,18 @@ fn emoji_image(choice: &EmojiChoice, size: f32, animate: bool, cx: &App) -> AnyE
     div()
         .size(rpx(size))
         .flex_none()
-        .children(image.map(|image| img(image).size_full().object_fit(ObjectFit::Contain)))
+        .children(image.map(|image| {
+            img(image)
+                .id("emoji-preview-image")
+                .size_full()
+                .object_fit(ObjectFit::Contain)
+        }))
         .into_any_element()
 }
 
-/// A grid-size emoji. Animated custom emoji use the decoded cache so every
-/// visible cell can play, falling back to the still image until the frames are
-/// decoded.
-fn emoji_grid_image(choice: &EmojiChoice, animate: bool, cx: &App) -> AnyElement {
+/// Picker cells and autocomplete rows share frame-timed playback, with a still
+/// fallback while the animation is decoding.
+fn emoji_preview_image(choice: &EmojiChoice, size: f32, animate: bool, cx: &App) -> AnyElement {
     if animate
         && let EmojiChoice::Custom(custom) = choice
         && custom.animated
@@ -503,16 +507,16 @@ fn emoji_grid_image(choice: &EmojiChoice, animate: bool, cx: &App) -> AnyElement
             id: custom.id,
             animated: true,
         };
-        if let Some(image) = animated::resolve(&spec, theme::image_px(GRID_EMOJI), cx) {
+        if let Some(image) = animated::resolve(&spec, theme::image_px(size), cx) {
             return animated::image(image)
-                .size(rpx(GRID_EMOJI))
+                .size(rpx(size))
                 .flex_none()
                 .object_fit(ObjectFit::Contain)
                 .id(("picker-emoji", custom.id))
                 .into_any_element();
         }
     }
-    emoji_image(choice, GRID_EMOJI, false, cx)
+    emoji_image(choice, size, false, cx)
 }
 
 fn access_note(access: EmojiAccess) -> Option<&'static str> {
@@ -769,7 +773,7 @@ fn grid(
                             .child(
                                 div()
                                     .when(!usable, |this| this.opacity(0.3))
-                                    .child(emoji_grid_image(&entry.0, animate, cx)),
+                                    .child(emoji_preview_image(&entry.0, GRID_EMOJI, animate, cx)),
                             )
                     }))
                     .into_any_element(),
@@ -913,7 +917,12 @@ pub(super) fn suggestions(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                             })
                             .ok();
                     })
-                    .child(emoji_image(choice, 24., false, cx))
+                    .child(emoji_preview_image(
+                        choice,
+                        24.,
+                        crate::settings::emoji_animation(),
+                        cx,
+                    ))
                     .child(
                         div()
                             .flex_1()
