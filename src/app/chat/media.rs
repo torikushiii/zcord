@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::expression_info::{Expression, HoverOwner};
 
 const MEDIA_MAX: (f32, f32) = (550., 350.);
 
@@ -69,14 +70,13 @@ pub(super) fn render_sticker(
             _ => None,
         }
     });
-    let tip_shown = app.hovered_sticker == Some((message_id, sticker.id));
     let entity = app.entity.clone();
     let sticker_id = sticker.id;
-    let tip = if sticker.name.is_empty() {
-        "Sticker".to_owned()
-    } else {
-        sticker.name.clone()
-    };
+    let expression = Expression::Sticker(sticker.clone());
+    let click_expression = expression.clone();
+    let click_entity = entity.clone();
+    let bounds = Rc::new(Cell::new(None));
+    let painted_bounds = bounds.clone();
     div()
         .id((
             ElementId::from(("sticker-hover", message_id)),
@@ -87,15 +87,33 @@ pub(super) fn render_sticker(
         .w(rpx(STICKER_SIZE))
         .h(rpx(STICKER_SIZE))
         .mt_1()
+        .cursor_pointer()
+        .on_prepaint(move |bounds, _, _| painted_bounds.set(Some(bounds)))
         .on_hover(move |hovered, _, cx| {
+            let Some(bounds) = bounds.get() else {
+                return;
+            };
             entity
                 .update(cx, |app, cx| {
-                    app.set_sticker_hover(message_id, sticker_id, *hovered, cx)
+                    app.set_expression_hover(
+                        HoverOwner::Sticker(message_id, sticker_id),
+                        expression.clone(),
+                        bounds,
+                        *hovered,
+                        cx,
+                    );
                 })
                 .ok();
         })
+        .on_click(move |_, window, cx| {
+            click_entity
+                .update(cx, |app, cx| {
+                    app.open_expression_info(click_expression.clone(), window.mouse_position(), cx);
+                })
+                .ok();
+            cx.stop_propagation();
+        })
         .child(image.unwrap_or_else(|| sticker_placeholder(sticker)))
-        .when(tip_shown, |this| this.child(theme::tooltip_above(tip)))
         .into_any_element()
 }
 

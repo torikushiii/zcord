@@ -138,6 +138,7 @@ impl DiscordApp {
         let restored = self.drafts.remove(&id).unwrap_or_default();
 
         if previous != id {
+            self.expression_info.clear_open();
             self.reply = None;
             self.editing = None;
             self.confirm_delete = None;
