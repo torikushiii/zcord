@@ -17,6 +17,9 @@ use crate::{
     theme::{self, rpx},
 };
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) const WIDTH: f32 = 72.;
 pub const ICON: f32 = 48.;
 const DEFAULT_FOLDER_COLOR: u32 = 0x5865F2;
@@ -25,6 +28,10 @@ const ADD_SERVER_KEY: u64 = 2;
 const DISCOVER_KEY: u64 = 3;
 const CIRCLE: f32 = ICON / 2.;
 const SQUARE: f32 = 16.;
+const TOOLTIP_AVATAR_SIZE: f32 = 28.;
+const TOOLTIP_AVATAR_OVERLAP: f32 = 6.;
+const TOOLTIP_AVATAR_LIMIT: usize = 5;
+const ACTIVITY_TOOLTIP_MAX_WIDTH: f32 = 264.;
 /// Circle to square on hover-in is slower than the snap back on hover-out.
 const MORPH_IN: Duration = Duration::from_millis(300);
 const MORPH_OUT: Duration = Duration::from_millis(180);
@@ -149,7 +156,7 @@ pub fn render(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
             rail_item(
                 "home",
                 HOME_KEY,
-                "Direct Messages",
+                Some("Direct Messages"),
                 app.is_home(),
                 false,
                 app,
@@ -218,8 +225,16 @@ pub fn render(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
 fn guild_item(app: &DiscordApp, guild: &Guild, cx: &App, morphs: Option<Instant>) -> Stateful<Div> {
     let id = guild.id;
     let selected = app.selected_guild_id == id;
+    let connected = app
+        .voice
+        .call
+        .as_ref()
+        .is_some_and(|call| call.guild_id == id && call.connected);
     let entity = app.entity.clone();
-    rail_item(("guild", id), id, &guild.name, selected, guild.unread, app)
+    rail_item(("guild", id), id, None, selected, guild.unread, app)
+        .when(app.hovered_rail == Some(id), |this| {
+            this.child(guild_tooltip(app, guild, cx))
+        })
         .on_click(move |_, window, cx| {
             entity
                 .update(cx, |this, cx| this.select_guild(id, window, cx))
@@ -234,7 +249,11 @@ fn guild_item(app: &DiscordApp, guild: &Guild, cx: &App, morphs: Option<Instant>
             morphs,
         ))
         .children(corner_badge(guild.mentions))
-        .children(app.store.guild_voice_activity(id).map(voice_badge))
+        .children(
+            app.store
+                .guild_voice_activity(id)
+                .map(|activity| voice_badge(activity, connected)),
+        )
 }
 
 fn guild_icon(
@@ -315,7 +334,7 @@ fn folder_item(app: &DiscordApp, folder: &Folder, cx: &App, morphs: Option<Insta
     let header = rail_item(
         ("folder", id),
         id,
-        &name,
+        Some(&name),
         !open && contains_selected,
         !open && unread,
         app,
@@ -381,7 +400,7 @@ fn folder_item(app: &DiscordApp, folder: &Folder, cx: &App, morphs: Option<Insta
 fn rail_item(
     id: impl Into<ElementId>,
     key: u64,
-    label: &str,
+    label: Option<&str>,
     selected: bool,
     unread: bool,
     app: &DiscordApp,
@@ -395,7 +414,9 @@ fn rail_item(
                 .update(cx, |app, cx| app.set_rail_hover(key, *hovered, cx))
                 .ok();
         })
-        .when(hovered, |this| this.child(tooltip(key, &label)))
+        .when(hovered, |this| {
+            this.children(label.map(|label| tooltip(key, label)))
+        })
         .group("rail-item")
         .relative()
         .flex()
@@ -437,11 +458,9 @@ fn corner_badge(count: u32) -> Option<impl IntoElement> {
     })
 }
 
-fn voice_badge(activity: VoiceActivity) -> impl IntoElement {
-    // The speaker glyph only fills the left two thirds of its box, so it needs a larger
-    // size to look as heavy as the monitor.
+fn voice_badge(activity: VoiceActivity, connected: bool) -> impl IntoElement {
     let (icon, size) = match activity {
-        VoiceActivity::Voice => ("volume-1-filled", 15.),
+        VoiceActivity::Voice => ("video-volume", 14.),
         VoiceActivity::Streaming => ("monitor-filled", 12.),
     };
     div()
@@ -454,35 +473,197 @@ fn voice_badge(activity: VoiceActivity) -> impl IntoElement {
         .size(rpx(20.))
         .rounded_full()
         .bg(rgb(theme::BG))
-        .child(theme::icon(icon, size, theme::STRONG))
+        .when(connected, |this| {
+            this.bg(rgb(theme::GREEN))
+                .border(rpx(2.))
+                .border_color(rgb(theme::BG))
+        })
+        .child(theme::icon(
+            icon,
+            size,
+            if connected { 0xFFFFFF } else { theme::STRONG },
+        ))
 }
 
 fn tooltip(key: u64, label: &str) -> impl IntoElement {
+    positioned_tooltip(
+        theme::tooltip_bubble()
+            .text_size(rpx(16.))
+            .line_height(rpx(20.))
+            .child(
+                rich_text(
+                    ("rail-tooltip", key),
+                    emoji_pieces(label, &PieceStyle::default()),
+                )
+                .emoji_scale(1.125),
+            ),
+    )
+}
+
+fn guild_tooltip(app: &DiscordApp, guild: &Guild, cx: &App) -> AnyElement {
+    let members = app.store.guild_voice_members(guild.id);
+    if members.is_empty() {
+        return tooltip(guild.id, &guild.name).into_any_element();
+    }
+    let voice: Vec<u64> = members.iter().map(|member| member.user_id).collect();
+    let streaming: Vec<u64> = members
+        .iter()
+        .filter(|member| member.streaming)
+        .map(|member| member.user_id)
+        .collect();
+    let row = |icon, members: &[u64]| {
+        activity_row(
+            icon,
+            members.len(),
+            members.iter().map(|user_id| {
+                theme::undecorated_member_avatar(
+                    &app.store,
+                    guild.id,
+                    *user_id,
+                    TOOLTIP_AVATAR_SIZE - 4.,
+                    cx,
+                )
+                .into_any_element()
+            }),
+        )
+    };
+    positioned_tooltip(
+        activity_tooltip_bubble(guild.id, &guild.name)
+            .child(row("volume-2", &voice))
+            .when(!streaming.is_empty(), |this| {
+                this.child(row("monitor-filled", &streaming))
+            }),
+    )
+    .into_any_element()
+}
+
+fn activity_tooltip_bubble(key: u64, name: &str) -> Div {
+    theme::tooltip_bubble()
+        .max_w(rpx(ACTIVITY_TOOLTIP_MAX_WIDTH))
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap(rpx(6.))
+        .border_1()
+        .border_color(rgba(theme::BORDER))
+        .child(
+            div()
+                .id(("guild-tooltip-header", key))
+                .min_w_0()
+                .mb(rpx(2.))
+                .text_size(rpx(16.))
+                .line_height(rpx(20.))
+                .child(
+                    rich_text(
+                        ("rail-tooltip", key),
+                        emoji_pieces(name, &PieceStyle::default()),
+                    )
+                    .line_clamp(2)
+                    .emoji_scale(1.125),
+                ),
+        )
+}
+
+fn activity_row(icon: &str, count: usize, avatars: impl Iterator<Item = AnyElement>) -> Div {
+    let visible = count.min(TOOLTIP_AVATAR_LIMIT);
+    let remaining = count.saturating_sub(TOOLTIP_AVATAR_LIMIT);
+    let pitch = TOOLTIP_AVATAR_SIZE - TOOLTIP_AVATAR_OVERLAP;
+    let overlap_count = visible.saturating_sub(1) + usize::from(remaining > 0);
+    let stack_width =
+        visible as f32 * TOOLTIP_AVATAR_SIZE - overlap_count as f32 * TOOLTIP_AVATAR_OVERLAP;
+    div()
+        .flex()
+        .items_center()
+        .gap(rpx(8.))
+        .h(rpx(TOOLTIP_AVATAR_SIZE))
+        .child(theme::icon(icon, 20., theme::MUTED).flex_none())
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .child(
+                    div()
+                        .relative()
+                        .flex_none()
+                        .w(rpx(stack_width))
+                        .h(rpx(TOOLTIP_AVATAR_SIZE))
+                        .children(avatars.take(visible).enumerate().map(|(index, avatar)| {
+                            div()
+                                .absolute()
+                                .left(rpx(index as f32 * pitch))
+                                .top_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .size(rpx(TOOLTIP_AVATAR_SIZE))
+                                .rounded_full()
+                                .border(rpx(2.))
+                                .border_color(rgb(theme::TOOLTIP_BG))
+                                .bg(rgb(theme::TOOLTIP_BG))
+                                .overflow_hidden()
+                                .child(avatar)
+                        })),
+                )
+                .when(remaining > 0, |this| {
+                    let selector = format!("rail-activity-overflow-{icon}");
+                    this.child(
+                        div()
+                            .debug_selector(move || selector.clone())
+                            .flex()
+                            .flex_none()
+                            .items_center()
+                            .justify_center()
+                            .min_w(rpx(TOOLTIP_AVATAR_SIZE))
+                            .h(rpx(TOOLTIP_AVATAR_SIZE))
+                            .px(rpx(4.))
+                            .rounded_full()
+                            .border(rpx(2.))
+                            .border_color(rgb(theme::TOOLTIP_BG))
+                            .bg(rgb(theme::BG))
+                            .text_size(rpx(12.))
+                            .line_height(rpx(16.))
+                            .child(format!("+{remaining}")),
+                    )
+                }),
+        )
+}
+
+fn positioned_tooltip(body: Div) -> Div {
     div()
         .absolute()
         .left(rpx(WIDTH - 4.))
         .top(rpx(ICON / 2.))
         .size_0()
-        .child(deferred(
-            anchored().anchor(Anchor::LeftCenter).child(
-                div()
-                    .flex()
-                    .items_center()
-                    .child(theme::icon("tooltip-arrow", 6., theme::TOOLTIP_BG).h(rpx(12.)))
-                    .child(
-                        theme::tooltip_bubble()
-                            .text_size(rpx(16.))
-                            .line_height(rpx(20.))
-                            .child(
-                                rich_text(
-                                    ("rail-tooltip", key),
-                                    emoji_pieces(label, &PieceStyle::default()),
+        .child(
+            canvas(
+                move |bounds, window, cx| {
+                    let mut popup = anchored()
+                        .position(bounds.origin)
+                        .anchor(Anchor::LeftCenter)
+                        .snap_to_window_with_margin(px(8.))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .child(
+                                    theme::icon("tooltip-arrow", 6., theme::TOOLTIP_BG).h(rpx(12.)),
                                 )
-                                .emoji_scale(1.125),
-                            ),
-                    ),
-            ),
-        ))
+                                .child(body),
+                        )
+                        .into_any_element();
+                    // Measure outside the cached, scrollable rail; only its anchor belongs there.
+                    popup.layout_as_root(
+                        size(AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+                        window,
+                        cx,
+                    );
+                    window.defer_draw(popup, Point::default(), 0, None);
+                },
+                |_, _, _, _| {},
+            )
+            .size_0(),
+        )
 }
 
 fn action_item(
@@ -493,7 +674,7 @@ fn action_item(
     app: &DiscordApp,
     morphs: Option<Instant>,
 ) -> impl IntoElement {
-    rail_item(id, key, label, false, false, app).child(round(
+    rail_item(id, key, Some(label), false, false, app).child(round(
         div()
             .flex()
             .items_center()

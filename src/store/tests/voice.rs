@@ -137,6 +137,71 @@ fn guild_voice_activity_prefers_streaming() {
 }
 
 #[test]
+fn guild_voice_preview_combines_channels_and_tracks_streaming_and_leaves() {
+    let mut store = Store::from_ready(ready_with_voice());
+    let members = store.guild_voice_members(200);
+    assert_eq!(
+        members
+            .iter()
+            .map(|member| member.user_id)
+            .collect::<Vec<_>>(),
+        [2, 1, 3]
+    );
+    assert!(members.iter().all(|member| !member.streaming));
+    assert!(store.guild_voice_members(100).is_empty());
+    assert!(store.guild_voice_members(u64::MAX).is_empty());
+
+    let mut streaming = state(200, Some(2006), 3);
+    streaming.self_stream = true;
+    store.apply(Event::VoiceStateUpdate(Box::new(streaming)));
+    store.apply(Event::VoiceStateUpdate(Box::new(state(200, Some(2006), 2))));
+    let members = store.guild_voice_members(200);
+    assert_eq!(
+        members.len(),
+        3,
+        "moving channels does not duplicate a participant"
+    );
+    assert_eq!(
+        members
+            .iter()
+            .filter(|member| member.streaming)
+            .map(|member| member.user_id)
+            .collect::<Vec<_>>(),
+        [3]
+    );
+
+    store.apply(Event::VoiceStateUpdate(Box::new(state(200, None, 3))));
+    let members = store.guild_voice_members(200);
+    assert_eq!(members.len(), 2);
+    assert!(members.iter().all(|member| !member.streaming));
+    store.apply(Event::GuildDelete { id: 200 });
+    assert!(store.guild_voice_members(200).is_empty());
+}
+
+#[test]
+fn guild_voice_preview_ignores_disconnected_snapshots_and_keeps_unknown_users() {
+    let mut ready = ready_with_voice();
+    let guild = ready
+        .guilds
+        .iter_mut()
+        .find(|guild| guild.id == 200)
+        .unwrap();
+    let mut disconnected = state(200, None, 4);
+    disconnected.self_stream = true;
+    guild.voice_states.push(disconnected);
+    guild.voice_states.push(state(200, Some(2005), 99));
+    let store = Store::from_ready(ready);
+    let members = store.guild_voice_members(200);
+    assert_eq!(members.len(), 4);
+    assert!(members.iter().any(|member| member.user_id == 99));
+    assert!(
+        members
+            .iter()
+            .all(|member| member.user_id != 4 && !member.streaming)
+    );
+}
+
+#[test]
 fn voice_session_snapshot_and_updates_preserve_missing_fields() {
     let mut store = Store::from_ready(ready_with_voice());
     let snapshot = json!({"guild_id":"200","channels":[

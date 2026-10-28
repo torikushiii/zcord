@@ -146,6 +146,18 @@ impl Store {
     }
 
     pub fn voice_members(&self, guild_id: u64, channel_id: u64) -> Vec<VoiceMember> {
+        self.voice_members_matching(guild_id, |state| state.channel_id == Some(channel_id))
+    }
+
+    pub fn guild_voice_members(&self, guild_id: u64) -> Vec<VoiceMember> {
+        self.voice_members_matching(guild_id, |state| state.channel_id.is_some())
+    }
+
+    fn voice_members_matching(
+        &self,
+        guild_id: u64,
+        include: impl Fn(&model::VoiceState) -> bool,
+    ) -> Vec<VoiceMember> {
         let Some(guild) = self
             .source
             .as_ref()
@@ -156,7 +168,7 @@ impl Store {
         let mut members: Vec<_> = guild
             .voice_states
             .iter()
-            .filter(|state| state.channel_id == Some(channel_id))
+            .filter(|state| include(state))
             .map(|state| VoiceMember {
                 user_id: state.user_id,
                 self_mute: state.self_mute,
