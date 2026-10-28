@@ -329,7 +329,7 @@ fn count_pill(count: u32) -> Div {
         .min_w(rpx(16.))
         .px(rpx(4.))
         .rounded_full()
-        .bg(rgb(theme::RED))
+        .bg(rgb(theme::NOTIFICATION))
         .text_size(rpx(12.))
         .line_height(rpx(16.))
         .font_weight(FontWeight::BOLD)
@@ -348,12 +348,12 @@ pub(crate) fn sidebar(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         .h(rpx(32.))
         .px_2()
         .rounded(rpx(8.))
-        .bg(rgba(0x97979F1F))
+        .bg(rgba(theme::HOVER))
         .text_size(rpx(14.))
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(theme::MUTED))
         .cursor_pointer()
-        .hover(|style| style.bg(rgba(0x97979F33)).text_color(rgb(theme::TEXT)))
+        .hover(|style| style.bg(rgba(theme::ACTIVE)).text_color(rgb(theme::TEXT)))
         .child("Find or start a conversation")
         .on_click(move |_, window, cx| {
             entity
@@ -372,7 +372,7 @@ pub(crate) fn sidebar(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
     )
     .cursor_pointer()
     .when(!friends_selected, |this| {
-        this.hover(|style| style.bg(rgb(theme::HOVER)).text_color(rgb(theme::TEXT)))
+        this.hover(|style| style.bg(rgba(theme::HOVER)).text_color(rgb(theme::TEXT)))
     })
     .on_click(move |_, window, cx| {
         entity
@@ -400,7 +400,7 @@ pub(crate) fn sidebar(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 .h(rpx(chat::HEADER_HEIGHT))
                 .px_2()
                 .border_b_1()
-                .border_color(rgb(theme::BORDER))
+                .border_color(rgba(theme::BORDER))
                 .child(find),
         )
         .child(
@@ -426,7 +426,9 @@ pub(crate) fn sidebar(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                     )
                     .cursor_pointer()
                     .when(!requests_selected, |this| {
-                        this.hover(|style| style.bg(rgb(theme::HOVER)).text_color(rgb(theme::TEXT)))
+                        this.hover(|style| {
+                            style.bg(rgba(theme::HOVER)).text_color(rgb(theme::TEXT))
+                        })
                     })
                     .on_click({
                         let entity = app.entity.clone();
@@ -443,7 +445,7 @@ pub(crate) fn sidebar(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                         .h(rpx(1.))
                         .mx_2()
                         .my_2()
-                        .bg(rgb(theme::BORDER)),
+                        .bg(rgba(theme::BORDER)),
                 )
                 .child(
                     div()
@@ -487,7 +489,7 @@ fn nav_row(
         .text_size(rpx(16.))
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(color))
-        .when(selected, |this| this.bg(rgb(theme::SELECTED)))
+        .when(selected, |this| this.bg(rgba(theme::SELECTED)))
         .child(theme::icon(icon, 20., color))
         .child(div().flex_1().child(text))
         .when(badge > 0, |this| this.child(count_pill(badge)))
@@ -553,7 +555,11 @@ fn dm_row(
     } else {
         theme::MUTED
     };
-    let ring = if selected { theme::SELECTED } else { theme::BG };
+    let ring = if selected {
+        theme::composite(theme::SELECTED, theme::BG)
+    } else {
+        theme::BG
+    };
     let tag = (!dm.group)
         .then(|| dm.recipient_ids.first())
         .flatten()
@@ -574,9 +580,9 @@ fn dm_row(
         .rounded(rpx(8.))
         .cursor_pointer()
         .text_color(rgb(text))
-        .when(selected, |this| this.bg(rgb(theme::SELECTED)))
+        .when(selected, |this| this.bg(rgba(theme::SELECTED)))
         .when(!selected, |this| {
-            this.hover(|style| style.bg(rgb(theme::HOVER)).text_color(rgb(theme::TEXT)))
+            this.hover(|style| style.bg(rgba(theme::HOVER)).text_color(rgb(theme::TEXT)))
         })
         .without_text_selection()
         .on_click(move |_, window, cx| {
@@ -669,9 +675,9 @@ pub(crate) fn friends_header(app: &DiscordApp) -> impl IntoElement + use<> {
             } else {
                 theme::MUTED
             }))
-            .when(selected, |this| this.bg(rgb(theme::SELECTED)))
+            .when(selected, |this| this.bg(rgba(theme::SELECTED)))
             .when(!selected, |this| {
-                this.hover(|style| style.bg(rgb(theme::HOVER)).text_color(rgb(theme::TEXT)))
+                this.hover(|style| style.bg(rgba(theme::HOVER)).text_color(rgb(theme::TEXT)))
             })
             .child(tab.label())
             .when(badge > 0, |this| this.child(count_pill(badge)))
@@ -690,7 +696,7 @@ pub(crate) fn friends_header(app: &DiscordApp) -> impl IntoElement + use<> {
         .flex_none()
         .px_4()
         .border_b_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .child(theme::icon("users", 20., theme::FAINT))
         .child(
             div()
@@ -796,7 +802,7 @@ pub(crate) fn friends_page(app: &DiscordApp, cx: &App) -> AnyElement {
                         .rounded(rpx(8.))
                         .bg(rgb(theme::ELEVATED))
                         .border_1()
-                        .border_color(rgb(theme::BORDER))
+                        .border_color(rgba(theme::BORDER))
                         .child(
                             div().flex_1().min_w_0().child(
                                 Input::new(search)
@@ -861,7 +867,7 @@ fn round_action(id: impl Into<ElementId>, icon: &'static str) -> Stateful<Div> {
         .rounded_full()
         .bg(rgb(theme::ELEVATED))
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(theme::SELECTED)))
+        .hover(|style| style.bg(rgba(theme::SELECTED)))
         .child(theme::icon(icon, 18., theme::MUTED))
 }
 
@@ -893,9 +899,9 @@ fn friend_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement + us
         .px(rpx(10.))
         .rounded(rpx(8.))
         .border_t_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(theme::HOVER)))
+        .hover(|style| style.bg(rgba(theme::HOVER)))
         .without_text_selection()
         .on_click(move |_, window, cx| {
             entity
@@ -1044,7 +1050,7 @@ fn active_card(
         .flex_none()
         .size(rpx(ACTIVE_ART))
         .rounded(rpx(ACTIVE_ART / 5.))
-        .bg(rgb(theme::SELECTED))
+        .bg(rgba(theme::SELECTED))
         .child(
             presence(ACTIVE_ART, "active-art")
                 .or_else(|| app_icon(ACTIVE_ART))
@@ -1058,7 +1064,7 @@ fn active_card(
         .flex_none()
         .rounded(rpx(12.))
         .border_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .overflow_hidden()
         .child(
             div()
@@ -1159,7 +1165,7 @@ fn active_now(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         .p(rpx(16.))
         .overflow_y_scroll()
         .border_l_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .child(
             div()
                 .text_size(rpx(20.))
@@ -1217,7 +1223,7 @@ pub(crate) fn dm_header(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> 
         .pl_4()
         .pr_2()
         .border_b_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .children(dm.map(|dm| {
             div()
                 .flex_none()
@@ -1335,9 +1341,9 @@ fn header_tab(id: &'static str, text: &'static str, selected: bool, badge: u32) 
         } else {
             theme::MUTED
         }))
-        .when(selected, |this| this.bg(rgb(theme::SELECTED)))
+        .when(selected, |this| this.bg(rgba(theme::SELECTED)))
         .when(!selected, |this| {
-            this.hover(|style| style.bg(rgb(theme::HOVER)).text_color(rgb(theme::TEXT)))
+            this.hover(|style| style.bg(rgba(theme::HOVER)).text_color(rgb(theme::TEXT)))
         })
         .child(text)
         .when(badge > 0, |this| this.child(count_pill(badge)))
@@ -1361,7 +1367,7 @@ pub(crate) fn requests_header(app: &DiscordApp) -> impl IntoElement + use<> {
         .flex_none()
         .px_4()
         .border_b_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .child(theme::icon("mail", 20., theme::FAINT))
         .child(
             div()
@@ -1486,9 +1492,9 @@ fn request_row(app: &DiscordApp, dm: &PrivateChannel, cx: &App) -> impl IntoElem
         .px(rpx(10.))
         .rounded(rpx(8.))
         .border_t_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(theme::HOVER)))
+        .hover(|style| style.bg(rgba(theme::HOVER)))
         .without_text_selection()
         .on_click(move |_, window, cx| {
             entity
@@ -1554,7 +1560,7 @@ pub(crate) fn request_bar(app: &DiscordApp) -> Option<AnyElement> {
         .private_channel(id)
         .filter(|dm| app.is_home() && dm.message_request)?;
     let name = app.store.private_channel_name(id);
-    let button = |key: &'static str, text: &'static str, background: u32, hover: u32| {
+    let button = |key: &'static str, text: &'static str, background: Rgba, hover: Rgba| {
         div()
             .id(key)
             .flex()
@@ -1563,8 +1569,8 @@ pub(crate) fn request_bar(app: &DiscordApp) -> Option<AnyElement> {
             .h(rpx(32.))
             .px(rpx(16.))
             .rounded(rpx(8.))
-            .bg(rgb(background))
-            .hover(move |style| style.bg(rgb(hover)))
+            .bg(background)
+            .hover(move |style| style.bg(hover))
             .cursor_pointer()
             .text_size(rpx(14.))
             .font_weight(FontWeight::MEDIUM)
@@ -1573,23 +1579,31 @@ pub(crate) fn request_bar(app: &DiscordApp) -> Option<AnyElement> {
     };
     let accept = {
         let entity = app.entity.clone();
-        button("request-bar-accept", "Accept", theme::BLURPLE, 0x4752C4).on_click(
-            move |_, window, cx| {
-                entity
-                    .update(cx, |app, cx| app.accept_request(id, window, cx))
-                    .ok();
-            },
+        button(
+            "request-bar-accept",
+            "Accept",
+            rgb(theme::BLURPLE),
+            rgb(theme::BLURPLE),
         )
+        .on_click(move |_, window, cx| {
+            entity
+                .update(cx, |app, cx| app.accept_request(id, window, cx))
+                .ok();
+        })
     };
     let ignore = {
         let entity = app.entity.clone();
-        button("request-bar-ignore", "Ignore", theme::SELECTED, 0x2E2E36).on_click(
-            move |_, window, cx| {
-                entity
-                    .update(cx, |app, cx| app.ignore_request(id, window, cx))
-                    .ok();
-            },
+        button(
+            "request-bar-ignore",
+            "Ignore",
+            rgba(theme::CONTROL),
+            rgba(theme::HOVER),
         )
+        .on_click(move |_, window, cx| {
+            entity
+                .update(cx, |app, cx| app.ignore_request(id, window, cx))
+                .ok();
+        })
     };
     Some(
         div()
@@ -1602,7 +1616,7 @@ pub(crate) fn request_bar(app: &DiscordApp) -> Option<AnyElement> {
             .rounded(rpx(8.))
             .bg(rgb(theme::ELEVATED))
             .border_1()
-            .border_color(rgb(theme::BORDER))
+            .border_color(rgba(theme::BORDER))
             .child(
                 div()
                     .text_size(rpx(16.))

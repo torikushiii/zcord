@@ -27,7 +27,7 @@ const EMBED_MEDIA: (f32, f32) = (400., 300.);
 const PLAIN_MEDIA: (f32, f32) = (550., 350.);
 const THUMBNAIL: f32 = 80.;
 const SECTION_THUMBNAIL: f32 = 85.;
-const LINK: u32 = 0x00A8FC;
+const LINK: u32 = theme::LINK;
 const EMBED_BORDER: u32 = 0x2E2E36;
 
 const DESCRIPTION_SLOT: u64 = 0;
@@ -167,7 +167,7 @@ fn embed_card(color: Option<u32>, content_width: Option<f32>) -> Div {
         .pl(rpx(EMBED_PADDING_LEFT))
         .rounded(rpx(4.))
         .border_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .bg(rgb(theme::ELEVATED))
         .child(
             div()
@@ -271,7 +271,7 @@ fn image_box(media: &Media, width: f32, height: f32, radius: f32, cx: &App) -> D
         .h(rpx(height))
         .rounded(rpx(radius))
         .overflow_hidden()
-        .when(child.is_none(), |this| this.bg(rgb(theme::BORDER)))
+        .when(child.is_none(), |this| this.bg(rgba(theme::BORDER)))
         .children(child)
 }
 
@@ -398,7 +398,7 @@ pub(super) fn blurred_box(
         .h(rpx(height))
         .rounded(rpx(radius))
         .overflow_hidden()
-        .bg(rgb(theme::BORDER))
+        .bg(rgba(theme::BORDER))
         // GPUI clips children to the parent's rectangle, not its rounded corners,
         // so the image must carry the radius itself and stay inside the box.
         .children(images::blurred(spec, cx).map(|image| {
@@ -484,7 +484,7 @@ fn icon_image(media: Option<&Media>, size: f32, cx: &App) -> Option<AnyElement> 
             .flex_none()
             .rounded_full()
             .overflow_hidden()
-            .bg(rgb(theme::BORDER))
+            .bg(rgba(theme::BORDER))
             .children(image.map(|path| img(path).size_full().rounded_full()))
             .into_any_element(),
     )
@@ -1024,7 +1024,7 @@ fn render_component(
             .px(rpx(12.))
             .rounded(rpx(8.))
             .border_1()
-            .border_color(rgb(theme::BORDER))
+            .border_color(rgba(theme::BORDER))
             .bg(rgb(theme::BG))
             .when(*disabled, |this| this.opacity(0.5))
             .child(
@@ -1113,7 +1113,7 @@ fn render_component(
             .rounded(rpx(8.))
             .bg(rgb(theme::BG))
             .border_1()
-            .border_color(rgb(theme::BORDER))
+            .border_color(rgba(theme::BORDER))
             .when(*spoiler, |this| this.opacity(0.6))
             .child(theme::icon("file", 32., theme::MUTED))
             .child(
@@ -1136,7 +1136,7 @@ fn render_component(
                 .w_full()
                 .py(rpx(space / 2.))
                 .when(*divider, |this| {
-                    this.child(div().w_full().h(px(1.)).bg(rgb(theme::BORDER)))
+                    this.child(div().w_full().h(px(1.)).bg(rgba(theme::BORDER)))
                 })
                 .into_any_element()
         }
@@ -1173,7 +1173,7 @@ fn component_container(accent: Option<u32>, children: impl IntoIterator<Item = A
         .rounded(rpx(8.))
         .overflow_hidden()
         .border_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .bg(rgb(theme::ELEVATED))
         .children(accent.map(|color| {
             div()
@@ -1385,7 +1385,7 @@ pub fn render_reactions(
                     .border_color(rgb(theme::ELEVATED))
                     .opacity(if picking { 1. } else { 0. })
                     .group_hover("message", |style| style.opacity(1.))
-                    .hover(|style| style.bg(rgb(theme::SELECTED)))
+                    .hover(|style| style.bg(rgba(theme::SELECTED)))
                     .cursor_pointer()
                     .relative()
                     .on_mouse_down(MouseButton::Left, move |event, window, cx| {

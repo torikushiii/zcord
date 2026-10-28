@@ -545,7 +545,7 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
         .h(gif_picker::panel_height(picker.position, window))
         .rounded(rpx(8.))
         .border_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .bg(rgb(theme::ELEVATED))
         .shadow_lg()
         .overflow_hidden()
@@ -564,7 +564,7 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
                 .gap(rpx(12.))
                 .p(rpx(12.))
                 .border_b_1()
-                .border_color(rgb(theme::BORDER))
+                .border_color(rgba(theme::BORDER))
                 .when(picker.target == PickerTarget::Composer, |this| {
                     this.child(gif_picker::tabs(app, gif_picker::Tab::Emoji))
                 })
@@ -577,7 +577,7 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
                         .rounded(rpx(8.))
                         .bg(rgb(theme::BG))
                         .border_1()
-                        .border_color(rgb(theme::BORDER))
+                        .border_color(rgba(theme::BORDER))
                         .child(theme::icon("search", 18., theme::MUTED))
                         .child(
                             div().flex_1().min_w_0().child(
@@ -664,7 +664,7 @@ fn sidebar(picker: &EmojiPicker, cx: &App, interactive: bool) -> impl IntoElemen
                             .justify_center()
                             .size(rpx(28.))
                             .rounded_full()
-                            .bg(rgb(theme::SELECTED))
+                            .bg(rgba(theme::SELECTED))
                             .text_size(rpx(10.))
                             .text_color(rgb(theme::TEXT))
                             .child(initials.clone())
@@ -682,7 +682,7 @@ fn sidebar(picker: &EmojiPicker, cx: &App, interactive: bool) -> impl IntoElemen
                 .rounded(rpx(6.))
                 .when(interactive, |this| {
                     this.cursor_pointer()
-                        .hover(|style| style.bg(rgb(theme::SELECTED)))
+                        .hover(|style| style.bg(rgba(theme::SELECTED)))
                         .on_click(move |_, _, _| scroll.scroll_to_item(row, ScrollStrategy::Top))
                 })
                 .child(icon)
@@ -741,7 +741,7 @@ fn grid(
                             .justify_center()
                             .size(rpx(CELL))
                             .rounded(rpx(6.))
-                            .when(selected, |this| this.bg(rgb(theme::SELECTED)))
+                            .when(selected, |this| this.bg(rgba(theme::SELECTED)))
                             .when(usable && interactive, |this| this.cursor_pointer())
                             .when(interactive, move |this| {
                                 this.on_hover(move |hovered, _, cx| {
@@ -842,7 +842,7 @@ fn footer(app: &DiscordApp, picker: &EmojiPicker, cx: &App) -> impl IntoElement 
         .h(rpx(56.))
         .px(rpx(12.))
         .border_t_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .bg(rgb(theme::BG))
         .child(content)
 }
@@ -862,7 +862,7 @@ pub(super) fn suggestions(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
             .py(rpx(8.))
             .rounded(rpx(8.))
             .border_1()
-            .border_color(rgb(theme::BORDER))
+            .border_color(rgba(theme::BORDER))
             .bg(rgb(theme::ELEVATED))
             .shadow_lg()
             .occlude()
@@ -897,7 +897,7 @@ pub(super) fn suggestions(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                     .h(rpx(36.))
                     .rounded(rpx(4.))
                     .cursor_pointer()
-                    .when(index == selected, |this| this.bg(rgb(theme::SELECTED)))
+                    .when(index == selected, |this| this.bg(rgba(theme::SELECTED)))
                     .on_hover(move |hovered, _, cx| {
                         if *hovered {
                             hover

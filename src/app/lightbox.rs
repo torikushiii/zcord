@@ -189,7 +189,7 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
                 close.update(cx, |app, cx| app.close_lightbox(cx)).ok();
             })
             .with_animation(("lightbox-backdrop", 0u64), animation, |this, delta| {
-                this.bg(hsla(0., 0., 0., 0.85 * delta))
+                this.bg(rgba(theme::LIGHTBOX_SCRIM).opacity(delta))
             })
             .child(
                 div()

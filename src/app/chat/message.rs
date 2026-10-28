@@ -125,7 +125,7 @@ fn render_system(app: &DiscordApp, message: &Message) -> Option<AnyElement> {
             .pr_4()
             .py(rpx(2.))
             .mt(rpx(4.))
-            .hover(|style| style.bg(rgb(theme::HOVER)))
+            .hover(|style| style.bg(rgba(theme::HOVER)))
             .child(
                 div()
                     .flex()
@@ -365,7 +365,7 @@ fn render_forward(app: &DiscordApp, message_id: u64, forward: &Forward, cx: &App
         .pl(rpx(12.))
         .rounded_l(rpx(4.))
         .border_l_4()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .child(
             div()
                 .flex()
@@ -501,7 +501,7 @@ pub(super) fn render_message(
                     )
             } else {
                 this.when(!preview, |this| {
-                    this.hover(|style| style.bg(rgb(theme::HOVER)))
+                    this.hover(|style| style.bg(rgba(theme::HOVER)))
                 })
             }
         })
@@ -727,7 +727,7 @@ fn message_editor(app: &DiscordApp, editing: &Editing) -> impl IntoElement {
                 .rounded(rpx(8.))
                 .bg(rgb(theme::ELEVATED))
                 .border_1()
-                .border_color(rgb(theme::BORDER))
+                .border_color(rgba(theme::BORDER))
                 .relative()
                 .child(
                     flush_textarea(Textarea::new(&editing.input))
@@ -829,7 +829,7 @@ fn message_actions(app: &DiscordApp, message: &Message) -> Option<AnyElement> {
             .rounded(rpx(8.))
             .bg(rgb(theme::ELEVATED))
             .border_1()
-            .border_color(rgb(theme::BORDER))
+            .border_color(rgba(theme::BORDER))
             .block_mouse_except_scroll()
             .on_hover(move |hovered, _, cx| {
                 hover

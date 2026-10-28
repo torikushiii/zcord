@@ -93,7 +93,7 @@ fn tabs(app: &DiscordApp, selected: DetailsTab, closing: bool) -> impl IntoEleme
         .gap(rpx(24.))
         .px(rpx(16.))
         .border_b_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .child(tab(
             "voice-details-connection",
             "Connection",
@@ -218,7 +218,7 @@ fn graph(samples: &[PingSample], now: i64) -> impl IntoElement {
             for &fx in &gridlines {
                 window.paint_quad(fill(
                     Bounds::new(at(fx, 0.), size(px(1.), bounds.size.height)),
-                    rgb(theme::BORDER),
+                    rgba(theme::BORDER),
                 ));
             }
             let Some(&(first_x, first_y)) = points.first() else {
@@ -385,7 +385,7 @@ fn privacy(app: &DiscordApp, call: &Call, closing: bool, cx: &App) -> impl IntoE
                 .flex_none()
                 .pt(rpx(12.))
                 .border_t_1()
-                .border_color(rgb(theme::BORDER))
+                .border_color(rgba(theme::BORDER))
                 .text_size(rpx(12.))
                 .line_height(rpx(16.))
                 .text_color(rgb(theme::MUTED))
@@ -432,7 +432,7 @@ fn code_grid(code: &str, cx: &App) -> impl IntoElement {
         .bg(black());
     for (index, row) in rows.into_iter().enumerate() {
         if index > 0 {
-            grid = grid.child(div().h(px(1.)).bg(rgb(theme::BORDER)));
+            grid = grid.child(div().h(px(1.)).bg(rgba(theme::BORDER)));
         }
         grid = grid.child(row);
     }
@@ -456,10 +456,10 @@ fn copy_button(app: &DiscordApp, code: String, closing: bool) -> impl IntoElemen
         .h(rpx(32.))
         .rounded(rpx(8.))
         .border_1()
-        .border_color(rgb(theme::BORDER))
-        .bg(rgb(theme::HOVER))
+        .border_color(rgba(theme::BORDER))
+        .bg(rgba(theme::HOVER))
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(theme::SELECTED)))
+        .hover(|style| style.bg(rgba(theme::SELECTED)))
         .text_size(rpx(14.))
         .line_height(rpx(18.))
         .font_weight(FontWeight::MEDIUM)

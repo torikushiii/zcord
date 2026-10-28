@@ -51,7 +51,7 @@ pub(super) fn popout(
             None => this
                 .bg(rgb(theme::ELEVATED))
                 .border_1()
-                .border_color(rgb(theme::BORDER)),
+                .border_color(rgba(theme::BORDER)),
         })
         .child(inner)
         .into_any_element();
@@ -194,7 +194,7 @@ fn banner(card: &ProfileCard, layout: &Layout, cx: &App) -> AnyElement {
         .and_then(|p| p.user.banner_color.or(p.user.accent_color))
         .or_else(|| profile?.user_profile.as_ref()?.accent_color)
         .or_else(|| card.theme().map(|theme| theme.primary))
-        .unwrap_or(theme::SELECTED);
+        .unwrap_or(theme::SURFACE_HIGHEST);
     let banner = div()
         .w_full()
         .h(rpx(layout.banner))
@@ -437,7 +437,7 @@ fn skeleton(user_id: u64) -> impl IntoElement {
             .w(width)
             .h(rpx(height))
             .rounded(rpx(height / 2.))
-            .bg(rgb(theme::SELECTED))
+            .bg(rgba(theme::SELECTED))
     };
     let pill = |width: f32| bar(rpx(width).into(), 20.);
     let content = div()

@@ -18,7 +18,7 @@ fn sticker_placeholder(sticker: &Sticker) -> AnyElement {
         .rounded(rpx(8.))
         .bg(rgb(theme::ELEVATED))
         .border_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .child(theme::icon("sticker", 48., theme::MUTED))
         .child(
             div()
@@ -121,7 +121,7 @@ pub(super) fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &
                         .h(rpx(height))
                         .rounded(rpx(8.))
                         .overflow_hidden()
-                        .bg(rgb(theme::BORDER))
+                        .bg(rgba(theme::BORDER))
                 },
                 |spec| embeds::blurred_box(spec, width, height, 8., cx),
             );
@@ -237,7 +237,7 @@ fn file_card(attachment: &Attachment) -> impl IntoElement + use<> {
         .rounded(rpx(8.))
         .bg(rgb(theme::ELEVATED))
         .border_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .child(theme::icon("file", 32., theme::MUTED))
         .child(
             div()

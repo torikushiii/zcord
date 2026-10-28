@@ -186,7 +186,7 @@ pub fn render(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 .w(rpx(32.))
                 .h(rpx(1.))
                 .flex_none()
-                .bg(rgb(theme::BORDER)),
+                .bg(rgba(theme::BORDER)),
         )
         .children(app.store.rail.iter().filter_map(|entry| {
             match entry {

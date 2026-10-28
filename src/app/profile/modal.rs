@@ -229,7 +229,7 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
         .with_animation(
             ("profile-modal-backdrop", card.user_id),
             Animation::new(ENTER).with_easing(ease_out_quint()),
-            |this, delta| this.bg(hsla(0., 0., 0., 0.7 * delta)),
+            |this, delta| this.bg(rgba(theme::SCRIM).opacity(delta)),
         )
         .child(dialog.with_animation(
             ("profile-modal-enter", card.user_id),

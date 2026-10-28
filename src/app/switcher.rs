@@ -391,7 +391,7 @@ fn item_row(app: &DiscordApp, item: &Item, index: usize, selected: bool, cx: &Ap
         .px(rpx(12.))
         .rounded(rpx(4.))
         .cursor_pointer()
-        .when(selected, |this| this.bg(rgb(theme::SELECTED)))
+        .when(selected, |this| this.bg(rgba(theme::SELECTED)))
         .on_mouse_move(move |_, _, cx| {
             hover
                 .update(cx, |app, cx| {
@@ -452,7 +452,7 @@ fn guild_icon(app: &DiscordApp, target: Target, cx: &App) -> AnyElement {
             .justify_center()
             .size(rpx(20.))
             .rounded_full()
-            .bg(rgb(theme::SELECTED))
+            .bg(rgba(theme::SELECTED))
             .text_size(rpx(8.))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(rgb(theme::TEXT))

@@ -149,8 +149,12 @@ pub(super) fn welcome(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
 }
 
 fn date_divider(message: &Message, unread: bool) -> impl IntoElement {
-    let color = if unread { theme::RED } else { theme::BORDER };
-    let line = || div().flex_1().h(rpx(1.)).bg(rgb(color));
+    let color = if unread {
+        rgb(theme::RED)
+    } else {
+        rgba(theme::BORDER)
+    };
+    let line = || div().flex_1().h(rpx(1.)).bg(color);
     div()
         .flex()
         .items_center()

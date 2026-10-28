@@ -17,7 +17,7 @@ use gpui::{
     AppContext, KeyBinding, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions,
     actions, px, size,
 };
-use gpui_component::{Root, Theme, ThemeMode};
+use gpui_component::Root;
 
 actions!(zcord, [ZoomIn, ZoomOut, ResetZoom]);
 
@@ -39,7 +39,7 @@ fn main() {
             gpui_tokio::init(cx);
             media::images::init(cx);
             media::animated::init(cx);
-            Theme::change(ThemeMode::Dark, None, cx);
+            theme::init(cx);
             fonts::init(cx);
             settings::init(cx);
             let saved = settings::get(cx);

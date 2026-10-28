@@ -9,22 +9,46 @@ use crate::{
     store::{Decoration, GuildTag, NameStyle, Status, Store, User},
 };
 
+mod midnight;
 mod profile_avatar;
 
-pub const BG: u32 = 0x08080A;
+pub use midnight::init;
+
+pub const BG: u32 = 0x000000;
+pub const SURFACE_HIGH: u32 = 0x0A0A0C;
 pub const ELEVATED: u32 = 0x121214;
-pub const BORDER: u32 = 0x202024;
-pub const HOVER: u32 = 0x151518;
-pub const SELECTED: u32 = 0x24242A;
-pub const PLACEHOLDER_STRONG: u32 = 0x2E2E36;
-pub const TEXT: u32 = 0xDBDEE1;
-pub const STRONG: u32 = 0xF2F3F5;
-pub const MUTED: u32 = 0x949BA4;
-pub const FAINT: u32 = 0x6D6F78;
+pub const SURFACE_HIGHEST: u32 = 0x17181B;
+// Layer colors are RGBA, not RGB: they must blend with their actual surface.
+pub const BORDER: u32 = 0x96969F3D;
+pub const BORDER_SUBTLE: u32 = 0x9696A033;
+pub const BORDER_MUTED: u32 = 0x9595A229;
+pub const BORDER_STRONG: u32 = 0x96969F70;
+pub const HOVER: u32 = 0x94949C1F;
+pub const ACTIVE: u32 = 0x9696A033;
+pub const SELECTED: u32 = 0x96969F3D;
+pub const CONTROL: u32 = 0x99999914;
+pub const CODE_BACKGROUND: u32 = 0x5966F214;
+pub const SCRIM: u32 = 0x000000B8;
+pub const LIGHTBOX_SCRIM: u32 = 0x000000EB;
+pub const PLACEHOLDER_STRONG: u32 = 0x2C2D32;
+pub const TEXT: u32 = 0xD4D5D8;
+pub const TEXT_SELECTION: u32 = 0x0438A2;
+pub const STRONG: u32 = 0xDCDCDF;
+pub const MUTED: u32 = 0x96979E;
+pub const FAINT: u32 = 0x81828A;
+pub const INTERACTIVE_MUTED: u32 = 0x4F505A;
+pub const LINK: u32 = 0x2781E7;
+pub const FOCUS: u32 = 0x6AA8F4;
 pub const BLURPLE: u32 = 0x5865F2;
-pub const RED: u32 = 0xF23F43;
-pub const GREEN: u32 = 0x23A55A;
-pub const YELLOW: u32 = 0xF0B232;
+pub const BLURPLE_ACTIVE: u32 = 0x3A48A3;
+pub const RED: u32 = 0xEB5F5E;
+pub const GREEN: u32 = 0x41A063;
+pub const YELLOW: u32 = 0xCE8100;
+pub const NOTIFICATION: u32 = 0xD22D39;
+pub const STATUS_ONLINE: u32 = 0x3D9E60;
+pub const STATUS_IDLE: u32 = 0xFFCB6E;
+pub const STATUS_DND: u32 = 0xDC4247;
+pub const STATUS_OFFLINE: u32 = 0x9D9EA5;
 
 pub const BASE_FONT_SIZE: f32 = 16.;
 pub const ZOOM_LEVELS: [f32; 11] = [0.5, 0.67, 0.75, 0.8, 0.9, 1., 1.1, 1.25, 1.5, 1.75, 2.];
@@ -56,11 +80,18 @@ pub fn user_color(id: u64) -> Hsla {
 
 pub fn status_color(status: Status) -> u32 {
     match status {
-        Status::Online => GREEN,
-        Status::Idle => YELLOW,
-        Status::DoNotDisturb => RED,
-        Status::Offline => FAINT,
+        Status::Online => STATUS_ONLINE,
+        Status::Idle => STATUS_IDLE,
+        Status::DoNotDisturb => STATUS_DND,
+        Status::Offline => STATUS_OFFLINE,
     }
+}
+
+/// Avatar/status cutout rings need the opaque result of a row's translucent layer.
+pub fn composite(overlay: u32, background: u32) -> u32 {
+    let color = rgb(background).blend(rgba(overlay));
+    let channel = |value: f32| (value * 255.).round() as u32;
+    (channel(color.r) << 16) | (channel(color.g) << 8) | channel(color.b)
 }
 
 pub fn icon(name: &str, size: f32, color: u32) -> Svg {
@@ -373,7 +404,7 @@ fn status_cutout(status: Status, dot: f32, ring: u32) -> Option<Div> {
     }
 }
 
-pub const TOOLTIP_BG: u32 = 0x1F1F24;
+pub const TOOLTIP_BG: u32 = SURFACE_HIGHEST;
 
 /// Body of a Discord-style tooltip. Pair it with a `tooltip-arrow*` icon and
 /// position it with `deferred(anchored())`; callers set the text size.
@@ -432,11 +463,12 @@ pub fn badge(count: u32, ring: u32) -> impl IntoElement {
         .h(rpx(20.))
         .px(rpx(5.))
         .rounded_full()
-        .bg(rgb(RED))
+        .bg(rgb(NOTIFICATION))
         .border_2()
         .border_color(rgb(ring))
-        .text_size(rpx(11.))
-        .font_weight(FontWeight::BOLD)
+        .text_size(rpx(12.))
+        .line_height(rpx(16.))
+        .font_weight(FontWeight::SEMIBOLD)
         .text_color(white())
         .child(label)
 }
@@ -465,7 +497,7 @@ pub fn guild_tag(tag: &GuildTag, cx: &App) -> Div {
         .gap(rpx(3.))
         .px(rpx(4.))
         .rounded(rpx(4.))
-        .bg(rgb(SELECTED))
+        .bg(rgba(SELECTED))
         .text_size(rpx(12.))
         .line_height(rpx(16.))
         .font_weight(FontWeight::SEMIBOLD)
@@ -488,7 +520,7 @@ pub trait WithoutTextSelection: InteractiveElement + Sized {
 impl<E: InteractiveElement> WithoutTextSelection for E {}
 
 pub fn icon_button(id: impl Into<ElementId>, name: &str, size: f32, color: u32) -> Stateful<Div> {
-    icon_button_with_hover(id, name, size, color, rgb(SELECTED).into())
+    icon_button_with_hover(id, name, size, color, rgba(HOVER).into())
 }
 
 pub fn icon_button_with_hover(

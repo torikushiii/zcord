@@ -307,7 +307,7 @@ pub(crate) fn video_box(app: &DiscordApp, video: Video<'_>, cx: &App) -> AnyElem
             .rounded(rpx(radius))
             .into_any_element()
     } else {
-        div().size_full().bg(rgb(theme::BORDER)).into_any_element()
+        div().size_full().bg(rgba(theme::BORDER)).into_any_element()
     };
 
     let hovered = app.hovered_video == Some(video.key);

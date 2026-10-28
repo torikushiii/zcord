@@ -200,7 +200,7 @@ fn render_block(
             .rounded(rpx(4.))
             .bg(rgb(theme::ELEVATED))
             .border_1()
-            .border_color(rgb(theme::BORDER))
+            .border_color(rgba(theme::BORDER))
             .font_family(cx.theme().mono_font_family.clone())
             .text_color(rgb(theme::TEXT))
             .text_size(rpx(14. * scale))
