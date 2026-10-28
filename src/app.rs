@@ -840,6 +840,7 @@ fn collect_mentions(blocks: &[markdown::Block], ids: &mut Vec<u64>) {
 impl Render for DiscordApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         views::count_render(views::ViewKind::Root);
+        theme::set_image_scale(window, cx);
         if matches!(self.screen, Screen::Chat) {
             self.update_member_subscription();
             self.load_active_now_apps(cx);

@@ -1,4 +1,7 @@
-use crate::media::images::{self, ImageSpec};
+use crate::media::{
+    frames,
+    images::{self, ImageSpec},
+};
 use anyhow::{Context, Result, ensure};
 use gpui::{
     App, DefiniteLength, Element, ElementId, EntityId, Global, GlobalElementId, Hitbox,
@@ -18,19 +21,27 @@ use std::{
     collections::HashMap,
     io::Cursor,
     rc::Rc,
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
-const MAX_IMAGE: usize = 96 * 1024 * 1024;
+const MAX_IMAGE: usize = 32 * 1024 * 1024;
 const MAX_TOTAL: usize = 256 * 1024 * 1024;
 const MAX_FRAMES: usize = 600;
 const MAX_DIMENSION: u32 = 4096;
-const MAX_RUNNING_CAP: usize = 6;
+const DOWNLOADS: usize = 8;
+const DECODES: usize = 4;
+/// Emoji and stickers only queue a tiny decode each, so they get their own lane.
+const SMALL_DOWNLOADS: usize = 8;
+const SMALL_DECODES: usize = 2;
 const MAX_SOURCE_BYTES: u64 = 32 * 1024 * 1024;
 const STALE_AFTER: Duration = Duration::from_secs(2);
 /// A just-decoded image may still be waiting for its debounced repaint.
 const FRESH_FOR: Duration = Duration::from_secs(1);
+/// Must stay under `STALE_AFTER`, or jobs for visible tiles get cancelled between repaints.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
+/// Elements only hold the image Arc during paint, so recent cache hits mark it visible.
+const VISIBLE_GRACE: Duration = Duration::from_secs(5);
 type Key = (ImageSpec, u32);
 
 pub enum Load {
@@ -39,13 +50,61 @@ pub enum Load {
     Failed,
 }
 
-fn max_running() -> usize {
-    static RUNNING: OnceLock<usize> = OnceLock::new();
-    *RUNNING.get_or_init(|| {
-        std::thread::available_parallelism()
-            .map_or(2, |parallelism| parallelism.get().saturating_sub(1))
-            .clamp(2, MAX_RUNNING_CAP)
-    })
+#[derive(Clone, Copy)]
+enum Lane {
+    Gif,
+    Small,
+}
+
+impl Lane {
+    fn of(spec: &ImageSpec) -> Self {
+        match spec {
+            ImageSpec::Emoji { .. } | ImageSpec::Sticker { .. } => Lane::Small,
+            ImageSpec::Animated { still } => Lane::of(still),
+            _ => Lane::Gif,
+        }
+    }
+
+    fn downloads(self) -> usize {
+        match self {
+            Lane::Gif => DOWNLOADS,
+            Lane::Small => SMALL_DOWNLOADS,
+        }
+    }
+
+    fn decodes(self) -> usize {
+        match self {
+            Lane::Gif => DECODES,
+            Lane::Small => SMALL_DECODES,
+        }
+    }
+}
+
+fn decode_permits(lane: Lane) -> &'static tokio::sync::Semaphore {
+    static GIF: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+    static SMALL: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+    match lane {
+        Lane::Gif => GIF.get_or_init(|| tokio::sync::Semaphore::new(lane.decodes())),
+        Lane::Small => SMALL.get_or_init(|| tokio::sync::Semaphore::new(lane.decodes())),
+    }
+}
+
+fn wanted(last: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(last) <= STALE_AFTER
+}
+
+fn still_wanted(stamp: &Mutex<Instant>) -> bool {
+    wanted(
+        *stamp
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        Instant::now(),
+    )
+}
+
+enum DecodeOutcome {
+    Decoded(Arc<RenderImage>, usize),
+    Cancelled,
 }
 
 enum Entry {
@@ -53,12 +112,15 @@ enum Entry {
         /// Last `state`/`resolve` request for this key, used to drop abandoned work.
         requested: Instant,
         queued: bool,
+        /// Refreshed on every request while the job is queued or in flight.
+        wanted: Arc<Mutex<Instant>>,
     },
     Ready {
         image: Arc<RenderImage>,
         bytes: usize,
         used: u64,
         ready_at: Instant,
+        seen: Instant,
     },
     Failed,
 }
@@ -70,9 +132,10 @@ struct Cache {
     queue: Vec<Key>,
     bytes: usize,
     clock: u64,
-    running: usize,
+    running: [usize; 2],
     pump_pending: bool,
     refresh_pending: bool,
+    heartbeat_running: bool,
 }
 
 struct AnimatedCache(Rc<RefCell<Cache>>);
@@ -538,9 +601,13 @@ pub fn state(spec: &ImageSpec, size: u32, cx: &App) -> Load {
         {
             match entry {
                 Entry::Ready {
-                    image, used: stamp, ..
+                    image,
+                    used: stamp,
+                    seen,
+                    ..
                 } => {
                     *stamp = used;
+                    *seen = Instant::now();
                     return Load::Ready(image.clone());
                 }
                 Entry::Failed => return Load::Failed,
@@ -571,8 +638,14 @@ impl Cache {
             .and_then(|sizes| sizes.get_mut(&size))
         {
             found = true;
-            if let Entry::Pending { requested, queued } = entry {
+            if let Entry::Pending {
+                requested,
+                queued,
+                wanted,
+            } = entry
+            {
                 *requested = now;
+                *wanted.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = now;
                 promote = *queued;
             }
         }
@@ -588,6 +661,7 @@ impl Cache {
             Entry::Pending {
                 requested: now,
                 queued: true,
+                wanted: Arc::new(Mutex::new(now)),
             },
         );
         self.queue.insert(0, (spec, size));
@@ -604,25 +678,34 @@ impl Cache {
         }
     }
 
-    fn next(&mut self) -> (Option<Key>, usize) {
-        if self.running >= max_running() {
-            return (None, 0);
-        }
+    fn next(&mut self) -> (Option<Key>, usize, Vec<Arc<RenderImage>>) {
         let mut dropped = 0;
-        loop {
-            let Some(key) = self.queue.first().cloned() else {
-                return (None, dropped);
-            };
-            let stale = match self.entries.get(&key.0).and_then(|sizes| sizes.get(&key.1)) {
-                Some(Entry::Pending { requested, .. }) => requested.elapsed() > STALE_AFTER,
-                _ => true,
-            };
-            if !stale {
-                break;
+        let mut index = 0;
+        let selected = loop {
+            if index >= self.queue.len() {
+                break None;
             }
-            self.queue.remove(0);
+            let key = self.queue[index].clone();
+            let lane = Lane::of(&key.0);
+            let fresh = matches!(
+                self.entries
+                    .get(&key.0)
+                    .and_then(|sizes| sizes.get(&key.1)),
+                Some(Entry::Pending { requested, .. }) if requested.elapsed() <= STALE_AFTER
+            );
+            if fresh {
+                if self.running[lane as usize] < lane.downloads() {
+                    break Some((index, key, lane));
+                }
+                // Another lane may still have room; a full GIF lane must not block emoji.
+                index += 1;
+                continue;
+            }
+            self.queue.remove(index);
             let pending = matches!(
-                self.entries.get(&key.0).and_then(|sizes| sizes.get(&key.1)),
+                self.entries
+                    .get(&key.0)
+                    .and_then(|sizes| sizes.get(&key.1)),
                 Some(Entry::Pending { .. })
             );
             if pending {
@@ -637,14 +720,40 @@ impl Cache {
                 }
             }
             dropped += 1;
-        }
-        let Some(key) = self.queue.first().cloned() else {
-            return (None, dropped);
         };
+        let Some((index, key, lane)) = selected else {
+            return (None, dropped, Vec::new());
+        };
+        let evicted = self.evict();
+        self.queue.remove(index);
+        if let Some(Entry::Pending { queued, .. }) = self
+            .entries
+            .get_mut(&key.0)
+            .and_then(|sizes| sizes.get_mut(&key.1))
+        {
+            *queued = false;
+        }
+        self.running[lane as usize] += 1;
+        (Some(key), dropped, evicted)
+    }
+
+    fn wanted_stamp(&self, key: &Key) -> Option<Arc<Mutex<Instant>>> {
+        match self.entries.get(&key.0)?.get(&key.1)? {
+            Entry::Pending { wanted, .. } => Some(wanted.clone()),
+            _ => None,
+        }
+    }
+
+    fn needs_heartbeat(&self) -> bool {
+        self.running.iter().any(|&running| running > 0) || !self.queue.is_empty()
+    }
+
+    fn evict(&mut self) -> Vec<Arc<RenderImage>> {
+        let mut evicted = Vec::new();
         // The budget is soft: reserve one future decode, and if only fresh or pinned entries
-        // are left, start anyway rather than stalling the queue.
+        // are left, start anyway rather than stalling.
         while self.bytes + MAX_IMAGE > MAX_TOTAL {
-            let evict = self
+            let candidate = self
                 .entries
                 .iter()
                 .flat_map(|(spec, sizes)| {
@@ -655,20 +764,25 @@ impl Cache {
                         image,
                         used,
                         ready_at,
+                        seen,
                         ..
-                    } if Arc::strong_count(image) == 1 && ready_at.elapsed() >= FRESH_FOR => {
+                    } if Arc::strong_count(image) == 1
+                        && ready_at.elapsed() >= FRESH_FOR
+                        && seen.elapsed() >= VISIBLE_GRACE =>
+                    {
                         Some((spec, size, *used))
                     }
                     _ => None,
                 })
                 .min_by_key(|(_, _, used)| *used)
                 .map(|(spec, size, _)| (spec.clone(), *size));
-            let Some((spec, size)) = evict else {
+            let Some((spec, size)) = candidate else {
                 break;
             };
             let empty = if let Some(sizes) = self.entries.get_mut(&spec) {
-                if let Some(Entry::Ready { bytes, .. }) = sizes.remove(&size) {
+                if let Some(Entry::Ready { image, bytes, .. }) = sizes.remove(&size) {
                     self.bytes -= bytes;
+                    evicted.push(image);
                 }
                 sizes.is_empty()
             } else {
@@ -678,16 +792,7 @@ impl Cache {
                 self.entries.remove(&spec);
             }
         }
-        self.queue.remove(0);
-        if let Some(Entry::Pending { queued, .. }) = self
-            .entries
-            .get_mut(&key.0)
-            .and_then(|sizes| sizes.get_mut(&key.1))
-        {
-            *queued = false;
-        }
-        self.running += 1;
-        (Some(key), dropped)
+        evicted
     }
 }
 
@@ -709,59 +814,193 @@ fn schedule_refresh(cache: Rc<RefCell<Cache>>, cx: &App) {
     .detach();
 }
 
+pub(crate) fn drop_images(images: Vec<Arc<RenderImage>>, cx: &App) {
+    if images.is_empty() {
+        return;
+    }
+    cx.spawn(async move |cx| {
+        cx.update(|cx| {
+            // gpui's sprite atlas keeps every frame until drop_image is called.
+            for image in images {
+                cx.drop_image(image, None);
+            }
+        });
+    })
+    .detach();
+}
+
+/// Repaint while work is in flight so visible still fallbacks keep refreshing their stamps.
+fn start_heartbeat(cache: Rc<RefCell<Cache>>, cx: &App) {
+    {
+        let mut state = cache.borrow_mut();
+        if state.heartbeat_running || !state.needs_heartbeat() {
+            return;
+        }
+        state.heartbeat_running = true;
+    }
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor()
+                .timer(HEARTBEAT_INTERVAL)
+                .await;
+            let busy = {
+                let mut state = cache.borrow_mut();
+                if state.needs_heartbeat() {
+                    true
+                } else {
+                    state.heartbeat_running = false;
+                    false
+                }
+            };
+            if !busy {
+                break;
+            }
+            cx.update(|cx| cx.refresh_windows());
+        }
+    })
+    .detach();
+}
+
 fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
     loop {
-        let (key, dropped) = cache.borrow_mut().next();
+        let (key, dropped, evicted) = cache.borrow_mut().next();
+        drop_images(evicted, cx);
         if dropped > 0 {
             // Dropped entries may still be visible; repaint so `resolve` re-requests them.
             schedule_refresh(cache.clone(), cx);
         }
         let Some(key) = key else {
+            let evicted = {
+                let mut state = cache.borrow_mut();
+                if state.queue.is_empty() {
+                    state.evict()
+                } else {
+                    Vec::new()
+                }
+            };
+            drop_images(evicted, cx);
             return;
         };
+        let lane = Lane::of(&key.0);
+        let stamp = {
+            let state = cache.borrow();
+            state.wanted_stamp(&key)
+        };
+        let Some(stamp) = stamp else {
+            cache.borrow_mut().running[lane as usize] -= 1;
+            continue;
+        };
+        start_heartbeat(cache.clone(), cx);
         let service = images::download_service(cx);
         let request = key.clone();
-        let task = Tokio::spawn(cx, async move {
+        let job_stamp = stamp.clone();
+        let task = Tokio::spawn_result(cx, async move {
             let service = service.context("download service unavailable")?;
+            if !still_wanted(&job_stamp) {
+                return Ok(DecodeOutcome::Cancelled);
+            }
+            if matches!(lane, Lane::Gif)
+                && let Some((image, bytes)) =
+                    frames::load(&service.frames_path(&request.0, request.1)).await
+            {
+                if !still_wanted(&job_stamp) {
+                    return Ok(DecodeOutcome::Cancelled);
+                }
+                return Ok(DecodeOutcome::Decoded(image, bytes));
+            }
             let path = service
                 .load(&request.0, request.1)
                 .await
                 .context("animation download failed")?;
-            tokio::task::spawn_blocking(move || {
+            if !still_wanted(&job_stamp) {
+                return Ok(DecodeOutcome::Cancelled);
+            }
+            let _permit = decode_permits(lane)
+                .acquire()
+                .await
+                .context("animation decode permits closed")?;
+            // The tile may have scrolled away while this job waited for a permit.
+            if !still_wanted(&job_stamp) {
+                return Ok(DecodeOutcome::Cancelled);
+            }
+            let frames_path = service.frames_path(&request.0, request.1);
+            let (image, bytes) = tokio::task::spawn_blocking(move || {
                 let bytes = std::fs::read(path)?;
-                decode(&bytes, request.1)
+                let (image, bytes) = decode(&bytes, request.1)?;
+                if matches!(lane, Lane::Gif) {
+                    match frames::save(&frames_path, &image) {
+                        Ok(written) => service.record_frames_write(written),
+                        Err(error) => log::debug!(
+                            "Could not cache decoded frames at {}: {error}",
+                            frames_path.display()
+                        ),
+                    }
+                }
+                Ok::<_, anyhow::Error>((image, bytes))
             })
             .await
-            .context("decode worker failed")?
+            .context("decode worker failed")??;
+            drop(_permit);
+            Ok(DecodeOutcome::Decoded(image, bytes))
         });
         let cache = cache.clone();
         cx.spawn(async move |cx| {
             let result = task.await;
-            let success = {
+            let (success, cancelled) = {
                 let mut state = cache.borrow_mut();
-                state.running -= 1;
-                let success = matches!(result, Ok(Ok(_)));
-                let entry = match result {
-                    Ok(Ok((image, bytes))) => {
+                state.running[lane as usize] -= 1;
+                match result {
+                    Ok(DecodeOutcome::Decoded(image, bytes)) => {
                         state.bytes += bytes;
                         state.clock = state.clock.saturating_add(1);
-                        Entry::Ready {
-                            image,
-                            bytes,
-                            used: state.clock,
-                            ready_at: Instant::now(),
+                        let used = state.clock;
+                        let (spec, size) = key;
+                        state.entries.entry(spec).or_default().insert(
+                            size,
+                            Entry::Ready {
+                                image,
+                                bytes,
+                                used,
+                                ready_at: Instant::now(),
+                                seen: Instant::now(),
+                            },
+                        );
+                        (true, false)
+                    }
+                    Ok(DecodeOutcome::Cancelled) => {
+                        let owned = matches!(
+                            state
+                                .entries
+                                .get(&key.0)
+                                .and_then(|sizes| sizes.get(&key.1)),
+                            Some(Entry::Pending { wanted, .. }) if Arc::ptr_eq(wanted, &stamp)
+                        );
+                        if owned {
+                            let empty = if let Some(sizes) = state.entries.get_mut(&key.0) {
+                                sizes.remove(&key.1);
+                                sizes.is_empty()
+                            } else {
+                                false
+                            };
+                            if empty {
+                                state.entries.remove(&key.0);
+                            }
                         }
+                        (false, owned)
                     }
                     _ => {
                         log::warn!("Animation download or decode failed (size {})", key.1);
-                        Entry::Failed
+                        let (spec, size) = key;
+                        state
+                            .entries
+                            .entry(spec)
+                            .or_default()
+                            .insert(size, Entry::Failed);
+                        (false, false)
                     }
-                };
-                let (spec, size) = key;
-                state.entries.entry(spec).or_default().insert(size, entry);
-                success
+                }
             };
-            if success {
+            if success || cancelled {
                 let cache = cache.clone();
                 cx.update(|cx| schedule_refresh(cache, cx));
             }
@@ -997,8 +1236,9 @@ mod tests {
     }
 
     fn next(cache: &mut Cache) -> Option<Key> {
-        let (key, dropped) = cache.next();
+        let (key, dropped, evicted) = cache.next();
         assert_eq!(dropped, 0, "unexpected stale drop");
+        assert!(evicted.is_empty());
         key
     }
 
@@ -1103,6 +1343,7 @@ mod tests {
                 bytes,
                 used,
                 ready_at,
+                seen: ready_at,
             },
         );
     }
@@ -1344,39 +1585,40 @@ mod tests {
     fn cache_uses_all_workers_and_evicts_only_old_unheld_lru_entries() {
         let mut cache = Cache::default();
         let now = Instant::now();
-        for index in 0..(max_running() as u8 + 1) {
+        for index in 0..(DOWNLOADS as u8 + 1) {
             cache.request(&ImageSpec::DefaultAvatar { index }, 16, now);
         }
-        for _ in 0..max_running() {
+        for _ in 0..DOWNLOADS {
             assert!(next(&mut cache).is_some());
         }
         assert!(next(&mut cache).is_none());
-        assert_eq!(cache.running, max_running());
+        assert_eq!(cache.running[Lane::Gif as usize], DOWNLOADS);
 
         // At max-1 workers a non-empty cache must still admit the last worker.
-        cache.running = max_running().saturating_sub(1);
+        cache.running[Lane::Gif as usize] = DOWNLOADS - 1;
         let mb = 1024 * 1024;
-        let stale = now - FRESH_FOR - Duration::from_secs(1);
+        let stale = now - VISIBLE_GRACE - Duration::from_secs(1);
         let held = blank_image();
         let held_key = (ImageSpec::DefaultAvatar { index: 10 }, 16);
         put_ready(&mut cache, &held_key, held.clone(), 64 * mb, 0, stale);
         let older_key = (ImageSpec::DefaultAvatar { index: 11 }, 16);
-        put_ready(&mut cache, &older_key, blank_image(), 80 * mb, 1, stale);
+        put_ready(&mut cache, &older_key, blank_image(), 96 * mb, 1, stale);
         let fresh_key = (ImageSpec::DefaultAvatar { index: 12 }, 16);
         put_ready(
             &mut cache,
             &fresh_key,
             blank_image(),
-            56 * mb,
+            80 * mb,
             2,
             Instant::now(),
         );
-        cache.bytes = 200 * mb;
+        cache.bytes = 240 * mb;
         cache.request(&ImageSpec::DefaultAvatar { index: 13 }, 16, now);
-        let (key, dropped) = cache.next();
+        let (key, dropped, evicted) = cache.next();
         assert!(key.is_some());
         assert_eq!(dropped, 0);
-        assert_eq!(cache.running, max_running());
+        assert_eq!(evicted.len(), 1);
+        assert_eq!(cache.running[Lane::Gif as usize], DOWNLOADS);
         assert!(!has(&cache, &older_key));
         assert!(has(&cache, &fresh_key));
         assert!(has(&cache, &held_key));
@@ -1396,7 +1638,7 @@ mod tests {
             held.clone(),
             160 * mb,
             0,
-            now - FRESH_FOR - Duration::from_secs(1),
+            now - VISIBLE_GRACE - Duration::from_secs(1),
         );
         let fresh_key = (ImageSpec::DefaultAvatar { index: 21 }, 16);
         put_ready(
@@ -1409,10 +1651,11 @@ mod tests {
         );
         cache.bytes = 256 * mb;
         cache.request(&ImageSpec::DefaultAvatar { index: 22 }, 16, now);
-        let (key, dropped) = cache.next();
+        let (key, dropped, evicted) = cache.next();
         assert!(key.is_some());
         assert_eq!(dropped, 0);
-        assert_eq!(cache.running, 1);
+        assert!(evicted.is_empty());
+        assert_eq!(cache.running[Lane::Gif as usize], 1);
         assert!(has(&cache, &held_key));
         assert!(has(&cache, &fresh_key));
         assert_eq!(cache.bytes, 256 * mb);
@@ -1420,10 +1663,92 @@ mod tests {
         // Once released, the old held entry is evictable again.
         drop(held);
         cache.request(&ImageSpec::DefaultAvatar { index: 23 }, 16, now);
-        let (key, _) = cache.next();
+        let (key, _, evicted) = cache.next();
         assert!(key.is_some());
+        assert_eq!(evicted.len(), 1);
         assert!(!has(&cache, &held_key));
         assert!(has(&cache, &fresh_key));
+    }
+
+    #[test]
+    fn eviction_reports_the_image_for_dropping() {
+        let mut cache = Cache::default();
+        let now = Instant::now();
+        let mb = 1024 * 1024;
+        let fresh_key = (ImageSpec::DefaultAvatar { index: 30 }, 16);
+        put_ready(
+            &mut cache,
+            &fresh_key,
+            blank_image(),
+            96 * mb,
+            0,
+            Instant::now(),
+        );
+        let evicted_key = (ImageSpec::DefaultAvatar { index: 31 }, 16);
+        let image = blank_image();
+        put_ready(
+            &mut cache,
+            &evicted_key,
+            image.clone(),
+            160 * mb,
+            1,
+            now - VISIBLE_GRACE - Duration::from_secs(1),
+        );
+        let image_ptr = Arc::as_ptr(&image);
+        drop(image);
+        cache.bytes = 256 * mb;
+        cache.request(&ImageSpec::DefaultAvatar { index: 32 }, 16, now);
+        let (key, dropped, evicted) = cache.next();
+        assert!(key.is_some());
+        assert_eq!(dropped, 0);
+        assert!(!has(&cache, &evicted_key));
+        assert!(has(&cache, &fresh_key));
+        assert_eq!(evicted.len(), 1);
+        assert_eq!(Arc::as_ptr(&evicted[0]), image_ptr);
+        assert_eq!(Arc::strong_count(&evicted[0]), 1);
+    }
+
+    #[test]
+    fn visible_entries_survive_eviction_until_grace_expires() {
+        let mut cache = Cache::default();
+        let now = Instant::now();
+        let mb = 1024 * 1024;
+        let old = now - VISIBLE_GRACE - Duration::from_secs(1);
+        let visible_key = (ImageSpec::DefaultAvatar { index: 40 }, 16);
+        put_ready(&mut cache, &visible_key, blank_image(), 120 * mb, 0, old);
+        if let Some(Entry::Ready { seen, .. }) = cache
+            .entries
+            .get_mut(&visible_key.0)
+            .and_then(|sizes| sizes.get_mut(&visible_key.1))
+        {
+            *seen = Instant::now();
+        }
+        let unseen_key = (ImageSpec::DefaultAvatar { index: 41 }, 16);
+        put_ready(&mut cache, &unseen_key, blank_image(), 120 * mb, 1, old);
+        cache.bytes = 240 * mb;
+        cache.request(&ImageSpec::DefaultAvatar { index: 42 }, 16, now);
+        let (key, _, evicted) = cache.next();
+        assert!(key.is_some());
+        assert_eq!(evicted.len(), 1);
+        assert!(has(&cache, &visible_key));
+        assert!(!has(&cache, &unseen_key));
+
+        if let Some(Entry::Ready { seen, .. }) = cache
+            .entries
+            .get_mut(&visible_key.0)
+            .and_then(|sizes| sizes.get_mut(&visible_key.1))
+        {
+            *seen = old;
+        }
+        let filler_key = (ImageSpec::DefaultAvatar { index: 43 }, 16);
+        put_ready(&mut cache, &filler_key, blank_image(), 120 * mb, 2, old);
+        cache.bytes = 240 * mb;
+        cache.request(&ImageSpec::DefaultAvatar { index: 44 }, 16, now);
+        let (key, _, evicted) = cache.next();
+        assert!(key.is_some());
+        assert_eq!(evicted.len(), 1);
+        assert!(!has(&cache, &visible_key));
+        assert!(has(&cache, &filler_key));
     }
 
     #[test]
@@ -1438,7 +1763,7 @@ mod tests {
         }
         assert_eq!(next(&mut cache), Some(keys[2].clone()));
         assert_eq!(next(&mut cache), Some(keys[1].clone()));
-        cache.running = 0;
+        cache.running[Lane::Gif as usize] = 0;
         assert_eq!(next(&mut cache), Some(keys[0].clone()));
 
         let mut cache = Cache::default();
@@ -1461,9 +1786,15 @@ mod tests {
             now - STALE_AFTER - Duration::from_millis(1),
         );
         cache.request(&fresh.0, fresh.1, now);
-        assert_eq!(cache.next(), (Some(fresh), 0));
-        cache.running = 0;
-        assert_eq!(cache.next(), (None, 1));
+        let (key, dropped, evicted) = cache.next();
+        assert_eq!(key, Some(fresh));
+        assert_eq!(dropped, 0);
+        assert!(evicted.is_empty());
+        cache.running[Lane::Gif as usize] = 0;
+        let (key, dropped, evicted) = cache.next();
+        assert_eq!(key, None);
+        assert_eq!(dropped, 1);
+        assert!(evicted.is_empty());
         assert!(!has(&cache, &stale));
         assert!(!matches!(
             cache
@@ -1479,7 +1810,10 @@ mod tests {
             stale.1,
             now - STALE_AFTER - Duration::from_millis(1),
         );
-        assert_eq!(cache.next(), (None, 1));
+        let (key, dropped, evicted) = cache.next();
+        assert_eq!(key, None);
+        assert_eq!(dropped, 1);
+        assert!(evicted.is_empty());
         assert!(!has(&cache, &stale));
         assert!(!matches!(
             cache
@@ -1488,6 +1822,71 @@ mod tests {
                 .and_then(|sizes| sizes.get(&stale.1)),
             Some(Entry::Failed)
         ));
+    }
+
+    #[test]
+    fn requests_refresh_a_running_jobs_wanted_stamp() {
+        let mut cache = Cache::default();
+        let now = Instant::now();
+        let key = (ImageSpec::DefaultAvatar { index: 1 }, 16);
+        cache.request(&key.0, key.1, now);
+        assert_eq!(next(&mut cache), Some(key.clone()));
+        let stamp = cache.wanted_stamp(&key).unwrap();
+        *stamp.lock().unwrap() = now - STALE_AFTER - Duration::from_millis(1);
+        cache.request(&key.0, key.1, now);
+        assert_eq!(*stamp.lock().unwrap(), now);
+    }
+
+    #[test]
+    fn wanted_jobs_expire_after_the_stale_window() {
+        let now = Instant::now();
+        let old = now - STALE_AFTER - Duration::from_millis(1);
+        let fresh = now - STALE_AFTER + Duration::from_millis(1);
+        assert!(wanted(now, now));
+        assert!(wanted(fresh, now));
+        assert!(wanted(now - STALE_AFTER, now));
+        assert!(!wanted(old, now));
+    }
+
+    #[test]
+    fn queued_small_images_are_served_while_the_gif_lane_is_full() {
+        let mut cache = Cache::default();
+        let now = Instant::now();
+        for index in 0..DOWNLOADS as u8 {
+            cache.request(&ImageSpec::DefaultAvatar { index }, 16, now);
+        }
+        for _ in 0..DOWNLOADS {
+            assert!(next(&mut cache).is_some());
+        }
+        assert_eq!(cache.running[Lane::Gif as usize], DOWNLOADS);
+        assert!(next(&mut cache).is_none());
+
+        let emoji = (ImageSpec::Emoji { id: 1, animated: true }, 32);
+        cache.request(&emoji.0, emoji.1, now);
+        // A fresh GIF request is ahead in the queue; its full lane must not block the emoji.
+        cache.request(&ImageSpec::DefaultAvatar { index: 100 }, 16, now);
+        assert_eq!(next(&mut cache), Some(emoji));
+        assert_eq!(cache.running[Lane::Small as usize], 1);
+        assert_eq!(cache.running[Lane::Gif as usize], DOWNLOADS);
+    }
+
+    #[test]
+    fn heartbeat_runs_until_both_lanes_and_the_queue_are_idle() {
+        let mut cache = Cache::default();
+        assert!(!cache.needs_heartbeat());
+
+        let key = (ImageSpec::Emoji { id: 2, animated: true }, 32);
+        cache.request(&key.0, key.1, Instant::now());
+        assert!(cache.needs_heartbeat());
+        assert_eq!(next(&mut cache), Some(key));
+        assert!(cache.needs_heartbeat());
+
+        cache.running[Lane::Small as usize] = 0;
+        assert!(!cache.needs_heartbeat());
+        cache.running[Lane::Gif as usize] = 1;
+        assert!(cache.needs_heartbeat());
+        cache.running[Lane::Gif as usize] = 0;
+        assert!(!cache.needs_heartbeat());
     }
 
     struct AnimationCounter {

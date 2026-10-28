@@ -1,9 +1,11 @@
 use gpui::{App, Global, Task};
 use gpui_tokio::Tokio;
+use image::{AnimationDecoder, ImageEncoder, ImageFormat};
 use std::{
     cell::RefCell,
     collections::{HashMap, VecDeque, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
+    io::Cursor,
     path::{Path, PathBuf},
     rc::Rc,
     sync::{
@@ -20,6 +22,7 @@ use tokio::{
 const MAX_DOWNLOAD: u64 = 25 * 1024 * 1024;
 const MAX_CACHE: u64 = 512 * 1024 * 1024;
 const MAX_VIDEO_CACHE: u64 = 256 * 1024 * 1024;
+const MAX_FRAMES_CACHE: u64 = 1536 * 1024 * 1024;
 const PRUNE_THRESHOLD: u64 = 64 * 1024 * 1024;
 /// Cache hits older than this get their mtime refreshed so pruning stays LRU.
 const TOUCH_INTERVAL: Duration = Duration::from_secs(60 * 60);
@@ -505,10 +508,79 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
     Some(url)
 }
 
+// gpui's `img()` decodes every frame of an animated file and keeps it in its asset cache.
+fn first_frame_png(bytes: &[u8], size: u32) -> Option<Vec<u8>> {
+    let format = image::guess_format(bytes).ok()?;
+    let first = match format {
+        ImageFormat::Gif => {
+            let mut frames = image::codecs::gif::GifDecoder::new(Cursor::new(bytes))
+                .ok()?
+                .into_frames();
+            let first = frames.next()?.ok()?;
+            if frames.next().is_none() {
+                return None;
+            }
+            first
+        }
+        ImageFormat::WebP => {
+            let decoder = image::codecs::webp::WebPDecoder::new(Cursor::new(bytes)).ok()?;
+            if !decoder.has_animation() {
+                return None;
+            }
+            decoder.into_frames().next()?.ok()?
+        }
+        _ => return None,
+    };
+    let mut image = first.into_buffer();
+    let target = size.max(1);
+    let longest = image.width().max(image.height());
+    if longest > target {
+        let scaled = |side: u32| {
+            ((u64::from(side) * u64::from(target) + u64::from(longest) / 2) / u64::from(longest))
+                .max(1) as u32
+        };
+        let width = scaled(image.width());
+        let height = scaled(image.height());
+        image = image::imageops::resize(
+            &image,
+            width,
+            height,
+            image::imageops::FilterType::Triangle,
+        );
+    }
+    let mut png = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut png)
+        .write_image(
+            image.as_raw(),
+            image.width(),
+            image.height(),
+            image::ExtendedColorType::Rgba8,
+        )
+        .ok()?;
+    Some(png)
+}
+
+fn still_spec(spec: &ImageSpec) -> bool {
+    match spec {
+        ImageSpec::Animated { .. }
+        | ImageSpec::Video { .. }
+        | ImageSpec::Attachment { .. }
+        | ImageSpec::Collectible { .. } => false,
+        ImageSpec::Emoji { animated, .. }
+        | ImageSpec::Media { animated, .. }
+        | ImageSpec::AvatarDecoration { animated, .. }
+        | ImageSpec::Nameplate { animated, .. }
+        | ImageSpec::AppImage { animated, .. } => !*animated,
+        ImageSpec::Sticker { format, .. } => !matches!(*format, 2 | 4),
+        _ => true,
+    }
+}
+
 fn file_name(spec: &ImageSpec, size: u32) -> String {
     let mut hasher = DefaultHasher::new();
     spec.hash(&mut hasher);
-    format!("{:016x}-{}.img", hasher.finish(), rounded_size(size))
+    let suffix = if still_spec(spec) { "-still" } else { "" };
+    format!("{:016x}{suffix}-{}.img", hasher.finish(), rounded_size(size))
 }
 
 enum Entry {
@@ -536,11 +608,13 @@ pub(crate) struct Service {
     client: reqwest::Client,
     directory: PathBuf,
     video_directory: PathBuf,
+    frames_directory: PathBuf,
     permits: Semaphore,
     video_permits: Semaphore,
     initialized: OnceCell<bool>,
     image_written: AtomicU64,
     video_written: AtomicU64,
+    frames_written: AtomicU64,
     pruning: Arc<AtomicBool>,
 }
 
@@ -550,7 +624,7 @@ pub fn init(cx: &mut App) {
     }
     let directories = dirs::cache_dir().map(|dir| {
         let root = dir.join("zcord");
-        (root.join("images"), root.join("videos"))
+        (root.join("images"), root.join("videos"), root.join("frames"))
     });
     let client = reqwest::Client::builder()
         .user_agent(crate::discord::USER_AGENT)
@@ -560,16 +634,18 @@ pub fn init(cx: &mut App) {
         .ok();
     let service = directories
         .zip(client)
-        .map(|((directory, video_directory), client)| {
+        .map(|((directory, video_directory, frames_directory), client)| {
             Arc::new(Service {
                 client,
                 directory,
                 video_directory,
+                frames_directory,
                 permits: Semaphore::new(6),
                 video_permits: Semaphore::new(2),
                 initialized: OnceCell::new(),
                 image_written: AtomicU64::new(0),
                 video_written: AtomicU64::new(0),
+                frames_written: AtomicU64::new(0),
                 pruning: Arc::new(AtomicBool::new(false)),
             })
         });
@@ -595,16 +671,16 @@ pub(crate) fn download_service(cx: &App) -> Option<Arc<Service>> {
     cx.try_global::<ImageCache>()?.0.borrow().service.clone()
 }
 
-fn cache_directories() -> Option<(PathBuf, PathBuf)> {
+fn cache_directories() -> Option<(PathBuf, PathBuf, PathBuf)> {
     dirs::cache_dir().map(|dir| {
         let root = dir.join("zcord");
-        (root.join("images"), root.join("videos"))
+        (root.join("images"), root.join("videos"), root.join("frames"))
     })
 }
 
-fn clear_cache_dirs(images: &Path, videos: &Path) -> Result<u64, String> {
+fn clear_cache_dirs(images: &Path, videos: &Path, frames: &Path) -> Result<u64, String> {
     let mut freed = 0u64;
-    for directory in [images, videos] {
+    for directory in [images, videos, frames] {
         let entries = match std::fs::read_dir(directory) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
@@ -642,9 +718,9 @@ pub fn clear_cache(cx: &mut App) -> Task<Result<u64, String>> {
     let directories = cache_directories();
     cx.spawn(async move |cx| {
         let result = match directories {
-            Some((images, videos)) => {
+            Some((images, videos, frames)) => {
                 cx.background_executor()
-                    .spawn(async move { clear_cache_dirs(&images, &videos) })
+                    .spawn(async move { clear_cache_dirs(&images, &videos, &frames) })
                     .await
             }
             None => Ok(0),
@@ -792,12 +868,12 @@ fn cache_directory<'a>(images: &'a Path, videos: &'a Path, spec: &ImageSpec) -> 
     }
 }
 
-fn touch_due(modified: SystemTime, now: SystemTime) -> bool {
+pub(crate) fn touch_due(modified: SystemTime, now: SystemTime) -> bool {
     now.duration_since(modified)
         .is_ok_and(|age| age >= TOUCH_INTERVAL)
 }
 
-fn touch_modified(path: &Path) -> std::io::Result<()> {
+pub(crate) fn touch_modified(path: &Path) -> std::io::Result<()> {
     std::fs::File::options()
         .write(true)
         .open(path)?
@@ -811,15 +887,19 @@ impl Service {
             .get_or_init(|| async {
                 let directory = self.directory.clone();
                 let video_directory = self.video_directory.clone();
+                let frames_directory = self.frames_directory.clone();
                 let success = tokio::task::spawn_blocking(move || {
                     std::fs::create_dir_all(&directory)?;
                     std::fs::create_dir_all(&video_directory)?;
-                    // Run both even if the first fails, so neither directory
-                    // can grow unbounded because the other one errored.
+                    std::fs::create_dir_all(&frames_directory)?;
+                    // Run all of them even if one fails, so no directory can grow
+                    // unbounded because another one errored.
                     let images = prune(&directory, MAX_CACHE);
                     let videos = prune(&video_directory, MAX_VIDEO_CACHE);
+                    let frames = prune(&frames_directory, MAX_FRAMES_CACHE);
                     images?;
-                    videos
+                    videos?;
+                    frames
                 })
                 .await
                 .is_ok_and(|result| result.is_ok());
@@ -829,6 +909,10 @@ impl Service {
                 success
             })
             .await
+    }
+
+    pub(crate) fn frames_path(&self, spec: &ImageSpec, size: u32) -> PathBuf {
+        self.frames_directory.join(file_name(spec, size))
     }
 
     pub(crate) async fn load(&self, spec: &ImageSpec, size: u32) -> Option<PathBuf> {
@@ -884,6 +968,14 @@ impl Service {
         if !download_bytes(spec, &bytes) {
             return None;
         }
+        let bytes = if still_spec(spec) {
+            let target = rounded_size(size);
+            tokio::task::spawn_blocking(move || first_frame_png(&bytes, target).unwrap_or(bytes))
+                .await
+                .ok()?
+        } else {
+            bytes
+        };
         atomic_write(&path, &bytes).await.ok()?;
         self.record_write(spec, bytes.len() as u64);
         Some(path)
@@ -895,6 +987,19 @@ impl Service {
         } else {
             (&self.image_written, &self.directory, MAX_CACHE)
         };
+        self.record(counter, directory, limit, bytes);
+    }
+
+    pub(crate) fn record_frames_write(&self, bytes: u64) {
+        self.record(
+            &self.frames_written,
+            &self.frames_directory,
+            MAX_FRAMES_CACHE,
+            bytes,
+        );
+    }
+
+    fn record(&self, counter: &AtomicU64, directory: &Path, limit: u64, bytes: u64) {
         let total = counter
             .fetch_add(bytes, Ordering::Relaxed)
             .saturating_add(bytes);
@@ -902,7 +1007,7 @@ impl Service {
             return;
         }
         counter.store(0, Ordering::Relaxed);
-        let directory = directory.clone();
+        let directory = directory.to_path_buf();
         let pruning = self.pruning.clone();
         let _ = tokio::task::spawn_blocking(move || {
             if let Err(error) = prune(&directory, limit) {
@@ -1066,11 +1171,13 @@ mod tests {
             client: reqwest::Client::new(),
             directory: root.join("images"),
             video_directory: videos,
+            frames_directory: root.join("frames"),
             permits: tokio::sync::Semaphore::new(6),
             video_permits: tokio::sync::Semaphore::new(2),
             initialized: tokio::sync::OnceCell::new(),
             image_written: AtomicU64::new(0),
             video_written: AtomicU64::new(0),
+            frames_written: AtomicU64::new(0),
             pruning: Arc::new(AtomicBool::new(false)),
         };
         let loaded = service.load(&video, 64).await.unwrap();
@@ -1896,6 +2003,103 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn still_conversion_keeps_one_downscaled_frame() {
+        let gif = {
+            let mut bytes = Vec::new();
+            {
+                let mut encoder = image::codecs::gif::GifEncoder::new(&mut bytes);
+                for color in [[255, 0, 0, 255], [0, 0, 255, 255]] {
+                    encoder
+                        .encode_frame(image::Frame::new(image::RgbaImage::from_pixel(
+                            100,
+                            50,
+                            image::Rgba(color),
+                        )))
+                        .unwrap();
+                }
+            }
+            bytes
+        };
+        let png = first_frame_png(&gif, 40).unwrap();
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+        let decoder = image::codecs::png::PngDecoder::new(Cursor::new(&png)).unwrap();
+        assert!(!decoder.is_apng().unwrap());
+        let decoded = image::load_from_memory(&png).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (40, 20));
+    }
+
+    #[test]
+    fn still_conversion_leaves_a_single_frame_png_alone() {
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(&[255, 0, 0, 255], 1, 1, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        assert!(first_frame_png(&png, 8).is_none());
+    }
+
+    #[test]
+    fn animated_specs_are_not_converted() {
+        let still = ImageSpec::Media {
+            url: "https://media.tenor.com/a.gif".into(),
+            width: 100,
+            height: 100,
+            animated: false,
+        };
+        assert!(still_spec(&still));
+        assert!(file_name(&still, 64).contains("-still-"));
+
+        let animated_media = ImageSpec::Media {
+            url: "https://media.tenor.com/a.gif".into(),
+            width: 100,
+            height: 100,
+            animated: true,
+        };
+        assert!(!still_spec(&animated_media));
+        assert!(!file_name(&animated_media, 64).contains("-still-"));
+
+        for spec in [
+            ImageSpec::Emoji {
+                id: 1,
+                animated: true,
+            },
+            ImageSpec::Sticker { id: 1, format: 2 },
+            ImageSpec::Animated {
+                still: Box::new(still.clone()),
+            },
+            ImageSpec::Video {
+                url: "https://cdn.discordapp.com/a.mp4".into(),
+                width: 1,
+                height: 1,
+            },
+            ImageSpec::Collectible {
+                url: "https://cdn.discordapp.com/a.png".into(),
+            },
+            ImageSpec::Attachment {
+                id: 1,
+                url: "https://cdn.discordapp.com/a.gif".into(),
+                width: 1,
+                height: 1,
+            },
+            ImageSpec::AvatarDecoration {
+                asset: "a_decoration".into(),
+                animated: true,
+            },
+            ImageSpec::Nameplate {
+                asset: "nameplates/a/".into(),
+                animated: true,
+            },
+            ImageSpec::AppImage {
+                application_id: 1,
+                hash: "asset".into(),
+                uploaded: false,
+                animated: true,
+            },
+        ] {
+            assert!(!still_spec(&spec), "{spec:?}");
+        }
     }
 
     #[tokio::test]

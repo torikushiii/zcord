@@ -20,10 +20,34 @@ pub fn resolve(spec: &ImageSpec, size: u32, cx: &App) -> Option<Arc<RenderImage>
 #[cfg(any(windows, test))]
 mod animation {
     use image::Delay;
-    use std::time::Duration;
+    use std::{
+        sync::Mutex,
+        time::{Duration, Instant},
+    };
 
-    pub const MAX_CLIP: usize = 64 * 1024 * 1024;
+    pub const MAX_CLIP: usize = 32 * 1024 * 1024;
     pub const MAX_FRAMES: usize = 300;
+    pub const MIN_FPS: u32 = 10;
+    pub const MAX_FPS: u32 = 15;
+    pub const STALE_AFTER: Duration = Duration::from_secs(2);
+    pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
+
+    pub fn wanted(last: Instant, now: Instant) -> bool {
+        now.saturating_duration_since(last) <= STALE_AFTER
+    }
+
+    pub fn still_wanted(stamp: &Mutex<Instant>) -> bool {
+        wanted(
+            *stamp
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            Instant::now(),
+        )
+    }
+
+    pub fn heartbeat_needed(running: usize, queued: bool) -> bool {
+        running > 0 || queued
+    }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct CropRect {
@@ -93,6 +117,61 @@ mod animation {
             .collect()
     }
 
+    pub fn frame_skip_stride(
+        frames: usize,
+        frame_bytes: usize,
+        rate: Option<(u32, u32)>,
+    ) -> Option<usize> {
+        let total = frames.max(1).saturating_mul(frame_bytes.max(1));
+        let for_size = total.div_ceil(MAX_CLIP).max(1);
+        let Some((numerator, denominator)) = rate else {
+            return (for_size == 1).then_some(1);
+        };
+        if numerator == 0 || denominator == 0 {
+            return (for_size == 1).then_some(1);
+        }
+        let numerator = u64::from(numerator);
+        let denominator = u64::from(denominator);
+        let for_rate = numerator
+            .div_ceil(denominator * u64::from(MAX_FPS))
+            .max(1) as usize;
+        let max_stride = (numerator / denominator / u64::from(MIN_FPS)).max(1) as usize;
+        (for_size <= max_stride).then_some(for_size.max(for_rate))
+    }
+
+    pub fn skipped_delays(samples: &[(i64, Option<i64>)], stride: usize) -> Vec<Delay> {
+        let stride = stride.max(1);
+        let (sum, count) = samples
+            .windows(2)
+            .fold((0u128, 0u128), |(sum, count), pair| {
+                match pair[1].0.checked_sub(pair[0].0).filter(|delta| *delta > 0) {
+                    Some(delta) => (sum + delta as u128, count + 1),
+                    None => (sum, count),
+                }
+            });
+        let average = sum.checked_div(count).unwrap_or(1_000_000) as i64;
+        let mut out = Vec::new();
+        let mut index = 0;
+        while index < samples.len() {
+            let next = (index + stride).min(samples.len());
+            let end = if next < samples.len() {
+                samples[next].0
+            } else {
+                let (timestamp, duration) = samples[next - 1];
+                timestamp.saturating_add(
+                    duration
+                        .filter(|duration| *duration > 0)
+                        .unwrap_or(average),
+                )
+            };
+            let ticks = end.saturating_sub(samples[index].0).max(200_000);
+            let nanos = (ticks as u128 * 100).min(u128::from(u64::MAX)) as u64;
+            out.push(Delay::from_saturating_duration(Duration::from_nanos(nanos)));
+            index = next;
+        }
+        out
+    }
+
     pub fn estimated_frames(duration: Option<u64>, rate: Option<(u32, u32)>) -> usize {
         match (duration, rate) {
             (Some(duration), Some((numerator, denominator)))
@@ -132,12 +211,27 @@ mod animation {
         }
         Some(dimensions(low))
     }
+
+    pub fn output_target(
+        width: u32,
+        height: u32,
+        size: u32,
+        frames: usize,
+        rate: Option<(u32, u32)>,
+    ) -> Option<((u32, u32), usize)> {
+        let target = output_size(width, height, size, 1)?;
+        let frame_bytes = target.0 as usize * target.1 as usize * 4;
+        match frame_skip_stride(frames, frame_bytes, rate) {
+            Some(stride) => Some((target, stride)),
+            None => Some((output_size(width, height, size, frames)?, 1)),
+        }
+    }
 }
 
 #[cfg(windows)]
 mod platform {
     use super::{animation::*, *};
-    use crate::media::images;
+    use crate::media::{frames, images};
     use anyhow::{Context, Result, ensure};
     use gpui::Global;
     use gpui_tokio::Tokio;
@@ -151,7 +245,8 @@ mod platform {
         os::windows::ffi::OsStrExt,
         path::Path,
         rc::Rc,
-        time::Duration,
+        sync::Mutex,
+        time::{Duration, Instant},
     };
     use windows::{
         Win32::{
@@ -165,14 +260,20 @@ mod platform {
     };
 
     const MAX_TOTAL: usize = 256 * 1024 * 1024;
+    const VISIBLE_GRACE: Duration = Duration::from_secs(5);
+    const DECODES: usize = 2;
     type Key = (ImageSpec, u32);
 
     enum Entry {
-        Pending,
+        Pending {
+            requested: Instant,
+            wanted: Arc<Mutex<Instant>>,
+        },
         Ready {
             image: Arc<RenderImage>,
             bytes: usize,
             used: u64,
+            seen: Instant,
         },
         Failed,
     }
@@ -183,8 +284,20 @@ mod platform {
         queue: VecDeque<Key>,
         bytes: usize,
         clock: u64,
-        running: bool,
+        running: usize,
         refresh_pending: bool,
+        heartbeat_running: bool,
+    }
+
+    impl Cache {
+        fn needs_heartbeat(&self) -> bool {
+            heartbeat_needed(self.running, !self.queue.is_empty())
+        }
+    }
+
+    enum DecodeOutcome {
+        Decoded(Arc<RenderImage>, usize),
+        Cancelled,
     }
 
     struct VideoCache(Rc<RefCell<Cache>>);
@@ -200,105 +313,268 @@ mod platform {
         }
         let cache = cx.try_global::<VideoCache>()?.0.clone();
         let key = (spec.clone(), images::rounded_size(size));
+        let now = Instant::now();
         {
             let mut state = cache.borrow_mut();
             state.clock = state.clock.saturating_add(1);
             let used = state.clock;
-            if let Some(entry) = state.entries.get_mut(&key) {
-                match entry {
-                    Entry::Ready {
-                        image, used: stamp, ..
-                    } => {
-                        *stamp = used;
-                        return Some(image.clone());
-                    }
-                    Entry::Failed => return None,
-                    Entry::Pending => {}
+            let pending = match state.entries.get_mut(&key) {
+                Some(Entry::Ready {
+                    image,
+                    used: stamp,
+                    seen,
+                    ..
+                }) => {
+                    *stamp = used;
+                    *seen = Instant::now();
+                    return Some(image.clone());
+                }
+                Some(Entry::Failed) => return None,
+                Some(Entry::Pending { requested, wanted }) => {
+                    *requested = now;
+                    *wanted.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = now;
+                    true
+                }
+                None => false,
+            };
+            if pending {
+                if let Some(position) = state.queue.iter().position(|queued| queued == &key) {
+                    state.queue.remove(position);
+                    state.queue.push_front(key);
                 }
             } else {
-                state.entries.insert(key.clone(), Entry::Pending);
-                state.queue.push_back(key);
+                state.entries.insert(
+                    key.clone(),
+                    Entry::Pending {
+                        requested: now,
+                        wanted: Arc::new(Mutex::new(now)),
+                    },
+                );
+                state.queue.push_front(key);
             }
         }
         start_next(cache, cx);
         None
     }
 
-    fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
-        let key = {
+    fn schedule_refresh(cache: Rc<RefCell<Cache>>, cx: &App) {
+        {
             let mut state = cache.borrow_mut();
-            if state.running {
+            if state.refresh_pending {
                 return;
             }
-            let Some(key) = state.queue.front().cloned() else {
+            state.refresh_pending = true;
+        }
+        cx.spawn(async move |cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(16))
+                .await;
+            cache.borrow_mut().refresh_pending = false;
+            cx.update(|cx| cx.refresh_windows());
+        })
+        .detach();
+    }
+
+    fn start_heartbeat(cache: Rc<RefCell<Cache>>, cx: &App) {
+        {
+            let mut state = cache.borrow_mut();
+            if state.heartbeat_running || !state.needs_heartbeat() {
                 return;
-            };
-            while state.bytes > MAX_TOTAL - MAX_CLIP {
-                let oldest = state
-                    .entries
-                    .iter()
-                    .filter_map(|(key, entry)| match entry {
-                        Entry::Ready { image, used, .. } if Arc::strong_count(image) == 1 => {
-                            Some((key.clone(), *used))
+            }
+            state.heartbeat_running = true;
+        }
+        cx.spawn(async move |cx| {
+            loop {
+                cx.background_executor()
+                    .timer(HEARTBEAT_INTERVAL)
+                    .await;
+                let busy = {
+                    let mut state = cache.borrow_mut();
+                    if state.needs_heartbeat() {
+                        true
+                    } else {
+                        state.heartbeat_running = false;
+                        false
+                    }
+                };
+                if !busy {
+                    break;
+                }
+                cx.update(|cx| cx.refresh_windows());
+            }
+        })
+        .detach();
+    }
+
+    fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
+        start_heartbeat(cache.clone(), cx);
+        let (job, evicted, dropped) = {
+            let mut state = cache.borrow_mut();
+            let mut dropped = 0;
+            loop {
+                let Some(key) = state.queue.front().cloned() else {
+                    break;
+                };
+                let stale = match state.entries.get(&key) {
+                    Some(Entry::Pending { requested, .. }) => {
+                        requested.elapsed() > STALE_AFTER
+                    }
+                    _ => true,
+                };
+                if !stale {
+                    break;
+                }
+                state.queue.pop_front();
+                if matches!(
+                    state.entries.get(&key),
+                    Some(Entry::Pending { .. })
+                ) {
+                    state.entries.remove(&key);
+                }
+                dropped += 1;
+            }
+            if state.running >= DECODES {
+                (None, Vec::new(), dropped)
+            } else {
+                match state.queue.front().cloned() {
+                    None => (None, Vec::new(), dropped),
+                    Some(key) => {
+                        let mut evicted = Vec::new();
+                        let mut blocked = false;
+                        while state.bytes > MAX_TOTAL - MAX_CLIP {
+                            let oldest = state
+                                .entries
+                                .iter()
+                                .filter_map(|(key, entry)| match entry {
+                                    Entry::Ready { image, used, seen, .. }
+                                        if Arc::strong_count(image) == 1
+                                            && seen.elapsed() >= VISIBLE_GRACE =>
+                                    {
+                                        Some((key.clone(), *used))
+                                    }
+                                    _ => None,
+                                })
+                                .min_by_key(|(_, used)| *used);
+                            let Some((oldest, _)) = oldest else {
+                                blocked = true;
+                                break;
+                            };
+                            if let Some(Entry::Ready { image, bytes, .. }) =
+                                state.entries.remove(&oldest)
+                            {
+                                state.bytes -= bytes;
+                                evicted.push(image);
+                            }
                         }
-                        _ => None,
-                    })
-                    .min_by_key(|(_, used)| *used);
-                let Some((oldest, _)) = oldest else { return };
-                if let Some(Entry::Ready { bytes, .. }) = state.entries.remove(&oldest) {
-                    state.bytes -= bytes;
+                        if blocked {
+                            (None, evicted, dropped)
+                        } else {
+                            let stamp = match state.entries.get(&key) {
+                                Some(Entry::Pending { wanted, .. }) => Some(wanted.clone()),
+                                _ => None,
+                            };
+                            if let Some(stamp) = stamp {
+                                state.queue.pop_front();
+                                state.running += 1;
+                                (Some((key, stamp)), evicted, dropped)
+                            } else {
+                                (None, evicted, dropped)
+                            }
+                        }
+                    }
                 }
             }
-            state.queue.pop_front();
-            state.running = true;
-            key
+        };
+        crate::media::animated::drop_images(evicted, cx);
+        if dropped > 0 {
+            schedule_refresh(cache.clone(), cx);
+        }
+        let Some((key, stamp)) = job else {
+            return;
         };
         let service = images::download_service(cx);
         let request = key.clone();
-        let task = Tokio::spawn(cx, async move {
+        let job_stamp = stamp.clone();
+        let task = Tokio::spawn_result(cx, async move {
             let service = service.context("download service unavailable")?;
+            if !still_wanted(&job_stamp) {
+                return Ok(DecodeOutcome::Cancelled);
+            }
+            let frames_path = service.frames_path(&request.0, request.1);
+            if let Some((image, bytes)) = frames::load(&frames_path).await {
+                if !still_wanted(&job_stamp) {
+                    return Ok(DecodeOutcome::Cancelled);
+                }
+                return Ok(DecodeOutcome::Decoded(image, bytes));
+            }
             let path = service
                 .load(&request.0, request.1)
                 .await
                 .context("video download failed")?;
-            tokio::task::spawn_blocking(move || decode(&path, request.1))
-                .await
-                .context("decode worker failed")?
+            if !still_wanted(&job_stamp) {
+                return Ok(DecodeOutcome::Cancelled);
+            }
+            let outcome = tokio::task::spawn_blocking(move || {
+                let outcome = decode(&path, request.1, &job_stamp)?;
+                if let DecodeOutcome::Decoded(image, _) = &outcome {
+                    match frames::save(&frames_path, image) {
+                        Ok(written) => service.record_frames_write(written),
+                        Err(error) => log::debug!(
+                            "Could not cache video frames at {}: {error}",
+                            frames_path.display()
+                        ),
+                    }
+                }
+                Ok::<_, anyhow::Error>(outcome)
+            })
+            .await
+            .context("decode worker failed")??;
+            Ok(outcome)
         });
         cx.spawn(async move |cx| {
             let result = task.await;
             let refresh = {
                 let mut state = cache.borrow_mut();
-                state.running = false;
-                let success = matches!(result, Ok(Ok(_)));
-                let entry = match result {
-                    Ok(Ok((image, bytes))) => {
+                state.running -= 1;
+                match result {
+                    Ok(DecodeOutcome::Decoded(image, bytes)) => {
                         state.bytes += bytes;
                         state.clock = state.clock.saturating_add(1);
-                        Entry::Ready {
-                            image,
-                            bytes,
-                            used: state.clock,
+                        let used = state.clock;
+                        state.entries.insert(
+                            key,
+                            Entry::Ready {
+                                image,
+                                bytes,
+                                used,
+                                seen: Instant::now(),
+                            },
+                        );
+                        true
+                    }
+                    Ok(DecodeOutcome::Cancelled) => {
+                        let owned = matches!(
+                            state.entries.get(&key),
+                            Some(Entry::Pending { wanted, .. }) if Arc::ptr_eq(wanted, &stamp)
+                        );
+                        if owned {
+                            state.entries.remove(&key);
                         }
+                        owned
                     }
                     _ => {
                         log::warn!("Video download or decode failed (size {})", key.1);
-                        Entry::Failed
+                        state.entries.insert(key, Entry::Failed);
+                        false
                     }
-                };
-                state.entries.insert(key, entry);
-                let refresh = success && !state.refresh_pending;
-                state.refresh_pending |= refresh;
-                refresh
+                }
             };
-            cx.update(|cx| start_next(cache.clone(), cx));
-            if refresh {
-                cx.background_executor()
-                    .timer(Duration::from_millis(16))
-                    .await;
-                cache.borrow_mut().refresh_pending = false;
-                cx.update(|cx| cx.refresh_windows());
-            }
+            cx.update(|cx| {
+                start_next(cache.clone(), cx);
+                if refresh {
+                    schedule_refresh(cache.clone(), cx);
+                }
+            });
         })
         .detach();
     }
@@ -317,7 +593,15 @@ mod platform {
         }
     }
 
-    fn decode(path: &Path, size: u32) -> Result<(Arc<RenderImage>, usize)> {
+    fn decode(path: &Path, size: u32, stamp: &Mutex<Instant>) -> Result<DecodeOutcome> {
+        if !still_wanted(stamp) {
+            return Ok(DecodeOutcome::Cancelled);
+        }
+        decode_frames(path, size)
+            .map(|(image, bytes)| DecodeOutcome::Decoded(image, bytes))
+    }
+
+    fn decode_frames(path: &Path, size: u32) -> Result<(Arc<RenderImage>, usize)> {
         unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok()? };
         let _com = Com;
         unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL)? };
@@ -365,17 +649,20 @@ mod platform {
             reader.SetCurrentMediaType(stream, None, &output)?;
         }
         let mut layout = current_layout(&reader, stream)?;
-        let mut target = output_size(
+        let estimated = estimated_frames(duration, rate);
+        let (mut target, mut stride) = output_target(
             layout.crop.width,
             layout.crop.height,
             size,
-            estimated_frames(duration, rate),
+            estimated,
+            rate,
         )
         .context("invalid output dimensions")?;
         let mut frame_bytes = target.0 as usize * target.1 as usize * 4;
         let mut frame_limit = MAX_FRAMES.min(MAX_CLIP / frame_bytes);
         let mut pixels = Vec::new();
         let mut timing = Vec::new();
+        let mut source_index = 0usize;
         for _ in 0..MAX_FRAMES * 20 {
             let mut flags = 0;
             let mut timestamp = 0;
@@ -401,11 +688,12 @@ mod platform {
             {
                 layout = current_layout(&reader, stream)?;
                 if pixels.is_empty() {
-                    target = output_size(
+                    (target, stride) = output_target(
                         layout.crop.width,
                         layout.crop.height,
                         size,
-                        estimated_frames(duration, rate),
+                        estimated,
+                        rate,
                     )
                     .context("invalid output dimensions")?;
                     frame_bytes = target.0 as usize * target.1 as usize * 4;
@@ -414,16 +702,19 @@ mod platform {
             }
             if let Some(sample) = sample {
                 let duration = unsafe { sample.GetSampleDuration() }.ok();
-                let buffer = unsafe { sample.ConvertToContiguousBuffer()? };
-                let mut image = copy_frame(&buffer, &layout)?;
-                if target != (layout.crop.width, layout.crop.height) {
-                    image = resize(&image, target.0, target.1, FilterType::Triangle);
+                if source_index % stride == 0 {
+                    let buffer = unsafe { sample.ConvertToContiguousBuffer()? };
+                    let mut image = copy_frame(&buffer, &layout)?;
+                    if target != (layout.crop.width, layout.crop.height) {
+                        image = resize(&image, target.0, target.1, FilterType::Triangle);
+                    }
+                    for pixel in image.pixels_mut() {
+                        pixel.0[3] = 255;
+                    }
+                    pixels.push(image);
                 }
-                for pixel in image.pixels_mut() {
-                    pixel.0[3] = 255;
-                }
-                pixels.push(image);
                 timing.push((timestamp, duration));
+                source_index += 1;
             }
             if pixels.len() >= frame_limit || flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
                 break;
@@ -431,9 +722,18 @@ mod platform {
         }
         ensure!(!pixels.is_empty(), "video has no frames");
         let bytes = pixels.len() * frame_bytes;
+        let frame_delays = if stride > 1 {
+            skipped_delays(&timing, stride)
+        } else {
+            delays(&timing)
+        };
+        ensure!(
+            frame_delays.len() == pixels.len(),
+            "video frame timing mismatch"
+        );
         let frames: Vec<Frame> = pixels
             .into_iter()
-            .zip(delays(&timing))
+            .zip(frame_delays)
             .map(|(image, delay)| Frame::from_parts(image, 0, 0, delay))
             .collect();
         Ok((Arc::new(RenderImage::new(frames)), bytes))
@@ -575,6 +875,10 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::animation::*;
+    use std::{
+        sync::Mutex,
+        time::{Duration, Instant},
+    };
 
     #[test]
     fn display_aperture_is_clamped_to_the_surface() {
@@ -676,6 +980,71 @@ mod tests {
     }
 
     #[test]
+    fn frame_skipping_respects_budget_and_fps_caps() {
+        let frame = 1024 * 1024;
+        assert_eq!(frame_skip_stride(32, frame, Some((30, 1))), Some(2));
+        assert_eq!(frame_skip_stride(32, frame, Some((60, 1))), Some(4));
+        assert_eq!(frame_skip_stride(32, frame, Some((24, 1))), Some(2));
+        assert_eq!(frame_skip_stride(32, frame, Some((16, 1))), Some(2));
+        assert_eq!(frame_skip_stride(32, frame, Some((15, 1))), Some(1));
+        assert_eq!(frame_skip_stride(32, frame, None), Some(1));
+        assert_eq!(frame_skip_stride(64, frame, Some((30, 1))), Some(2));
+        assert_eq!(frame_skip_stride(128, frame, Some((30, 1))), None);
+        assert_eq!(frame_skip_stride(128, frame, Some((60, 1))), Some(4));
+        assert_eq!(
+            output_target(100, 100, 100, 32, Some((30, 1))),
+            Some(((100, 100), 2))
+        );
+    }
+
+    #[test]
+    fn video_jobs_are_wanted_only_within_the_stale_window() {
+        let now = Instant::now();
+        assert!(wanted(now, now));
+        assert!(wanted(now - STALE_AFTER + Duration::from_millis(1), now));
+        assert!(wanted(now - STALE_AFTER, now));
+        assert!(!wanted(
+            now - STALE_AFTER - Duration::from_millis(1),
+            now
+        ));
+        let stamp = Mutex::new(now - STALE_AFTER - Duration::from_millis(1));
+        assert!(!still_wanted(&stamp));
+        *stamp.lock().unwrap() = Instant::now();
+        assert!(still_wanted(&stamp));
+    }
+
+    #[test]
+    fn heartbeat_is_needed_while_running_or_queued() {
+        assert!(!heartbeat_needed(0, false));
+        assert!(heartbeat_needed(1, false));
+        assert!(heartbeat_needed(0, true));
+        assert!(heartbeat_needed(2, true));
+        assert!(HEARTBEAT_INTERVAL < STALE_AFTER);
+    }
+
+    #[test]
+    fn frame_skipping_merges_delays_and_preserves_duration() {
+        let samples = [
+            (0, Some(400_000)),
+            (400_000, Some(400_000)),
+            (800_000, Some(400_000)),
+            (1_200_000, Some(400_000)),
+            (1_600_000, Some(400_000)),
+        ];
+        let kept = skipped_delays(&samples, 2);
+        let ms: Vec<f64> = kept
+            .iter()
+            .map(|delay| {
+                let (numerator, denominator) = delay.numer_denom_ms();
+                f64::from(numerator) / f64::from(denominator)
+            })
+            .collect();
+        assert_eq!(kept.len(), 3);
+        assert_eq!(ms, [80.0, 80.0, 40.0]);
+        assert_eq!(ms.iter().sum::<f64>(), 200.0);
+    }
+
+    #[test]
     fn output_scaling_obeys_size_and_pixel_budget() {
         assert_eq!(output_size(400, 200, 128, 10), Some((128, 64)));
         assert_eq!(output_size(200, 400, 128, 10), Some((64, 128)));
@@ -683,8 +1052,8 @@ mod tests {
         assert_eq!(output_size(0, 200, 128, 10), None);
         assert_eq!(output_size(200, 0, 128, 10), None);
         assert_eq!(output_size(200, 100, 0, 10), None);
-        assert_eq!(output_size(4096, 4096, 4096, 1), Some((4096, 4096)));
-        assert_eq!(output_size(4096, 4096, 4096, MAX_FRAMES), Some((236, 236)));
+        assert_eq!(output_size(4096, 4096, 4096, 1), Some((2896, 2896)));
+        assert_eq!(output_size(4096, 4096, 4096, MAX_FRAMES), Some((167, 167)));
         for (width, height) in [
             (4096, 4096),
             (1920, 1080),

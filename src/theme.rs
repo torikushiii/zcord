@@ -1,5 +1,6 @@
 use gpui::{prelude::*, *};
 use gpui_component::Theme;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::{
     media::animated,
@@ -70,8 +71,17 @@ pub fn icon(name: &str, size: f32, color: u32) -> Svg {
         .text_color(rgb(color))
 }
 
+/// Device pixels per CSS pixel (display scale × zoom), as `f32` bits. Starts at 2 so images
+/// requested before the first root render are sharp on HiDPI screens.
+static IMAGE_SCALE: AtomicU32 = AtomicU32::new(0x4000_0000);
+
+pub fn set_image_scale(window: &Window, cx: &App) {
+    let scale = window.scale_factor() * ZOOM_LEVELS[zoom_index(cx)];
+    IMAGE_SCALE.store(scale.to_bits(), Ordering::Relaxed);
+}
+
 pub fn image_px(css: f32) -> u32 {
-    (css * 2.).ceil() as u32
+    (css * f32::from_bits(IMAGE_SCALE.load(Ordering::Relaxed))).ceil() as u32
 }
 
 pub fn user_avatar(
