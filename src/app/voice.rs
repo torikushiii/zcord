@@ -566,11 +566,18 @@ fn remember_channel(channel: Option<SavedChannel>, cx: &mut App) {
 pub(crate) fn member_row(
     app: &DiscordApp,
     guild_id: u64,
+    channel_id: u64,
     member: &VoiceMember,
     cx: &App,
 ) -> impl IntoElement + use<> {
     let user_id = member.user_id;
-    let speaking = app.voice.speaking.contains(&user_id);
+    let connected_elsewhere = user_id == app.store.current_user_id
+        && app
+            .voice
+            .call
+            .as_ref()
+            .is_none_or(|call| call.guild_id != guild_id || call.channel_id != channel_id);
+    let speaking = !connected_elsewhere && app.voice.speaking.contains(&user_id);
     let name = app
         .store
         .member_name(guild_id, user_id)
@@ -591,6 +598,7 @@ pub(crate) fn member_row(
         .h(rpx(MEMBER_HEIGHT))
         .px_2()
         .rounded(rpx(6.))
+        .when(connected_elsewhere, |this| this.opacity(0.5))
         .cursor_pointer()
         .hover(|style| style.bg(rgba(theme::HOVER)))
         .child(
