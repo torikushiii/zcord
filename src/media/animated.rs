@@ -645,7 +645,9 @@ impl Cache {
             } = entry
             {
                 *requested = now;
-                *wanted.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = now;
+                *wanted
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = now;
                 promote = *queued;
             }
         }
@@ -703,9 +705,7 @@ impl Cache {
             }
             self.queue.remove(index);
             let pending = matches!(
-                self.entries
-                    .get(&key.0)
-                    .and_then(|sizes| sizes.get(&key.1)),
+                self.entries.get(&key.0).and_then(|sizes| sizes.get(&key.1)),
                 Some(Entry::Pending { .. })
             );
             if pending {
@@ -840,9 +840,7 @@ fn start_heartbeat(cache: Rc<RefCell<Cache>>, cx: &App) {
     }
     cx.spawn(async move |cx| {
         loop {
-            cx.background_executor()
-                .timer(HEARTBEAT_INTERVAL)
-                .await;
+            cx.background_executor().timer(HEARTBEAT_INTERVAL).await;
             let busy = {
                 let mut state = cache.borrow_mut();
                 if state.needs_heartbeat() {
@@ -1444,6 +1442,8 @@ mod tests {
         let (image, bytes) = decode(DISPOSAL_OFFSET_WEBP, 16).unwrap();
         assert_eq!(image.frame_count(), 2);
         assert_eq!(bytes, 4 * 2 * 4 * 2);
+        assert_eq!(image.delay(0).numer_denom_ms(), (50, 1));
+        assert_eq!(image.delay(1).numer_denom_ms(), (50, 1));
 
         // Opaque red becomes BGRA after process_frame.
         assert_eq!(&image.as_bytes(0).unwrap()[..4], &[0, 0, 255, 255]);
@@ -1861,7 +1861,13 @@ mod tests {
         assert_eq!(cache.running[Lane::Gif as usize], DOWNLOADS);
         assert!(next(&mut cache).is_none());
 
-        let emoji = (ImageSpec::Emoji { id: 1, animated: true }, 32);
+        let emoji = (
+            ImageSpec::Emoji {
+                id: 1,
+                animated: true,
+            },
+            32,
+        );
         cache.request(&emoji.0, emoji.1, now);
         // A fresh GIF request is ahead in the queue; its full lane must not block the emoji.
         cache.request(&ImageSpec::DefaultAvatar { index: 100 }, 16, now);
@@ -1875,7 +1881,13 @@ mod tests {
         let mut cache = Cache::default();
         assert!(!cache.needs_heartbeat());
 
-        let key = (ImageSpec::Emoji { id: 2, animated: true }, 32);
+        let key = (
+            ImageSpec::Emoji {
+                id: 2,
+                animated: true,
+            },
+            32,
+        );
         cache.request(&key.0, key.1, Instant::now());
         assert!(cache.needs_heartbeat());
         assert_eq!(next(&mut cache), Some(key));
