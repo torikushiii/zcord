@@ -90,7 +90,7 @@ pub fn render(app: &DiscordApp) -> impl IntoElement + use<> {
         .h_full()
         .flex_none()
         .border_l_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .child(
             list(app.member_rows.clone(), move |index, _, cx| {
                 let Some(app) = entity.upgrade() else {
@@ -160,14 +160,14 @@ fn placeholder_row() -> AnyElement {
                 .size(rpx(32.))
                 .flex_none()
                 .rounded_full()
-                .bg(rgb(theme::SELECTED)),
+                .bg(rgba(theme::SELECTED)),
         )
         .child(
             div()
                 .h(rpx(12.))
                 .w(rpx(110.))
                 .rounded(rpx(6.))
-                .bg(rgb(theme::SELECTED)),
+                .bg(rgba(theme::SELECTED)),
         )
         .into_any_element()
 }
@@ -186,7 +186,11 @@ fn member_row(app: &DiscordApp, guild_id: u64, user: &User, cx: &App) -> impl In
         .nameplate(Some(guild_id), user.id)
         .and_then(|nameplate| nameplate_layer(nameplate, user.id, ROW_HEIGHT, hovered, cx));
     let plated = nameplate.is_some();
-    let row_background = if hovered { theme::HOVER } else { theme::BG };
+    let row_background = if hovered {
+        theme::composite(theme::HOVER, theme::BG)
+    } else {
+        theme::BG
+    };
     let dim = rgba(row_background << 8 | NAMEPLATE_DIM);
     let entity = app.entity.clone();
     let id = user.id;
@@ -203,7 +207,7 @@ fn member_row(app: &DiscordApp, guild_id: u64, user: &User, cx: &App) -> impl In
         .overflow_hidden()
         .cursor_pointer()
         .when(!online, |this| this.opacity(0.35))
-        .hover(|style| style.bg(rgb(theme::HOVER)).opacity(1.))
+        .hover(|style| style.bg(rgba(theme::HOVER)).opacity(1.))
         .on_hover(move |hovered, _, cx| {
             entity
                 .update(cx, |app, cx| {

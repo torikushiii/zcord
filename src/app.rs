@@ -867,7 +867,7 @@ impl Render for DiscordApp {
                         .rounded_tl(rpx(8.))
                         .border_t_1()
                         .border_l_1()
-                        .border_color(rgb(theme::BORDER))
+                        .border_color(rgba(theme::BORDER))
                         .child(
                             self.views
                                 .channel_list

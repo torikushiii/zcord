@@ -83,9 +83,9 @@ pub fn render(app: &DiscordApp, forum_id: u64, cx: &App) -> impl IntoElement + u
                     .text_color(rgb(theme::TEXT))
                     .bg(rgb(theme::ELEVATED))
                     .border_1()
-                    .border_color(rgb(theme::BORDER))
+                    .border_color(rgba(theme::BORDER))
                     .cursor_pointer()
-                    .hover(|style| style.bg(rgb(theme::HOVER)))
+                    .hover(|style| style.bg(rgba(theme::HOVER)))
                     .child("Load more posts")
                     .on_click(move |_, _, cx| {
                         entity.update(cx, |app, cx| app.load_more_forum(cx)).ok();
@@ -103,7 +103,7 @@ fn tag_chip(tag: &ForumTag, cx: &App) -> impl IntoElement + use<> {
         .h(rpx(24.))
         .px(rpx(8.))
         .rounded(rpx(12.))
-        .bg(rgb(theme::SELECTED))
+        .bg(rgba(theme::SELECTED))
         .text_size(rpx(12.))
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(theme::TEXT))
@@ -167,9 +167,9 @@ fn post_card(app: &DiscordApp, post: &ForumPost, tags: &[ForumTag], cx: &App) ->
         .rounded(rpx(8.))
         .bg(rgb(theme::ELEVATED))
         .border_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(theme::HOVER)))
+        .hover(|style| style.bg(rgba(theme::HOVER)))
         .without_text_selection()
         .on_click(move |_, window, cx| {
             entity

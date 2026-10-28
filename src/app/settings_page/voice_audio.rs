@@ -299,7 +299,7 @@ pub(super) fn page(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> Vec<A
             .text_color(white())
             .map(|this| {
                 if in_call {
-                    this.bg(rgb(theme::SELECTED)).text_color(rgb(theme::FAINT))
+                    this.bg(rgba(theme::SELECTED)).text_color(rgb(theme::FAINT))
                 } else {
                     this.cursor_pointer()
                         .bg(rgb(theme::BLURPLE))
@@ -472,7 +472,11 @@ fn device_picker(
         .cursor_pointer()
         .bg(rgb(theme::BG))
         .border_1()
-        .border_color(rgb(if open { theme::BLURPLE } else { theme::BORDER }))
+        .border_color(if open {
+            rgb(theme::FOCUS)
+        } else {
+            rgba(theme::BORDER)
+        })
         .on_click(move |_, _, cx| {
             toggle
                 .update(cx, |app, cx| app.toggle_device_list(kind, cx))
@@ -513,7 +517,7 @@ fn device_picker(
             .rounded(rpx(8.))
             .bg(rgb(theme::BG))
             .border_1()
-            .border_color(rgb(theme::BORDER))
+            .border_color(rgba(theme::BORDER))
             .children(names.into_iter().enumerate().map(|(index, name)| {
                 let chosen = name.as_deref() == selected;
                 let entity = app.entity.clone();
@@ -528,7 +532,7 @@ fn device_picker(
                     .px(rpx(8.))
                     .rounded(rpx(6.))
                     .cursor_pointer()
-                    .hover(|style| style.bg(rgb(theme::HOVER)))
+                    .hover(|style| style.bg(rgba(theme::HOVER)))
                     .on_click(move |_, _, cx| {
                         entity
                             .update(cx, |app, cx| app.select_device(kind, name.clone(), cx))
@@ -664,7 +668,7 @@ impl Render for LevelMeter {
             .h(rpx(8.))
             .rounded_full()
             .overflow_hidden()
-            .bg(rgb(theme::SELECTED))
+            .bg(rgba(theme::SELECTED))
             .child(
                 div()
                     .absolute()

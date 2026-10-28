@@ -19,11 +19,11 @@ const MARGIN: f32 = 32.;
 const MAX_WIDTH: f32 = 1400.;
 const MAX_HEIGHT: f32 = 1030.;
 const SIDEBAR_WIDTH: f32 = 252.;
-const SIDEBAR_MUTED: u32 = 0x81828A;
-const SIDEBAR_STRONG: u32 = 0xDCDCDF;
-const SETTINGS_TEXT: u32 = 0xD4D5D8;
+const SIDEBAR_MUTED: u32 = theme::MUTED;
+const SIDEBAR_STRONG: u32 = theme::STRONG;
+const SETTINGS_TEXT: u32 = theme::TEXT;
 /// Discord's settings borders: its muted grey at 20% opacity.
-const EDGE: u32 = 0x97979F33;
+const EDGE: u32 = theme::BORDER_SUBTLE;
 const CONTENT_WIDTH: f32 = 784.;
 /// Voice & Video's measured panel includes 16px padding on each side.
 const VOICE_CONTENT_WIDTH: f32 = 728.;
@@ -330,7 +330,7 @@ pub(crate) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
                     close.update(cx, |app, cx| app.close_settings(cx)).ok();
                 })
             })
-            .bg(hsla(0., 0., 0., if closing { 0. } else { 0.7 }))
+            .bg(rgba(theme::SCRIM).opacity(if closing { 0. } else { 1. }))
             .child(dialog)
             .into_any_element(),
     )
@@ -364,7 +364,7 @@ fn sidebar(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> impl IntoElem
         .p(rpx(8.))
         .rounded(rpx(8.))
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(theme::HOVER)))
+        .hover(|style| style.bg(rgba(theme::HOVER)))
         .on_click(profile::opener(app, user_id, Anchor::TopLeft))
         .child(theme::user_avatar(user, user_id, 48., None, false, cx))
         .child(
@@ -407,7 +407,7 @@ fn sidebar(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> impl IntoElem
         .rounded(rpx(8.))
         .bg(rgba(0x0000001F))
         .border_1()
-        .border_color(rgba(0x97979F3D))
+        .border_color(rgba(theme::BORDER))
         .text_color(rgb(SETTINGS_TEXT))
         .child(
             div()
@@ -510,7 +510,7 @@ fn sidebar(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> impl IntoElem
             .px(rpx(8.))
             .rounded(rpx(8.))
             .cursor_pointer()
-            .hover(|style| style.bg(rgb(theme::HOVER)))
+            .hover(|style| style.bg(rgba(theme::HOVER)))
             .text_size(rpx(16.))
             .line_height(rpx(20.))
             .text_color(rgb(theme::RED))
@@ -602,9 +602,9 @@ fn sidebar_item(app: &DiscordApp, settings: &SettingsPage, info: &'static PageIn
         .text_color(rgb(foreground))
         .map(|this| {
             if selected {
-                this.bg(rgba(0x97979F33))
+                this.bg(rgba(theme::ACTIVE))
             } else {
-                this.hover(|style| style.bg(rgb(theme::HOVER)))
+                this.hover(|style| style.bg(rgba(theme::HOVER)))
             }
         })
         .on_click(move |_, _, cx| {
@@ -621,7 +621,7 @@ fn sidebar_item(app: &DiscordApp, settings: &SettingsPage, info: &'static PageIn
             .ml(rpx(18.))
             .my(rpx(4.))
             .border_l_1()
-            .border_color(rgb(theme::BORDER))
+            .border_color(rgba(theme::BORDER))
             .children(info.sections.iter().enumerate().map(|(index, name)| {
                 let entity = app.entity.clone();
                 div()
@@ -696,7 +696,7 @@ fn content(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> impl IntoElem
         .pl(rpx(16.))
         .pr(rpx(8.))
         .border_b_1()
-        .border_color(rgba(0x97979F29))
+        .border_color(rgba(theme::BORDER_MUTED))
         .child(
             div()
                 .text_size(rpx(16.))
@@ -706,7 +706,7 @@ fn content(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> impl IntoElem
                 .child(info.label),
         )
         .child(
-            theme::icon_button("settings-close", "x", 16., 0x96979E)
+            theme::icon_button("settings-close", "x", 16., theme::MUTED)
                 .size(rpx(32.))
                 .rounded(rpx(8.))
                 .on_click(move |_, _, cx| {

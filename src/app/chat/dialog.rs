@@ -64,7 +64,7 @@ pub(in crate::app) fn delete_dialog(app: &DiscordApp, cx: &App) -> Option<AnyEle
                 backdrop.update(cx, |app, cx| app.cancel_delete(cx)).ok();
             })
             .with_animation((key, message_id), animation.clone(), move |this, delta| {
-                this.bg(hsla(0., 0., 0., 0.7 * progress(delta)))
+                this.bg(rgba(theme::SCRIM).opacity(progress(delta)))
             })
             .child(
                 div()
@@ -78,7 +78,7 @@ pub(in crate::app) fn delete_dialog(app: &DiscordApp, cx: &App) -> Option<AnyEle
                     .rounded(rpx(12.))
                     .bg(rgb(theme::ELEVATED))
                     .border_1()
-                    .border_color(rgb(theme::BORDER))
+                    .border_color(rgba(theme::BORDER))
                     .occlude()
                     .child(
                         theme::icon_button("delete-close", "x", 24., theme::MUTED)
@@ -113,7 +113,7 @@ pub(in crate::app) fn delete_dialog(app: &DiscordApp, cx: &App) -> Option<AnyEle
                             .rounded(rpx(8.))
                             .bg(rgb(theme::BG))
                             .border_1()
-                            .border_color(rgb(theme::BORDER))
+                            .border_color(rgba(theme::BORDER))
                             .child(render_message(app, message, false, true, cx)),
                     )
                     .child(
@@ -138,7 +138,7 @@ pub(in crate::app) fn delete_dialog(app: &DiscordApp, cx: &App) -> Option<AnyEle
                             .child(
                                 dialog_button("delete-cancel", "Cancel", 0x232327, 0x2C2C31)
                                     .border_1()
-                                    .border_color(rgb(theme::BORDER))
+                                    .border_color(rgba(theme::BORDER))
                                     .on_click(move |_, _, cx| {
                                         cancel.update(cx, |app, cx| app.cancel_delete(cx)).ok();
                                     }),

@@ -258,7 +258,7 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
             .h_full()
             .flex_none()
             .border_r_1()
-            .border_color(rgb(theme::BORDER))
+            .border_color(rgba(theme::BORDER))
             .child(home::sidebar(app, cx))
             .child(user_panel(app, cx))
             .into_any_element();
@@ -277,7 +277,7 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
         .h_full()
         .flex_none()
         .border_r_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .when(!banner, |this| {
             this.child(guild_header(app, 1., window, cx))
         })
@@ -436,11 +436,10 @@ fn guild_header(
         window.request_animation_frame();
     }
     let hover: Hsla = if solid {
-        rgb(theme::HOVER).into()
+        rgba(theme::HOVER).into()
     } else {
         rgba(0xFFFFFF14).into()
     };
-    let fade = |color: u32, alpha: f32| Hsla::from(rgb(color)).opacity(alpha);
     div()
         .id(("guild-header", guild.map_or(0, |guild| guild.id)))
         .relative()
@@ -451,9 +450,9 @@ fn guild_header(
         .h(rpx(HEADER_HEIGHT))
         .flex_none()
         .px_2()
-        .bg(fade(theme::BG, solidity))
+        .bg(rgb(theme::BG).opacity(solidity))
         .border_b_1()
-        .border_color(fade(theme::BORDER, solidity))
+        .border_color(rgba(theme::BORDER).opacity(solidity))
         .when(app.channel_rows.banner.is_some(), |this| {
             this.on_hover(banner_hover_listener(app))
         })
@@ -598,7 +597,7 @@ fn row_content(
         Row::Shortcuts => div()
             .child(shortcut_row("events", "calendar", "Events"))
             .child(shortcut_row("boosts", "gem", "Server Boosts"))
-            .child(div().mx_2().my_2().h(rpx(1.)).bg(rgb(theme::BORDER)))
+            .child(div().mx_2().my_2().h(rpx(1.)).bg(rgba(theme::BORDER)))
             .into_any_element(),
         Row::Category(index) => match guild.and_then(|guild| guild.categories.get(index)) {
             Some(category) => div()
@@ -672,7 +671,7 @@ fn shortcut_row(id: &'static str, icon: &str, label: &'static str) -> impl IntoE
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(theme::MUTED))
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(theme::HOVER)).text_color(rgb(theme::TEXT)))
+        .hover(|style| style.bg(rgba(theme::HOVER)).text_color(rgb(theme::TEXT)))
         .child(theme::icon(icon, 20., theme::MUTED))
         .child(label)
 }
@@ -727,7 +726,7 @@ fn channel_row(
                     .min_w(rpx(16.))
                     .px(rpx(4.))
                     .rounded_full()
-                    .bg(rgb(theme::RED))
+                    .bg(rgb(theme::NOTIFICATION))
                     .text_size(rpx(12.))
                     .line_height(rpx(16.))
                     .font_weight(FontWeight::BOLD)
@@ -756,9 +755,9 @@ fn channel_row(
         .when(unread || joined.is_some(), |this| {
             this.font_weight(FontWeight::SEMIBOLD)
         })
-        .when(selected, |this| this.bg(rgb(theme::SELECTED)))
+        .when(selected, |this| this.bg(rgba(theme::SELECTED)))
         .when(!selected, |this| {
-            this.hover(|style| style.bg(rgb(theme::HOVER)).text_color(rgb(theme::TEXT)))
+            this.hover(|style| style.bg(rgba(theme::HOVER)).text_color(rgb(theme::TEXT)))
         })
         .when(unread, |this| {
             this.child(
@@ -1037,7 +1036,7 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         .overflow_hidden()
         .bg(rgb(theme::ELEVATED))
         .border_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .children(voice::panel(app))
         .child(account)
 }

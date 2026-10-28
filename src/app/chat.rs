@@ -44,7 +44,7 @@ const GROUP_MINUTES: u32 = 7;
 const GUTTER: f32 = 72.;
 const BOTTOM_SPACER: f32 = 24.;
 const STICKER_SIZE: f32 = 160.;
-pub(crate) const LINK: u32 = 0x00A8FC;
+pub(crate) const LINK: u32 = theme::LINK;
 const DIALOG_ENTER: Duration = Duration::from_millis(200);
 
 #[cfg(test)]
@@ -66,7 +66,7 @@ pub fn header(app: &DiscordApp) -> impl IntoElement + use<> {
         .rounded(rpx(8.))
         .bg(rgb(theme::ELEVATED))
         .border_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .text_size(rpx(14.))
         .text_color(rgb(theme::FAINT))
         .child(
@@ -86,7 +86,7 @@ pub fn header(app: &DiscordApp) -> impl IntoElement + use<> {
         .flex_none()
         .pl_4()
         .border_b_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .child(theme::icon(header_icon(app), 20., theme::FAINT))
         .children(forum_crumb(app))
         .child(

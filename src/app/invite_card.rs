@@ -47,7 +47,7 @@ fn frame(key: u64) -> Stateful<Div> {
         .max_w_full()
         .rounded(rpx(12.))
         .border_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .bg(rgb(theme::ELEVATED))
 }
 
@@ -146,7 +146,7 @@ fn card(app: &DiscordApp, key: u64, invite: &Invite, cx: &App) -> AnyElement {
             div()
                 .size_full()
                 .rounded(rpx(16.))
-                .bg(rgb(theme::SELECTED))
+                .bg(rgba(theme::SELECTED))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -238,7 +238,7 @@ fn card(app: &DiscordApp, key: u64, invite: &Invite, cx: &App) -> AnyElement {
                         .relative()
                         .h(rpx(BANNER))
                         .rounded_t(rpx(12.))
-                        .bg(rgb(theme::SELECTED))
+                        .bg(rgba(theme::SELECTED))
                         .children(banner),
                 )
                 .child(
@@ -319,7 +319,7 @@ fn card(app: &DiscordApp, key: u64, invite: &Invite, cx: &App) -> AnyElement {
                 .inset_0()
                 .rounded(rpx(12.))
                 .border_1()
-                .border_color(rgb(theme::BORDER)),
+                .border_color(rgba(theme::BORDER)),
         )
         .into_any_element()
 }

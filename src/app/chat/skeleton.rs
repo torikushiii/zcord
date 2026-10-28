@@ -16,13 +16,13 @@ const SKELETON_GROUPS: usize = 14;
 
 pub(super) fn skeleton(seed: u64) -> impl IntoElement {
     let mut shuffle = Shuffle(seed ^ 0x9E37_79B9_7F4A_7C15);
-    let bar = |width: f32, height: f32, color: u32| {
+    let bar = |width: f32, height: f32, color: Rgba| {
         div()
             .flex_none()
             .w(rpx(width))
             .h(rpx(height))
             .rounded(rpx(height / 2.))
-            .bg(rgb(color))
+            .bg(color)
     };
     let groups: Vec<_> = (0..SKELETON_GROUPS)
         .map(|_| {
@@ -30,7 +30,7 @@ pub(super) fn skeleton(seed: u64) -> impl IntoElement {
             let lines: Vec<_> = (0..shuffle.next(1..4))
                 .map(|_| {
                     let words: Vec<_> = (0..shuffle.next(2..9))
-                        .map(|_| bar(shuffle.next(24..90) as f32, 14., theme::SELECTED))
+                        .map(|_| bar(shuffle.next(24..90) as f32, 14., rgba(theme::SELECTED)))
                         .collect();
                     div()
                         .flex()
@@ -47,7 +47,7 @@ pub(super) fn skeleton(seed: u64) -> impl IntoElement {
                     .w(rpx(shuffle.next(200..320) as f32))
                     .h(rpx(shuffle.next(120..200) as f32))
                     .rounded(rpx(8.))
-                    .bg(rgb(theme::SELECTED))
+                    .bg(rgba(theme::SELECTED))
             });
             div()
                 .flex()
@@ -67,7 +67,7 @@ pub(super) fn skeleton(seed: u64) -> impl IntoElement {
                                 .mt(rpx(2.))
                                 .size(rpx(40.))
                                 .rounded_full()
-                                .bg(rgb(theme::SELECTED)),
+                                .bg(rgba(theme::SELECTED)),
                         ),
                 )
                 .child(
@@ -79,7 +79,7 @@ pub(super) fn skeleton(seed: u64) -> impl IntoElement {
                         .child(div().flex().items_center().h(rpx(22.)).child(bar(
                             name,
                             16.,
-                            theme::PLACEHOLDER_STRONG,
+                            rgb(theme::PLACEHOLDER_STRONG),
                         )))
                         .children(lines)
                         .children(image),

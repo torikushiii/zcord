@@ -128,7 +128,7 @@ fn appearance(_app: &DiscordApp, cx: &App) -> AnyElement {
         )
         .size(rpx(32.))
         .rounded(rpx(8.))
-        .bg(rgb(theme::SELECTED))
+        .bg(rgba(theme::SELECTED))
         .when_some(target, |this, target| {
             this.on_click(move |_, _, cx| theme::set_zoom(target, cx))
         })
@@ -303,7 +303,7 @@ fn chat_text() -> AnyElement {
         )
         .size(rpx(32.))
         .rounded(rpx(8.))
-        .bg(rgb(theme::SELECTED))
+        .bg(rgba(theme::SELECTED))
         .when_some(target, |this, target| {
             this.on_click(move |_, _, cx| crate::settings::set_chat_font_size(cx, target))
         })
@@ -451,7 +451,7 @@ pub(super) fn section(title: &'static str, rows: Vec<AnyElement>) -> AnyElement 
         .pb(rpx(40.))
         .mb(rpx(40.))
         .border_b_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .child(
             div()
                 .mb(rpx(16.))
@@ -548,7 +548,7 @@ fn button(
         .px(rpx(12.))
         .rounded(rpx(8.))
         .cursor_pointer()
-        .bg(rgb(theme::SELECTED))
+        .bg(rgba(theme::SELECTED))
         .hover(|style| style.bg(rgb(theme::PLACEHOLDER_STRONG)))
         .text_size(rpx(14.))
         .font_weight(FontWeight::MEDIUM)
@@ -570,7 +570,7 @@ where
         .rounded(rpx(8.))
         .bg(rgb(theme::BG))
         .border_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .children(
             options
                 .into_iter()
@@ -588,7 +588,7 @@ where
                         .font_weight(FontWeight::MEDIUM)
                         .map(|this| {
                             if selected {
-                                this.bg(rgb(theme::SELECTED)).text_color(rgb(theme::STRONG))
+                                this.bg(rgba(theme::SELECTED)).text_color(rgb(theme::STRONG))
                             } else {
                                 this.cursor_pointer()
                                     .text_color(rgb(theme::MUTED))

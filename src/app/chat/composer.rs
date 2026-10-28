@@ -1,5 +1,6 @@
 use super::message::author_name;
 use super::*;
+use gpui_component::ActiveTheme;
 
 pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
     let can_send = app.store.can_send(app.selected_channel_id);
@@ -47,7 +48,7 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 })
                 .bg(rgb(theme::ELEVATED))
                 .border_1()
-                .border_color(rgb(theme::BORDER))
+                .border_color(rgba(theme::BORDER))
                 .children(emoji_picker::suggestions(app, cx))
                 .child(div().my(rpx(12.)).child(theme::icon_button(
                     "attach",
@@ -167,7 +168,7 @@ pub(super) fn emoji_token_overlay(input: &Entity<TextareaState>) -> impl IntoEle
                     // small boxes, so cover the whole token with the input background first.
                     window.paint_quad(fill(bounds, rgb(theme::ELEVATED)));
                     if range.start >= selected.start && range.end <= selected.end {
-                        window.paint_quad(fill(bounds, rgba(0x5865F24D)));
+                        window.paint_quad(fill(bounds, cx.theme().selection));
                     }
                     let spec = ImageSpec::Emoji {
                         id: token.id,
@@ -220,10 +221,10 @@ fn reply_banner(app: &DiscordApp, reply: ReplyTarget) -> impl IntoElement {
         .pl(rpx(16.))
         .pr(rpx(8.))
         .rounded_t(rpx(8.))
-        .bg(rgb(theme::HOVER))
+        .bg(rgba(theme::HOVER))
         .border_1()
         .border_b_0()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .text_size(rpx(14.))
         .text_color(rgb(theme::MUTED))
         .child(
@@ -266,7 +267,7 @@ fn reply_banner(app: &DiscordApp, reply: ReplyTarget) -> impl IntoElement {
                     .child("@")
                     .child(if reply.mention { "ON" } else { "OFF" }),
             )
-            .child(div().w(rpx(1.)).h(rpx(16.)).mx_1().bg(rgb(theme::BORDER)))
+            .child(div().w(rpx(1.)).h(rpx(16.)).mx_1().bg(rgba(theme::BORDER)))
         })
         .child(
             theme::icon_button("reply-cancel", "x", 16., theme::MUTED).on_click(move |_, _, cx| {

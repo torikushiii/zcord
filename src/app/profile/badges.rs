@@ -84,7 +84,7 @@ fn badge_tooltip(tip: &BadgeTip, cx: &App) -> impl IntoElement {
         .rounded(rpx(8.))
         .bg(rgb(theme::ELEVATED))
         .border_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .shadow_lg()
         .text_center()
         .children(art.map(|path| {

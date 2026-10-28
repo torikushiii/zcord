@@ -150,7 +150,7 @@ impl RichText {
 
 const SPOILER_HIDDEN: u32 = 0x2A2A30;
 const SPOILER_HOVER: u32 = 0x33333A;
-const LINK: u32 = 0x00A8FC;
+const LINK: u32 = theme::LINK;
 const MENTION: u32 = 0x5865F2;
 const MENTION_TEXT: u32 = 0xC9CDFB;
 
@@ -1060,7 +1060,7 @@ impl Element for RichText {
                     size(last.x + last.width - first.x, chip_height),
                 );
                 let (background, radius): (Hsla, Pixels) = match chip {
-                    Chip::Code => (rgb(theme::SELECTED).into(), px(4.)),
+                    Chip::Code => (rgba(theme::CODE_BACKGROUND).into(), px(4.)),
                     Chip::Timestamp => (hsla(0., 0., 1., 0.06), px(4.)),
                     Chip::Mention { color: Some(color) } if !hovered => {
                         (rgba((color << 8) | 0x1A).into(), px(3.))

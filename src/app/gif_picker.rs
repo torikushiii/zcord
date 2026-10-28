@@ -735,7 +735,7 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
         .h(panel_height(picker.position, window))
         .rounded(rpx(8.))
         .border_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .bg(rgb(theme::ELEVATED))
         .shadow_lg()
         .overflow_hidden()
@@ -807,7 +807,7 @@ fn header(
             .rounded(rpx(8.))
             .bg(rgb(theme::BG))
             .border_1()
-            .border_color(rgb(theme::BORDER))
+            .border_color(rgba(theme::BORDER))
             .child(
                 theme::icon_button("gif-back", "arrow-left", 20., theme::MUTED).on_click({
                     let entity = entity.clone();
@@ -837,11 +837,11 @@ fn header(
             .rounded(rpx(8.))
             .bg(rgb(theme::BG))
             .border_1()
-            .border_color(rgb(if focused {
-                theme::BLURPLE
+            .border_color(if focused {
+                rgb(theme::FOCUS)
             } else {
-                theme::BORDER
-            }))
+                rgba(theme::BORDER)
+            })
             .child(theme::icon("search", 18., theme::TEXT))
             .child(
                 div().flex_1().min_w_0().child(
@@ -865,10 +865,10 @@ fn header(
         .px(rpx(12.))
         .rounded(rpx(8.))
         .border_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .bg(rgb(theme::BG))
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(theme::HOVER)))
+        .hover(|style| style.bg(rgba(theme::HOVER)))
         .on_click({
             let entity = entity.clone();
             move |_, _, cx| {
@@ -896,7 +896,7 @@ fn header(
         .gap(rpx(HEADER_GAP))
         .p(rpx(HEADER_PADDING))
         .border_b_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .child(tabs(app, Tab::Media))
         .child(
             div()
@@ -928,10 +928,10 @@ pub(super) fn tabs(app: &DiscordApp, selected: Tab) -> impl IntoElement {
             .text_size(rpx(15.))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(rgb(if active { theme::STRONG } else { theme::TEXT }))
-            .when(active, |this| this.bg(rgb(theme::SELECTED)))
+            .when(active, |this| this.bg(rgba(theme::SELECTED)))
             .when(!active, |this| {
                 this.cursor_pointer()
-                    .hover(|style| style.bg(rgb(theme::HOVER)).text_color(rgb(theme::STRONG)))
+                    .hover(|style| style.bg(rgba(theme::HOVER)).text_color(rgb(theme::STRONG)))
                     .on_click(move |_, window, cx| {
                         entity
                             .update(cx, |app, cx| app.switch_picker_tab(tab, window, cx))
@@ -992,7 +992,7 @@ fn provider_menu(app: &DiscordApp, selected: GifProvider) -> impl IntoElement {
         .gap(rpx(2.))
         .rounded(rpx(8.))
         .border_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .bg(rgb(theme::ELEVATED))
         .shadow_lg()
         .occlude()
@@ -1019,8 +1019,8 @@ fn provider_menu(app: &DiscordApp, selected: GifProvider) -> impl IntoElement {
                 .px(rpx(10.))
                 .rounded(rpx(6.))
                 .cursor_pointer()
-                .hover(|style| style.bg(rgb(theme::SELECTED)))
-                .when(active, |this| this.bg(rgb(theme::SELECTED)))
+                .hover(|style| style.bg(rgba(theme::SELECTED)))
+                .when(active, |this| this.bg(rgba(theme::SELECTED)))
                 .text_size(rpx(16.))
                 .text_color(rgb(if active { theme::STRONG } else { theme::MUTED }))
                 .on_click(move |_, window, cx| {
@@ -1125,7 +1125,7 @@ fn tile(app: &DiscordApp, index: usize, placed: Placed, animate: bool, cx: &App)
         .h(rpx(placed.height))
         .rounded(rpx(RADIUS))
         .overflow_hidden()
-        .bg(rgb(theme::BORDER));
+        .bg(rgba(theme::BORDER));
     match placed.tile {
         Tile::Placeholder => frame.into_any_element(),
         Tile::Favorites(favorite) => frame

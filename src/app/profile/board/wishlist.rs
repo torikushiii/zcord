@@ -137,7 +137,7 @@ fn shop_menu(
                             .px(rpx(10.))
                             .rounded(rpx(4.))
                             .cursor_pointer()
-                            .hover(|style| style.bg(rgb(theme::SELECTED)))
+                            .hover(|style| style.bg(rgba(theme::SELECTED)))
                             .text_size(rpx(15.))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(rgb(theme::STRONG))
@@ -156,7 +156,7 @@ fn shop_menu(
                                             this.child(img(path).size_full().rounded(rpx(4.)))
                                         }
                                         Some(None) => {
-                                            this.rounded(rpx(4.)).bg(rgb(theme::SELECTED))
+                                            this.rounded(rpx(4.)).bg(rgba(theme::SELECTED))
                                         }
                                     }),
                             )

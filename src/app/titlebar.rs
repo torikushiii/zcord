@@ -139,7 +139,7 @@ fn caption_button(
     let hover_bg: Hsla = if close {
         rgb(0xE81123).into()
     } else {
-        rgb(theme::SELECTED).into()
+        rgba(theme::SELECTED).into()
     };
     div()
         .id(id)

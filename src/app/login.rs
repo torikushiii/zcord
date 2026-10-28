@@ -148,7 +148,7 @@ pub fn render(
                 .rounded(rpx(8.))
                 .bg(rgb(theme::ELEVATED))
                 .border_1()
-                .border_color(rgb(theme::BORDER))
+                .border_color(rgba(theme::BORDER))
                 .child(token_form(form, cx))
                 .when(show_qr, |card| card.child(qr_panel(&form.qr.state, cx))),
         )
@@ -206,7 +206,7 @@ fn token_form(form: &LoginForm, cx: &mut Context<DiscordApp>) -> Div {
                 .rounded(rpx(8.))
                 .bg(rgb(theme::BG))
                 .border_1()
-                .border_color(rgb(theme::BORDER))
+                .border_color(rgba(theme::BORDER))
                 .child(
                     Input::new(&form.token)
                         .appearance(false)
@@ -236,7 +236,7 @@ fn token_form(form: &LoginForm, cx: &mut Context<DiscordApp>) -> Div {
                     } else {
                         button
                             .cursor_pointer()
-                            .hover(|style| style.bg(rgb(0x4752C4)))
+                            .hover(|style| style.bg(rgb(theme::BLURPLE)))
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.submit_login(window, cx)),
                             )
@@ -440,7 +440,7 @@ fn link(id: &'static str, label: &'static str) -> Stateful<Div> {
     div()
         .id(id)
         .text_size(rpx(14.))
-        .text_color(rgb(0x00A8FC))
+        .text_color(rgb(theme::LINK))
         .cursor_pointer()
         .hover(|style| style.underline())
         .child(label)

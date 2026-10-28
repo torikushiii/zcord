@@ -568,7 +568,7 @@ pub(crate) fn member_row(
         .px_2()
         .rounded(rpx(6.))
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(theme::HOVER)))
+        .hover(|style| style.bg(rgba(theme::HOVER)))
         .child(
             div()
                 .relative()
@@ -794,7 +794,7 @@ pub(crate) fn panel(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
                 .size(rpx(28.))
                 .rounded(rpx(4.))
                 .cursor_pointer()
-                .hover(|style| style.bg(rgb(theme::SELECTED)))
+                .hover(|style| style.bg(rgba(theme::SELECTED)))
                 .on_click(move |_, _, cx| {
                     entity.update(cx, |app, cx| app.leave_voice(cx)).ok();
                 })
@@ -821,7 +821,7 @@ pub(crate) fn panel(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
                     .justify_center()
                     .h(rpx(32.))
                     .rounded(rpx(8.))
-                    .bg(rgba(0x97979F1F))
+                    .bg(rgba(theme::HOVER))
                     .child(theme::icon(icon, 20., theme::TEXT)),
                 feature,
             )
@@ -958,7 +958,7 @@ fn menu_frame(id: &'static str) -> Stateful<Div> {
         .rounded(rpx(8.))
         .bg(rgb(theme::ELEVATED))
         .border_1()
-        .border_color(rgb(theme::BORDER))
+        .border_color(rgba(theme::BORDER))
         .shadow_lg()
 }
 
