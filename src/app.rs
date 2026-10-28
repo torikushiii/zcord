@@ -2,6 +2,7 @@ mod channel_list;
 mod chat;
 mod composer;
 mod connection;
+mod display_name;
 mod embeds;
 mod emoji_picker;
 mod expression_info;

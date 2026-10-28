@@ -830,12 +830,13 @@ fn channel_row(
         })
 }
 
-const SUBTITLE_HEIGHT: f32 = 16.;
-const USER_PANEL_HEIGHT: f32 = 58.;
+const SUBTITLE_HEIGHT: f32 = 14.;
+const USER_PANEL_HEIGHT: f32 = 56.;
+const ACCOUNT_AVATAR_SIZE: f32 = 32.;
 
 /// The custom status (or the presence when there is none), which slides up to reveal the
 /// username while the panel is hovered, like Discord's.
-fn account_subtitle(app: &DiscordApp, user: &User, cx: &App) -> AnyElement {
+fn account_subtitle(user: &User, hovered: bool, animate: bool, cx: &App) -> AnyElement {
     let line = || {
         div()
             .flex()
@@ -865,7 +866,12 @@ fn account_subtitle(app: &DiscordApp, user: &User, cx: &App) -> AnyElement {
                     )?
                     .into(),
                 };
-                Some(img(source).size(rpx(SUBTITLE_HEIGHT)).flex_none())
+                Some(
+                    img(source)
+                        .debug_selector(|| "account-status-emoji".into())
+                        .size(rpx(SUBTITLE_HEIGHT))
+                        .flex_none(),
+                )
             });
             line()
                 .children(emoji)
@@ -877,7 +883,7 @@ fn account_subtitle(app: &DiscordApp, user: &User, cx: &App) -> AnyElement {
                 }))
         }
     };
-    let hovered = app.hovered_account && !user.username.is_empty();
+    let hovered = hovered && !user.username.is_empty();
     let lines = div()
         .absolute()
         .left_0()
@@ -886,7 +892,7 @@ fn account_subtitle(app: &DiscordApp, user: &User, cx: &App) -> AnyElement {
         .flex_col()
         .child(status_line)
         .child(line().child(div().truncate().child(user.username.clone())));
-    let lines = if app.channel_rows.subtitle_hovered_once {
+    let lines = if animate {
         let animation = Animation::new(Duration::from_millis(200)).with_easing(ease_out_quint());
         lines
             .with_animation(
@@ -902,15 +908,101 @@ fn account_subtitle(app: &DiscordApp, user: &User, cx: &App) -> AnyElement {
         lines.top_0().into_any_element()
     };
     div()
+        .debug_selector(|| "account-subtitle".into())
         .relative()
         .h(rpx(SUBTITLE_HEIGHT))
         .min_w_0()
         .overflow_hidden()
         .text_size(rpx(12.))
-        .line_height(rpx(SUBTITLE_HEIGHT))
+        .line_height(rpx(13.))
+        .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(theme::MUTED))
         .child(lines)
         .into_any_element()
+}
+
+fn account_identity(user: &User, hovered: bool, animate_subtitle: bool, cx: &App) -> Div {
+    div()
+        .debug_selector(|| "account-identity".into())
+        .flex()
+        .flex_1()
+        .min_w_0()
+        .items_center()
+        .gap(rpx(8.))
+        .py(rpx(5.))
+        .rounded(rpx(4.))
+        .child(theme::user_avatar(
+            Some(user),
+            user.id,
+            ACCOUNT_AVATAR_SIZE,
+            Some((user.status, theme::ELEVATED)),
+            hovered,
+            cx,
+        ))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .child(
+                    div()
+                        .debug_selector(|| "account-name".into())
+                        .h(rpx(22.))
+                        .mt(rpx(-1.))
+                        .mb(rpx(2.))
+                        .min_w_0()
+                        .text_size(rpx(16.))
+                        .line_height(rpx(22.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(theme::STRONG))
+                        .child(super::display_name::render(
+                            ("self-name", user.id),
+                            &user.name,
+                            user.name_style.as_ref(),
+                            super::display_name::Surface::Account { hovered },
+                            cx,
+                        )),
+                )
+                .child(account_subtitle(user, hovered, animate_subtitle, cx)),
+        )
+}
+
+fn account_button(id: &'static str, icon: &str, color: u32) -> Stateful<Div> {
+    theme::icon_button(id, icon, 20., color)
+        .debug_selector(move || format!("account-{id}-button"))
+        .size(rpx(32.))
+        .rounded(rpx(8.))
+}
+
+fn account_row(
+    nameplate: Option<AnyElement>,
+    identity: Option<AnyElement>,
+    controls: [AnyElement; 3],
+) -> Div {
+    div()
+        .debug_selector(|| "account-strip".into())
+        .relative()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(rpx(4.))
+        .h(rpx(USER_PANEL_HEIGHT))
+        .p(rpx(4.))
+        .children(nameplate.map(|nameplate| {
+            // The nameplate bleeds one CSS pixel past the account strip's border.
+            div()
+                .debug_selector(|| "account-nameplate".into())
+                .absolute()
+                .top(rpx(-1.))
+                .bottom(rpx(-1.))
+                .left_0()
+                .right(rpx(-1.))
+                .rounded(rpx(7.))
+                .child(nameplate)
+        }))
+        .children(identity)
+        .child(div().flex().flex_none().items_center().children(controls))
 }
 
 fn status_label(status: Status) -> &'static str {
@@ -960,7 +1052,7 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
             member_list::nameplate_layer(
                 nameplate,
                 app.store.current_user_id,
-                USER_PANEL_HEIGHT,
+                USER_PANEL_HEIGHT + 2.,
                 app.hovered_account,
                 cx,
             )
@@ -976,105 +1068,71 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
     } else {
         ("headphones", theme::TEXT, "Deafen")
     };
-    let account = div()
-        .relative()
-        .flex()
-        .flex_none()
-        .items_center()
-        .gap_2()
-        .h(rpx(USER_PANEL_HEIGHT))
-        .px(rpx(6.))
-        .children(nameplate)
-        .children(user.map(|user| {
-            div()
-                .id("account")
-                .flex()
-                .flex_1()
-                .min_w_0()
-                .items_center()
-                .gap_2()
-                .p(rpx(2.))
-                .rounded(rpx(6.))
-                .cursor_pointer()
-                // Translucent so a nameplate behind the panel stays visible.
-                .hover(|style| style.bg(rgba(0xFFFFFF14)))
-                .on_hover({
-                    let entity = app.entity.clone();
-                    move |hovered: &bool, _, cx| {
-                        entity
-                            .update(cx, |app, cx| {
-                                app.hovered_account = *hovered;
-                                // Until the first hover the subtitle sits still, so it doesn't
-                                // play the slide-back animation when the panel first appears.
-                                app.channel_rows.subtitle_hovered_once = true;
-                                cx.notify();
-                            })
-                            .ok();
-                    }
-                })
-                .without_text_selection()
-                .on_click(profile::account_opener(
-                    app,
-                    user.id,
-                    app.channel_rows.account_bounds.clone(),
-                ))
-                .child(theme::user_avatar(
-                    Some(user),
-                    user.id,
-                    36.,
-                    Some((user.status, theme::ELEVATED)),
-                    app.hovered_account,
-                    cx,
-                ))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_w_0()
-                        .child(
-                            div()
-                                .truncate()
-                                .text_size(rpx(14.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(theme::STRONG))
-                                .child(label(("self-name", user.id), &user.name)),
-                        )
-                        .child(account_subtitle(app, user, cx)),
-                )
-        }))
-        .child(
-            theme::icon_button("mic", mic, 20., mic_color)
-                .map(|this| account_tooltip(this, app, AccountControl::Mute, mic_tip))
-                .on_click({
-                    let entity = app.entity.clone();
-                    move |_, _, cx| {
-                        entity.update(cx, |app, cx| app.toggle_self_mute(cx)).ok();
-                    }
-                }),
+    let identity = user.map(|user| {
+        account_identity(
+            user,
+            app.hovered_account,
+            app.channel_rows.subtitle_hovered_once,
+            cx,
         )
-        .child(
-            theme::icon_button("deafen", deafen, 20., deafen_color)
-                .map(|this| account_tooltip(this, app, AccountControl::Deafen, deafen_tip))
-                .on_click({
-                    let entity = app.entity.clone();
-                    move |_, _, cx| {
-                        entity.update(cx, |app, cx| app.toggle_self_deaf(cx)).ok();
-                    }
-                }),
-        )
-        .child(
-            theme::icon_button("user-settings", "settings", 20., theme::TEXT)
-                .map(|this| account_tooltip(this, app, AccountControl::Settings, "User Settings"))
-                .on_click({
-                    let entity = app.entity.clone();
-                    move |_, window, cx| {
-                        entity
-                            .update(cx, |app, cx| app.open_settings(window, cx))
-                            .ok();
-                    }
-                }),
-        )
+        .id("account")
+        .cursor_pointer()
+        // Translucent so a nameplate behind the panel stays visible.
+        .hover(|style| style.bg(rgba(0xFFFFFF14)))
+        .on_hover({
+            let entity = app.entity.clone();
+            move |hovered: &bool, _, cx| {
+                entity
+                    .update(cx, |app, cx| {
+                        app.hovered_account = *hovered;
+                        // Until the first hover the subtitle sits still, so it doesn't
+                        // play the slide-back animation when the panel first appears.
+                        app.channel_rows.subtitle_hovered_once = true;
+                        cx.notify();
+                    })
+                    .ok();
+            }
+        })
+        .without_text_selection()
+        .on_click(profile::account_opener(
+            app,
+            user.id,
+            app.channel_rows.account_bounds.clone(),
+        ))
+        .into_any_element()
+    });
+    let controls = [
+        account_button("mic", mic, mic_color)
+            .map(|this| account_tooltip(this, app, AccountControl::Mute, mic_tip))
+            .on_click({
+                let entity = app.entity.clone();
+                move |_, _, cx| {
+                    entity.update(cx, |app, cx| app.toggle_self_mute(cx)).ok();
+                }
+            })
+            .into_any_element(),
+        account_button("deafen", deafen, deafen_color)
+            .map(|this| account_tooltip(this, app, AccountControl::Deafen, deafen_tip))
+            .on_click({
+                let entity = app.entity.clone();
+                move |_, _, cx| {
+                    entity.update(cx, |app, cx| app.toggle_self_deaf(cx)).ok();
+                }
+            })
+            .into_any_element(),
+        account_button("user-settings", "settings", theme::TEXT)
+            .map(|this| account_tooltip(this, app, AccountControl::Settings, "User Settings"))
+            .on_click({
+                let entity = app.entity.clone();
+                move |_, window, cx| {
+                    entity
+                        .update(cx, |app, cx| app.open_settings(window, cx))
+                        .ok();
+                }
+            })
+            .into_any_element(),
+    ];
+    let account = account_row(nameplate, identity, controls)
         // The account strip, not the outer footer: a connected voice panel must not move the
         // popout or change the height available above the account row.
         .on_prepaint(move |bounds, _, _| account_bounds.set(Some(bounds)));

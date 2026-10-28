@@ -29,7 +29,7 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 )));
             }
         })
-        .children(app.reply.map(|reply| reply_banner(app, reply)))
+        .children(app.reply.map(|reply| reply_banner(app, reply, cx)))
         .child(
             div()
                 .relative()
@@ -211,7 +211,7 @@ pub(super) fn flush_textarea(textarea: Textarea) -> Textarea {
         .my(px(-TEXTAREA_BUILTIN_INSET_Y))
 }
 
-fn reply_banner(app: &DiscordApp, reply: ReplyTarget) -> impl IntoElement {
+fn reply_banner(app: &DiscordApp, reply: ReplyTarget, cx: &App) -> impl IntoElement + use<> {
     let entity = app.entity.clone();
     let own = reply.author_id == app.store.current_user_id;
     div()
@@ -240,9 +240,13 @@ fn reply_banner(app: &DiscordApp, reply: ReplyTarget) -> impl IntoElement {
                         .truncate()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(theme::TEXT))
-                        .child(label(
+                        .child(crate::app::display_name::render(
                             ("reply-target", reply.message_id),
                             &author_name(app, reply.author_id),
+                            app.store
+                                .member_name_style(app.selected_guild_id, reply.author_id),
+                            crate::app::display_name::Surface::FontOnly,
+                            cx,
                         )),
                 ),
         )
