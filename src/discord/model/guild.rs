@@ -12,6 +12,8 @@ pub struct GuildProperties {
     pub icon: Option<Option<String>>,
     #[serde(default, deserialize_with = "nullable_string")]
     pub banner: Option<Option<String>>,
+    #[serde(default)]
+    pub features: Option<Vec<String>>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -32,6 +34,8 @@ pub struct Guild {
     pub members: Option<Vec<Member>>,
     #[serde(default, deserialize_with = "optional_entries")]
     pub emojis: Option<Vec<GuildEmoji>>,
+    #[serde(default, deserialize_with = "optional_entries")]
+    pub stickers: Option<Vec<StickerDetails>>,
     #[serde(default, deserialize_with = "entries")]
     pub voice_states: Vec<VoiceState>,
     #[serde(default)]
@@ -64,6 +68,12 @@ impl Guild {
             .or(self.legacy.banner.as_ref())
             .cloned()
             .flatten()
+    }
+    pub fn features(&self) -> Option<&[String]> {
+        self.properties
+            .features
+            .as_deref()
+            .or(self.legacy.features.as_deref())
     }
     pub fn fill_voice_state_guilds(&mut self) {
         for state in &mut self.voice_states {
@@ -99,6 +109,9 @@ impl Guild {
         {
             self.properties.banner = Some(banner.clone());
         }
+        if let Some(features) = update.features() {
+            self.properties.features = Some(features.to_vec());
+        }
         if update.channels.is_some() {
             self.channels.clone_from(&update.channels);
         }
@@ -113,6 +126,9 @@ impl Guild {
         }
         if update.emojis.is_some() {
             self.emojis.clone_from(&update.emojis);
+        }
+        if update.stickers.is_some() {
+            self.stickers.clone_from(&update.stickers);
         }
         if !update.voice_states.is_empty() {
             self.voice_states.clone_from(&update.voice_states);
@@ -145,4 +161,12 @@ pub struct GuildEmojisUpdate {
     pub guild_id: u64,
     #[serde(default, deserialize_with = "entries")]
     pub emojis: Vec<GuildEmoji>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct GuildStickersUpdate {
+    #[serde(deserialize_with = "snowflake")]
+    pub guild_id: u64,
+    #[serde(default, deserialize_with = "optional_entries")]
+    pub stickers: Option<Vec<StickerDetails>>,
 }

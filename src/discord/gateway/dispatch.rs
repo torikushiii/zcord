@@ -98,6 +98,9 @@ pub(super) fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) 
             "GUILD_EMOJIS_UPDATE" => serde_json::from_value(value)
                 .ok()
                 .map(Event::GuildEmojisUpdate),
+            "GUILD_STICKERS_UPDATE" => serde_json::from_value(value)
+                .ok()
+                .map(Event::GuildStickersUpdate),
             "GUILD_DELETE" => id(&value, "id").map(|id| Event::GuildDelete { id }),
             "MESSAGE_ACK" => {
                 if value.get("ack_type").and_then(Value::as_u64).unwrap_or(0) != 0 {
@@ -129,6 +132,63 @@ pub(super) fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guild_stickers_update_dispatches_typed_catalog_and_skips_malformed_entries() {
+        let mut ignored = HashSet::new();
+        let event = dispatch(
+            "GUILD_STICKERS_UPDATE",
+            json!({"guild_id": "200", "stickers": [
+                {"id": "9001", "name": "wave", "type": 2, "format_type": 4,
+                 "guild_id": "200", "available": false, "description": null},
+                {"name": "missing-id"}, {"id": "bad"}, null
+            ]}),
+            &mut ignored,
+        );
+        let Some(Event::GuildStickersUpdate(update)) = event else {
+            panic!("expected guild stickers update");
+        };
+        assert_eq!(update.guild_id, 200);
+        let stickers = update.stickers.unwrap();
+        assert_eq!(stickers.len(), 1);
+        assert_eq!(stickers[0].id, 9001);
+        assert_eq!(stickers[0].name, "wave");
+        assert_eq!(stickers[0].kind, 2);
+        assert_eq!(stickers[0].format_type, 4);
+        assert_eq!(stickers[0].guild_id, Some(200));
+        assert_eq!(stickers[0].available, Some(false));
+        assert!(stickers[0].description.is_none());
+        assert!(ignored.is_empty());
+    }
+
+    #[test]
+    fn guild_stickers_update_distinguishes_missing_or_null_from_empty_catalog() {
+        let mut ignored = HashSet::new();
+        for (payload, expected_len) in [
+            (json!({"guild_id": 200}), None),
+            (json!({"guild_id": "200", "stickers": null}), None),
+            (json!({"guild_id": "200", "stickers": []}), Some(0)),
+        ] {
+            let event = dispatch("GUILD_STICKERS_UPDATE", payload, &mut ignored);
+            let Some(Event::GuildStickersUpdate(update)) = event else {
+                panic!("expected guild stickers update");
+            };
+            assert_eq!(update.guild_id, 200);
+            assert_eq!(update.stickers.as_ref().map(Vec::len), expected_len);
+        }
+    }
+
+    #[test]
+    fn guild_stickers_update_rejects_missing_or_invalid_guild_identity() {
+        let mut ignored = HashSet::new();
+        for payload in [
+            json!({"stickers": []}),
+            json!({"guild_id": null, "stickers": []}),
+            json!({"guild_id": "bad", "stickers": []}),
+        ] {
+            assert!(dispatch("GUILD_STICKERS_UPDATE", payload, &mut ignored).is_none());
+        }
+    }
 
     #[test]
     fn voice_session_timestamps_dispatch_with_missing_and_null_fields() {

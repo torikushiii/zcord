@@ -30,6 +30,7 @@ pub enum Event {
     ThreadListSync(Box<model::ThreadListSync>),
     GuildUpsert(Box<model::Guild>),
     GuildEmojisUpdate(model::GuildEmojisUpdate),
+    GuildStickersUpdate(model::GuildStickersUpdate),
     GuildDelete { id: u64 },
     MessageAck { channel_id: u64, message_id: u64 },
     VoiceStateUpdate(Box<model::VoiceState>),
