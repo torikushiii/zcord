@@ -34,6 +34,8 @@ mod modal;
 mod mutuals;
 mod palette;
 mod popout;
+#[cfg(test)]
+mod scope_tests;
 pub(crate) use account_logic::{AccountAction, account_action};
 pub(crate) use board::presence_art;
 use loading::{widget_application_ids, widget_game_ids};
@@ -108,6 +110,10 @@ const ACTIVITY_PROMPTS: [ActivityPrompt; 3] = [
 pub(crate) struct ProfileCard {
     user_id: u64,
     guild_id: Option<u64>,
+    /// Unlike `guild_id`, kept while viewing the main profile so the menu can switch back.
+    pub(crate) source_guild_id: Option<u64>,
+    pub(crate) more_menu_open: bool,
+    scope_snapshots: HashMap<Option<u64>, Arc<model::Profile>>,
     origin: ProfileOrigin,
     position: Point<Pixels>,
     anchor: Anchor,
@@ -161,6 +167,7 @@ pub(crate) struct ProfileCard {
     _tasks: Vec<Task<()>>,
 }
 
+#[derive(Clone)]
 enum ProfileOrigin {
     /// A member avatar or name; keeps its guild context and click-derived position.
     Member,
@@ -200,6 +207,10 @@ struct Layout {
 }
 
 impl ProfileCard {
+    pub(crate) fn can_switch_scope(&self) -> bool {
+        self.source_guild_id.is_some()
+    }
+
     /// Account popouts show account actions instead of server nickname and roles.
     pub(crate) fn is_account(&self) -> bool {
         matches!(&self.origin, ProfileOrigin::Account(_))

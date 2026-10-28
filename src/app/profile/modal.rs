@@ -1,6 +1,8 @@
 use super::connections::connections;
 use super::frame::framed;
-use super::popout::{bio, display_names, header, member_since, playing, roles, section};
+use super::popout::{
+    banner_spec, bio, display_names, header, member_since, playing, profile_actions, roles, section,
+};
 use super::*;
 
 /// The Wishlist tab is hidden for now; its panel and loading stay in place.
@@ -91,6 +93,7 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
                         .pb(rpx(layout.padding))
                         .overflow_y_scroll()
                         .child(display_names(app, card, true, None, cx))
+                        .children(profile_actions(app, card, window, None))
                         .children(
                             bio(app, card, false, cx).map(|bio| section("About Me", bio, palette)),
                         )
@@ -118,14 +121,7 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
         .children(effect_layers(card, card_width, cx))
         .into_any_element();
     let framed = framed(card, card_width, profile_card, true, cx);
-    let banner_backdrop = card
-        .profile
-        .as_deref()
-        .and_then(|p| p.user.banner.clone())
-        .map(|hash| ImageSpec::Banner {
-            user_id: card.user_id,
-            hash,
-        })
+    let banner_backdrop = banner_spec(card)
         .and_then(|spec| {
             let sigma = BACKDROP_BLUR * BACKDROP_SOURCE as f32 / modal_width;
             images::blurred_with(&spec, BACKDROP_SOURCE, sigma, BACKDROP_SATURATION, cx)

@@ -12,6 +12,10 @@ use super::loading::guild_profile;
 use super::mutuals::mutuals_line;
 use super::*;
 
+mod menu;
+
+pub(super) use menu::profile_actions;
+
 pub(super) fn popout(
     app: &DiscordApp,
     card: &ProfileCard,
@@ -25,6 +29,8 @@ pub(super) fn popout(
     let outer_width = POPOUT_WIDTH + theme.map_or(0., |_| THEME_BORDER * 2.);
     let overflow = frame_overflow(card, outer_width).unwrap_or_default();
     let position = card.popout_position(window, &overflow);
+    let menu_bounds = Rc::new(Cell::new(None));
+    let outside_menu = menu_bounds.clone();
     let entity = app.entity.clone();
     let open_full = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
         entity.update(cx, |app, cx| app.open_full_profile(cx)).ok();
@@ -49,7 +55,7 @@ pub(super) fn popout(
             Some(Box::new(open_full)),
             cx,
         ))
-        .child(popout_body(app, card, &layout, cx))
+        .child(popout_body(app, card, &layout, window, menu_bounds, cx))
         .children(effect_layers(card, layout.width, cx));
     let inner = match card.account_max_height(window, &overflow) {
         Some(height) => {
@@ -104,7 +110,13 @@ pub(super) fn popout(
                     .id("profile-popout")
                     .relative()
                     .occlude()
-                    .on_mouse_down_out(move |_, _, cx| {
+                    .on_mouse_down_out(move |event, _, cx| {
+                        if outside_menu
+                            .get()
+                            .is_some_and(|bounds: Bounds<Pixels>| bounds.contains(&event.position))
+                        {
+                            return;
+                        }
                         close.update(cx, |app, cx| app.close_profile(cx)).ok();
                     })
                     .child(framed)
@@ -193,9 +205,8 @@ fn active_custom_status(status: Option<&CustomStatus>, now: SystemTime) -> Optio
     })
 }
 
-fn banner(card: &ProfileCard, layout: &Layout, cx: &App) -> AnyElement {
-    let profile = card.profile.as_deref();
-    let spec = profile.and_then(|p| {
+pub(super) fn banner_spec(card: &ProfileCard) -> Option<ImageSpec> {
+    card.profile.as_deref().and_then(|p| {
         let member_banner = p.guild_member.as_ref().and_then(|m| m.banner.clone());
         match (member_banner, card.guild_id) {
             (Some(hash), Some(guild_id)) => Some(ImageSpec::GuildMemberBanner {
@@ -208,7 +219,12 @@ fn banner(card: &ProfileCard, layout: &Layout, cx: &App) -> AnyElement {
                 hash,
             }),
         }
-    });
+    })
+}
+
+fn banner(card: &ProfileCard, layout: &Layout, cx: &App) -> AnyElement {
+    let profile = card.profile.as_deref();
+    let spec = banner_spec(card);
     let pixels = BANNER_SOURCE;
     let corner = rpx(layout.corner);
     let image = spec.and_then(|spec| {
@@ -523,6 +539,8 @@ fn popout_body(
     app: &DiscordApp,
     card: &ProfileCard,
     layout: &Layout,
+    window: &Window,
+    menu_bounds: menu::MenuBounds,
     cx: &App,
 ) -> impl IntoElement {
     let user = app.store.user(card.user_id);
@@ -544,6 +562,7 @@ fn popout_body(
             })),
             cx,
         ))
+        .children(profile_actions(app, card, window, Some(menu_bounds)))
         .map(|this| {
             if card.loading() {
                 return this.child(skeleton(card.user_id));
