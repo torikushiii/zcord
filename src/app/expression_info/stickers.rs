@@ -11,7 +11,7 @@ pub(super) struct Source<'a> {
     initials: String,
     color: u32,
     online: Option<u32>,
-    discoverable: Option<bool>,
+    pub(super) discoverable: Option<bool>,
     stickers: Option<&'a [model::StickerDetails]>,
 }
 
