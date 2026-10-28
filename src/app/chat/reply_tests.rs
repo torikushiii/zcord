@@ -3,6 +3,46 @@ use gpui::{Context, IntoElement, Render, TestAppContext, Window, div, prelude::*
 use super::message::attachment_reply_preview;
 use crate::theme::rpx;
 
+#[test]
+fn local_first_unread_matches_the_full_scan_with_placeholders() {
+    use crate::store::{Delivery, Store};
+
+    let mut store = Store::seed();
+    let channel = store.guilds[0].categories[0].channels.first_mut().unwrap();
+    channel.messages.truncate(6);
+    assert_eq!(channel.messages.len(), 6);
+    for pattern in 0..3u32.pow(6) {
+        let mut remaining = pattern;
+        for (index, message) in channel.messages.iter_mut().enumerate() {
+            message.delivery = match remaining % 3 {
+                0 => Delivery::Sent,
+                1 => Delivery::Pending,
+                _ => Delivery::Failed,
+            };
+            message.id = if message.delivery == Delivery::Sent {
+                (index as u64 + 1) * 10
+            } else {
+                1000 - index as u64
+            };
+            remaining /= 3;
+        }
+        for since in [0, 10, 15, 20, 30, 40, 50, 60, 1000] {
+            for complete in [false, true] {
+                for index in 0..channel.messages.len() {
+                    let start = index == 0 && complete;
+                    let expected =
+                        (index > 0 || start) && channel.first_unread_index(since) == Some(index);
+                    assert_eq!(
+                        super::rows::is_first_unread(&channel.messages, index, since, start),
+                        expected,
+                        "pattern={pattern}, since={since}, complete={complete}, index={index}",
+                    );
+                }
+            }
+        }
+    }
+}
+
 struct AttachmentReply {
     width: f32,
 }

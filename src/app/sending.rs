@@ -1,5 +1,39 @@
 use super::*;
 
+#[cfg(test)]
+mod tests;
+
+#[derive(Default)]
+pub(super) struct PendingSends {
+    entries: Vec<(u64, String, Option<ReplyTarget>)>,
+}
+
+impl PendingSends {
+    fn should_stage(&self, channel_id: u64, at_present: bool, refreshing: bool) -> bool {
+        !at_present || refreshing || self.has_channel(channel_id)
+    }
+
+    pub(super) fn has_channel(&self, channel_id: u64) -> bool {
+        self.entries.iter().any(|entry| entry.0 == channel_id)
+    }
+
+    fn push(&mut self, channel_id: u64, content: String, reply: Option<ReplyTarget>) {
+        self.entries.push((channel_id, content, reply));
+    }
+
+    fn take_channel(&mut self, channel_id: u64) -> Vec<(u64, String, Option<ReplyTarget>)> {
+        let (ready, waiting) = std::mem::take(&mut self.entries)
+            .into_iter()
+            .partition(|entry| entry.0 == channel_id);
+        self.entries = waiting;
+        ready
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
 impl DiscordApp {
     pub(crate) fn toggle_reaction(
         &mut self,
@@ -141,14 +175,8 @@ impl DiscordApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let mut index = 0;
-        while index < self.pending_sends.len() {
-            if self.pending_sends[index].0 == channel_id {
-                let (channel, content, reply) = self.pending_sends.remove(index);
-                self.dispatch_send(channel, content, reply, window, cx);
-            } else {
-                index += 1;
-            }
+        for (channel, content, reply) in self.pending_sends.take_channel(channel_id) {
+            self.dispatch_send(channel, content, reply, window, cx);
         }
     }
 
@@ -199,13 +227,32 @@ impl DiscordApp {
             cx.notify();
             return;
         }
-        if !self.store.at_present(channel_id) {
-            self.pending_sends.push((channel_id, content, reply));
-            self.jump_to_present(window, cx);
-            return;
-        }
         self.messages.set_follow_mode(FollowMode::Tail);
-        self.dispatch_send(channel_id, content, reply, window, cx);
+        self.submit_send(channel_id, content, reply, window, cx);
+    }
+
+    fn submit_send(
+        &mut self,
+        channel_id: u64,
+        content: String,
+        reply: Option<ReplyTarget>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.pending_sends.should_stage(
+            channel_id,
+            self.store.at_present(channel_id),
+            self.loading.contains(&channel_id),
+        ) {
+            self.pending_sends.push(channel_id, content, reply);
+            self.pending_present.insert(channel_id);
+            smooth_scroll::cancel(cx);
+            // Refresh even if another response already marked the channel present. A later
+            // submission retries a failed refresh.
+            self.fetch_history(channel_id, None, window, cx);
+        } else {
+            self.dispatch_send(channel_id, content, reply, window, cx);
+        }
     }
 
     fn dispatch_send(
@@ -292,12 +339,8 @@ impl DiscordApp {
             .and_then(|failed| failed.reply);
         let change = self.store.discard_message(channel_id, nonce);
         self.apply_change(change, window, cx);
-        if self.live && !self.store.at_present(channel_id) {
-            self.pending_sends.push((channel_id, content, reply));
-            self.jump_to_present(window, cx);
-            return;
-        }
-        self.dispatch_send(channel_id, content, reply, window, cx);
+        self.messages.set_follow_mode(FollowMode::Tail);
+        self.submit_send(channel_id, content, reply, window, cx);
     }
 
     pub(crate) fn discard_message(

@@ -210,7 +210,7 @@ pub struct DiscordApp {
     reaction_requests: HashSet<(u64, u64, String)>,
     /// Channels waiting for a latest-page fetch before jumping to the present.
     pending_present: HashSet<u64>,
-    pending_sends: Vec<(u64, String, Option<ReplyTarget>)>,
+    pending_sends: sending::PendingSends,
     history_complete: HashSet<u64>,
     forum_pages: HashMap<u64, ForumPage>,
     pub(crate) invites: HashMap<String, InviteState>,
@@ -345,7 +345,7 @@ impl DiscordApp {
             loading_newer: HashSet::new(),
             reaction_requests: HashSet::new(),
             pending_present: HashSet::new(),
-            pending_sends: Vec::new(),
+            pending_sends: sending::PendingSends::default(),
             history_complete: HashSet::new(),
             forum_pages: HashMap::new(),
             invites: HashMap::new(),
@@ -621,6 +621,12 @@ impl DiscordApp {
             return;
         }
         let len = self.channel().map_or(0, |channel| channel.messages.len());
+        let placeholders = self.channel().is_some_and(|channel| {
+            channel
+                .messages
+                .iter()
+                .any(|message| message.delivery != crate::store::Delivery::Sent)
+        });
         match change {
             Change::None => return,
             Change::VoiceTimers => {
@@ -631,17 +637,24 @@ impl DiscordApp {
                 if channel_id == self.selected_channel_id =>
             {
                 self.messages.splice(index..index, 1);
-                self.messages
-                    .remeasure_items(index.saturating_sub(1)..(index + 2).min(len));
+                self.messages.remeasure_items(if placeholders {
+                    0..len
+                } else {
+                    index.saturating_sub(1)..(index + 2).min(len)
+                });
                 let own = self
                     .channel()
                     .and_then(|channel| channel.messages.get(index))
                     .is_some_and(|message| message.author_id == self.store.current_user_id);
                 if self.unread_since.is_none() && !own && !self.viewing() {
-                    self.unread_since = self
-                        .channel()
-                        .and_then(|channel| channel.messages.get(index.checked_sub(1)?))
-                        .map(|message| message.id);
+                    self.unread_since =
+                        self.channel()
+                            .and_then(|channel| {
+                                channel.messages[..index].iter().rev().find(|message| {
+                                    message.delivery == crate::store::Delivery::Sent
+                                })
+                            })
+                            .map(|message| message.id);
                     self.unread_bar = self.unread_since.is_some();
                 }
                 self.schedule_ack(cx);
@@ -653,9 +666,12 @@ impl DiscordApp {
             } if channel_id == self.selected_channel_id => {
                 self.messages.splice(removed..removed + 1, 0);
                 self.messages.splice(inserted..inserted, 1);
-                let start = removed.min(inserted).saturating_sub(1);
-                self.messages
-                    .remeasure_items(start..(removed.max(inserted) + 2).min(len));
+                // Confirming a successor can also move earlier optimistic placeholders.
+                self.messages.remeasure_items(if placeholders {
+                    0..len
+                } else {
+                    removed.min(inserted).saturating_sub(1)..(removed.max(inserted) + 2).min(len)
+                });
             }
             Change::MessageChanged { channel_id, index }
                 if channel_id == self.selected_channel_id =>
@@ -667,8 +683,11 @@ impl DiscordApp {
             {
                 self.stop_player(Some(window), cx);
                 self.messages.splice(index..index + 1, 0);
-                self.messages
-                    .remeasure_items(index.saturating_sub(1)..(index + 1).min(len));
+                self.messages.remeasure_items(if placeholders {
+                    0..len
+                } else {
+                    index.saturating_sub(1)..(index + 1).min(len)
+                });
             }
             Change::Members { guild_id } => {
                 if guild_id.is_none_or(|id| id == self.selected_guild_id) {
@@ -727,10 +746,7 @@ impl DiscordApp {
     }
 
     fn message_index(&self, message_id: u64) -> Option<usize> {
-        self.channel()?
-            .messages
-            .binary_search_by_key(&message_id, |message| message.id)
-            .ok()
+        self.channel()?.message_index(message_id)
     }
 
     fn remeasure_message(&self, message_id: u64) {

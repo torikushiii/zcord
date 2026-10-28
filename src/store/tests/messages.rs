@@ -1,6 +1,39 @@
 use super::*;
 
 #[test]
+fn message_lookup_matches_display_indices_with_unsorted_placeholders() {
+    let mut store = Store::seed();
+    let channel = store.guilds[0].categories[0].channels.first_mut().unwrap();
+    channel.messages.truncate(5);
+    assert_eq!(channel.messages.len(), 5);
+    for pattern in 0..(1 << 5) {
+        for (index, message) in channel.messages.iter_mut().enumerate() {
+            let placeholder = pattern & (1 << index) != 0;
+            message.delivery = if !placeholder {
+                Delivery::Sent
+            } else if index % 2 == 0 {
+                Delivery::Pending
+            } else {
+                Delivery::Failed
+            };
+            message.id = if placeholder {
+                1000 - index as u64
+            } else {
+                (index as u64 + 1) * 10
+            };
+        }
+        for (index, message) in channel.messages.iter().enumerate() {
+            assert_eq!(channel.message_index(message.id), Some(index));
+        }
+        for missing in [0, 15, 35, 1001] {
+            assert_eq!(channel.message_index(missing), None);
+        }
+    }
+    channel.messages.clear();
+    assert_eq!(channel.message_index(10), None);
+}
+
+#[test]
 fn component_and_formatting_fixtures_map_to_view() {
     let source: model::Message =
         serde_json::from_str(include_str!("../fixtures/components_v2.json")).unwrap();
@@ -925,7 +958,7 @@ fn replacement_indices_account_for_messages_arriving_between() {
         )))),
         Change::MessageInserted {
             channel_id: 2002,
-            index: 3
+            index: 2
         }
     );
     assert_eq!(
@@ -937,7 +970,7 @@ fn replacement_indices_account_for_messages_arriving_between() {
         )))),
         Change::MessageReplaced {
             channel_id: 2002,
-            removed: 2,
+            removed: 3,
             inserted: 3
         }
     );
@@ -995,4 +1028,408 @@ fn failed_and_discarded_messages_and_sent_rows_stay() {
             .len(),
         2
     );
+}
+
+fn outbound_confirmation(id: u64, nonce: u64, content: &str) -> model::Message {
+    let mut message = server_message(id, 2002, 1, Some(nonce));
+    message.content = content.into();
+    message
+}
+
+fn assert_display_and_lookup_invariants(store: &Store, expected_local: &[&str]) {
+    let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+    let local: Vec<_> = channel
+        .messages
+        .iter()
+        .filter(|message| matches!(message.content.as_str(), "A" | "B" | "C" | "Retry"))
+        .map(|message| message.content.as_str())
+        .collect();
+    assert_eq!(local, expected_local);
+    let sent: Vec<_> = channel
+        .messages
+        .iter()
+        .filter(|message| message.delivery == Delivery::Sent)
+        .map(|message| message.id)
+        .collect();
+    assert!(
+        sent.windows(2).all(|pair| pair[0] < pair[1]),
+        "server chronology stays canonical"
+    );
+    for (index, message) in channel.messages.iter().enumerate() {
+        assert_eq!(channel.message_index(message.id), Some(index));
+    }
+    assert_eq!(
+        channel.oldest_message().map(|message| message.id),
+        sent.first().copied()
+    );
+    assert_eq!(
+        channel.newest_message().map(|message| message.id),
+        sent.last().copied()
+    );
+}
+
+#[test]
+fn multiple_outbound_messages_keep_composer_order_for_every_ack_arrival_order() {
+    for order in [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ] {
+        let mut store = Store::from_ready(ready());
+        store.set_messages(2002, messages());
+        for (nonce, content) in [(1000, "A"), (1001, "B"), (1002, "C")] {
+            store.queue_message(2002, nonce, content.into(), None);
+        }
+        store.apply(Event::MessageCreate(Box::new(server_message(
+            2500, 2002, 2, None,
+        ))));
+        assert_display_and_lookup_invariants(&store, &["A", "B", "C"]);
+        let confirmations = [
+            outbound_confirmation(2000, 1000, "A"),
+            outbound_confirmation(3000, 1001, "B"),
+            outbound_confirmation(4000, 1002, "C"),
+        ];
+        for index in order {
+            let message = confirmations[index].clone();
+            assert!(matches!(
+                store.apply(Event::MessageCreate(Box::new(message.clone()))),
+                Change::MessageReplaced { .. }
+            ));
+            assert_display_and_lookup_invariants(&store, &["A", "B", "C"]);
+            assert_eq!(
+                store.apply(Event::MessageCreate(Box::new(message))),
+                Change::None
+            );
+        }
+        let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+        assert_eq!(
+            channel
+                .messages
+                .iter()
+                .map(|message| message.id)
+                .collect::<Vec<_>>(),
+            [61, 62, 2000, 2500, 3000, 4000]
+        );
+        assert_eq!(store.last_read(2002), Some(4000));
+    }
+}
+
+#[test]
+fn optimistic_display_indices_support_edits_reactions_deletes_and_pagination() {
+    let mut store = Store::from_ready(ready());
+    store.set_messages(2002, messages());
+    store.queue_message(2002, 1000, "A".into(), None);
+    store.queue_message(2002, 1001, "B".into(), None);
+    store.apply(Event::MessageCreate(Box::new(outbound_confirmation(
+        3000, 1001, "B",
+    ))));
+    store.apply(Event::MessageCreate(Box::new(server_message(
+        2500, 2002, 2, None,
+    ))));
+    assert_display_and_lookup_invariants(&store, &["A", "B"]);
+    let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+    assert_eq!(
+        channel
+            .messages
+            .iter()
+            .map(|message| message.id)
+            .collect::<Vec<_>>(),
+        [61, 62, 2500, 1000, 3000]
+    );
+    assert_eq!(channel.first_unread_index(2500), Some(4));
+    assert_eq!(channel.first_unread_index(3000), None);
+    assert_eq!(channel.unread_message_count(2500), 1);
+    assert_eq!(channel.unread_message_count(3000), 0);
+    assert!(matches!(
+        store.edit_message_locally(2002, 1000, "edited pending".into()),
+        Change::MessageChanged { index: 3, .. }
+    ));
+    let emoji = ReactionEmoji {
+        id: None,
+        name: "test".into(),
+        animated: false,
+    };
+    store.set_reaction(2002, 3000, &emoji, true);
+    assert_eq!(store.reaction_state(2002, 3000, &emoji), Some(true));
+    store.apply(Event::MessageReactionAdd(
+        serde_json::from_value(json!({
+            "channel_id": "2002", "message_id": "3000", "user_id": "2",
+            "emoji": {"name": "test"}
+        }))
+        .unwrap(),
+    ));
+    let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+    assert_eq!(
+        channel.messages[channel.message_index(3000).unwrap()].reactions[0].count,
+        2
+    );
+    store.apply(Event::MessageUpdate(Box::new(
+        serde_json::from_value(json!({
+            "id": "3000", "channel_id": "2002", "content": "updated sent"
+        }))
+        .unwrap(),
+    )));
+    let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+    assert_eq!(
+        channel.messages[channel.message_index(3000).unwrap()].content,
+        "updated sent"
+    );
+    store.apply(Event::MessageDelete {
+        channel_id: 2002,
+        id: 2500,
+    });
+    assert_eq!(
+        store
+            .guild_by_id(200)
+            .unwrap()
+            .channel(2002)
+            .unwrap()
+            .message_index(2500),
+        None
+    );
+    assert_eq!(
+        store.prepend_messages(2002, vec![server_message(60, 2002, 2, None)]),
+        1
+    );
+    assert_eq!(
+        store.append_messages(2002, vec![server_message(3500, 2002, 2, None)], 50),
+        1
+    );
+    let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+    assert_eq!(channel.oldest_message().unwrap().id, 60);
+    assert_eq!(channel.newest_message().unwrap().id, 3500);
+    assert!(channel.message_index(1000).is_some());
+    store.apply(Event::MessageDelete {
+        channel_id: 2002,
+        id: 3000,
+    });
+    let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+    assert!(channel.message_index(3000).is_none());
+    assert_eq!(
+        channel.messages.last().unwrap().id,
+        1000,
+        "removing a successor reanchors its placeholder"
+    );
+}
+
+#[test]
+fn history_refresh_preserves_and_reconciles_outstanding_local_messages() {
+    for around in [false, true] {
+        let mut store = Store::from_ready(ready());
+        store.set_messages(2002, messages());
+        store.queue_message(2002, 1000, "A".into(), None);
+        store.queue_message(2002, 1001, "B".into(), None);
+        store.queue_message(2002, 1002, "C".into(), None);
+        store.fail_message(2002, 1002);
+        store.apply(Event::MessageCreate(Box::new(outbound_confirmation(
+            3000, 1001, "B",
+        ))));
+        if around {
+            store.set_around_messages(2002, messages());
+        } else {
+            store.set_messages(2002, messages());
+        }
+        assert_display_and_lookup_invariants(&store, &["A", "B", "C"]);
+        let mut page = messages();
+        page.push(outbound_confirmation(2000, 1000, "A"));
+        page.push(outbound_confirmation(3000, 1001, "B"));
+        store.set_messages(2002, page);
+        assert_display_and_lookup_invariants(&store, &["A", "B", "C"]);
+        let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+        assert!(channel.message_index(1000).is_none());
+        assert!(channel.message_index(1001).is_none());
+        assert_eq!(
+            channel.messages[channel.message_index(1002).unwrap()].delivery,
+            Delivery::Failed
+        );
+        assert_eq!(
+            store.apply(Event::MessageCreate(Box::new(outbound_confirmation(
+                2000, 1000, "A"
+            )))),
+            Change::None
+        );
+        store.discard_message(2002, 1002);
+        store.queue_message(2002, 5000, "Retry".into(), None);
+        assert_display_and_lookup_invariants(&store, &["A", "B", "Retry"]);
+        assert_eq!(
+            store.append_messages(2002, vec![outbound_confirmation(6000, 5000, "Retry")], 50),
+            0
+        );
+        assert_display_and_lookup_invariants(&store, &["A", "B", "Retry"]);
+        let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+        assert!(channel.message_index(5000).is_none());
+        assert_eq!(channel.newest_message().unwrap().id, 6000);
+    }
+}
+
+#[test]
+fn failed_first_send_stays_before_its_successor_but_a_retry_joins_the_tail() {
+    let mut store = Store::from_ready(ready());
+    store.set_messages(2002, messages());
+    store.queue_message(2002, 1000, "A".into(), None);
+    store.queue_message(2002, 1001, "B".into(), None);
+    store.fail_message(2002, 1000);
+    store.apply(Event::MessageCreate(Box::new(outbound_confirmation(
+        3000, 1001, "B",
+    ))));
+    store.apply(Event::MessageCreate(Box::new(server_message(
+        4000, 2002, 2, None,
+    ))));
+    assert_display_and_lookup_invariants(&store, &["A", "B"]);
+    store.discard_message(2002, 1000);
+    store.queue_message(2002, 5000, "Retry".into(), None);
+    assert_display_and_lookup_invariants(&store, &["B", "Retry"]);
+    store.apply(Event::MessageCreate(Box::new(outbound_confirmation(
+        6000, 5000, "Retry",
+    ))));
+    assert_display_and_lookup_invariants(&store, &["B", "Retry"]);
+}
+
+#[test]
+fn pending_and_failed_nonces_are_never_history_or_unread_boundaries() {
+    let mut store = Store::from_ready(ready());
+    store.set_messages(2002, messages());
+    store.queue_message(2002, 10, "A".into(), None);
+    store.queue_message(2002, 10000, "B".into(), None);
+    store.fail_message(2002, 10000);
+    let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+    assert_eq!(channel.oldest_message().unwrap().id, 61);
+    assert_eq!(channel.newest_message().unwrap().id, 62);
+    assert_eq!(channel.first_unread_index(62), None);
+    assert_eq!(channel.unread_message_count(62), 0);
+    assert_eq!(
+        store.prepend_messages(2002, vec![server_message(60, 2002, 2, None)]),
+        1
+    );
+    assert_eq!(
+        store.append_messages(2002, vec![server_message(63, 2002, 2, None)], 50),
+        1
+    );
+    assert_display_and_lookup_invariants(&store, &["A", "B"]);
+    let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+    assert_eq!(channel.oldest_message().unwrap().id, 60);
+    assert_eq!(channel.newest_message().unwrap().id, 63);
+    assert!(channel.message_index(10).is_some());
+    assert!(channel.message_index(10000).is_some());
+}
+
+#[test]
+fn an_outbound_ack_reconciles_a_retained_row_even_while_viewing_older_history() {
+    let mut store = Store::from_ready(ready());
+    store.set_messages(2002, messages());
+    store.queue_message(2002, 1000, "A".into(), None);
+    store.queue_message(2002, 1001, "B".into(), None);
+    store.set_around_messages(2002, vec![server_message(50, 2002, 2, None)]);
+    assert!(!store.at_present(2002));
+    let confirmation = outbound_confirmation(2000, 1000, "A");
+    assert!(matches!(
+        store.apply(Event::MessageCreate(Box::new(confirmation.clone()))),
+        Change::MessageReplaced { .. }
+    ));
+    assert_display_and_lookup_invariants(&store, &["A", "B"]);
+    assert_eq!(
+        store.apply(Event::MessageCreate(Box::new(confirmation))),
+        Change::None
+    );
+    assert!(!store.at_present(2002));
+    assert!(
+        store
+            .guild_by_id(200)
+            .unwrap()
+            .channel(2002)
+            .unwrap()
+            .message_index(1000)
+            .is_none()
+    );
+}
+
+#[test]
+fn a_stale_refresh_cannot_erase_a_send_confirmed_after_the_request_started() {
+    let mut store = Store::from_ready(ready());
+    store.set_messages(2002, messages());
+    store.queue_message(2002, 1000, "A".into(), None);
+    let confirmation = outbound_confirmation(2000, 1000, "A");
+    store.apply(Event::MessageCreate(Box::new(confirmation.clone())));
+    assert_eq!(
+        store.append_messages(2002, vec![confirmation.clone()], 50),
+        0
+    );
+    // A concurrent newer-page response may see the acknowledgement before an older
+    // latest-page response arrives. It must not release the outbox protection early.
+    store.set_messages(2002, messages());
+    assert_display_and_lookup_invariants(&store, &["A"]);
+    let mut fresh = messages();
+    fresh.push(confirmation);
+    store.set_messages(2002, fresh);
+    assert_display_and_lookup_invariants(&store, &["A"]);
+    // Once a history page has observed the confirmed send, ordinary history replacement
+    // may evict it again. It is no longer an outstanding outbox entry.
+    store.set_around_messages(2002, messages());
+    assert_display_and_lookup_invariants(&store, &[]);
+}
+
+#[test]
+fn retained_outbox_confirmations_do_not_skip_unloaded_history() {
+    let mut store = Store::from_ready(ready());
+    store.set_messages(2002, messages());
+    store.queue_message(2002, 1000, "A".into(), None);
+    store.queue_message(2002, 1001, "B".into(), None);
+    store.fail_message(2002, 1000);
+    let confirmation = outbound_confirmation(3000, 1001, "B");
+    store.apply(Event::MessageCreate(Box::new(confirmation.clone())));
+    let mut observed = messages();
+    observed.push(confirmation);
+    store.set_messages(2002, observed);
+    store.set_around_messages(2002, vec![server_message(50, 2002, 2, None)]);
+    assert_display_and_lookup_invariants(&store, &["A", "B"]);
+    let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+    assert_eq!(channel.newest_message().unwrap().id, 3000);
+    assert_eq!(channel.newest_history_message().unwrap().id, 50);
+    assert_eq!(channel.oldest_history_message().unwrap().id, 50);
+    assert_eq!(
+        store.append_messages(2002, vec![server_message(51, 2002, 2, None)], 1),
+        1
+    );
+    assert!(
+        !store.at_present(2002),
+        "the retained confirmation cannot mark the gap complete"
+    );
+    assert_eq!(
+        store.prepend_messages(2002, vec![server_message(49, 2002, 2, None)]),
+        1
+    );
+    let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+    assert_eq!(channel.oldest_history_message().unwrap().id, 49);
+    assert_eq!(channel.newest_history_message().unwrap().id, 51);
+    assert_display_and_lookup_invariants(&store, &["A", "B"]);
+}
+
+#[test]
+fn stale_history_retains_confirmation_metadata_for_partial_updates() {
+    let mut store = Store::from_ready(ready());
+    store.set_messages(2002, messages());
+    store.queue_message(2002, 1000, "A".into(), None);
+    let mut confirmation = outbound_confirmation(2000, 1000, "A");
+    confirmation.message_reference = Some(
+        serde_json::from_value(json!({
+            "message_id": "61", "channel_id": "2002", "type": 0
+        }))
+        .unwrap(),
+    );
+    confirmation.referenced_message = Some(None);
+    store.apply(Event::MessageCreate(Box::new(confirmation)));
+    store.set_messages(2002, messages());
+    store.apply(Event::MessageUpdate(Box::new(
+        serde_json::from_value(json!({
+            "id": "2000", "channel_id": "2002", "content": "updated sent"
+        }))
+        .unwrap(),
+    )));
+    let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+    let message = &channel.messages[channel.message_index(2000).unwrap()];
+    assert!(matches!(&message.reply, Some(ReplyState::Deleted)));
+    assert_eq!(message.content, "updated sent");
 }

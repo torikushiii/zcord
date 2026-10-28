@@ -193,8 +193,10 @@ impl DiscordApp {
         {
             let (oldest, inside) = self.channel().map_or((None, false), |channel| {
                 (
-                    channel.messages.first().map(|message| message.id),
-                    channel.messages.iter().any(|message| message.id > since),
+                    channel.oldest_history_message().map(|message| message.id),
+                    channel
+                        .newest_history_message()
+                        .is_some_and(|message| message.id > since),
                 )
             });
             if !inside || oldest.is_some_and(|oldest| since < oldest) {

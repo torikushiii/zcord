@@ -20,6 +20,7 @@ impl Store {
         let index = channel.messages.len();
         channel.messages.push(Message {
             id: self.next_message_id,
+            send_order: None,
             author_id: self.current_user_id,
             timestamp,
             delivery: Delivery::Sent,
@@ -141,29 +142,29 @@ impl Store {
         let Some(channel) = self.network_channel_mut(channel_id) else {
             return Change::None;
         };
-        let index = channel
-            .messages
-            .partition_point(|message| message.id < nonce);
-        channel.messages.insert(
-            index,
-            Message {
-                id: nonce,
-                author_id,
-                timestamp: timestamp_from_nonce(nonce),
-                delivery: Delivery::Pending,
-                content,
-                embeds: Vec::new(),
-                components: Vec::new(),
-                reactions: Vec::new(),
-                attachments: Vec::new(),
-                stickers: Vec::new(),
-                kind: 0,
-                edited: false,
-                reply,
-                forward: None,
-                mentions_me: false,
-            },
-        );
+        channel.messages.push(Message {
+            id: nonce,
+            send_order: Some(SendOrder {
+                nonce,
+                history_seen: false,
+            }),
+            author_id,
+            timestamp: timestamp_from_nonce(nonce),
+            delivery: Delivery::Pending,
+            content,
+            embeds: Vec::new(),
+            components: Vec::new(),
+            reactions: Vec::new(),
+            attachments: Vec::new(),
+            stickers: Vec::new(),
+            kind: 0,
+            edited: false,
+            reply,
+            forward: None,
+            mentions_me: false,
+        });
+        order_messages(&mut channel.messages);
+        let index = channel.message_index(nonce).expect("queued message");
         Change::MessageInserted { channel_id, index }
     }
 
@@ -176,10 +177,7 @@ impl Store {
         let Some(channel) = self.network_channel_mut(channel_id) else {
             return Change::None;
         };
-        let Ok(index) = channel
-            .messages
-            .binary_search_by_key(&message_id, |message| message.id)
-        else {
+        let Some(index) = channel.message_index(message_id) else {
             return Change::None;
         };
         let message = &mut channel.messages[index];
@@ -192,10 +190,7 @@ impl Store {
         let Some(channel) = self.network_channel_mut(channel_id) else {
             return Change::None;
         };
-        let Ok(index) = channel
-            .messages
-            .binary_search_by_key(&nonce, |message| message.id)
-        else {
+        let Some(index) = channel.message_index(nonce) else {
             return Change::None;
         };
         if channel.messages[index].delivery != Delivery::Pending {
@@ -209,16 +204,14 @@ impl Store {
         let Some(channel) = self.network_channel_mut(channel_id) else {
             return Change::None;
         };
-        let Ok(index) = channel
-            .messages
-            .binary_search_by_key(&nonce, |message| message.id)
-        else {
+        let Some(index) = channel.message_index(nonce) else {
             return Change::None;
         };
         if channel.messages[index].delivery == Delivery::Sent {
             return Change::None;
         }
         channel.messages.remove(index);
+        order_messages(&mut channel.messages);
         Change::MessageRemoved { channel_id, index }
     }
 
@@ -249,14 +242,32 @@ impl Store {
         messages.retain(|m| m.channel_id == channel_id);
         messages.sort_by_key(|m| m.id);
         messages.dedup_by_key(|m| m.id);
-        self.clear_message_info(channel_id);
-        let mapped = messages
+        let previous: Vec<_> = self
+            .network_channel(channel_id)
+            .map(|channel| channel.messages.iter().map(|message| message.id).collect())
+            .unwrap_or_default();
+        if !self
+            .network_channel(channel_id)
+            .is_some_and(Channel::has_outbox)
+        {
+            self.clear_message_info(channel_id);
+        }
+        let mapped: Vec<_> = messages
             .iter()
             .filter_map(|message| self.map_network_message(message, true))
             .collect();
-        if let Some(channel) = self.network_channel_mut(channel_id) {
-            channel.messages = mapped;
+        let removed: Vec<_> = if let Some(channel) = self.network_channel_mut(channel_id) {
+            merge_history(channel, &messages, mapped, true);
             channel.messages_loaded = true;
+            previous
+                .into_iter()
+                .filter(|id| channel.message_index(*id).is_none())
+                .collect()
+        } else {
+            previous
+        };
+        for id in removed {
+            self.forget_message_info(channel_id, id);
         }
     }
 
@@ -289,8 +300,8 @@ impl Store {
         mut messages: Vec<model::Message>,
     ) -> usize {
         let oldest = self
-            .network_channel_mut(channel_id)
-            .and_then(|channel| channel.messages.first())
+            .network_channel(channel_id)
+            .and_then(Channel::oldest_history_message)
             .map_or(u64::MAX, |message| message.id);
         messages.retain(|m| m.channel_id == channel_id && m.id < oldest);
         messages.sort_by_key(|m| m.id);
@@ -299,11 +310,9 @@ impl Store {
             .iter()
             .filter_map(|message| self.map_network_message(message, true))
             .collect();
-        let count = mapped.len();
-        if let Some(channel) = self.network_channel_mut(channel_id) {
-            channel.messages.splice(0..0, mapped);
-        }
-        count
+        self.network_channel_mut(channel_id).map_or(0, |channel| {
+            merge_history(channel, &messages, mapped, false)
+        })
     }
 
     pub fn append_messages(
@@ -315,7 +324,7 @@ impl Store {
         let complete = messages.len() < limit;
         let newest = self
             .network_channel(channel_id)
-            .and_then(|channel| channel.messages.last())
+            .and_then(Channel::newest_history_message)
             .map_or(0, |message| message.id);
         messages.retain(|m| m.channel_id == channel_id && m.id > newest);
         messages.sort_by_key(|m| m.id);
@@ -324,14 +333,13 @@ impl Store {
             .iter()
             .filter_map(|message| self.map_network_message(message, true))
             .collect();
-        let count = mapped.len();
-        if let Some(channel) = self.network_channel_mut(channel_id) {
-            channel.messages.extend(mapped);
-        }
+        let count = self.network_channel_mut(channel_id).map_or(0, |channel| {
+            merge_history(channel, &messages, mapped, false)
+        });
         let latest = self.latest_message_id(channel_id);
         let reached = self
             .network_channel(channel_id)
-            .and_then(|channel| channel.messages.last())
+            .and_then(Channel::newest_history_message)
             .is_some_and(|message| message.id >= latest);
         if complete || reached {
             self.set_at_present(channel_id, true);
@@ -353,11 +361,7 @@ impl Store {
             .unwrap_or(true);
         if let Some(channel) = self.network_channel_mut(message.channel_id) {
             loaded = channel.messages_loaded;
-            if channel
-                .messages
-                .binary_search_by_key(&message.id, |m| m.id)
-                .is_ok()
-            {
+            if channel.message_index(message.id).is_some() {
                 return Change::None;
             }
         }
@@ -398,10 +402,7 @@ impl Store {
         if !channel.messages_loaded {
             return Change::Structure;
         }
-        if !present {
-            return Change::Structure;
-        }
-        let Some(mapped) = mapped else {
+        let Some(mut mapped) = mapped else {
             return Change::None;
         };
         let pending = if own {
@@ -413,18 +414,26 @@ impl Store {
         } else {
             None
         };
+        if !present && pending.is_none() {
+            self.forget_message_info(message.channel_id, message.id);
+            return Change::Structure;
+        }
         if let Some(removed) = pending {
-            channel.messages.remove(removed);
-            let inserted = channel.messages.partition_point(|m| m.id < mapped.id);
-            channel.messages.insert(inserted, mapped);
+            mapped.send_order = channel.messages.remove(removed).send_order;
+            channel.messages.push(mapped);
+            order_messages(&mut channel.messages);
+            let inserted = channel
+                .message_index(message.id)
+                .expect("confirmed message");
             return Change::MessageReplaced {
                 channel_id: message.channel_id,
                 removed,
                 inserted,
             };
         }
-        let index = channel.messages.partition_point(|m| m.id < message.id);
-        channel.messages.insert(index, mapped);
+        channel.messages.push(mapped);
+        order_messages(&mut channel.messages);
+        let index = channel.message_index(message.id).expect("created message");
         Change::MessageInserted {
             channel_id: message.channel_id,
             index,
@@ -436,7 +445,7 @@ impl Store {
         let Some(channel) = self.network_channel_mut(update.channel_id) else {
             return Change::None;
         };
-        let Ok(index) = channel.messages.binary_search_by_key(&update.id, |m| m.id) else {
+        let Some(index) = channel.message_index(update.id) else {
             return Change::None;
         };
         let message = &mut channel.messages[index];
@@ -496,10 +505,86 @@ impl Store {
         let Some(channel) = self.network_channel_mut(channel_id) else {
             return Change::None;
         };
-        let Ok(index) = channel.messages.binary_search_by_key(&id, |m| m.id) else {
+        let Some(index) = channel.message_index(id) else {
             return Change::None;
         };
         channel.messages.remove(index);
+        order_messages(&mut channel.messages);
         Change::MessageRemoved { channel_id, index }
     }
+}
+
+fn merge_history(
+    channel: &mut Channel,
+    wire: &[model::Message],
+    mut mapped: Vec<Message>,
+    replace: bool,
+) -> usize {
+    let old = std::mem::take(&mut channel.messages);
+    let old_len = old.len();
+    let outstanding = old.iter().any(|message| message.delivery != Delivery::Sent);
+    for mut message in old {
+        let replacement = wire
+            .iter()
+            .find(|wire| {
+                wire.id == message.id
+                    || (message.delivery != Delivery::Sent
+                        && wire.author.id == message.author_id
+                        && wire.nonce == Some(message.id))
+            })
+            .and_then(|wire| mapped.iter_mut().find(|mapped| mapped.id == wire.id));
+        if let Some(replacement) = replacement {
+            // Only a full history reload clears `send_order`; a page that loaded first must
+            // keep it so placeholders stay in place.
+            replacement.send_order =
+                if replace && message.delivery == Delivery::Sent && !outstanding {
+                    None
+                } else {
+                    message.send_order.map(|order| SendOrder {
+                        history_seen: true,
+                        ..order
+                    })
+                };
+        } else if !replace || message.delivery != Delivery::Sent || message.send_order.is_some() {
+            if replace && let Some(order) = &mut message.send_order {
+                order.history_seen = false;
+            }
+            mapped.push(message);
+        }
+    }
+    order_messages(&mut mapped);
+    let inserted = mapped.len().saturating_sub(old_len);
+    channel.messages = mapped;
+    inserted
+}
+
+/// Keep the server chronology intact and anchor placeholders to their next confirmed
+/// local successor. Acknowledgements can arrive out of order without swapping local sends.
+fn order_messages(messages: &mut Vec<Message>) {
+    if messages
+        .iter()
+        .all(|message| message.delivery == Delivery::Sent)
+    {
+        messages.sort_by_key(|message| message.id);
+        return;
+    }
+    let (mut sent, mut pending): (Vec<_>, Vec<_>) = std::mem::take(messages)
+        .into_iter()
+        .partition(|message| message.delivery == Delivery::Sent);
+    sent.sort_by_key(|message| message.id);
+    pending.sort_by_key(|message| message.id);
+    for message in pending {
+        let index = sent
+            .iter()
+            .position(|successor| {
+                successor.delivery == Delivery::Sent
+                    && successor
+                        .send_order
+                        .as_ref()
+                        .is_some_and(|order| order.nonce > message.id)
+            })
+            .unwrap_or(sent.len());
+        sent.insert(index, message);
+    }
+    *messages = sent;
 }

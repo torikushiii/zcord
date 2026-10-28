@@ -412,8 +412,16 @@ impl Sticker {
     }
 }
 
+pub(super) struct SendOrder {
+    pub nonce: u64,
+    /// Part of the current loaded history span, rather than a retained outbox-only row.
+    pub history_seen: bool,
+}
+
 pub struct Message {
     pub id: u64,
+    /// Composer order, retained through confirmation until replacing history observes it.
+    pub(super) send_order: Option<SendOrder>,
     pub author_id: u64,
     pub timestamp: Timestamp,
     pub delivery: Delivery,
@@ -598,8 +606,75 @@ pub struct Channel {
     pub unread: bool,
     pub mentions: u32,
     pub new_posts: u32,
+    /// Display order; see `order_messages`.
     pub messages: Vec<Message>,
     pub messages_loaded: bool,
+}
+
+impl Channel {
+    pub fn has_outbox(&self) -> bool {
+        self.messages
+            .iter()
+            .any(|message| message.send_order.is_some())
+    }
+
+    /// Try ID-sorted lookup, falling back to a scan for out-of-order placeholders.
+    pub fn message_index(&self, id: u64) -> Option<usize> {
+        self.messages
+            .binary_search_by_key(&id, |message| message.id)
+            .ok()
+            .or_else(|| self.messages.iter().position(|message| message.id == id))
+    }
+
+    #[cfg(test)]
+    pub fn oldest_message(&self) -> Option<&Message> {
+        self.messages
+            .iter()
+            .find(|message| message.delivery == Delivery::Sent)
+    }
+
+    #[cfg(test)]
+    pub fn newest_message(&self) -> Option<&Message> {
+        self.messages
+            .iter()
+            .rev()
+            .find(|message| message.delivery == Delivery::Sent)
+    }
+
+    /// Retained outbox rows outside the loaded history page must not bridge pagination gaps.
+    pub fn oldest_history_message(&self) -> Option<&Message> {
+        self.messages.iter().find(|message| message.in_history())
+    }
+
+    pub fn newest_history_message(&self) -> Option<&Message> {
+        self.messages
+            .iter()
+            .rev()
+            .find(|message| message.in_history())
+    }
+
+    pub fn first_unread_index(&self, since: u64) -> Option<usize> {
+        self.messages
+            .iter()
+            .position(|message| message.delivery == Delivery::Sent && message.id > since)
+    }
+
+    pub fn unread_message_count(&self, since: u64) -> usize {
+        self.messages
+            .iter()
+            .filter(|message| message.delivery == Delivery::Sent && message.id > since)
+            .count()
+    }
+}
+
+impl Message {
+    fn in_history(&self) -> bool {
+        self.delivery == Delivery::Sent
+            && self
+                .send_order
+                .as_ref()
+                .is_none_or(|order| order.history_seen)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
