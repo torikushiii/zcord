@@ -1,4 +1,4 @@
-use super::message::author_name;
+use super::message::{author_name, message_author_name};
 use super::*;
 use gpui_component::ActiveTheme;
 
@@ -29,7 +29,7 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 )));
             }
         })
-        .children(app.reply.map(|reply| reply_banner(app, reply, cx)))
+        .children(app.reply.as_ref().map(|reply| reply_banner(app, reply, cx)))
         .child(
             div()
                 .relative()
@@ -211,9 +211,23 @@ pub(super) fn flush_textarea(textarea: Textarea) -> Textarea {
         .my(px(-TEXTAREA_BUILTIN_INSET_Y))
 }
 
-fn reply_banner(app: &DiscordApp, reply: ReplyTarget, cx: &App) -> impl IntoElement + use<> {
+fn reply_banner(app: &DiscordApp, reply: &ReplyTarget, cx: &App) -> impl IntoElement + use<> {
     let entity = app.entity.clone();
     let own = reply.author_id == app.store.current_user_id;
+    let target = app.channel().and_then(|channel| {
+        channel
+            .message_index(reply.message_id)
+            .map(|index| &channel.messages[index])
+    });
+    let name = target.map_or_else(
+        || {
+            reply.webhook_name.as_ref().map_or_else(
+                || author_name(app, reply.author_id),
+                |name| name.to_string(),
+            )
+        },
+        |message| message_author_name(app, message),
+    );
     div()
         .flex()
         .items_center()
@@ -242,9 +256,15 @@ fn reply_banner(app: &DiscordApp, reply: ReplyTarget, cx: &App) -> impl IntoElem
                         .text_color(rgb(theme::TEXT))
                         .child(crate::app::display_name::render(
                             ("reply-target", reply.message_id),
-                            &author_name(app, reply.author_id),
+                            &name,
                             app.store
-                                .member_name_style(app.selected_guild_id, reply.author_id),
+                                .member_name_style(app.selected_guild_id, reply.author_id)
+                                .filter(|_| {
+                                    target.map_or_else(
+                                        || reply.webhook_name.is_none(),
+                                        |message| message.webhook.is_none(),
+                                    )
+                                }),
                             crate::app::display_name::Surface::FontOnly,
                             cx,
                         )),

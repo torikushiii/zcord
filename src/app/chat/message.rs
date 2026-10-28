@@ -42,12 +42,45 @@ pub(in crate::app) fn author_name(app: &DiscordApp, user_id: u64) -> String {
         .to_owned()
 }
 
+pub(super) fn message_author_name(app: &DiscordApp, message: &Message) -> String {
+    message.webhook.as_ref().map_or_else(
+        || author_name(app, message.author_id),
+        |author| author.name.clone(),
+    )
+}
+
 fn author_label(app: &DiscordApp, message: &Message, cx: &App) -> AnyElement {
-    let name = author_name(app, message.author_id);
+    let name = message_author_name(app, message);
     let style = app
         .store
-        .member_name_style(app.selected_guild_id, message.author_id);
+        .member_name_style(app.selected_guild_id, message.author_id)
+        .filter(|_| message.webhook.is_none());
     display_name::render(("author", message.id), &name, style, Surface::FontOnly, cx)
+}
+
+fn author_avatar(
+    app: &DiscordApp,
+    author_id: u64,
+    webhook: Option<&crate::store::WebhookAuthor>,
+    size: f32,
+    animate: bool,
+    cx: &App,
+) -> AnyElement {
+    match webhook {
+        Some(author) => {
+            theme::webhook_avatar(author_id, author, size, animate, cx).into_any_element()
+        }
+        None => theme::member_avatar(
+            &app.store,
+            app.selected_guild_id,
+            author_id,
+            size,
+            None,
+            animate,
+            cx,
+        )
+        .into_any_element(),
+    }
 }
 
 fn author_color(app: &DiscordApp, user_id: u64) -> Hsla {
@@ -279,12 +312,11 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
                         .text_color(rgb(theme::FAINT))
                         .child(reply.timestamp.time()),
                 )
-                .child(theme::member_avatar(
-                    &app.store,
-                    app.selected_guild_id,
+                .child(author_avatar(
+                    app,
                     reply.author_id,
+                    reply.webhook.as_ref(),
                     16.,
-                    None,
                     false,
                     cx,
                 ))
@@ -295,12 +327,23 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
                         .min_w_0()
                         .truncate()
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(author_color(app, reply.author_id))
+                        .text_color(if reply.webhook.is_some() {
+                            rgb(theme::STRONG).into()
+                        } else {
+                            author_color(app, reply.author_id)
+                        })
                         .child(display_name::render(
                             ("reply-author", message.id),
-                            &format!("@{}", author_name(app, reply.author_id)),
+                            &format!(
+                                "@{}",
+                                reply.webhook.as_ref().map_or_else(
+                                    || author_name(app, reply.author_id),
+                                    |author| author.name.clone(),
+                                )
+                            ),
                             app.store
-                                .member_name_style(app.selected_guild_id, reply.author_id),
+                                .member_name_style(app.selected_guild_id, reply.author_id)
+                                .filter(|_| reply.webhook.is_none()),
                             Surface::FontOnly,
                             cx,
                         )),
@@ -308,6 +351,7 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
                 .children(
                     app.store
                         .user(reply.author_id)
+                        .filter(|_| reply.webhook.is_none())
                         .and_then(|user| user.tag.as_ref())
                         .map(|tag| theme::guild_tag(tag, cx)),
                 )
@@ -437,7 +481,10 @@ pub(super) fn render_message(
     {
         return element;
     }
-    let user = app.store.user(message.author_id);
+    let user = app
+        .store
+        .user(message.author_id)
+        .filter(|_| message.webhook.is_none());
     let font_size = crate::settings::chat_font_size();
     let line_height = font_size * 22.0 / 16.0;
     let text_scale = font_size / 16.0;
@@ -459,6 +506,7 @@ pub(super) fn render_message(
     let replying = !preview
         && app
             .reply
+            .as_ref()
             .is_some_and(|reply| reply.message_id == message.id);
     let entity = app.entity.clone();
     let id = message.id;
@@ -554,7 +602,7 @@ pub(super) fn render_message(
                                 gutter.pt(rpx(2.)).child(
                                     div()
                                         .id("author-avatar")
-                                        .when(!preview, |this| {
+                                        .when(!preview && message.webhook.is_none(), |this| {
                                             this.cursor_pointer().without_text_selection().on_click(
                                                 profile::opener(
                                                     app,
@@ -563,12 +611,11 @@ pub(super) fn render_message(
                                                 ),
                                             )
                                         })
-                                        .child(theme::member_avatar(
-                                            &app.store,
-                                            app.selected_guild_id,
+                                        .child(author_avatar(
+                                            app,
                                             message.author_id,
+                                            message.webhook.as_ref(),
                                             40.,
-                                            None,
                                             !preview && app.hovered_message == Some(message.id),
                                             cx,
                                         )),
@@ -595,8 +642,12 @@ pub(super) fn render_message(
                                             .id("author-name")
                                             .text_size(rpx(16.))
                                             .font_weight(FontWeight::MEDIUM)
-                                            .text_color(author_color(app, message.author_id))
-                                            .when(!preview, |this| {
+                                            .text_color(if message.webhook.is_some() {
+                                                rgb(theme::STRONG).into()
+                                            } else {
+                                                author_color(app, message.author_id)
+                                            })
+                                            .when(!preview && message.webhook.is_none(), |this| {
                                                 this.cursor_pointer()
                                                     .without_text_selection()
                                                     .hover(|style| style.underline())
@@ -608,9 +659,11 @@ pub(super) fn render_message(
                                             })
                                             .child(author_label(app, message, cx)),
                                     )
-                                    .when(user.is_some_and(|user| user.bot), |this| {
-                                        this.child(theme::app_tag())
-                                    })
+                                    .when(
+                                        message.webhook.is_some()
+                                            || user.is_some_and(|user| user.bot),
+                                        |this| this.child(theme::app_tag()),
+                                    )
                                     .children(
                                         user.and_then(|user| user.tag.as_ref())
                                             .map(|tag| theme::guild_tag(tag, cx)),

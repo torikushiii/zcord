@@ -47,6 +47,7 @@ struct MessageInfo {
     embeds: Vec<model::Embed>,
     guild_id: Option<u64>,
     author_id: u64,
+    webhook_id: Option<u64>,
     mentions: Vec<u64>,
     roles: Vec<u64>,
     everyone: bool,
@@ -812,6 +813,7 @@ impl Store {
                 ReplyState::Loaded(Reply {
                     message_id: message.id,
                     author_id: message.author.id,
+                    webhook: mapping::map_webhook_author(message.webhook_id, &message.author),
                     timestamp: message
                         .timestamp
                         .as_deref()
@@ -882,15 +884,21 @@ impl Store {
         message: &model::Message,
         remember: bool,
     ) -> Option<Message> {
-        self.register_author(&message.author);
+        if message.webhook_id.is_none() {
+            self.register_author(&message.author);
+        }
         for user in &message.mentions {
             self.register_author(user);
         }
-        if let Some(Some(reply)) = &message.referenced_message {
+        if let Some(Some(reply)) = &message.referenced_message
+            && reply.webhook_id.is_none()
+        {
             self.register_author(&reply.author);
         }
         let guild_id = self.message_guild(message.channel_id, message.guild_id);
-        if let (Some(guild), Some(member)) = (guild_id, &message.member) {
+        if message.webhook_id.is_none()
+            && let (Some(guild), Some(member)) = (guild_id, &message.member)
+        {
             self.upsert_member(guild, message.author.id, member);
         }
         if !remember {
@@ -901,6 +909,7 @@ impl Store {
             embeds: message.embeds.clone(),
             guild_id,
             author_id: message.author.id,
+            webhook_id: message.webhook_id,
             mentions: message.mentions.iter().map(|u| u.id).collect(),
             roles: message.mention_roles.clone(),
             everyone: message.mention_everyone,
@@ -920,28 +929,40 @@ impl Store {
         &mut self,
         update: &model::MessageUpdate,
     ) -> (Option<ReplyState>, bool, Option<Vec<Embed>>) {
-        if let Some(user) = &update.author {
+        let key = (update.channel_id, update.id);
+        let webhook_id = update.webhook_id.or_else(|| {
+            self.social
+                .messages
+                .get(&key)
+                .and_then(|info| info.webhook_id)
+        });
+        if webhook_id.is_none()
+            && let Some(user) = &update.author
+        {
             self.register_author(user);
         }
         for user in update.mentions.iter().flatten() {
             self.register_author(user);
         }
-        if let Some(Some(reply)) = &update.referenced_message {
+        if let Some(Some(reply)) = &update.referenced_message
+            && reply.webhook_id.is_none()
+        {
             self.register_author(&reply.author);
         }
-        let key = (update.channel_id, update.id);
         let known = self.social.messages.contains_key(&key);
         let mut info = self.social.messages.remove(&key).unwrap_or_default();
+        info.webhook_id = webhook_id;
         info.guild_id = self
             .message_guild(update.channel_id, update.guild_id)
             .or(info.guild_id);
         if let Some(author) = &update.author {
             info.author_id = author.id;
         }
-        if let (Some(guild), Some(member)) = (info.guild_id, &update.member) {
-            if info.author_id != 0 {
-                self.upsert_member(guild, info.author_id, member);
-            }
+        if info.webhook_id.is_none()
+            && let (Some(guild), Some(member)) = (info.guild_id, &update.member)
+            && info.author_id != 0
+        {
+            self.upsert_member(guild, info.author_id, member);
         }
         if let Some(mentions) = &update.mentions {
             info.mentions = mentions.iter().map(|u| u.id).collect();

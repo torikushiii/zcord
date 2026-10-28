@@ -38,7 +38,7 @@ pub(super) fn render_row(app: &DiscordApp, index: usize, cx: &App) -> AnyElement
     let new_day = previous.is_some_and(|previous| !previous.timestamp.same_day(message.timestamp));
     let grouped = previous.is_some_and(|previous| {
         !new_day
-            && previous.author_id == message.author_id
+            && previous.same_author(message)
             && message.timestamp.minutes_since(previous.timestamp) < GROUP_MINUTES
             && message.reply.is_none()
             && !is_system(previous.kind)

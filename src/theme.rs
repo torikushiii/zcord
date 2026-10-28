@@ -6,7 +6,7 @@ use crate::{
     media::animated,
     media::images::{self, ImageSpec},
     settings,
-    store::{Decoration, GuildTag, Status, Store, User},
+    store::{Decoration, GuildTag, Status, Store, User, WebhookAuthor},
 };
 
 mod midnight;
@@ -146,6 +146,19 @@ pub fn member_avatar(
     cx: &App,
 ) -> impl IntoElement + use<> {
     member_avatar_with(store, guild_id, user_id, size, status, animate, true, cx)
+}
+
+pub fn webhook_avatar(
+    author_id: u64,
+    author: &WebhookAuthor,
+    size: f32,
+    animate: bool,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    let spec = crate::store::avatar_spec(author_id, author.avatar.as_deref(), Some("0000"));
+    let image = avatar_image(&spec, size, animate, None, cx);
+    let initials: String = author.name.chars().take(2).collect();
+    avatar(&initials, user_color(author_id), size, None, image, None)
 }
 
 /// Discord leaves avatar decorations off small avatars such as voice channel members.

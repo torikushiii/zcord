@@ -22,6 +22,7 @@ impl Store {
             id: self.next_message_id,
             send_order: None,
             author_id: self.current_user_id,
+            webhook: None,
             timestamp,
             delivery: Delivery::Sent,
             content,
@@ -105,6 +106,7 @@ impl Store {
                     Reply {
                         message_id: message.id,
                         author_id: message.author_id,
+                        webhook: message.webhook.clone(),
                         timestamp: message.timestamp,
                         content: if hides_embed_content(content, embeds) {
                             String::new()
@@ -149,6 +151,7 @@ impl Store {
                 history_seen: false,
             }),
             author_id,
+            webhook: None,
             timestamp: timestamp_from_nonce(nonce),
             delivery: Delivery::Pending,
             content,
@@ -462,6 +465,21 @@ impl Store {
         }
         if let Some(author) = update.author {
             message.author_id = author.id;
+            let webhook_id = update
+                .webhook_id
+                .or_else(|| message.webhook.as_ref().map(|webhook| webhook.id));
+            if author.username.is_empty()
+                && let Some(webhook) = &mut message.webhook
+            {
+                webhook.id = webhook_id.unwrap_or(webhook.id);
+                if let Some(avatar) = author.avatar {
+                    webhook.avatar = Some(avatar);
+                }
+            } else {
+                message.webhook = mapping::map_webhook_author(webhook_id, &author);
+            }
+        } else if let (Some(id), Some(webhook)) = (update.webhook_id, &mut message.webhook) {
+            webhook.id = id;
         }
         if let Some(timestamp) = update.timestamp.as_deref().and_then(local_timestamp) {
             message.timestamp = timestamp;

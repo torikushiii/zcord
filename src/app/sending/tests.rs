@@ -34,9 +34,10 @@ fn failed_refresh_retains_content_and_retries_join_the_tail_without_blocking_oth
     let reply = ReplyTarget {
         message_id: 99,
         author_id: 2,
+        webhook_name: None,
         mention: false,
     };
-    sends.push(10, "A".into(), Some(reply));
+    sends.push(10, "A".into(), Some(reply.clone()));
     sends.push(20, "Other".into(), None);
     // A failed refresh does not drain the queue. A later submission initiates another
     // refresh even when an unrelated response already set at_present.
@@ -62,4 +63,25 @@ fn failed_refresh_retains_content_and_retries_join_the_tail_without_blocking_oth
     assert_eq!(retained.message_id, 99);
     assert!(!retained.mention);
     assert_eq!(flushed[2].2.as_ref().unwrap().message_id, 99);
+}
+
+#[test]
+fn staged_webhook_reply_retains_its_display_name() {
+    let mut sends = PendingSends::default();
+    sends.push(
+        10,
+        "Reply".into(),
+        Some(ReplyTarget {
+            message_id: 99,
+            author_id: 2,
+            webhook_name: Some("Webhook display name".into()),
+            mention: false,
+        }),
+    );
+    let flushed = sends.take_channel(10);
+    let reply = flushed[0].2.as_ref().unwrap();
+    assert_eq!(reply.webhook_name.as_deref(), Some("Webhook display name"));
+    assert_eq!(reply.message_id, 99);
+    assert_eq!(reply.author_id, 2);
+    assert!(!reply.mention);
 }

@@ -302,11 +302,20 @@ pub(super) fn map_stickers(stickers: &[model::Sticker]) -> Vec<Sticker> {
         .collect()
 }
 
+pub(super) fn map_webhook_author(id: Option<u64>, author: &model::User) -> Option<WebhookAuthor> {
+    Some(WebhookAuthor {
+        id: id?,
+        name: author.username.clone(),
+        avatar: author.avatar.clone(),
+    })
+}
+
 pub(super) fn map_message(message: &model::Message) -> Option<Message> {
     Some(Message {
         id: message.id,
         send_order: None,
         author_id: message.author.id,
+        webhook: map_webhook_author(message.webhook_id, &message.author),
         timestamp: local_timestamp(&message.timestamp)?,
         delivery: Delivery::Sent,
         content: message.content.clone(),

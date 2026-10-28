@@ -19,8 +19,12 @@ impl DiscordApp {
             .channel(channel_id)
             .map_or(&[][..], |channel| &channel.messages)
         {
-            ids.push(message.author_id);
-            if let Some(ReplyState::Loaded(reply)) = &message.reply {
+            if message.webhook.is_none() {
+                ids.push(message.author_id);
+            }
+            if let Some(ReplyState::Loaded(reply)) = &message.reply
+                && reply.webhook.is_none()
+            {
                 ids.push(reply.author_id);
             }
             collect_mentions(&self.parsed(message.id, &message.content).blocks, &mut ids);

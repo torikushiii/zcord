@@ -278,13 +278,13 @@ impl DiscordApp {
             channel_id,
             nonce,
             content.clone(),
-            reply.map(|reply| reply.message_id),
+            reply.as_ref().map(|reply| reply.message_id),
         );
         self.apply_change(change, window, cx);
         let outgoing = OutgoingMessage {
             content,
             nonce,
-            reply: reply.map(|reply| OutgoingReply {
+            reply: reply.as_ref().map(|reply| OutgoingReply {
                 message_id: reply.message_id,
                 mention: reply.mention,
             }),
@@ -360,16 +360,19 @@ impl DiscordApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(author_id) = self
+        let Some(message) = self
             .message_index(message_id)
             .and_then(|index| self.channel()?.messages.get(index))
-            .map(|message| message.author_id)
         else {
             return;
         };
         self.reply = Some(ReplyTarget {
             message_id,
-            author_id,
+            author_id: message.author_id,
+            webhook_name: message
+                .webhook
+                .as_ref()
+                .map(|author| author.name.clone().into()),
             mention: true,
         });
         self.focus_composer(window, cx);
@@ -577,6 +580,7 @@ impl DiscordApp {
     pub(super) fn forget_message(&mut self, message_id: u64, cx: &mut Context<Self>) {
         if self
             .reply
+            .as_ref()
             .is_some_and(|reply| reply.message_id == message_id)
         {
             self.reply = None;
