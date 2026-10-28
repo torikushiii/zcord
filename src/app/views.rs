@@ -188,6 +188,7 @@ impl Render for ChatHeaderView {
 pub(crate) struct MessagesView {
     app: WeakEntity<DiscordApp>,
     layout_preferences: (f32, bool),
+    active_now_clock: Option<Task<()>>,
     _observe: Subscription,
 }
 
@@ -199,7 +200,24 @@ impl MessagesView {
                 crate::settings::chat_font_size(),
                 crate::settings::link_previews(),
             ),
+            active_now_clock: None,
             _observe: observe_app(app, cx),
+        }
+    }
+
+    fn sync_active_now_clock(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if !enabled {
+            self.active_now_clock = None;
+        } else if self.active_now_clock.is_none() {
+            // Notify only this view; notifying the app would re-render every shell panel each second.
+            self.active_now_clock = Some(cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(Duration::from_secs(1)).await;
+                    if this.update(cx, |_, cx| cx.notify()).is_err() {
+                        break;
+                    }
+                }
+            }));
         }
     }
 }
@@ -208,8 +226,10 @@ impl Render for MessagesView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         count_render(ViewKind::Messages);
         let Some(app) = self.app.upgrade() else {
+            self.sync_active_now_clock(false, cx);
             return div().into_any_element();
         };
+        self.sync_active_now_clock(home::needs_active_now_clock(app.read(cx)), cx);
         let app = app.read(cx);
         let preferences = (
             crate::settings::chat_font_size(),

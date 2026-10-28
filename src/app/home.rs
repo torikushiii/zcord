@@ -4,11 +4,13 @@ use gpui_tokio::Tokio;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use crate::{
-    app::{DiscordApp, chat, member_list, message_body::label, profile::presence_art, set_text},
+    app::{
+        DiscordApp, chat, member_list, message_body::label, profile::presence_art, set_text, voice,
+    },
     discord::{Event, model::PublicApplication},
     media::images::{self, ImageSpec},
     store::{GameActivity, PrivateChannel, RelationshipKind, Status, Store, User},
@@ -22,8 +24,12 @@ const FRIEND_HEIGHT: f32 = 62.;
 const ACTIVE_NOW_WIDTH: f32 = 420.;
 const ACTIVE_ICON: f32 = 24.;
 const ACTIVE_ART: f32 = 32.;
+const ACTIVE_BADGE: f32 = 16.;
 const ACTION_SIZE: f32 = 36.;
 const SPOTIFY_GREEN: u32 = 0x1DB954;
+
+#[cfg(test)]
+mod tests;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum FriendsTab {
@@ -978,13 +984,91 @@ fn friend_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement + us
         )
 }
 
-fn elapsed(started: Option<SystemTime>) -> Option<String> {
-    let minutes = SystemTime::now().duration_since(started?).ok()?.as_secs() / 60;
-    Some(if minutes < 60 {
+fn elapsed(duration: Duration) -> String {
+    let minutes = duration.as_secs() / 60;
+    if minutes < 60 {
         format!("{minutes}m")
     } else {
         format!("{}h", minutes / 60)
-    })
+    }
+}
+
+fn activity_elapsed(started: Option<SystemTime>, now: SystemTime) -> Option<Duration> {
+    now.duration_since(started?).ok()
+}
+
+fn shows_elapsed_line(game: &GameActivity) -> bool {
+    game.started_at.is_some() && (game.details.is_some() || game.state.is_some())
+}
+
+pub(super) fn needs_active_now_clock(app: &DiscordApp) -> bool {
+    app.showing_home_page()
+        && app.home.page == HomePage::Friends
+        && app.store.active_now().into_iter().any(|id| {
+            app.store
+                .user(id)
+                .and_then(|user| user.game.as_ref())
+                .is_some_and(shows_elapsed_line)
+        })
+}
+
+fn active_art(image: AnyElement, badge: Option<AnyElement>) -> Div {
+    div()
+        .relative()
+        .flex_none()
+        .size(rpx(ACTIVE_ART))
+        .rounded(rpx(ACTIVE_ART / 5.))
+        .bg(rgba(theme::SELECTED))
+        .child(image)
+        .children(badge.map(|badge| {
+            div()
+                .absolute()
+                .right(rpx(-4.))
+                .bottom(rpx(-4.))
+                .size(rpx(ACTIVE_BADGE + 4.))
+                .p(rpx(2.))
+                .rounded_full()
+                .bg(rgb(theme::BG))
+                .child(badge)
+        }))
+}
+
+fn active_detail_text(
+    id: u64,
+    detail: &str,
+    state: Option<&str>,
+    duration: Option<Duration>,
+) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w_0()
+        .child(
+            div()
+                .truncate()
+                .text_size(rpx(14.))
+                .line_height(rpx(18.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(theme::STRONG))
+                .child(label(("active-detail", id), detail)),
+        )
+        .children(state.map(|state| {
+            div()
+                .truncate()
+                .text_size(rpx(12.))
+                .line_height(rpx(16.))
+                .text_color(rgb(theme::MUTED))
+                .child(label(("active-state", id), state))
+        }))
+        .children(duration.map(|duration| {
+            div()
+                .debug_selector(|| "active-elapsed".into())
+                .text_size(rpx(12.))
+                .line_height(rpx(16.))
+                .text_color(rgb(theme::MUTED))
+                .child(format!("{} elapsed", voice::format_elapsed(duration)))
+        }))
 }
 
 fn active_card(
@@ -995,11 +1079,12 @@ fn active_card(
     cx: &App,
 ) -> AnyElement {
     let listening = user.game.is_none();
+    let duration = activity_elapsed(game.started_at, SystemTime::now());
     let headline = if listening {
         format!("Listening to {}", game.name)
     } else {
-        match elapsed(game.started_at) {
-            Some(time) => format!("{} – {time}", game.name),
+        match duration {
+            Some(duration) => format!("{} – {}", game.name, elapsed(duration)),
             None => game.name.clone(),
         }
     };
@@ -1046,16 +1131,21 @@ fn active_card(
                     .or_else(|| presence(ACTIVE_ICON, "active-icon"))
                     .unwrap_or_else(|| fallback(ACTIVE_ICON))
             });
-    let art = div()
-        .flex_none()
-        .size(rpx(ACTIVE_ART))
-        .rounded(rpx(ACTIVE_ART / 5.))
-        .bg(rgba(theme::SELECTED))
-        .child(
-            presence(ACTIVE_ART, "active-art")
-                .or_else(|| app_icon(ACTIVE_ART))
-                .unwrap_or_else(|| fallback(ACTIVE_ART)),
-        );
+    let badge = game.small_image.as_ref().and_then(|image| {
+        presence_art(
+            &image.url,
+            ACTIVE_BADGE,
+            ACTIVE_BADGE,
+            ("active-badge", id),
+            cx,
+        )
+    });
+    let art = active_art(
+        presence(ACTIVE_ART, "active-art")
+            .or_else(|| app_icon(ACTIVE_ART))
+            .unwrap_or_else(|| fallback(ACTIVE_ART)),
+        badge,
+    );
     let detail = game.details.clone().or_else(|| game.state.clone());
     let state = game.details.as_ref().and(game.state.clone());
     div()
@@ -1114,30 +1204,12 @@ fn active_card(
                 .gap(rpx(12.))
                 .p(rpx(16.))
                 .child(art)
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_w_0()
-                        .child(
-                            div()
-                                .truncate()
-                                .text_size(rpx(14.))
-                                .line_height(rpx(18.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(theme::STRONG))
-                                .child(label(("active-detail", id), &detail)),
-                        )
-                        .children(state.map(|state| {
-                            div()
-                                .truncate()
-                                .text_size(rpx(12.))
-                                .line_height(rpx(16.))
-                                .text_color(rgb(theme::MUTED))
-                                .child(label(("active-state", id), &state))
-                        })),
-                )
+                .child(active_detail_text(
+                    id,
+                    &detail,
+                    state.as_deref(),
+                    duration.filter(|_| !listening),
+                ))
         }))
         .into_any_element()
 }
