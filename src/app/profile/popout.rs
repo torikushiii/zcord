@@ -468,7 +468,14 @@ pub(super) fn display_names(
                 } else {
                     FontWeight::BOLD
                 })
-                .child(theme::display_name(&name, name_style, palette.strong)),
+                .text_color(rgb(palette.strong))
+                .child(crate::app::display_name::render(
+                    ("profile-styled-name", card.user_id),
+                    &name,
+                    name_style,
+                    crate::app::display_name::Surface::Profile,
+                    cx,
+                )),
         )
         .child(
             div()

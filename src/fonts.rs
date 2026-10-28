@@ -3,6 +3,10 @@ use std::{borrow::Cow, fs, path::PathBuf};
 use gpui::{App, SharedString};
 use gpui_component::Theme;
 
+mod display;
+
+pub(crate) use display::{DisplayFont, display_font};
+
 const DISCORD_FAMILY: &str = "gg sans";
 const BUNDLED_FAMILY: &str = "Noto Sans";
 
@@ -32,7 +36,13 @@ pub fn init(cx: &mut App) {
         }
     }
 
-    let family = pick_family(&text_system.all_font_names());
+    if let Err(error) = text_system.add_fonts(display::FONTS.map(Cow::Borrowed).to_vec()) {
+        log::error!("Could not load bundled display fonts: {error:#}");
+    }
+
+    let available = text_system.all_font_names();
+    display::cache_availability(cx, &available);
+    let family = pick_family(&available);
     log::info!("Using {family} as UI font");
     Theme::global_mut(cx).font_family = family;
 }

@@ -2,6 +2,7 @@ use super::composer::{emoji_token_overlay, flush_textarea};
 use super::media::{render_attachment, render_sticker};
 use super::rows::is_system;
 use super::*;
+use crate::app::display_name::{self, Surface};
 use crate::app::message_body::render_body_scaled;
 
 pub(in crate::app) fn body_context<'a>(app: &'a DiscordApp, message_id: u64) -> BodyContext<'a> {
@@ -41,20 +42,12 @@ pub(in crate::app) fn author_name(app: &DiscordApp, user_id: u64) -> String {
         .to_owned()
 }
 
-fn author_label(app: &DiscordApp, message: &Message) -> AnyElement {
+fn author_label(app: &DiscordApp, message: &Message, cx: &App) -> AnyElement {
     let name = author_name(app, message.author_id);
     let style = app
         .store
-        .member_name_style(app.selected_guild_id, message.author_id)
-        .filter(|_| {
-            app.store
-                .member_color(app.selected_guild_id, message.author_id)
-                .is_none()
-        });
-    match style {
-        Some(style) => theme::display_name(&name, Some(style), theme::STRONG),
-        None => label(("author", message.id), &name),
-    }
+        .member_name_style(app.selected_guild_id, message.author_id);
+    display_name::render(("author", message.id), &name, style, Surface::FontOnly, cx)
 }
 
 fn author_color(app: &DiscordApp, user_id: u64) -> Hsla {
@@ -113,7 +106,7 @@ fn system_text(message: &Message) -> Option<(&'static str, u32, String)> {
     Some(template)
 }
 
-fn render_system(app: &DiscordApp, message: &Message) -> Option<AnyElement> {
+fn render_system(app: &DiscordApp, message: &Message, cx: &App) -> Option<AnyElement> {
     let (icon, color, template) = system_text(message)?;
     let (before, after) = template.split_once("{}").unwrap_or((&template, ""));
     Some(
@@ -152,9 +145,15 @@ fn render_system(app: &DiscordApp, message: &Message) -> Option<AnyElement> {
                                 div()
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(author_color(app, message.author_id))
-                                    .child(label(
+                                    .child(display_name::render(
                                         ("system-author", message.id),
                                         &author_name(app, message.author_id),
+                                        app.store.member_name_style(
+                                            app.selected_guild_id,
+                                            message.author_id,
+                                        ),
+                                        Surface::FontOnly,
+                                        cx,
                                     )),
                             )
                             .child(after.to_owned()),
@@ -297,9 +296,13 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
                         .truncate()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(author_color(app, reply.author_id))
-                        .child(label(
+                        .child(display_name::render(
                             ("reply-author", message.id),
                             &format!("@{}", author_name(app, reply.author_id)),
+                            app.store
+                                .member_name_style(app.selected_guild_id, reply.author_id),
+                            Surface::FontOnly,
+                            cx,
                         )),
                 )
                 .children(
@@ -430,7 +433,7 @@ pub(super) fn render_message(
     cx: &App,
 ) -> AnyElement {
     if is_system(message.kind)
-        && let Some(element) = render_system(app, message)
+        && let Some(element) = render_system(app, message, cx)
     {
         return element;
     }
@@ -603,7 +606,7 @@ pub(super) fn render_message(
                                                         Anchor::TopLeft,
                                                     ))
                                             })
-                                            .child(author_label(app, message)),
+                                            .child(author_label(app, message, cx)),
                                     )
                                     .when(user.is_some_and(|user| user.bot), |this| {
                                         this.child(theme::app_tag())

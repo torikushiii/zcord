@@ -6,7 +6,7 @@ use crate::{
     media::animated,
     media::images::{self, ImageSpec},
     settings,
-    store::{Decoration, GuildTag, NameStyle, Status, Store, User},
+    store::{Decoration, GuildTag, Status, Store, User},
 };
 
 mod midnight;
@@ -288,48 +288,6 @@ pub fn activity_icon(user: &User) -> Option<&'static str> {
     }
 }
 
-pub fn display_name(text: &str, style: Option<&NameStyle>, fallback: u32) -> AnyElement {
-    let colors: Vec<Rgba> = style
-        .map(|style| style.colors.iter().map(|color| rgb(*color)).collect())
-        .unwrap_or_default();
-    if colors.len() < 2 {
-        let color = colors.first().copied().unwrap_or(rgb(fallback));
-        return div()
-            .text_color(color)
-            .child(SharedString::from(text.to_owned()))
-            .into_any_element();
-    }
-    let chars: Vec<(usize, char)> = text.char_indices().collect();
-    let last = chars.len().saturating_sub(1).max(1) as f32;
-    let highlights = chars.iter().enumerate().map(|(index, (offset, ch))| {
-        let color = gradient_at(&colors, index as f32 / last);
-        (
-            *offset..offset + ch.len_utf8(),
-            HighlightStyle {
-                color: Some(color.into()),
-                ..Default::default()
-            },
-        )
-    });
-    div()
-        .text_color(colors[0])
-        .child(StyledText::new(text.to_owned()).with_highlights(highlights))
-        .into_any_element()
-}
-
-fn gradient_at(colors: &[Rgba], position: f32) -> Rgba {
-    let scaled = position.clamp(0., 1.) * (colors.len() - 1) as f32;
-    let index = (scaled.floor() as usize).min(colors.len() - 2);
-    let t = scaled - index as f32;
-    let (a, b) = (colors[index], colors[index + 1]);
-    Rgba {
-        r: a.r + (b.r - a.r) * t,
-        g: a.g + (b.g - a.g) * t,
-        b: a.b + (b.b - a.b) * t,
-        a: a.a + (b.a - a.a) * t,
-    }
-}
-
 pub fn avatar(
     initials: &str,
     color: Hsla,
@@ -339,8 +297,9 @@ pub fn avatar(
     decoration: Option<AnyElement>,
 ) -> impl IntoElement + use<> {
     let notch = profile_avatar::Geometry::for_avatar(size, status.is_some());
-    let dot = size * 0.3;
+    let dot = (size * 0.3).round();
     div()
+        .debug_selector(|| "user-avatar".into())
         .relative()
         .flex_none()
         .size(rpx(size))
@@ -366,6 +325,7 @@ pub fn avatar(
                 return profile_avatar::indicator(notch, status, ring);
             }
             div()
+                .debug_selector(|| "avatar-status".into())
                 .absolute()
                 .right(rpx(-2.))
                 .bottom(rpx(-2.))

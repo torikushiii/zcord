@@ -1,7 +1,11 @@
 use gpui::{prelude::*, *};
 
 use crate::{
-    app::{DiscordApp, message_body::label},
+    app::{
+        DiscordApp,
+        display_name::{self, Surface},
+        message_body::label,
+    },
     media::animated,
     media::images::{self, ImageSpec},
     store::{MemberList, MemberRow, NameStyle, Nameplate, User},
@@ -289,7 +293,6 @@ fn name_line(
     name_style: Option<&NameStyle>,
     cx: &App,
 ) -> impl IntoElement {
-    let name_style = name_style.filter(|_| role_color.is_none());
     div()
         .flex()
         .items_center()
@@ -303,10 +306,13 @@ fn name_line(
                 .line_height(rpx(20.))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(rgb(role_color.unwrap_or(theme::TEXT)))
-                .child(match name_style {
-                    Some(style) => theme::display_name(name, Some(style), theme::TEXT),
-                    None => label(("member-name", user.id), name),
-                }),
+                .child(display_name::render(
+                    ("member-name", user.id),
+                    name,
+                    name_style,
+                    Surface::FontOnly,
+                    cx,
+                )),
         )
         .when(user.bot, |this| this.child(theme::app_tag()))
         .children(user.tag.as_ref().map(|tag| theme::guild_tag(tag, cx)))
