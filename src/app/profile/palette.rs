@@ -1,5 +1,5 @@
 use gpui::*;
-use palette::{FromColor, Lab, Mix, Srgb};
+use palette::{FromColor, Hsl, Lab, Mix, Oklab, Srgb};
 
 use super::THEME_OVERLAY;
 use super::loading::guild_profile;
@@ -127,11 +127,52 @@ pub(super) struct ProfilePalette {
     pub(super) raised: Hsla,
     pub(super) border: Hsla,
     pub(super) hover: Hsla,
+    pub(super) status_surface: u32,
+    pub(super) status_border: Hsla,
+    pub(super) status_text: Hsla,
 }
 
 impl ProfilePalette {
     pub(super) fn of(theme: Option<ProfileTheme>) -> Self {
         let light = theme.is_some_and(ProfileTheme::is_light);
+        let to_srgb = |color: u32| -> Srgb<f32> {
+            Srgb::new(
+                ((color >> 16) & 0xFF) as u8,
+                ((color >> 8) & 0xFF) as u8,
+                (color & 0xFF) as u8,
+            )
+            .into_format()
+        };
+        let status_tint = theme.map(|theme| {
+            let source = if light {
+                theme.secondary
+            } else {
+                theme.primary
+            };
+            let mut tint = Hsl::from_color(to_srgb(source));
+            tint.saturation = 1.;
+            tint.lightness = if light { 0.9 } else { 0.05 };
+            let tint: Srgb<u8> = Srgb::from_color(tint).into_format();
+            Oklab::from_color(tint.into_format::<f32>())
+        });
+        let status_color = |color: u32| {
+            let Some(tint) = status_tint else {
+                return color;
+            };
+            // Discord mixes the original token at 100% with its profile tint at 50%.
+            let mixed: Srgb<u8> =
+                Srgb::from_color(Oklab::from_color(to_srgb(color)).mix(tint, 1. / 3.))
+                    .into_format();
+            (u32::from(mixed.red) << 16) | (u32::from(mixed.green) << 8) | u32::from(mixed.blue)
+        };
+        let status_border = status_color(if light { 0x9696A0 } else { 0x97979F });
+        let status_border_alpha = if light {
+            0x33
+        } else if theme.is_some() {
+            0x70
+        } else {
+            0x29
+        };
         let mut palette = Self {
             light,
             strong: if light { 0x18141F } else { theme::STRONG },
@@ -157,6 +198,14 @@ impl ProfilePalette {
             },
             border: hsla(0., 0., if light { 0. } else { 1. }, 0.08),
             hover: hsla(0., 0., if light { 0. } else { 1. }, 0.04),
+            status_surface: status_color(if light { 0xFFFFFF } else { 0x17181B }),
+            status_border: rgba((status_border << 8) | status_border_alpha).into(),
+            status_text: match (light, theme.is_some()) {
+                (false, false) => rgb(0xD4D5D8).into(),
+                (true, false) => rgb(0x2E2E34).into(),
+                (false, true) => rgba(0xFFFFFFF5).into(),
+                (true, true) => rgba(0x000000F5).into(),
+            },
         };
         if let Some(theme) = theme {
             let backgrounds = [
@@ -174,5 +223,35 @@ impl ProfilePalette {
             }
         }
         palette
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ProfilePalette, ProfileTheme};
+
+    #[test]
+    fn status_bubble_uses_discord_surface_and_border_tokens() {
+        let plain = ProfilePalette::of(None);
+        assert_eq!(plain.status_surface, 0x17181B);
+        assert!((plain.status_border.a - 41. / 255.).abs() < 0.001);
+
+        // Reference colors extracted from Discord's dark and light profile bubble CSS.
+        for (primary, expected, border_alpha) in [
+            (0xB2563E, 0x191211, 112. / 255.),
+            (0xD99DA3, 0xFFEEEF, 51. / 255.),
+        ] {
+            let palette = ProfilePalette::of(Some(ProfileTheme {
+                primary,
+                secondary: 0xD99DA3,
+            }));
+            for shift in [0, 8, 16] {
+                let actual = (palette.status_surface >> shift) & 0xFF;
+                let expected = (expected >> shift) & 0xFF;
+                assert!(actual.abs_diff(expected) <= 1);
+            }
+            assert!((palette.status_border.a - border_alpha).abs() < 0.001);
+            assert!((palette.status_text.a - 245. / 255.).abs() < 0.001);
+        }
     }
 }

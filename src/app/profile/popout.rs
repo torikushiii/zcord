@@ -1,3 +1,11 @@
+use std::time::SystemTime;
+
+use crate::app::{
+    message_body::emoji_pieces,
+    rich_text::{Content, EmojiSource, Piece, PieceStyle, rich_text},
+};
+use crate::store::{CustomStatus, StatusEmoji};
+
 use super::badges::badges;
 use super::frame::{frame_overflow, framed};
 use super::loading::guild_profile;
@@ -14,6 +22,9 @@ pub(super) fn popout(
     let palette = card.palette();
     let layout = Layout::popout(theme.is_some());
     let surface = theme.map_or(theme::ELEVATED, ProfileTheme::surface);
+    let outer_width = POPOUT_WIDTH + theme.map_or(0., |_| THEME_BORDER * 2.);
+    let overflow = frame_overflow(card, outer_width).unwrap_or_default();
+    let position = card.popout_position(window, &overflow);
     let entity = app.entity.clone();
     let open_full = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
         entity.update(cx, |app, cx| app.open_full_profile(cx)).ok();
@@ -40,7 +51,26 @@ pub(super) fn popout(
         ))
         .child(popout_body(app, card, &layout, cx))
         .children(effect_layers(card, layout.width, cx));
-    let outer_width = POPOUT_WIDTH + theme.map_or(0., |_| THEME_BORDER * 2.);
+    let inner = match card.account_max_height(window, &overflow) {
+        Some(height) => {
+            let inset = match theme {
+                Some(_) => rpx(THEME_BORDER * 2.).to_pixels(window.rem_size()),
+                None => px(2.),
+            };
+            // Scroll the account content instead of letting window snapping cover its anchor.
+            div()
+                .id("account-popout-scroll")
+                .flex()
+                .flex_col()
+                .max_h((height - inset).max(px(0.)))
+                .rounded(rpx(if theme.is_some() { 6. } else { 8. }))
+                .overflow_hidden()
+                .overflow_y_scroll()
+                .child(inner.flex_none())
+                .into_any_element()
+        }
+        None => inner.into_any_element(),
+    };
     let outer = div()
         .relative()
         .w(rpx(outer_width))
@@ -58,11 +88,10 @@ pub(super) fn popout(
     let framed = framed(card, outer_width, outer, false, cx);
     let close = app.entity.clone();
     // Keep the frame art that hangs past the card on screen, not just the card itself.
-    let overflow = frame_overflow(card, outer_width).unwrap_or_default();
     let margin = |overflow: f32| rpx(overflow).to_pixels(window.rem_size()) + px(12.);
     deferred(
         anchored()
-            .position(card.position)
+            .position(position)
             .anchor(card.anchor)
             .snap_to_window_with_margin(Edges {
                 top: margin(overflow.top),
@@ -102,14 +131,20 @@ pub(super) fn header(
 ) -> AnyElement {
     let user = app.store.user(card.user_id);
     let palette = card.palette();
-    let status = user
-        .filter(|user| !user.playing)
-        .and_then(|user| user.activity.clone());
+    let status = active_custom_status(
+        user.and_then(|user| user.custom_status.as_ref()),
+        SystemTime::now(),
+    )
+    .cloned();
     // Your own profile shows an "add status" prompt in place of an empty bubble.
     let prompt = status.is_none() && card.user_id == app.store.current_user_id;
-    let status = status
-        .map(|text| (text, false))
-        .or_else(|| prompt.then(|| (STATUS_PROMPTS[card.status_prompt].to_owned(), true)));
+    let status = status.or_else(|| {
+        prompt.then(|| CustomStatus {
+            text: Some(STATUS_PROMPTS[card.status_prompt].to_owned()),
+            emoji: None,
+            expires_at: None,
+        })
+    });
     let avatar = div()
         .id("profile-avatar")
         .absolute()
@@ -131,27 +166,31 @@ pub(super) fn header(
             Some(handler) => this.cursor_pointer().on_click(handler),
             None => this,
         });
-    let status_height = status.as_ref().map_or(0., |(text, prompt)| {
-        if text.chars().count() > if *prompt { 18 } else { 22 } {
-            54.
-        } else {
-            36.
-        }
-    });
-    let height = layout
-        .header_min
-        .max(layout.banner - STATUS_OVERLAP + status_height);
     div()
         .relative()
+        .flex()
+        .flex_col()
+        .flex_none()
         .w_full()
-        .h(rpx(height))
+        .min_h(rpx(layout.header_min))
         .child(banner(card, layout, cx))
         .child(avatar)
         .children(
-            status
-                .map(|(text, prompt)| status_bubble(card.user_id, &text, prompt, layout, palette)),
+            status.map(|status| status_bubble(card.user_id, &status, prompt, layout, palette, cx)),
         )
         .into_any_element()
+}
+
+// An emoji alone is a complete status, even while its image is still loading.
+fn active_custom_status(status: Option<&CustomStatus>, now: SystemTime) -> Option<&CustomStatus> {
+    status.filter(|status| {
+        !status.is_expired(now)
+            && (status.emoji.is_some()
+                || status
+                    .text
+                    .as_deref()
+                    .is_some_and(|text| !text.trim().is_empty()))
+    })
 }
 
 fn banner(card: &ProfileCard, layout: &Layout, cx: &App) -> AnyElement {
@@ -196,6 +235,7 @@ fn banner(card: &ProfileCard, layout: &Layout, cx: &App) -> AnyElement {
         .or_else(|| card.theme().map(|theme| theme.primary))
         .unwrap_or(theme::SURFACE_HIGHEST);
     let banner = div()
+        .flex_none()
         .w_full()
         .h(rpx(layout.banner))
         .rounded_t(corner)
@@ -210,85 +250,167 @@ fn banner(card: &ProfileCard, layout: &Layout, cx: &App) -> AnyElement {
 
 fn status_bubble(
     user_id: u64,
-    text: &str,
+    status: &CustomStatus,
     prompt: bool,
     layout: &Layout,
     palette: ProfilePalette,
+    cx: &App,
 ) -> impl IntoElement + use<> {
-    let surface = if palette.light {
-        0xF1EDF5
-    } else {
-        SURFACE_HIGHEST
+    let shadow = || {
+        vec![
+            BoxShadow::new(
+                px(0.),
+                px(1.),
+                hsla(0., 0., 0., if palette.light { 0.08 } else { 0.14 }),
+            )
+            .blur_radius(px(4.)),
+        ]
     };
     let bubble = |size: f32| {
         div()
             .absolute()
             .size(rpx(size))
             .rounded_full()
-            .bg(rgb(surface))
+            .bg(rgb(palette.status_surface))
             .border_1()
-            .border_color(palette.border)
+            .border_color(palette.status_border)
+            .shadow(shadow())
     };
     div()
-        .absolute()
-        .left(rpx(layout.status_left))
-        .top(rpx(layout.banner - 7.))
-        .right(rpx(12.))
+        .relative()
+        .flex_none()
+        .ml(rpx(layout.status_left))
+        .mr(rpx(layout.status_right))
+        .mt(rpx(-layout.status_overlap))
         .flex()
         .child(
-            // Thought circles come first so the bubble paints over them,
-            // hiding their lower half behind its edge.
             div()
                 .relative()
+                .max_w(rpx(181.))
+                .min_w(rpx(42.))
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .rounded(rpx(16.))
+                        .bg(rgb(palette.status_surface))
+                        .border_1()
+                        .border_color(palette.status_border)
+                        .shadow(shadow()),
+                )
                 .child(bubble(20.).left(rpx(10.)).top(rpx(-8.)))
                 .child(bubble(10.).left(rpx(-3.)).top(rpx(-15.)))
-                .child(status_body(user_id, text, prompt, surface, palette)),
+                // The inner fill covers the circles inside the outline without clipping
+                // the portions that extend above it, just like Discord's nested span.
+                .child(
+                    div()
+                        .relative()
+                        .rounded(rpx(16.))
+                        .overflow_hidden()
+                        .border_1()
+                        .border_color(hsla(0., 0., 0., 0.))
+                        .child(status_body(user_id, status, prompt, palette, cx)),
+                ),
         )
+}
+
+fn status_emoji_source(emoji: &StatusEmoji, size: f32, cx: &App) -> Option<ImageSource> {
+    match emoji {
+        StatusEmoji::Unicode(sequence) => crate::text::emoji::image(sequence).map(Into::into),
+        StatusEmoji::Custom { id, animated, .. } => images::resolve(
+            &ImageSpec::Emoji {
+                id: *id,
+                animated: *animated && crate::settings::emoji_animation(),
+            },
+            theme::image_px(size),
+            cx,
+        )
+        .map(Into::into),
+    }
 }
 
 fn status_body(
     user_id: u64,
-    text: &str,
+    status: &CustomStatus,
     prompt: bool,
-    surface: u32,
     palette: ProfilePalette,
+    cx: &App,
 ) -> Div {
-    div()
-        .max_w(rpx(181.))
-        .min_w(rpx(42.))
+    let text = status.text.as_deref().unwrap_or_default();
+    let body = div()
+        .min_w_0()
         .px(rpx(12.))
         .py(rpx(8.))
-        .rounded(rpx(12.))
-        .bg(rgb(surface))
-        .border_1()
-        .border_color(palette.border)
-        .shadow_sm()
+        .rounded(rpx(15.))
+        .bg(rgb(palette.status_surface))
         .text_size(rpx(14.))
         .line_height(rpx(18.))
-        .text_color(rgb(palette.text))
-        .map(|this| {
-            if prompt {
-                // Will open a set-status dialog once one exists.
-                this.cursor_pointer()
-                    .flex()
-                    .items_start()
-                    .gap(rpx(4.))
-                    .child(theme::icon("circle-plus-filled", 16., palette.muted).mt(rpx(1.)))
-                    .child(
-                        div()
-                            .line_clamp(2)
-                            .italic()
-                            .text_color(rgb(palette.muted))
-                            .child(text.to_owned()),
-                    )
-            } else {
-                this.child(
-                    div()
-                        .line_clamp(2)
-                        .child(wrapped_label(("profile-status", user_id), text)),
-                )
-            }
-        })
+        .font_weight(FontWeight::NORMAL)
+        .text_color(palette.status_text);
+    if prompt {
+        // Will open a set-status dialog once one exists.
+        return body
+            .cursor_pointer()
+            .flex()
+            .items_start()
+            .gap(rpx(4.))
+            .child(theme::icon("circle-plus-filled", 16., palette.muted).mt(rpx(1.)))
+            .child(
+                div()
+                    .min_w_0()
+                    .line_clamp(2)
+                    .italic()
+                    .text_color(rgb(palette.muted))
+                    .child(text.to_owned()),
+            );
+    }
+    if text.trim().is_empty() {
+        return body.child(
+            div().size(rpx(32.)).children(
+                status
+                    .emoji
+                    .as_ref()
+                    .and_then(|emoji| status_emoji_source(emoji, 32., cx))
+                    .map(|source| {
+                        img(source)
+                            .id(("profile-status-emoji", user_id))
+                            .size_full()
+                            .object_fit(ObjectFit::Contain)
+                    }),
+            ),
+        );
+    }
+    let mut pieces = emoji_pieces(text, &PieceStyle::default());
+    // As an inline piece, the emoji only indents the first line, not every wrapped line.
+    if let Some(emoji) = status.emoji.as_ref() {
+        let fallback = match emoji {
+            StatusEmoji::Unicode(sequence) => sequence.clone(),
+            StatusEmoji::Custom { name, .. } => format!(":{name}:"),
+        };
+        pieces.insert(
+            0,
+            Piece {
+                content: Content::Emoji(
+                    status_emoji_source(emoji, 16., cx).map(EmojiSource::Still),
+                    fallback.into(),
+                ),
+                style: PieceStyle::default(),
+            },
+        );
+    }
+    let content = rich_text(("profile-status", user_id), pieces)
+        .emoji_size(rpx(16.))
+        .emoji_gap(rpx(4.))
+        .line_height(rpx(18.))
+        .line_clamp(2)
+        .selectable();
+    body.cursor_text().child(
+        div()
+            .min_w_0()
+            .max_h(rpx(36.))
+            .overflow_hidden()
+            .child(content),
+    )
 }
 
 pub(super) fn display_names(
@@ -426,8 +548,63 @@ fn popout_body(
                         .or_else(|| user.and_then(|user| playing(user, palette))),
                 )
                 .children(board::listening(app, card, false, cx))
-                .children(roles(app, card))
+                .when(!card.is_account(), |this| this.children(roles(app, card)))
         })
+        .when(card.is_account(), |this| {
+            this.child(account_menu(app, palette))
+        })
+}
+
+fn account_menu(app: &DiscordApp, palette: ProfilePalette) -> AnyElement {
+    let row = |id: &'static str, icon: &'static str, text: &'static str, action: AccountAction| {
+        div()
+            .id(id)
+            .flex()
+            .items_center()
+            .gap(rpx(12.))
+            .min_h(rpx(48.))
+            .px(rpx(12.))
+            .py(rpx(12.))
+            .rounded(rpx(8.))
+            .cursor_pointer()
+            .text_size(rpx(14.))
+            .line_height(rpx(20.))
+            .text_color(rgb(palette.text))
+            .hover(|style| style.bg(palette.hover).text_color(rgb(palette.strong)))
+            .without_text_selection()
+            .on_click(account_action(app, action))
+            .child(theme::icon(icon, 18., palette.muted))
+            .child(div().flex_1().min_w_0().truncate().child(text))
+    };
+    div()
+        .flex()
+        .flex_col()
+        .gap(rpx(12.))
+        .child(
+            div()
+                .rounded(rpx(8.))
+                .bg(palette.panel)
+                .child(row(
+                    "account-view-profile",
+                    "user",
+                    "View Profile",
+                    AccountAction::ViewProfile,
+                ))
+                .child(div().h(rpx(1.)).mx(rpx(12.)).bg(palette.border))
+                .child(row(
+                    "account-settings",
+                    "settings",
+                    "User Settings",
+                    AccountAction::Settings,
+                )),
+        )
+        .child(div().rounded(rpx(8.)).bg(palette.panel).child(row(
+            "account-copy-user-id",
+            "copy",
+            "Copy User ID",
+            AccountAction::CopyUserId,
+        )))
+        .into_any_element()
 }
 
 /// Stands in for the bio and roles while a profile nobody has opened before is fetched.
@@ -683,4 +860,57 @@ pub(super) fn member_since(app: &DiscordApp, card: &ProfileCard, cx: &App) -> An
             .into_any_element(),
         palette,
     )
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::active_custom_status;
+    use crate::store::{CustomStatus, StatusEmoji};
+    use std::time::{Duration, UNIX_EPOCH};
+
+    #[test]
+    fn custom_status_accepts_text_and_emoji_only() {
+        let now = UNIX_EPOCH + Duration::from_secs(60);
+        let mut status = CustomStatus {
+            text: Some("My custom status".to_owned()),
+            emoji: None,
+            expires_at: None,
+        };
+        assert_eq!(active_custom_status(Some(&status), now), Some(&status));
+
+        status.text = None;
+        status.emoji = Some(StatusEmoji::Custom {
+            id: 123,
+            name: "status_emoji".to_owned(),
+            animated: true,
+        });
+        assert_eq!(active_custom_status(Some(&status), now), Some(&status));
+
+        status.emoji = Some(StatusEmoji::Unicode("\u{1F680}".to_owned()));
+        assert_eq!(active_custom_status(Some(&status), now), Some(&status));
+    }
+
+    #[test]
+    fn custom_status_omits_missing_empty_and_expired_values() {
+        let now = UNIX_EPOCH + Duration::from_secs(60);
+        assert!(active_custom_status(None, now).is_none());
+
+        let status = CustomStatus {
+            text: Some(" \n ".to_owned()),
+            emoji: None,
+            expires_at: None,
+        };
+        assert!(active_custom_status(Some(&status), now).is_none());
+
+        let status = CustomStatus {
+            text: Some("Expires now".to_owned()),
+            expires_at: Some(now),
+            ..status
+        };
+        assert!(active_custom_status(Some(&status), now).is_none());
+        assert_eq!(
+            active_custom_status(Some(&status), now - Duration::from_secs(1)),
+            Some(&status)
+        );
+    }
 }

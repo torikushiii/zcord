@@ -89,7 +89,9 @@ pub struct RichText {
     pieces: Rc<Vec<Piece>>,
     line_height: Option<Rems>,
     emoji_size: Option<Rems>,
+    emoji_gap: Option<Rems>,
     emoji_scale: f32,
+    line_clamp: Option<usize>,
     wrap: bool,
     truncate: bool,
     selectable: bool,
@@ -102,7 +104,9 @@ pub fn rich_text(id: impl Into<ElementId>, pieces: Vec<Piece>) -> RichText {
         pieces: Rc::new(pieces),
         line_height: None,
         emoji_size: None,
+        emoji_gap: None,
         emoji_scale: 1.375,
+        line_clamp: None,
         wrap: true,
         truncate: false,
         selectable: false,
@@ -123,6 +127,19 @@ impl RichText {
 
     pub fn emoji_size(mut self, size: Rems) -> Self {
         self.emoji_size = Some(size);
+        self
+    }
+
+    /// Caps the visible lines and ellipsizes the last one when later content is hidden.
+    /// A zero clamp intentionally hides all lines and produces zero height.
+    pub fn line_clamp(mut self, lines: usize) -> Self {
+        self.line_clamp = Some(lines);
+        self
+    }
+
+    /// Sets the gap after each emoji. Unset keeps the legacy 0.1em slot, centered around the image.
+    pub fn emoji_gap(mut self, gap: Rems) -> Self {
+        self.emoji_gap = Some(gap);
         self
     }
 
@@ -162,6 +179,8 @@ struct Fonts {
     font_size: Pixels,
     line_height: Pixels,
     emoji_size: Pixels,
+    /// `None` keeps the legacy centered 0.1em emoji slot.
+    emoji_gap: Option<Pixels>,
 }
 
 impl Fonts {
@@ -264,16 +283,24 @@ fn hash_chip(chip: Option<Chip>, hasher: &mut impl Hasher) {
 /// runs, so colours/underlines are included too; re-shaping on those rare changes is cheaper than
 /// recolouring every run at paint. Emoji image loading is paint-time, and `group` only affects
 /// chip painting, so neither belongs here.
-fn layout_fingerprint(pieces: &[Piece], fonts: &Fonts, wrap: bool, truncate: bool) -> u64 {
+fn layout_fingerprint(
+    pieces: &[Piece],
+    fonts: &Fonts,
+    wrap: bool,
+    truncate: bool,
+    line_clamp: Option<usize>,
+) -> u64 {
     let mut hasher = DefaultHasher::new();
     wrap.hash(&mut hasher);
     truncate.hash(&mut hasher);
+    line_clamp.hash(&mut hasher);
     fonts.base.hash(&mut hasher);
     fonts.mono.hash(&mut hasher);
     fonts.color.hash(&mut hasher);
     fonts.font_size.hash(&mut hasher);
     fonts.line_height.hash(&mut hasher);
     fonts.emoji_size.hash(&mut hasher);
+    fonts.emoji_gap.hash(&mut hasher);
     for piece in pieces {
         match &piece.content {
             Content::Text(text) => {
@@ -336,6 +363,7 @@ impl Line {
 struct Layout {
     wrap_width: Option<Pixels>,
     truncated_to: Option<Pixels>,
+    line_clamp: Option<usize>,
     lines: Vec<Line>,
     size: Size<Pixels>,
 }
@@ -343,6 +371,7 @@ struct Layout {
 struct LayoutCache {
     wrap: bool,
     truncate: bool,
+    line_clamp: Option<usize>,
     atoms: Option<Vec<Atom>>,
     layouts: Vec<Rc<Layout>>,
 }
@@ -356,10 +385,11 @@ struct CachedLayout {
 const MAX_LAYOUTS: usize = 4;
 
 impl LayoutCache {
-    fn new(wrap: bool, truncate: bool) -> Self {
+    fn new(wrap: bool, truncate: bool, line_clamp: Option<usize>) -> Self {
         Self {
             wrap,
             truncate,
+            line_clamp,
             atoms: None,
             layouts: Vec::new(),
         }
@@ -375,7 +405,9 @@ impl LayoutCache {
         let wrap_width = width.filter(|_| self.wrap);
         let truncated_to = width.filter(|_| self.truncate);
         if let Some(index) = self.layouts.iter().position(|layout| {
-            layout.wrap_width == wrap_width && layout.truncated_to == truncated_to
+            layout.wrap_width == wrap_width
+                && layout.truncated_to == truncated_to
+                && layout.line_clamp == self.line_clamp
         }) {
             let layout = self.layouts.remove(index);
             self.layouts.push(layout.clone());
@@ -390,6 +422,7 @@ impl LayoutCache {
             atoms,
             self.wrap,
             self.truncate,
+            self.line_clamp,
             width,
             window,
         ));
@@ -460,6 +493,14 @@ fn text_lines(text: &str) -> impl Iterator<Item = (&str, usize)> {
     })
 }
 
+fn emoji_inset(fragment_width: Pixels, emoji_size: Pixels, explicit_gap: bool) -> Pixels {
+    if explicit_gap {
+        Pixels::ZERO
+    } else {
+        (fragment_width - emoji_size) / 2.
+    }
+}
+
 fn build_atoms(pieces: &[Piece], fonts: &Fonts, wrap: bool, window: &mut Window) -> Vec<Atom> {
     let mut atoms = Vec::new();
     let mut pending_break = false;
@@ -469,11 +510,12 @@ fn build_atoms(pieces: &[Piece], fonts: &Fonts, wrap: bool, window: &mut Window)
         let first_atom = atoms.len();
         match &piece.content {
             Content::Emoji(..) => {
+                let gap = fonts.emoji_gap.unwrap_or(fonts.font_size * 0.1);
                 atoms.push(Atom {
                     piece: piece_index,
                     range: 0..0,
                     shaped: None,
-                    width: fonts.emoji_size + fonts.font_size * 0.1,
+                    width: fonts.emoji_size + gap,
                     trailing_space: Pixels::ZERO,
                     pad_left: Pixels::ZERO,
                     pad_right: Pixels::ZERO,
@@ -611,6 +653,7 @@ fn layout_pieces(
     atoms: &[Atom],
     wrap: bool,
     truncate: bool,
+    line_clamp: Option<usize>,
     width_limit: Option<Pixels>,
     window: &mut Window,
 ) -> Layout {
@@ -675,9 +718,28 @@ fn layout_pieces(
         });
         x += atom.width;
     }
+    if let Some(clamp) = line_clamp
+        && lines.len() > clamp
+    {
+        let hidden = lines[clamp..]
+            .iter()
+            .any(|line| line_has_content(line, pieces));
+        lines.truncate(clamp);
+        if hidden && clamp > 0 {
+            let limit = truncated_to.or(wrap_width);
+            truncate_line(
+                lines.last_mut().expect("clamped to a visible line"),
+                limit,
+                true,
+                pieces,
+                fonts,
+                window,
+            );
+        }
+    }
     if let Some(limit) = truncated_to {
         for line in &mut lines {
-            truncate_line(line, limit, pieces, fonts, window);
+            truncate_line(line, Some(limit), false, pieces, fonts, window);
         }
     }
     let mut y = Pixels::ZERO;
@@ -692,29 +754,44 @@ fn layout_pieces(
     Layout {
         wrap_width,
         truncated_to,
+        line_clamp,
         lines,
         size: size(width, y),
     }
 }
 
+fn line_has_content(line: &Line, pieces: &[Piece]) -> bool {
+    line.fragments
+        .iter()
+        .any(|fragment| match &pieces[fragment.piece].content {
+            Content::Text(text) => !text[fragment.range.clone()].trim().is_empty(),
+            Content::Emoji(..) => true,
+        })
+}
+
 fn truncate_line(
     line: &mut Line,
-    limit: Pixels,
+    limit: Option<Pixels>,
+    force: bool,
     pieces: &[Piece],
     fonts: &Fonts,
     window: &mut Window,
 ) {
     let end = |fragment: &Fragment| fragment.x + fragment.width;
-    if line.fragments.last().is_none_or(|last| end(last) <= limit) {
+    if !force
+        && limit.is_none_or(|limit| line.fragments.last().is_none_or(|last| end(last) <= limit))
+    {
         return;
     }
     let is_text = |piece: usize| matches!(pieces[piece].content, Content::Text(_));
-    let cut = line
-        .fragments
-        .iter()
-        .position(|fragment| end(fragment) > limit)
-        .unwrap_or(line.fragments.len());
-    let Some(style_piece) = line.fragments[..=cut.min(line.fragments.len() - 1)]
+    let cut = limit.map_or(line.fragments.len(), |limit| {
+        line.fragments
+            .iter()
+            .position(|fragment| end(fragment) > limit)
+            .unwrap_or(line.fragments.len())
+    });
+    let search_end = cut.saturating_add(1).min(line.fragments.len());
+    let Some(style_piece) = line.fragments[..search_end]
         .iter()
         .rev()
         .map(|fragment| fragment.piece)
@@ -725,13 +802,14 @@ fn truncate_line(
         return;
     };
     let ellipsis = fonts.shape("…", &pieces[style_piece].style, false, window);
-    let room = limit - ellipsis.width();
+    let room = limit.map(|limit| limit - ellipsis.width());
     let mut kept: Vec<Fragment> = Vec::with_capacity(cut + 1);
     for fragment in line.fragments.drain(..) {
-        if end(&fragment) <= room {
+        if room.is_none_or(|room| end(&fragment) <= room) {
             kept.push(fragment);
             continue;
         }
+        let room = room.expect("a missing room keeps every fragment");
         if let (Some(shaped), Content::Text(text)) =
             (&fragment.shaped, &pieces[fragment.piece].content)
         {
@@ -836,8 +914,15 @@ impl Element for RichText {
                 || text_style.font_size.to_pixels(rem_size) * self.emoji_scale,
                 |size| size.to_pixels(rem_size),
             ),
+            emoji_gap: self.emoji_gap.map(|gap| gap.to_pixels(rem_size)),
         };
-        let fingerprint = layout_fingerprint(&self.pieces, &fonts, self.wrap, self.truncate);
+        let fingerprint = layout_fingerprint(
+            &self.pieces,
+            &fonts,
+            self.wrap,
+            self.truncate,
+            self.line_clamp,
+        );
         // Taffy probes the same text at several widths during one layout pass, and the element
         // lives across frames. Share shaped words and completed layouts until content changes;
         // GPUI drops this state in frames where the element is not drawn (virtualized rows).
@@ -848,8 +933,11 @@ impl Element for RichText {
                         (cached.cache, cached.baseline)
                     }
                     _ => {
-                        let cache =
-                            Rc::new(RefCell::new(LayoutCache::new(self.wrap, self.truncate)));
+                        let cache = Rc::new(RefCell::new(LayoutCache::new(
+                            self.wrap,
+                            self.truncate,
+                            self.line_clamp,
+                        )));
                         let baseline = fonts.baseline(window);
                         (cache, baseline)
                     }
@@ -864,7 +952,11 @@ impl Element for RichText {
                 )
             }),
             None => {
-                let cache = Rc::new(RefCell::new(LayoutCache::new(self.wrap, self.truncate)));
+                let cache = Rc::new(RefCell::new(LayoutCache::new(
+                    self.wrap,
+                    self.truncate,
+                    self.line_clamp,
+                )));
                 let baseline = fonts.baseline(window);
                 (cache, baseline)
             }
@@ -973,7 +1065,8 @@ impl Element for RichText {
                                 .into_any_element()
                         }
                     };
-                    let inset = (fragment.width - emoji_size) / 2.;
+                    let inset =
+                        emoji_inset(fragment.width, emoji_size, state.fonts.emoji_gap.is_some());
                     let top = (line.height - emoji_size) / 2.;
                     element.prepaint_as_root(
                         origin + point(inset, top),

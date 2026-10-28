@@ -1,10 +1,12 @@
 use std::{
+    cell::Cell,
     collections::{HashMap, HashSet},
+    rc::Rc,
     time::{Duration, Instant, SystemTime},
 };
 
 use gpui::{prelude::*, *};
-use gpui_component::tooltip::Tooltip;
+use gpui_component::ElementExt;
 
 use crate::{
     app::{DiscordApp, home, member_list, message_body::label, profile, voice},
@@ -43,6 +45,13 @@ enum Row {
         channel: usize,
         index: usize,
     },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AccountControl {
+    Mute,
+    Deafen,
+    Settings,
 }
 
 struct Fold {
@@ -96,6 +105,8 @@ impl BannerHover {
 /// Flatten the channel hierarchy only when the server or its structure changes.
 pub(crate) struct Rows {
     state: ListState,
+    /// Live window-space bounds of the bottom account strip, shared with its popout.
+    pub(crate) account_bounds: profile::AccountPanelBounds,
     rows: Vec<Row>,
     guild_id: Option<u64>,
     banner: Option<ImageSpec>,
@@ -104,12 +115,14 @@ pub(crate) struct Rows {
     folds: HashMap<u64, Fold>,
     kept: u64,
     subtitle_hovered_once: bool,
+    hovered_account_control: Option<AccountControl>,
 }
 
 impl Rows {
     pub fn new() -> Self {
         Self {
             state: ListState::new(1, ListAlignment::Top, px(200.)),
+            account_bounds: Rc::new(Cell::new(None)),
             rows: vec![Row::Shortcuts],
             guild_id: None,
             banner: None,
@@ -118,6 +131,7 @@ impl Rows {
             folds: HashMap::new(),
             kept: 0,
             subtitle_hovered_once: false,
+            hovered_account_control: None,
         }
     }
 
@@ -908,7 +922,37 @@ fn status_label(status: Status) -> &'static str {
     }
 }
 
+fn account_tooltip(
+    element: Stateful<Div>,
+    app: &DiscordApp,
+    control: AccountControl,
+    label: &'static str,
+) -> Stateful<Div> {
+    let entity = app.entity.clone();
+    element
+        .relative()
+        .on_hover(move |hovered, _, cx| {
+            entity
+                .update(cx, |app, cx| {
+                    if *hovered {
+                        app.channel_rows.hovered_account_control = Some(control);
+                    } else if app.channel_rows.hovered_account_control == Some(control) {
+                        app.channel_rows.hovered_account_control = None;
+                    } else {
+                        return;
+                    }
+                    app.views.channel_list.update(cx, |_, cx| cx.notify());
+                })
+                .ok();
+        })
+        .when(
+            app.channel_rows.hovered_account_control == Some(control),
+            |this| this.child(theme::tooltip_above(label)),
+        )
+}
+
 fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
+    let account_bounds = app.channel_rows.account_bounds.clone();
     let user = app.store.user(app.store.current_user_id);
     let nameplate = user
         .and_then(|user| app.store.nameplate(None, user.id))
@@ -969,7 +1013,11 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                     }
                 })
                 .without_text_selection()
-                .on_click(profile::opener(app, user.id, Anchor::BottomLeft))
+                .on_click(profile::account_opener(
+                    app,
+                    user.id,
+                    app.channel_rows.account_bounds.clone(),
+                ))
                 .child(theme::user_avatar(
                     Some(user),
                     user.id,
@@ -997,7 +1045,7 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         }))
         .child(
             theme::icon_button("mic", mic, 20., mic_color)
-                .tooltip(move |window, cx| Tooltip::new(mic_tip).build(window, cx))
+                .map(|this| account_tooltip(this, app, AccountControl::Mute, mic_tip))
                 .on_click({
                     let entity = app.entity.clone();
                     move |_, _, cx| {
@@ -1007,7 +1055,7 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         )
         .child(
             theme::icon_button("deafen", deafen, 20., deafen_color)
-                .tooltip(move |window, cx| Tooltip::new(deafen_tip).build(window, cx))
+                .map(|this| account_tooltip(this, app, AccountControl::Deafen, deafen_tip))
                 .on_click({
                     let entity = app.entity.clone();
                     move |_, _, cx| {
@@ -1017,7 +1065,7 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         )
         .child(
             theme::icon_button("user-settings", "settings", 20., theme::TEXT)
-                .tooltip(|window, cx| Tooltip::new("User Settings").build(window, cx))
+                .map(|this| account_tooltip(this, app, AccountControl::Settings, "User Settings"))
                 .on_click({
                     let entity = app.entity.clone();
                     move |_, window, cx| {
@@ -1026,7 +1074,10 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                             .ok();
                     }
                 }),
-        );
+        )
+        // The account strip, not the outer footer: a connected voice panel must not move the
+        // popout or change the height available above the account row.
+        .on_prepaint(move |bounds, _, _| account_bounds.set(Some(bounds)));
     div()
         .flex()
         .flex_col()
