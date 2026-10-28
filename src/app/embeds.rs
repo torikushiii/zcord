@@ -206,6 +206,21 @@ fn card_content_width(embed: &Embed, media: (f32, f32)) -> f32 {
     }
 }
 
+fn embed_content_width(
+    embed: &Embed,
+    side_thumbnail: bool,
+    media: Option<(f32, f32)>,
+) -> Option<f32> {
+    if !embed.fields.is_empty() {
+        // Inline fields need a resolved width before their percent-width children measure.
+        Some(EMBED_WIDTH - EMBED_HORIZONTAL_INSET)
+    } else if side_thumbnail {
+        None
+    } else {
+        media.map(|dimensions| card_content_width(embed, dimensions))
+    }
+}
+
 fn animated_id(key: &str) -> (&'static str, u64) {
     let mut hasher = std::hash::DefaultHasher::new();
     std::hash::Hash::hash(key, &mut hasher);
@@ -576,17 +591,15 @@ pub fn render_embed(
             .or(embed.video.as_ref())
             .map_or(EMBED_MEDIA, |media| fit(media, EMBED_MEDIA))
     });
-    let content_width = if side_thumbnail.is_none() {
-        video_dimensions
-            .or_else(|| match big_media.as_slice() {
-                [] => None,
-                [single] => Some(fit(single, EMBED_MEDIA)),
-                _ => Some(EMBED_MEDIA),
-            })
-            .map(|dimensions| card_content_width(embed, dimensions))
-    } else {
-        None
-    };
+    let content_width = embed_content_width(
+        embed,
+        side_thumbnail.is_some(),
+        video_dimensions.or_else(|| match big_media.as_slice() {
+            [] => None,
+            [single] => Some(fit(single, EMBED_MEDIA)),
+            _ => Some(EMBED_MEDIA),
+        }),
+    );
 
     let mut body = div().flex().flex_col().flex_1().min_w_0().gap(rpx(8.));
     if let Some(provider) = &embed.provider {
@@ -809,12 +822,29 @@ pub fn render_embed(
         .into_any_element()
 }
 
-fn fields(
-    app: &DiscordApp,
-    fields: &[EmbedField],
-    key: impl Fn(usize) -> u64,
-    cx: &App,
-) -> impl IntoElement {
+fn fields(app: &DiscordApp, fields: &[EmbedField], key: impl Fn(usize) -> u64, cx: &App) -> Div {
+    field_grid(fields, |index, field| {
+        div()
+            .flex()
+            .flex_col()
+            .gap(rpx(2.))
+            .child(
+                div()
+                    .text_size(rpx(14.))
+                    .line_height(rpx(18.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(theme::STRONG))
+                    .child(wrapped_label(
+                        ("embed-field-name", key(index) ^ 1),
+                        &field.name,
+                    )),
+            )
+            .child(markdown(app, key(index), &field.value, 14., 18., cx))
+            .into_any_element()
+    })
+}
+
+fn field_grid(fields: &[EmbedField], render: impl Fn(usize, &EmbedField) -> AnyElement) -> Div {
     let mut rows: Vec<Vec<usize>> = Vec::new();
     for (index, field) in fields.iter().enumerate() {
         match rows.last_mut() {
@@ -830,28 +860,16 @@ fn fields(
         .children(rows.into_iter().map(|row| {
             div()
                 .flex()
+                .flex_wrap()
                 .gap(rpx(8.))
                 .w_full()
+                .min_w_0()
                 .children(row.into_iter().map(|index| {
-                    let field = &fields[index];
                     div()
-                        .flex()
-                        .flex_col()
                         .flex_1()
-                        .min_w_0()
-                        .gap(rpx(2.))
-                        .child(
-                            div()
-                                .text_size(rpx(14.))
-                                .line_height(rpx(18.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(theme::STRONG))
-                                .child(wrapped_label(
-                                    ("embed-field-name", key(index) ^ 1),
-                                    &field.name,
-                                )),
-                        )
-                        .child(markdown(app, key(index), &field.value, 14., 18., cx))
+                        .min_w(rpx(96.))
+                        .max_w_full()
+                        .child(render(index, &fields[index]))
                 }))
         }))
 }
