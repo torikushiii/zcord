@@ -453,6 +453,7 @@ fn replies_mentions_and_partial_message_updates() {
             ReplyState::Loaded(Reply {
                 message_id: 400,
                 author_id: 8,
+                webhook: None,
                 timestamp: timestamp_from_nonce(400),
                 content: "original".into(),
                 attachments: true,
@@ -709,6 +710,7 @@ fn reply_to_forward_previews_snapshot() {
         Some(ReplyState::Loaded(Reply {
             message_id: 400,
             author_id: 8,
+            webhook: None,
             timestamp: timestamp_from_nonce(400),
             content: "forwarded preview".into(),
             attachments: true,

@@ -423,6 +423,7 @@ fn seed_messages(
             id: *next_message_id,
             send_order: None,
             author_id,
+            webhook: None,
             timestamp,
             delivery: Delivery::Sent,
             content,
@@ -438,6 +439,7 @@ fn seed_messages(
                     ReplyState::Loaded(Reply {
                         message_id: message.id,
                         author_id: message.author_id,
+                        webhook: message.webhook.clone(),
                         timestamp: message.timestamp,
                         content: if hides_embed_content(&message.content, &message.embeds) {
                             String::new()

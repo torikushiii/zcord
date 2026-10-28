@@ -418,11 +418,20 @@ pub(super) struct SendOrder {
     pub history_seen: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WebhookAuthor {
+    pub id: u64,
+    pub name: String,
+    pub avatar: Option<String>,
+}
+
 pub struct Message {
     pub id: u64,
     /// Composer order, retained through confirmation until replacing history observes it.
     pub(super) send_order: Option<SendOrder>,
     pub author_id: u64,
+    /// Webhook names and avatars belong to the message, not the shared user cache.
+    pub webhook: Option<WebhookAuthor>,
     pub timestamp: Timestamp,
     pub delivery: Delivery,
     pub content: String,
@@ -451,6 +460,7 @@ pub struct Role {
 pub struct Reply {
     pub message_id: u64,
     pub author_id: u64,
+    pub webhook: Option<WebhookAuthor>,
     pub timestamp: Timestamp,
     pub content: String,
     pub attachments: bool,
@@ -668,6 +678,10 @@ impl Channel {
 }
 
 impl Message {
+    pub fn same_author(&self, other: &Self) -> bool {
+        self.author_id == other.author_id && self.webhook == other.webhook
+    }
+
     fn in_history(&self) -> bool {
         self.delivery == Delivery::Sent
             && self

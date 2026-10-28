@@ -127,10 +127,11 @@ actions!(
     ]
 );
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct ReplyTarget {
     pub message_id: u64,
     pub author_id: u64,
+    pub webhook_name: Option<SharedString>,
     pub mention: bool,
 }
 
@@ -676,7 +677,8 @@ impl DiscordApp {
             Change::MessageChanged { channel_id, index }
                 if channel_id == self.selected_channel_id =>
             {
-                self.messages.remeasure_items(index..index + 1);
+                // Author changes can also change whether the next row has a header.
+                self.messages.remeasure_items(index..(index + 2).min(len));
             }
             Change::MessageRemoved { channel_id, index }
                 if channel_id == self.selected_channel_id =>

@@ -71,6 +71,8 @@ pub struct Message {
     #[serde(default, deserialize_with = "optional_nonce")]
     pub nonce: Option<u64>,
     pub author: User,
+    #[serde(default, deserialize_with = "optional_id")]
+    pub webhook_id: Option<u64>,
     #[serde(deserialize_with = "timestamp")]
     pub timestamp: String,
     #[serde(default)]
@@ -125,6 +127,8 @@ pub struct MessageUpdate {
     pub channel_id: u64,
     #[serde(default)]
     pub author: Option<User>,
+    #[serde(default, deserialize_with = "optional_id")]
+    pub webhook_id: Option<u64>,
     #[serde(default)]
     pub timestamp: Option<String>,
     #[serde(default)]
@@ -213,6 +217,8 @@ pub struct ReferencedMessage {
     #[serde(deserialize_with = "snowflake")]
     pub id: u64,
     pub author: User,
+    #[serde(default, deserialize_with = "optional_id")]
+    pub webhook_id: Option<u64>,
     #[serde(default, deserialize_with = "optional_timestamp")]
     pub timestamp: Option<String>,
     #[serde(default)]
