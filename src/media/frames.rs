@@ -96,7 +96,10 @@ pub(crate) async fn load(path: &Path) -> Option<(Arc<RenderImage>, usize)> {
             Some(decoded)
         }
         Err(error) => {
-            log::debug!("Discarding corrupt frame cache {}: {error:#}", path.display());
+            log::debug!(
+                "Discarding corrupt frame cache {}: {error:#}",
+                path.display()
+            );
             let _ = tokio::fs::remove_file(path).await;
             None
         }
@@ -183,10 +186,8 @@ mod tests {
     use std::time::Duration;
 
     fn temp_directory() -> std::path::PathBuf {
-        let directory = std::env::temp_dir().join(format!(
-            "zcord-frames-test-{:016x}",
-            rand::random::<u64>()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("zcord-frames-test-{:016x}", rand::random::<u64>()));
         fs::create_dir(&directory).unwrap();
         directory
     }

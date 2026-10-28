@@ -588,7 +588,8 @@ where
                         .font_weight(FontWeight::MEDIUM)
                         .map(|this| {
                             if selected {
-                                this.bg(rgba(theme::SELECTED)).text_color(rgb(theme::STRONG))
+                                this.bg(rgba(theme::SELECTED))
+                                    .text_color(rgb(theme::STRONG))
                             } else {
                                 this.cursor_pointer()
                                     .text_color(rgb(theme::MUTED))

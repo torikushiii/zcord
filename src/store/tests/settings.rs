@@ -255,7 +255,10 @@ fn authoritative_settings_clear_own_custom_status_across_sessions() {
     let set =
         settings_fixtures::status_fixture(Some("online"), Some(("working", 0, "\u{1f3ae}", 0)));
     store.apply(Event::SettingsUpdate(Box::new(model::SettingsUpdate {
-        settings: model::SettingsProto { kind: 1, proto: set },
+        settings: model::SettingsProto {
+            kind: 1,
+            proto: set,
+        },
         partial: true,
     })));
     assert!(store.user(1).unwrap().custom_status.is_some());
@@ -280,10 +283,12 @@ fn authoritative_settings_clear_own_custom_status_across_sessions() {
     assert_eq!(user.game.as_ref().unwrap().name, "Visual Studio Code");
 
     // A partial update that omits the custom-status field preserves the known value...
-    let set =
-        settings_fixtures::status_fixture(Some("online"), Some(("back", 0, "\u{1f3ae}", 0)));
+    let set = settings_fixtures::status_fixture(Some("online"), Some(("back", 0, "\u{1f3ae}", 0)));
     store.apply(Event::SettingsUpdate(Box::new(model::SettingsUpdate {
-        settings: model::SettingsProto { kind: 1, proto: set },
+        settings: model::SettingsProto {
+            kind: 1,
+            proto: set,
+        },
         partial: true,
     })));
     let omit = settings_fixtures::status_fixture(Some("dnd"), None);
