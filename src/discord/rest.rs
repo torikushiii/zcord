@@ -118,6 +118,7 @@ const MESSAGE_REQUEST_PREVIEW_LIMIT: usize = 25;
 const LOOKUP_BATCH: usize = 20;
 
 const FRECENCY_SETTINGS: &str = "https://discord.com/api/v9/users/@me/settings-proto/2";
+const PRELOADED_SETTINGS: &str = "https://discord.com/api/v9/users/@me/settings-proto/1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Anchor {

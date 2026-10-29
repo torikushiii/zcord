@@ -5,18 +5,41 @@ use tokio::time::{Duration, Instant};
 pub(super) struct Command {
     pub payload: Value,
     pub members: bool,
+    pub presence_revision: Option<u64>,
+    pub completion: Option<tokio::sync::oneshot::Sender<Result<(), super::Error>>>,
+}
+
+impl Command {
+    pub fn complete(self, result: Result<(), super::Error>) {
+        if let Some(completion) = self.completion {
+            let _ = completion.send(result);
+        }
+    }
+}
+
+pub(super) fn presence(payload: Value, revision: u64) -> Command {
+    Command {
+        payload,
+        members: false,
+        presence_revision: Some(revision),
+        completion: None,
+    }
 }
 
 pub(super) fn voice_state(payload: Value) -> Command {
     Command {
         payload,
         members: false,
+        presence_revision: None,
+        completion: None,
     }
 }
 
 pub(super) fn voice_start_times(guild_id: u64) -> Command {
     Command {
         members: false,
+        presence_revision: None,
+        completion: None,
         payload: json!({"op":43,"d":{
             "guild_id":guild_id.to_string(),"fields":["voice_start_time"]
         }}),
@@ -32,6 +55,8 @@ pub(super) fn subscription(guild_id: u64, channel_id: u64, ranges: &[(u32, u32)]
         .collect();
     Command {
         members: false,
+        presence_revision: None,
+        completion: None,
         payload: json!({"op":37,"d":{"subscriptions":{
             guild_id.to_string(): {"typing":true,"activities":true,"threads":false,
                 "member_updates":false,"channels":{channel_id.to_string():ranges}}
@@ -44,6 +69,8 @@ pub(super) fn members(guild_id: u64, user_ids: &[u64]) -> Vec<Command> {
         .chunks(100)
         .map(|chunk| Command {
             members: true,
+            presence_revision: None,
+            completion: None,
             payload: json!({"op":8,"d":{"guild_id":guild_id.to_string(),
             "user_ids":chunk.iter().map(u64::to_string).collect::<Vec<_>>(),"presences":false}}),
         })
@@ -55,6 +82,7 @@ pub(super) struct Commands {
     tokens: f64,
     refilled_at: Instant,
     next_members: Instant,
+    pub presence_after: Instant,
 }
 
 impl Commands {
@@ -64,11 +92,31 @@ impl Commands {
             tokens: 10.0,
             refilled_at: Instant::now(),
             next_members: Instant::now(),
+            presence_after: Instant::now(),
         }
     }
 
-    pub fn push(&mut self, ready: bool, command: Command) {
+    pub fn push(&mut self, ready: bool, mut command: Command) {
         if ready {
+            if let Some(revision) = command.presence_revision
+                && let Some(index) = self
+                    .queue
+                    .iter()
+                    .position(|queued| queued.presence_revision.is_some())
+            {
+                if self.queue[index]
+                    .presence_revision
+                    .is_some_and(|queued| queued > revision)
+                {
+                    command.complete(Err(super::Error::SettingsOutdated));
+                    return;
+                }
+                let mut previous = self.queue.remove(index).expect("queued presence");
+                if previous.presence_revision == Some(revision) && command.completion.is_none() {
+                    command.completion = previous.completion.take();
+                }
+                previous.complete(Err(super::Error::SettingsOutdated));
+            }
             self.queue.push_back(command);
         } else {
             log::debug!("Dropping gateway command before READY/RESUMED");
@@ -90,30 +138,110 @@ impl Commands {
     pub fn next_send(&mut self) -> Option<Instant> {
         let now = Instant::now();
         self.refill(now);
-        let command = self.queue.front()?;
-        // Burst 10 + refill 100/minute leaves 10 of Discord's 120 slots for heartbeats.
-        // https://docs.discord.food/gateway/using-gateway#rate-limiting
-        let mut next = now + Duration::from_secs_f64((1.0 - self.tokens).max(0.0) * 0.6);
-        if command.members {
-            next = next.max(self.next_members);
-        }
-        Some(next)
+        self.next_command(now).map(|(_, next)| next)
     }
 
-    pub fn pop(&mut self) -> Option<Value> {
-        let command = self.queue.pop_front()?;
+    fn next_command(&self, now: Instant) -> Option<(usize, Instant)> {
+        // Burst 10 + refill 100/minute leaves 10 of Discord's 120 slots for heartbeats.
+        // https://docs.discord.food/gateway/using-gateway#rate-limiting
+        let shared = now + Duration::from_secs_f64((1.0 - self.tokens).max(0.0) * 0.6);
+        self.queue
+            .iter()
+            .enumerate()
+            .map(|(index, command)| {
+                let mut next = shared;
+                if command.members {
+                    next = next.max(self.next_members);
+                }
+                if command.presence_revision.is_some() {
+                    next = next.max(self.presence_after);
+                }
+                (index, next)
+            })
+            .min_by_key(|(_, next)| *next)
+    }
+
+    pub fn pop(&mut self) -> Option<Command> {
         let now = Instant::now();
+        self.refill(now);
+        let (index, _) = self.next_command(now)?;
+        let command = self.queue.remove(index)?;
         if command.members {
             self.next_members = now + Duration::from_millis(300);
         }
+        if command.presence_revision.is_some() {
+            // At most five updates per 20 seconds, including across a resumed socket.
+            self.presence_after = now + Duration::from_secs(5);
+        }
         self.record_send(now);
-        Some(command.payload)
+        Some(command)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delayed_presence_does_not_block_voice_members_or_subscriptions() {
+        let mut queue = Commands::new();
+        queue.presence_after = Instant::now() + Duration::from_secs(5);
+        queue.push(true, presence(json!({"op":3}), 1));
+        queue.push(true, voice_state(json!({"op":4,"d":{"channel_id":null}})));
+        queue.push(true, subscription(1, 2, &[]));
+        queue.push(true, members(1, &[2]).remove(0));
+        let now = Instant::now();
+        assert!(queue.next_send().unwrap() <= Instant::now());
+        assert_eq!(queue.pop().unwrap().payload["op"], 4);
+        assert_eq!(queue.pop().unwrap().payload["op"], 37);
+        assert_eq!(queue.pop().unwrap().payload["op"], 8);
+        assert!(queue.next_send().unwrap() >= now + Duration::from_secs(4));
+        queue.presence_after = Instant::now();
+        let command = queue.pop().unwrap();
+        assert_eq!(command.presence_revision, Some(1));
+        assert!(queue.presence_after >= Instant::now() + Duration::from_secs(4));
+    }
+
+    #[test]
+    fn presence_coalescing_keeps_the_newest_revision_and_reports_superseded_writes() {
+        let mut queue = Commands::new();
+        let (done, mut result) = tokio::sync::oneshot::channel();
+        let mut command = presence(json!({"op":3}), 1);
+        command.completion = Some(done);
+        queue.push(true, command);
+        queue.push(true, presence(json!({"op":3}), 2));
+        assert!(matches!(
+            result.try_recv(),
+            Ok(Err(super::super::Error::SettingsOutdated))
+        ));
+        queue.push(true, presence(json!({"op":3}), 1));
+        assert_eq!(queue.queue.len(), 1);
+        assert_eq!(queue.pop().unwrap().presence_revision, Some(2));
+    }
+
+    #[test]
+    fn completion_means_socket_write_not_enqueue_and_drops_are_not_success() {
+        let mut queue = Commands::new();
+        let (done, mut result) = tokio::sync::oneshot::channel();
+        let mut command = presence(json!({"op":3}), 3);
+        command.completion = Some(done);
+        queue.push(true, command);
+        queue.push(true, presence(json!({"op":3}), 3));
+        assert!(matches!(
+            result.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        queue.pop().unwrap().complete(Ok(()));
+        assert!(matches!(result.try_recv(), Ok(Ok(()))));
+        let (done, mut result) = tokio::sync::oneshot::channel();
+        let mut command = presence(json!({"op":3}), 4);
+        command.completion = Some(done);
+        queue.push(false, command);
+        assert!(matches!(
+            result.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+        ));
+    }
 
     #[test]
     fn voice_start_times_requests_server_session_timestamps() {
@@ -125,7 +253,7 @@ mod tests {
         );
         let mut queue = Commands::new();
         queue.push(true, command);
-        assert_eq!(queue.pop().unwrap()["op"], 43);
+        assert_eq!(queue.pop().unwrap().payload["op"], 43);
     }
 
     #[test]

@@ -45,6 +45,8 @@ impl DiscordApp {
     }
 
     pub(super) fn disconnect(&mut self) {
+        self.self_status.disconnect();
+        self.self_status.error = None;
         self.expression_info.reset();
         self.settings_page = None;
         if let Some(session) = self.session.take() {

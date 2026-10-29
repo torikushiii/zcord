@@ -24,6 +24,13 @@ pub struct StatusSettings {
     pub custom_status_present: bool,
 }
 
+/// Manual presence timing, separate from CustomStatus.expires_at_ms.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct StatusTiming {
+    pub expires_at_ms: u64,
+    pub created_at_ms: Option<u64>,
+}
+
 #[derive(Default, Debug, PartialEq, Eq)]
 pub struct CustomStatus {
     pub text: String,
@@ -276,6 +283,104 @@ pub fn decode_base64(encoded: &str) -> Result<Settings> {
         return Err(DecodeError);
     }
     decode(&STANDARD.decode(encoded).map_err(|_| DecodeError)?)
+}
+
+/// PATCH replaces the entire top-level status message. Preserve its opaque siblings
+/// (custom status, activity sharing and future fields), but send no other settings.
+pub fn status_patch(preloaded: &[u8], status: &str) -> Result<Vec<u8>> {
+    status_patch_at(preloaded, status, 0, None)
+}
+
+/// Explicit selections replace manual timing. Unknown fields inside the status and
+/// creation wrappers survive even when Forever/Online clear their known values.
+pub fn status_patch_at(
+    preloaded: &[u8],
+    status: &str,
+    expires_at_ms: u64,
+    created_at_ms: Option<u64>,
+) -> Result<Vec<u8>> {
+    status_timing(preloaded)?;
+    let (expires_at_ms, created_at_ms) = if status == "online" {
+        (0, None)
+    } else {
+        (expires_at_ms, created_at_ms)
+    };
+    let mut content = Vec::new();
+    let mut wrapper = Vec::new();
+    let mut created_wrapper = Vec::new();
+    for field in fields(preloaded)? {
+        if field.number == 11 {
+            for sub in fields(field.value.ok_or(DecodeError)?)? {
+                match sub.number {
+                    1 | 5 => {
+                        for field in fields(sub.value.ok_or(DecodeError)?)? {
+                            if field.number != 1 {
+                                let output = if sub.number == 1 {
+                                    &mut wrapper
+                                } else {
+                                    &mut created_wrapper
+                                };
+                                output.extend_from_slice(field.raw);
+                            }
+                        }
+                    }
+                    4 => {}
+                    _ => content.extend_from_slice(sub.raw),
+                }
+            }
+        }
+    }
+    push_bytes(&mut wrapper, 1, status.as_bytes());
+    push_bytes(&mut content, 1, &wrapper);
+    // fixed64, not a varint and not the nested custom-status expiration.
+    push_varint(&mut content, (4 << 3) | 1);
+    content.extend_from_slice(&expires_at_ms.to_le_bytes());
+    if created_at_ms.is_some() || !created_wrapper.is_empty() {
+        push_uint(&mut created_wrapper, 1, created_at_ms.unwrap_or(0));
+        push_bytes(&mut content, 5, &created_wrapper);
+    }
+    let mut patch = Vec::new();
+    push_bytes(&mut patch, 11, &content);
+    Ok(patch)
+}
+
+pub fn status_timing(preloaded: &[u8]) -> Result<StatusTiming> {
+    let mut timing = StatusTiming::default();
+    for field in fields(preloaded)? {
+        if field.number != 11 {
+            continue;
+        }
+        let mut reader = Reader::new(field.value.ok_or(DecodeError)?);
+        while let Some((field, wire)) = reader.tag()? {
+            match field {
+                4 if wire == 1 => timing.expires_at_ms = reader.fixed64()?,
+                4 => return Err(DecodeError),
+                5 => timing.created_at_ms = Some(number_wrapper(reader.bytes(wire)?)?),
+                _ => reader.skip(field, wire, 0)?,
+            }
+        }
+    }
+    Ok(timing)
+}
+
+/// Required for a compare-and-swap PATCH so another client's edits cannot be lost.
+pub fn data_version(preloaded: &[u8]) -> Result<Option<u64>> {
+    let mut version = None;
+    for field in fields(preloaded)? {
+        if field.number != 1 {
+            continue;
+        }
+        let mut reader = Reader::new(field.value.ok_or(DecodeError)?);
+        version.get_or_insert(0);
+        while let Some((field, wire)) = reader.tag()? {
+            if field == 3 && wire == 0 {
+                version = Some(reader.varint()?);
+            } else {
+                reader.skip(field, wire, 0)?;
+            }
+        }
+    }
+    Ok(version)
 }
 
 struct Field<'a> {
@@ -591,6 +696,184 @@ pub(crate) mod tests {
     }
 
     use crate::discord::settings_fixtures::{field, uint};
+
+    fn fixed64_field(number: u32, value: u64) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        push_varint(&mut bytes, (u64::from(number) << 3) | 1);
+        bytes.extend_from_slice(&value.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn manual_status_timing_is_distinct_from_custom_status_expiration() {
+        let mut custom = field(1, b"keep custom");
+        custom.extend(fixed64_field(4, u64::MAX));
+        let mut status = field(1, &field(1, b"idle"));
+        status.extend(field(2, &custom));
+        status.extend(fixed64_field(4, 9_000));
+        status.extend(field(5, &uint(1, 1_000)));
+        let proto = field(11, &status);
+        assert_eq!(
+            status_timing(&proto).unwrap(),
+            StatusTiming {
+                expires_at_ms: 9_000,
+                created_at_ms: Some(1_000),
+            }
+        );
+        assert_eq!(
+            decode(&proto)
+                .unwrap()
+                .status
+                .unwrap()
+                .custom_status
+                .unwrap()
+                .expires_at_ms,
+            u64::MAX
+        );
+        assert_eq!(status_timing(&[]).unwrap(), StatusTiming::default());
+    }
+
+    #[test]
+    fn explicit_duration_replaces_manual_timing_and_preserves_unknown_wrapper_metadata() {
+        let status_unknown = uint(77, 3);
+        let created_unknown = field(88, b"creation-metadata");
+        let mut wrapper = field(1, b"invisible");
+        wrapper.extend(&status_unknown);
+        let mut created = uint(1, 111);
+        created.extend(&created_unknown);
+        let mut custom = field(1, b"keep custom");
+        custom.extend(fixed64_field(4, u64::MAX));
+        let custom = field(2, &custom);
+        let sharing = field(3, &uint(1, 0));
+        let unknown = field(99, b"unknown-status-setting");
+        let mut status = field(1, &wrapper);
+        status.extend(&custom);
+        status.extend(&sharing);
+        status.extend(fixed64_field(4, 999));
+        status.extend(field(5, &created));
+        status.extend(&unknown);
+        let mut base = field(11, &status);
+        let unrelated = field(100, b"do not send or overwrite");
+        base.extend(&unrelated);
+
+        for (choice, expires, created, expected_expires, expected_created) in [
+            ("dnd", 30_000, Some(2_000), 30_000, 2_000),
+            ("idle", 0, None, 0, 0),
+            ("online", 30_000, Some(2_000), 0, 0),
+        ] {
+            let patch = status_patch_at(&base, choice, expires, created).unwrap();
+            let top = fields(&patch).unwrap();
+            assert_eq!(top.len(), 1);
+            assert_eq!(top[0].number, 11);
+            let content = fields(top[0].value.unwrap()).unwrap();
+            for preserved in [&custom, &sharing, &unknown] {
+                assert!(
+                    content
+                        .iter()
+                        .any(|field| field.raw == preserved.as_slice())
+                );
+            }
+            for (number, opaque) in [(1, &status_unknown), (5, &created_unknown)] {
+                let wrapper = content.iter().find(|field| field.number == number).unwrap();
+                assert!(
+                    fields(wrapper.value.unwrap())
+                        .unwrap()
+                        .iter()
+                        .any(|field| field.raw == opaque.as_slice())
+                );
+            }
+            let timing = status_timing(&patch).unwrap();
+            assert_eq!(timing.expires_at_ms, expected_expires);
+            assert_eq!(timing.created_at_ms, Some(expected_created));
+            let expiry = content.iter().find(|field| field.number == 4).unwrap();
+            assert_eq!(expiry.wire, 1, "manual expiry is fixed64");
+            let merged = merge_partial(&base, &patch).unwrap();
+            assert!(
+                fields(&merged)
+                    .unwrap()
+                    .iter()
+                    .any(|field| field.raw == unrelated)
+            );
+        }
+        let forever = status_patch(&base, "invisible").unwrap();
+        assert_eq!(status_timing(&forever).unwrap().expires_at_ms, 0);
+    }
+
+    #[test]
+    fn malformed_manual_timing_fails_closed_without_touching_custom_timing() {
+        for status in [uint(4, 123), field(5, &[8, 128]), vec![33, 1, 2]] {
+            let proto = field(11, &status);
+            assert!(status_timing(&proto).is_err());
+            assert!(status_patch_at(&proto, "idle", 1_000, Some(1)).is_err());
+        }
+    }
+
+    #[test]
+    fn status_patch_changes_only_the_status_wrapper_and_preserves_opaque_siblings() {
+        let mut wrapper = field(1, b"invisible");
+        wrapper.extend(uint(88, 7));
+        let custom = field(2, &field(1, b"working"));
+        let sharing = field(3, &uint(1, 0));
+        let unknown = field(99, b"future-status-field");
+        let mut status = field(1, &wrapper);
+        status.extend(&custom);
+        status.extend(&sharing);
+        status.extend(&unknown);
+        let unrelated = field(90, b"untouched");
+        let mut base = field(1, &uint(3, 42));
+        base.extend(field(11, &status));
+        base.extend(&unrelated);
+        for status in ["online", "idle", "dnd", "invisible"] {
+            let patch = status_patch(&base, status).unwrap();
+            let top = fields(&patch).unwrap();
+            assert_eq!(top.len(), 1);
+            assert_eq!(top[0].number, 11);
+            let content = fields(top[0].value.unwrap()).unwrap();
+            for preserved in [&custom, &sharing, &unknown] {
+                assert!(
+                    content
+                        .iter()
+                        .any(|field| field.raw == preserved.as_slice())
+                );
+            }
+            let wrapper = content.iter().find(|field| field.number == 1).unwrap();
+            assert!(
+                fields(wrapper.value.unwrap())
+                    .unwrap()
+                    .iter()
+                    .any(|field| field.raw == uint(88, 7))
+            );
+            let merged = merge_partial(&base, &patch).unwrap();
+            assert_eq!(
+                decode(&merged).unwrap().status.unwrap().status.as_deref(),
+                Some(status)
+            );
+            assert_eq!(data_version(&merged).unwrap(), Some(42));
+            assert!(
+                fields(&merged)
+                    .unwrap()
+                    .iter()
+                    .any(|field| field.raw == unrelated)
+            );
+        }
+    }
+
+    #[test]
+    fn status_patch_and_version_fail_closed_on_malformed_input() {
+        assert!(status_patch(&[90, 9, 0], "online").is_err());
+        assert!(data_version(&[10, 4, 24]).is_err());
+        assert_eq!(data_version(&[]).unwrap(), None);
+        assert_eq!(data_version(&field(1, &[])).unwrap(), Some(0));
+        assert_eq!(
+            decode(&status_patch(&[], "invisible").unwrap())
+                .unwrap()
+                .status
+                .unwrap()
+                .status
+                .as_deref(),
+            Some("invisible")
+        );
+    }
 
     fn favorite(url: &str, src: &str, order: u32) -> FavoriteGif {
         FavoriteGif {

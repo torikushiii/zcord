@@ -396,15 +396,27 @@ mod tests {
         let mut commands = CommandReceiver {
             receiver,
             generation: generation.clone(),
+            presence: Arc::default(),
+            presence_after: Instant::now(),
         };
         commands.ready();
         assert_eq!(generation.load(Ordering::Acquire), 1);
         sender
             .send((1, crate::discord::commands::subscription(1, 2, &[])))
             .unwrap_or_else(|_| panic!("queue closed"));
+        let (completion, mut result) = tokio::sync::oneshot::channel();
+        let mut pending = crate::discord::commands::presence(json!({"op":3}), 1);
+        pending.completion = Some(completion);
+        sender
+            .send((1, pending))
+            .unwrap_or_else(|_| panic!("queue closed"));
         commands.disconnected();
         assert_eq!(generation.load(Ordering::Acquire), 2);
         assert!(commands.receiver.try_recv().is_err());
+        assert!(matches!(
+            result.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+        ));
         commands.ready();
         assert_eq!(generation.load(Ordering::Acquire), 3);
     }

@@ -1,6 +1,24 @@
 use super::*;
 
+impl From<discord::SelfStatus> for Status {
+    fn from(status: discord::SelfStatus) -> Self {
+        match status {
+            discord::SelfStatus::Online => Status::Online,
+            discord::SelfStatus::Idle => Status::Idle,
+            discord::SelfStatus::DoNotDisturb => Status::DoNotDisturb,
+            discord::SelfStatus::Invisible => Status::Offline,
+        }
+    }
+}
+
 impl Store {
+    /// Confirmed account status only; never replace custom status or another client's activity.
+    pub fn set_self_status(&mut self, status: discord::SelfStatus) {
+        if let Some(user) = self.users.get_mut(&self.current_user_id) {
+            user.status = status.into();
+        }
+    }
+
     pub fn set_frecency(&mut self, proto: Vec<u8>) {
         match settings_proto::favorite_gifs(&proto) {
             Ok(gifs) => {

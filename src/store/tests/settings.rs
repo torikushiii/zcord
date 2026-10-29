@@ -1,6 +1,41 @@
 use super::*;
 
 #[test]
+fn confirmed_self_status_maps_all_choices_without_changing_custom_status_or_games() {
+    use crate::discord::SelfStatus;
+    let mut payload = ready();
+    payload.user_settings_proto = Some(settings_fixtures::status_fixture(
+        Some("online"),
+        Some(("working", 42, "party", 0)),
+    ));
+    let mut store = Store::from_ready(payload);
+    store.apply(Event::SessionsReplace(model::parse_entries(json!([{
+        "session_id":"all","status":"online","activities":[{"type":0,"name":"Another client's game"}]
+    }]))));
+    let custom = store.user(1).unwrap().custom_status.clone();
+    let game = store.user(1).unwrap().game.clone();
+    for (choice, expected) in [
+        (SelfStatus::Online, Status::Online),
+        (SelfStatus::Idle, Status::Idle),
+        (SelfStatus::DoNotDisturb, Status::DoNotDisturb),
+        (SelfStatus::Invisible, Status::Offline),
+    ] {
+        store.set_self_status(choice);
+        let user = store.user(1).unwrap();
+        assert!(user.status == expected);
+        assert!(
+            user.custom_status
+                .as_ref()
+                .zip(custom.as_ref())
+                .is_some_and(|(now, before)| {
+                    now.text == before.text && now.expires_at == before.expires_at
+                })
+        );
+        assert_eq!(user.game, game);
+    }
+}
+
+#[test]
 fn rail_folders_ready_join_delete_and_settings_updates() {
     use base64::{Engine, engine::general_purpose::STANDARD};
     let mut payload: serde_json::Value =

@@ -6,6 +6,7 @@ mod gateway;
 pub mod gifs;
 pub mod model;
 mod permissions;
+mod presence;
 mod properties;
 pub mod remote_auth;
 mod rest;
@@ -33,6 +34,7 @@ pub use permissions::{
     CONNECT, MANAGE_MESSAGES, SEND_MESSAGES, USE_EXTERNAL_EMOJIS, VIEW_CHANNEL, can_view,
     channel_permissions,
 };
+pub use presence::{SelfStatus, StatusDuration};
 pub use properties::USER_AGENT;
 pub use voice::{AudioDevice, MicTest, audio_devices};
 
@@ -77,6 +79,7 @@ struct Inner {
     control: watch::Sender<Control>,
     commands: tokio::sync::mpsc::UnboundedSender<(u64, commands::Command)>,
     generation: Arc<AtomicU64>,
+    presence: Arc<Mutex<presence::Presence>>,
     voice: voice::VoiceManager,
 }
 
@@ -111,6 +114,7 @@ impl Session {
             .map_err(|_| Error::Network);
         let (commands, command_receiver) = tokio::sync::mpsc::unbounded_channel();
         let generation = Arc::new(AtomicU64::new(0));
+        let presence = Arc::new(Mutex::new(presence::Presence::default()));
         let voice = voice::VoiceManager::new(
             runtime,
             sender.clone(),
@@ -127,6 +131,7 @@ impl Session {
                 control,
                 commands,
                 generation: generation.clone(),
+                presence: presence.clone(),
                 voice: voice.clone(),
             }),
         };
@@ -139,6 +144,7 @@ impl Session {
             command_receiver,
             generation,
             voice,
+            presence,
         ));
         (session, receiver)
     }

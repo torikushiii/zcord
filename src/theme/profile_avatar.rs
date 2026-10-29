@@ -193,18 +193,22 @@ pub(super) fn indicator(geometry: Geometry, status: Status, surface: u32) -> Any
         .flex()
         .items_center()
         .justify_center()
-        .child(
-            canvas(
-                |_, _, _| {},
-                move |bounds, _, window, _| {
-                    if let Ok(path) = status_path(bounds, status).build() {
-                        window.paint_path(path, rgb(status_color(status)));
-                    }
-                },
-            )
-            .size(rpx(geometry.icon)),
-        )
+        .child(status_icon(status, geometry.icon))
         .into_any_element()
+}
+
+/// Paint the status shape with transparent cutouts so it works over any row surface.
+pub fn status_icon(status: Status, size: f32) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            if let Ok(path) = status_path(bounds, status).build() {
+                window.paint_path(path, rgb(status_color(status)));
+            }
+        },
+    )
+    .size(rpx(size))
+    .flex_none()
 }
 
 fn circle(path: &mut PathBuilder, center: Point<Pixels>, radius: Pixels) {
@@ -319,8 +323,8 @@ mod tests {
     }
 
     #[test]
-    fn all_status_shapes_build_at_profile_sizes() {
-        for diameter in [16., 24.] {
+    fn all_status_shapes_build_at_menu_and_profile_sizes() {
+        for diameter in [10., 12.5, 15., 16., 24.] {
             let bounds = Bounds::new(point(px(80.), px(120.)), size(px(diameter), px(diameter)));
             for status in [
                 Status::Online,
@@ -354,7 +358,7 @@ mod tests {
 
     #[test]
     fn idle_mesh_matches_discord_circle_subtraction() {
-        for diameter in [16., 24., 36.] {
+        for diameter in [10., 12.5, 15., 16., 24., 36.] {
             let origin = point(px(83.), px(117.));
             let bounds = Bounds::new(origin, size(px(diameter), px(diameter)));
             let path = status_path(bounds, Status::Idle).build().unwrap();
