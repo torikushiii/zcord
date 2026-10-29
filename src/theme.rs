@@ -13,6 +13,7 @@ mod midnight;
 mod profile_avatar;
 
 pub use midnight::init;
+pub use profile_avatar::status_icon;
 
 pub const BG: u32 = 0x000000;
 pub const SURFACE_HIGH: u32 = 0x0A0A0C;

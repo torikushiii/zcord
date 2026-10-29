@@ -37,6 +37,7 @@ mod palette;
 mod popout;
 #[cfg(test)]
 mod scope_tests;
+pub(crate) use account_logic::StatusChange;
 pub(crate) use account_logic::{AccountAction, account_action};
 pub(crate) use board::presence_art;
 use loading::{widget_application_ids, widget_game_ids};
@@ -114,6 +115,7 @@ pub(crate) struct ProfileCard {
     /// Unlike `guild_id`, kept while viewing the main profile so the menu can switch back.
     pub(crate) source_guild_id: Option<u64>,
     pub(crate) more_menu_open: bool,
+    status_menu: popout::status::State,
     scope_snapshots: HashMap<Option<u64>, Arc<model::Profile>>,
     origin: ProfileOrigin,
     position: Point<Pixels>,

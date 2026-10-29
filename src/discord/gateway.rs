@@ -37,9 +37,23 @@ type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 struct CommandReceiver {
     receiver: tokio::sync::mpsc::UnboundedReceiver<(u64, Command)>,
     generation: Arc<AtomicU64>,
+    presence: Arc<std::sync::Mutex<super::presence::Presence>>,
+    presence_after: Instant,
 }
 
 impl CommandReceiver {
+    fn presence_command(&self) -> Option<Command> {
+        let presence = self
+            .presence
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+        Some(super::commands::presence(
+            presence.payload(now)?,
+            presence.revision,
+        ))
+    }
+
     fn ready(&self) {
         self.generation.fetch_or(1, Ordering::Release);
     }
@@ -124,6 +138,7 @@ struct State {
     sequence: Option<u64>,
     session_id: Option<String>,
     resume_url: Option<String>,
+    settings_version: Option<u64>,
 }
 impl State {
     fn clear(&mut self) {
@@ -132,6 +147,27 @@ impl State {
     fn can_resume(&self) -> bool {
         self.sequence.is_some() && self.session_id.is_some()
     }
+
+    fn forward_settings_update(&mut self, update: &model::SettingsUpdate) -> bool {
+        let version = settings_version(&update.settings.proto);
+        if !update.partial
+            && self
+                .settings_version
+                .is_some_and(|current| version.is_none_or(|next| next < current))
+        {
+            return false;
+        }
+        self.settings_version = self.settings_version.max(version);
+        true
+    }
+}
+
+fn settings_version(encoded: &str) -> Option<u64> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+
+    let proto = STANDARD.decode(encoded).ok()?;
+    super::settings_proto::decode(&proto).ok()?;
+    super::settings_proto::data_version(&proto).ok().flatten()
 }
 
 enum Outcome {
@@ -179,10 +215,13 @@ pub(super) async fn run(
     receiver: tokio::sync::mpsc::UnboundedReceiver<(u64, Command)>,
     generation: Arc<AtomicU64>,
     voice: VoiceManager,
+    presence: Arc<std::sync::Mutex<super::presence::Presence>>,
 ) {
     let mut commands = CommandReceiver {
         receiver,
         generation,
+        presence,
+        presence_after: Instant::now(),
     };
     if owner.upgrade().is_some_and(|inner| inner.rest.is_err()) {
         let _ = sender.unbounded_send(Event::Fatal(FatalError::Other(
@@ -371,6 +410,7 @@ async fn drive(
     voice: &VoiceManager,
 ) -> Outcome {
     let mut outgoing = Commands::new();
+    outgoing.presence_after = commands.presence_after;
     let mut decoder = Decoder::new();
     let mut identified = false;
     let mut interval = Duration::from_secs(60);
@@ -401,8 +441,25 @@ async fn drive(
                 continue;
             }
             _ = sleep_until(next_command.unwrap_or_else(|| Instant::now() + Duration::from_secs(60))), if next_command.is_some() && identified && healthy => {
-                if let Some(payload) = outgoing.pop() {
-                    if send(socket, payload).await.is_err() { return retry(); }
+                if let Some(mut command) = outgoing.pop() {
+                    commands.presence_after = outgoing.presence_after;
+                    if let Some(revision) = command.presence_revision {
+                        let payload = {
+                            let presence = commands.presence.lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+                            (revision == presence.revision).then(|| presence.payload(now)).flatten()
+                        };
+                        let Some(payload) = payload else {
+                            command.complete(Err(super::Error::SettingsOutdated));
+                            continue;
+                        };
+                        // Custom status may have expired while this command was throttled.
+                        command.payload = payload;
+                    }
+                    let result = send(socket, std::mem::take(&mut command.payload)).await;
+                    command.complete(result.map_err(|_| super::Error::Network));
+                    if result.is_err() { return retry(); }
                 }
                 continue;
             }
@@ -503,8 +560,20 @@ async fn drive(
                                 state.session_id = Some(ready.session_id.clone());
                                 state.resume_url =
                                     ready.resume_gateway_url.as_deref().and_then(resume_url);
+                                state.settings_version = ready
+                                    .user_settings_proto
+                                    .as_deref()
+                                    .and_then(settings_version);
                                 healthy = true;
                                 commands.ready();
+                                commands
+                                    .presence
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                    .replace(ready.user_settings_proto.as_deref());
+                                if let Some(command) = commands.presence_command() {
+                                    outgoing.push(true, command);
+                                }
                                 voice.gateway_ready(ready.user.id, &ready.session_id, true);
                                 if let Some(payload) = voice.take_pending_op4() {
                                     outgoing.push(true, voice_state(payload));
@@ -534,6 +603,9 @@ async fn drive(
                     } else if kind == "RESUMED" {
                         healthy = true;
                         commands.ready();
+                        if let Some(command) = commands.presence_command() {
+                            outgoing.push(true, command);
+                        }
                         if let Some(payload) = voice.take_pending_op4() {
                             outgoing.push(true, voice_state(payload));
                         }
@@ -570,6 +642,25 @@ async fn drive(
                             voice.voice_server(guild_id, Secret(token.to_owned()), endpoint);
                         }
                     } else if let Some(event) = dispatch(kind, payload.d, ignored) {
+                        if let Event::SettingsUpdate(update) = &event
+                            && update.settings.kind == 1
+                        {
+                            let changed = commands
+                                .presence
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .update(&update.settings.proto, update.partial);
+                            if matches!(changed, Ok(true))
+                                && let Some(command) = commands.presence_command()
+                            {
+                                outgoing.push(true, command);
+                            }
+                            // REST may be ahead of the Store: keep partial edits, but
+                            // reject full snapshots older than settings already forwarded.
+                            if !state.forward_settings_update(update) {
+                                continue;
+                            }
+                        }
                         if sender.unbounded_send(event).is_err() {
                             return Outcome::Stop;
                         }
@@ -595,7 +686,149 @@ struct Payload {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::discord::{Error, presence::Presence, settings_fixtures};
+    use crate::store::{Change, RailEntry, Store};
+    use base64::{Engine, engine::general_purpose::STANDARD};
     use flate2::{Compress, Compression, FlushCompress};
+
+    fn preloaded_update(
+        version: Option<u64>,
+        folders: bool,
+        partial: bool,
+    ) -> model::SettingsUpdate {
+        let folders = if folders {
+            let mut folder = vec![9];
+            folder.extend(200u64.to_le_bytes());
+            folder.extend(settings_fixtures::field(2, &settings_fixtures::uint(1, 42)));
+            settings_fixtures::field(1, &folder)
+        } else {
+            Vec::new()
+        };
+        let mut proto = settings_fixtures::field(14, &folders);
+        proto.extend(
+            STANDARD
+                .decode(settings_fixtures::status_fixture(Some("online"), None))
+                .unwrap(),
+        );
+        if let Some(version) = version {
+            proto.extend(settings_fixtures::field(
+                1,
+                &settings_fixtures::uint(3, version),
+            ));
+        }
+        model::SettingsUpdate {
+            settings: model::SettingsProto {
+                kind: 1,
+                proto: STANDARD.encode(proto),
+            },
+            partial,
+        }
+    }
+
+    fn settings_store() -> (State, Store, Presence) {
+        let initial = preloaded_update(Some(10), true, false);
+        let mut ready: model::Ready =
+            serde_json::from_str(include_str!("fixtures/ready.json")).unwrap();
+        ready.user_settings_proto = Some(initial.settings.proto.clone());
+        let state = State {
+            settings_version: settings_version(&initial.settings.proto),
+            ..State::default()
+        };
+        let mut presence = Presence::default();
+        presence.replace(Some(&initial.settings.proto));
+        let rest = preloaded_update(Some(12), true, false);
+        presence.update(&rest.settings.proto, false).unwrap();
+        (state, Store::from_ready(ready), presence)
+    }
+
+    #[test]
+    fn outdated_partial_settings_reach_store_without_changing_presence() {
+        let (mut state, mut store, mut presence) = settings_store();
+        assert!(
+            store
+                .rail
+                .iter()
+                .any(|entry| matches!(entry, RailEntry::Folder(_)))
+        );
+        let revision = presence.revision;
+        let update = preloaded_update(Some(11), false, true);
+        assert!(matches!(
+            presence.update(&update.settings.proto, update.partial),
+            Err(Error::SettingsOutdated)
+        ));
+        assert_eq!(presence.revision, revision);
+        assert!(state.forward_settings_update(&update));
+        assert_eq!(
+            store.apply(Event::SettingsUpdate(Box::new(update))),
+            Change::Structure
+        );
+        assert!(
+            store
+                .rail
+                .iter()
+                .all(|entry| matches!(entry, RailEntry::Guild(_)))
+        );
+
+        let older_partial = preloaded_update(Some(9), true, true);
+        assert!(state.forward_settings_update(&older_partial));
+        assert_eq!(
+            store.apply(Event::SettingsUpdate(Box::new(older_partial))),
+            Change::Structure
+        );
+        assert!(
+            store
+                .rail
+                .iter()
+                .any(|entry| matches!(entry, RailEntry::Folder(_)))
+        );
+        assert_eq!(state.settings_version, Some(11));
+    }
+
+    #[test]
+    fn full_settings_are_compared_with_store_versions_not_rest_versions() {
+        let (mut state, mut store, mut presence) = settings_store();
+        let update = preloaded_update(Some(11), false, false);
+        assert!(matches!(
+            presence.update(&update.settings.proto, update.partial),
+            Err(Error::SettingsOutdated)
+        ));
+        assert!(state.forward_settings_update(&update));
+        assert_eq!(
+            store.apply(Event::SettingsUpdate(Box::new(update))),
+            Change::Structure
+        );
+        assert!(
+            store
+                .rail
+                .iter()
+                .all(|entry| matches!(entry, RailEntry::Guild(_)))
+        );
+
+        for version in [Some(10), None] {
+            let update = preloaded_update(version, true, false);
+            if state.forward_settings_update(&update) {
+                store.apply(Event::SettingsUpdate(Box::new(update)));
+            }
+            assert!(
+                store
+                    .rail
+                    .iter()
+                    .all(|entry| matches!(entry, RailEntry::Guild(_)))
+            );
+            assert_eq!(state.settings_version, Some(11));
+        }
+        assert!(state.forward_settings_update(&preloaded_update(Some(11), false, false)));
+        let newer = preloaded_update(Some(13), true, false);
+        assert!(state.forward_settings_update(&newer));
+        store.apply(Event::SettingsUpdate(Box::new(newer)));
+        assert!(
+            store
+                .rail
+                .iter()
+                .any(|entry| matches!(entry, RailEntry::Folder(_)))
+        );
+        assert_eq!(state.settings_version, Some(13));
+    }
 
     #[tokio::test]
     async fn ready_commands_use_the_socket_and_pace_member_chunks() {
@@ -687,11 +920,14 @@ mod tests {
                     sequence: Some(1),
                     session_id: Some("fixture-session".into()),
                     resume_url: None,
+                    settings_version: None,
                 },
                 &mut HashSet::new(),
                 &mut CommandReceiver {
                     receiver,
                     generation,
+                    presence: Arc::default(),
+                    presence_after: Instant::now(),
                 },
                 &VoiceManager::default(),
             ),
@@ -797,6 +1033,7 @@ mod tests {
             sequence: Some(42),
             session_id: Some("fixture-session".into()),
             resume_url: None,
+            settings_version: None,
         };
         let result = timeout(
             Duration::from_secs(3),
@@ -810,6 +1047,8 @@ mod tests {
                 &mut CommandReceiver {
                     receiver: command_receiver,
                     generation: Arc::new(AtomicU64::new(0)),
+                    presence: Arc::default(),
+                    presence_after: Instant::now(),
                 },
                 &VoiceManager::default(),
             ),
@@ -863,6 +1102,8 @@ mod tests {
                 &mut CommandReceiver {
                     receiver: command_receiver,
                     generation: Arc::new(AtomicU64::new(0)),
+                    presence: Arc::default(),
+                    presence_after: Instant::now(),
                 },
                 &VoiceManager::default(),
             ),

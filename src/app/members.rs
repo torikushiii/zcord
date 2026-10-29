@@ -65,11 +65,21 @@ impl DiscordApp {
     }
 
     pub(super) fn arm_status_expiry_timer(&mut self, cx: &mut Context<Self>) {
-        let expiry = self
+        let custom_expiry = self
             .store
             .user(self.store.current_user_id)
             .and_then(|user| user.custom_status.as_ref())
             .and_then(|status| status.expires_at);
+        let manual_expiry = self
+            .session
+            .as_ref()
+            .and_then(|session| session.next_status_expiry());
+        let now = SystemTime::now();
+        let (expired, expiry) =
+            status_expiry_plan(self.status_expiry, custom_expiry, manual_expiry, now);
+        if expired {
+            self.refresh_expired_self_status(now);
+        }
         if expiry == self.status_expiry {
             return;
         }
@@ -84,36 +94,41 @@ impl DiscordApp {
                 .unwrap_or_default();
             cx.background_executor().timer(delay).await;
             this.update(cx, |app, cx| {
-                let id = app.store.current_user_id;
-                let Some(user) = app.store.users.get_mut(&id) else {
-                    return;
-                };
-                let same = user
-                    .custom_status
-                    .as_ref()
-                    .is_some_and(|status| status.expires_at == Some(expires_at));
-                if !same {
+                if app.status_expiry != Some(expires_at) {
                     return;
                 }
-                if !user
-                    .custom_status
-                    .as_ref()
-                    .is_some_and(|status| status.is_expired(SystemTime::now()))
-                {
-                    app.status_expiry = None;
-                    app.arm_status_expiry_timer(cx);
-                    return;
-                }
-                user.custom_status = None;
-                user.activity = None;
-                user.activity_kind = None;
-                user.playing = false;
-                app.status_expiry = None;
                 app.status_expiry_timer = None;
+                if SystemTime::now() < expires_at {
+                    app.status_expiry = None;
+                }
+                app.arm_status_expiry_timer(cx);
                 cx.notify();
             })
             .ok();
         }));
+    }
+
+    fn refresh_expired_self_status(&mut self, now: SystemTime) {
+        if let Some(user) = self.store.users.get_mut(&self.store.current_user_id)
+            && user
+                .custom_status
+                .as_ref()
+                .is_some_and(|status| status.is_expired(now))
+        {
+            user.custom_status = None;
+            user.activity = None;
+            user.activity_kind = None;
+            user.playing = false;
+        }
+        // Project the current settings, not the choice captured by an earlier timer.
+        if let Some(status) = self.selected_self_status() {
+            self.store.set_self_status(status);
+        }
+        if let Some(session) = self.session.as_ref().filter(|_| self.live)
+            && let Err(error) = session.refresh_presence()
+        {
+            log::debug!("Could not refresh expired status presence: {error}");
+        }
     }
 
     pub(super) fn arm_members_timer(&mut self, cx: &mut Context<Self>) {
@@ -157,5 +172,78 @@ impl DiscordApp {
     pub(crate) fn toggle_members(&mut self, cx: &mut Context<Self>) {
         self.show_members = !self.show_members;
         cx.notify();
+    }
+}
+
+fn status_expiry_plan(
+    scheduled: Option<SystemTime>,
+    custom: Option<SystemTime>,
+    manual: Option<SystemTime>,
+    now: SystemTime,
+) -> (bool, Option<SystemTime>) {
+    // The Session exposes only future manual deadlines. An unrelated event must
+    // still process a due timer before replacing it with the next deadline.
+    let expired = [scheduled, custom, manual]
+        .into_iter()
+        .flatten()
+        .any(|expiry| expiry <= now);
+    let next = [custom, manual]
+        .into_iter()
+        .flatten()
+        .filter(|expiry| *expiry > now)
+        .min();
+    (expired, next)
+}
+
+#[cfg(test)]
+mod status_expiry_tests {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    use super::status_expiry_plan;
+
+    #[test]
+    fn both_deadlines_rearm_in_order_and_due_manual_timers_cannot_be_lost() {
+        let before = UNIX_EPOCH + Duration::from_secs(100);
+        let manual = before + Duration::from_secs(10);
+        let custom = before + Duration::from_secs(20);
+        assert_eq!(
+            status_expiry_plan(None, Some(custom), Some(manual), before),
+            (false, Some(manual))
+        );
+        assert_eq!(
+            status_expiry_plan(Some(manual), Some(custom), None, manual),
+            (true, Some(custom)),
+            "a concurrent event still processes the exact manual deadline"
+        );
+        assert_eq!(
+            status_expiry_plan(Some(custom), Some(custom), None, custom),
+            (true, None)
+        );
+        assert_eq!(
+            status_expiry_plan(None, Some(manual), Some(custom), before),
+            (false, Some(manual)),
+            "custom expiry can come first without clearing the manual deadline"
+        );
+    }
+
+    #[test]
+    fn replacing_or_clearing_deadlines_uses_the_current_snapshot() {
+        let now = UNIX_EPOCH + Duration::from_secs(100);
+        let old = now + Duration::from_secs(10);
+        let newer = now + Duration::from_secs(20);
+        assert_eq!(
+            status_expiry_plan(Some(old), None, Some(newer), now),
+            (false, Some(newer))
+        );
+        assert_eq!(
+            status_expiry_plan(Some(old), None, None, now),
+            (false, None)
+        );
+        assert_eq!(status_expiry_plan(None, None, None, now), (false, None));
+        assert_eq!(
+            status_expiry_plan(Some(old), Some(newer), None, old + Duration::from_secs(1)),
+            (true, Some(newer)),
+            "late callbacks refresh current state and retain the replacement"
+        );
     }
 }

@@ -238,6 +238,9 @@ impl DiscordApp {
         if self.close_lightbox(cx) {
             return;
         }
+        if self.dismiss_status_menu(window, cx) {
+            return;
+        }
         if self
             .profile
             .as_ref()

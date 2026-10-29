@@ -177,6 +177,7 @@ pub struct DiscordApp {
     pub(crate) hovered_member: Option<u64>,
     pub(crate) hovered_account: bool,
     pub(crate) profile: Option<profile::ProfileCard>,
+    pub(crate) self_status: profile::StatusChange,
     pub(crate) settings_page: Option<settings_page::SettingsPage>,
     settings_animation: u64,
     pub(crate) lightbox: Option<lightbox::Lightbox>,
@@ -339,6 +340,7 @@ impl DiscordApp {
             voice: voice::Voice::from_settings(cx),
             reconnecting: false,
             session: None,
+            self_status: profile::StatusChange::default(),
             pending_token: None,
             loading: HashSet::new(),
             loading_older: HashSet::new(),
@@ -559,11 +561,16 @@ impl DiscordApp {
             }
             Event::Voice(event) => self.handle_voice_event(event, cx),
             Event::Reconnecting => {
+                self.self_status.disconnect();
                 self.reconnecting = true;
                 cx.notify();
             }
             Event::Resumed => {
                 self.reconnecting = false;
+                if let Some(status) = self.selected_self_status() {
+                    self.store.set_self_status(status);
+                }
+                self.arm_status_expiry_timer(cx);
                 self.refresh_voice_start_times();
                 self.member_subscription = None;
                 self.typing.clear();
@@ -581,6 +588,9 @@ impl DiscordApp {
                 let reconnect = matches!(self.screen, Screen::Chat);
                 self.member_subscription = None;
                 self.store.apply(event);
+                if let Some(status) = self.selected_self_status() {
+                    self.store.set_self_status(status);
+                }
                 self.refresh_voice_start_times();
                 self.arm_status_expiry_timer(cx);
                 self.sync_channel_rows();
@@ -604,7 +614,21 @@ impl DiscordApp {
                     _ => {}
                 }
                 let supplemental = matches!(event, Event::ReadySupplemental(_));
+                let status_update = match &event {
+                    Event::SettingsUpdate(update) => update.settings.kind == 1,
+                    Event::SessionsReplace(_) | Event::ReadySupplemental(_) => true,
+                    Event::PresenceUpdate(presence) => {
+                        presence
+                            .user_id
+                            .or_else(|| presence.user.as_ref().map(|user| user.id))
+                            == Some(self.store.current_user_id)
+                    }
+                    _ => false,
+                };
                 let change = self.store.apply(event);
+                if status_update && let Some(status) = self.selected_self_status() {
+                    self.store.set_self_status(status);
+                }
                 self.apply_change(change, window, cx);
                 if supplemental {
                     self.restore_voice(cx);

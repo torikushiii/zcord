@@ -13,6 +13,7 @@ use super::mutuals::mutuals_line;
 use super::*;
 
 mod menu;
+pub(super) mod status;
 
 pub(super) use menu::profile_actions;
 
@@ -94,6 +95,7 @@ pub(super) fn popout(
         .into_any_element();
     let framed = framed(card, outer_width, outer, false, cx);
     let close = app.entity.clone();
+    let in_status_menu = card.status_menu.hit_test();
     // Keep the frame art that hangs past the card on screen, not just the card itself.
     let margin = |overflow: f32| rpx(overflow).to_pixels(window.rem_size()) + px(12.);
     deferred(
@@ -112,6 +114,9 @@ pub(super) fn popout(
                     .relative()
                     .occlude()
                     .on_mouse_down_out(move |event, _, cx| {
+                        if in_status_menu(event.position) {
+                            return;
+                        }
                         if outside_menu
                             .get()
                             .is_some_and(|bounds: Bounds<Pixels>| bounds.contains(&event.position))
@@ -578,11 +583,12 @@ fn popout_body(
                 .when(!card.is_account(), |this| this.children(roles(app, card)))
         })
         .when(card.is_account(), |this| {
-            this.child(account_menu(app, palette))
+            this.child(account_menu(app, card, window, cx))
         })
 }
 
-fn account_menu(app: &DiscordApp, palette: ProfilePalette) -> AnyElement {
+fn account_menu(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &App) -> AnyElement {
+    let palette = card.palette();
     let row = |id: &'static str, icon: &'static str, text: &'static str, action: AccountAction| {
         div()
             .id(id)
@@ -617,6 +623,8 @@ fn account_menu(app: &DiscordApp, palette: ProfilePalette) -> AnyElement {
                     "View Profile",
                     AccountAction::ViewProfile,
                 ))
+                .child(div().h(rpx(1.)).mx(rpx(12.)).bg(palette.border))
+                .child(status::trigger(app, card, window, cx))
                 .child(div().h(rpx(1.)).mx(rpx(12.)).bg(palette.border))
                 .child(row(
                     "account-settings",
