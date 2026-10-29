@@ -1,9 +1,9 @@
 //! Decoding a large GIF or clip takes seconds; re-showing one reads these frames instead.
 //!
-//! Format (little-endian): magic `ZCFR`, version `1`, frame count `u32`, width `u32`,
-//! height `u32`; then per frame the delay numerator and denominator (`u32` each)
-//! followed by `width * height * 4` raw BGRA bytes, exactly as stored in
-//! `RenderImage`.
+//! Format (little-endian): magic `ZCFR`, version `2`, frame count `u32`, width `u32`,
+//! height `u32`, play count `u32` (0 = infinite); then per frame the delay numerator
+//! and denominator (`u32` each) followed by `width * height * 4` raw BGRA bytes,
+//! exactly as stored in `RenderImage`.
 
 use super::images::{touch_due, touch_modified};
 use anyhow::{Context, ensure};
@@ -12,14 +12,15 @@ use image::{Delay, Frame, RgbaImage};
 use std::{
     fs::{self, File},
     io::{self, BufWriter, Write},
+    num::NonZeroU32,
     path::Path,
     sync::Arc,
     time::SystemTime,
 };
 
 const MAGIC: &[u8; 4] = b"ZCFR";
-const VERSION: u8 = 1;
-const HEADER_LEN: usize = 17;
+const VERSION: u8 = 2;
+const HEADER_LEN: usize = 21;
 const FRAME_HEADER_LEN: usize = 8;
 const MAX_DIMENSION: u32 = 4096;
 const MAX_FRAMES: u32 = 600;
@@ -27,7 +28,7 @@ const MAX_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Callers only save images produced by the animated and video decoders, which
 /// resize every frame to one target size.
-fn write(image: &RenderImage, out: &mut impl Write) -> io::Result<u64> {
+fn write(image: &RenderImage, plays: Option<NonZeroU32>, out: &mut impl Write) -> io::Result<u64> {
     let frame_count = u32::try_from(image.frame_count()).unwrap_or(u32::MAX);
     if frame_count == 0 {
         return Ok(0);
@@ -38,6 +39,7 @@ fn write(image: &RenderImage, out: &mut impl Write) -> io::Result<u64> {
     out.write_all(&frame_count.to_le_bytes())?;
     out.write_all(&width.to_le_bytes())?;
     out.write_all(&height.to_le_bytes())?;
+    out.write_all(&plays.map_or(0, NonZeroU32::get).to_le_bytes())?;
     let mut written = HEADER_LEN as u64;
     for index in 0..frame_count as usize {
         let (numerator, denominator) = image.delay(index).numer_denom_ms();
@@ -50,7 +52,7 @@ fn write(image: &RenderImage, out: &mut impl Write) -> io::Result<u64> {
     Ok(written)
 }
 
-pub(crate) fn save(path: &Path, image: &RenderImage) -> io::Result<u64> {
+pub(crate) fn save(path: &Path, image: &RenderImage, plays: Option<NonZeroU32>) -> io::Result<u64> {
     if image.frame_count() == 0 {
         return Ok(0);
     }
@@ -62,7 +64,7 @@ pub(crate) fn save(path: &Path, image: &RenderImage) -> io::Result<u64> {
     let result = (|| {
         let file = File::options().write(true).create_new(true).open(&temp)?;
         let mut out = BufWriter::new(file);
-        let written = write(image, &mut out)?;
+        let written = write(image, plays, &mut out)?;
         out.flush()?;
         drop(out);
         fs::rename(&temp, path)?;
@@ -74,7 +76,7 @@ pub(crate) fn save(path: &Path, image: &RenderImage) -> io::Result<u64> {
     result
 }
 
-pub(crate) async fn load(path: &Path) -> Option<(Arc<RenderImage>, usize)> {
+pub(crate) async fn load(path: &Path) -> Option<(Arc<RenderImage>, usize, Option<NonZeroU32>)> {
     let bytes = match tokio::fs::read(path).await {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -106,7 +108,7 @@ pub(crate) async fn load(path: &Path) -> Option<(Arc<RenderImage>, usize)> {
     }
 }
 
-fn decode(bytes: &[u8]) -> anyhow::Result<(Arc<RenderImage>, usize)> {
+fn decode(bytes: &[u8]) -> anyhow::Result<(Arc<RenderImage>, usize, Option<NonZeroU32>)> {
     ensure!(bytes.len() >= HEADER_LEN, "frame cache header is truncated");
     ensure!(bytes.starts_with(MAGIC), "invalid frame cache magic");
     ensure!(
@@ -121,6 +123,7 @@ fn decode(bytes: &[u8]) -> anyhow::Result<(Arc<RenderImage>, usize)> {
     let frame_count = u32_at(bytes, 5)?;
     let width = u32_at(bytes, 9)?;
     let height = u32_at(bytes, 13)?;
+    let plays = NonZeroU32::new(u32_at(bytes, 17)?);
     ensure!(
         frame_count > 0 && frame_count <= MAX_FRAMES,
         "invalid frame count"
@@ -159,7 +162,7 @@ fn decode(bytes: &[u8]) -> anyhow::Result<(Arc<RenderImage>, usize)> {
     let bytes = frame_bytes
         .checked_mul(frame_count as usize)
         .context("frame cache size overflow")?;
-    Ok((Arc::new(RenderImage::new(frames)), bytes))
+    Ok((Arc::new(RenderImage::new(frames)), bytes, plays))
 }
 
 fn dimensions(image: &RenderImage, index: usize) -> (u32, u32) {
@@ -217,11 +220,15 @@ mod tests {
     fn round_trip_preserves_frames_delays_and_pixels() {
         let image = image();
         let mut encoded = Vec::new();
-        assert_eq!(write(&image, &mut encoded).unwrap(), encoded.len() as u64);
-        let (decoded, bytes) = decode(&encoded).unwrap();
+        assert_eq!(
+            write(&image, None, &mut encoded).unwrap(),
+            encoded.len() as u64
+        );
+        let (decoded, bytes, plays) = decode(&encoded).unwrap();
 
         assert_eq!(decoded.frame_count(), 3);
         assert_eq!(bytes, 3 * 2 * 4 * 3);
+        assert_eq!(plays, None);
         for index in 0..3 {
             assert_eq!(decoded.size(index), image.size(index));
             assert_eq!(decoded.as_bytes(index), image.as_bytes(index));
@@ -233,9 +240,39 @@ mod tests {
     }
 
     #[test]
+    fn play_count_round_trips() {
+        for plays in [
+            None,
+            NonZeroU32::new(1),
+            NonZeroU32::new(17),
+            NonZeroU32::new(u32::MAX),
+        ] {
+            let mut encoded = Vec::new();
+            write(&image(), plays, &mut encoded).unwrap();
+            assert_eq!(decode(&encoded).unwrap().2, plays);
+        }
+    }
+
+    #[tokio::test]
+    async fn version_one_is_rejected_and_removed() {
+        let mut encoded = Vec::new();
+        write(&image(), None, &mut encoded).unwrap();
+        encoded[4] = 1;
+        encoded.drain(17..21);
+        assert!(decode(&encoded).is_err());
+
+        let directory = temp_directory();
+        let path = directory.join("version-one.img");
+        fs::write(&path, encoded).unwrap();
+        assert!(load(&path).await.is_none());
+        assert!(!path.exists());
+        fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
     fn truncated_file_is_an_error() {
         let mut encoded = Vec::new();
-        write(&image(), &mut encoded).unwrap();
+        write(&image(), None, &mut encoded).unwrap();
         for length in [0, 4, HEADER_LEN, encoded.len() - 1] {
             assert!(decode(&encoded[..length]).is_err(), "length {length}");
         }
@@ -244,7 +281,7 @@ mod tests {
     #[test]
     fn wrong_magic_is_an_error() {
         let mut encoded = Vec::new();
-        write(&image(), &mut encoded).unwrap();
+        write(&image(), None, &mut encoded).unwrap();
         encoded[0] = b'X';
         assert!(decode(&encoded).is_err());
     }
@@ -255,9 +292,9 @@ mod tests {
         let path = directory.join("test.img");
         let image = image();
         let mut encoded = Vec::new();
-        write(&image, &mut encoded).unwrap();
+        write(&image, None, &mut encoded).unwrap();
 
-        assert_eq!(save(&path, &image).unwrap(), encoded.len() as u64);
+        assert_eq!(save(&path, &image, None).unwrap(), encoded.len() as u64);
         assert_eq!(fs::read(&path).unwrap(), encoded);
         assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
         fs::remove_dir_all(directory).unwrap();
@@ -270,9 +307,9 @@ mod tests {
         let image = RenderImage::new(Vec::<Frame>::new());
         let mut encoded = Vec::new();
 
-        assert_eq!(write(&image, &mut encoded).unwrap(), 0);
+        assert_eq!(write(&image, None, &mut encoded).unwrap(), 0);
         assert!(encoded.is_empty());
-        assert_eq!(save(&path, &image).unwrap(), 0);
+        assert_eq!(save(&path, &image, None).unwrap(), 0);
         assert!(!path.exists());
         assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
         fs::remove_dir(directory).unwrap();
@@ -283,7 +320,7 @@ mod tests {
         let mut buffer = [0; HEADER_LEN];
         let mut out = io::Cursor::new(buffer.as_mut_slice());
         assert_eq!(
-            write(&image(), &mut out).unwrap_err().kind(),
+            write(&image(), None, &mut out).unwrap_err().kind(),
             io::ErrorKind::WriteZero
         );
     }
@@ -294,7 +331,7 @@ mod tests {
         let path = directory.join("test.img");
         fs::create_dir(&path).unwrap();
 
-        assert!(save(&path, &image()).is_err());
+        assert!(save(&path, &image(), None).is_err());
         assert!(path.is_dir());
         assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
         fs::remove_dir_all(directory).unwrap();
@@ -317,13 +354,14 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
         );
-        save(&path, &image).unwrap();
+        save(&path, &image, None).unwrap();
 
-        let (cached, bytes) = load(&path).await.unwrap();
+        let (cached, bytes, plays) = load(&path).await.unwrap();
         assert_eq!(cached.frame_count(), 2);
         assert_eq!(cached.delay(0).numer_denom_ms(), (50, 1));
         assert_eq!(cached.delay(1).numer_denom_ms(), (100, 1));
         assert_eq!(bytes, 2 * 4);
+        assert_eq!(plays, None);
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -331,7 +369,7 @@ mod tests {
     async fn cache_hits_refresh_only_old_mtimes() {
         let directory = temp_directory();
         let path = directory.join("test.img");
-        save(&path, &image()).unwrap();
+        save(&path, &image(), None).unwrap();
         let old = SystemTime::now() - Duration::from_secs(2 * 60 * 60);
         File::options()
             .write(true)

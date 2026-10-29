@@ -1,6 +1,7 @@
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
+    num::NonZeroU32,
     rc::Rc,
     sync::Arc,
     time::{Duration, Instant},
@@ -591,6 +592,35 @@ fn effect_start(started: &mut Option<Instant>, now: Instant) -> Instant {
     *started.get_or_insert(now)
 }
 
+fn effect_playback(
+    layer: &model::EffectLayer,
+    started: Instant,
+    now: Instant,
+) -> Option<(u64, Instant)> {
+    let elapsed = now.checked_duration_since(started)?.as_millis() as u64;
+    let start = u64::from(layer.start);
+    let duration = u64::from(layer.duration).max(1);
+    let since = elapsed.checked_sub(start)?;
+    if layer.looped && layer.loop_delay == 0 {
+        // A continuous layer stays mounted: its APNG decides whether to loop or hold.
+        return Some((0, started + Duration::from_millis(start)));
+    }
+    let (replay, cycle_start) = if layer.looped {
+        let period = duration + u64::from(layer.loop_delay);
+        if since % period >= duration {
+            return None;
+        }
+        let replay = since / period;
+        (replay, start + replay * period)
+    } else {
+        if since >= duration {
+            return None;
+        }
+        (0, start)
+    };
+    Some((replay, started + Duration::from_millis(cycle_start)))
+}
+
 enum EffectLoad<T> {
     Pending,
     Ready(T),
@@ -611,7 +641,74 @@ fn settle_effect_layers<T>(layers: impl IntoIterator<Item = EffectLoad<T>>) -> O
     (!pending).then_some(ready)
 }
 
-fn effect_layers(card: &ProfileCard, width: f32, cx: &App) -> Vec<AnyElement> {
+fn effect_clip_geometry(
+    bounds: Bounds<Pixels>,
+    corner: f32,
+    top_only: bool,
+    rem_size: Pixels,
+) -> (Bounds<Pixels>, Pixels) {
+    let radius = rpx(corner)
+        .to_pixels(rem_size)
+        .min(bounds.size.width / 2.)
+        .min(bounds.size.height / 2.);
+    let mut rounded = bounds;
+    if top_only {
+        // Keep the bottom arcs below the rectangular clip for the full-profile card.
+        rounded.size.height += radius;
+    }
+    (rounded, radius)
+}
+
+fn effect_image(
+    image: Arc<RenderImage>,
+    id: SharedString,
+    started_at: Instant,
+    plays: Option<NonZeroU32>,
+    corner: f32,
+    top_only: bool,
+) -> impl IntoElement {
+    canvas(
+        move |bounds, window, cx| {
+            let mut image = animated::image(image)
+                .play_from(started_at, plays)
+                .id(id)
+                .w(bounds.size.width)
+                .into_any_element();
+            image.prepaint_as_root(
+                bounds.origin,
+                size(
+                    AvailableSpace::Definite(bounds.size.width),
+                    AvailableSpace::MaxContent,
+                ),
+                window,
+                cx,
+            );
+            image
+        },
+        move |bounds, mut image, window, cx| {
+            let visible = bounds.intersect(&window.content_mask().bounds);
+            if visible.is_empty() {
+                return;
+            }
+            let (rounded, radius) =
+                effect_clip_geometry(visible, corner, top_only, window.rem_size());
+            // Overflow clipping alone is rectangular; round only the effect's paint scope.
+            window.with_content_mask(Some(ContentMask { bounds: visible }), |window| {
+                window.with_rounded_clip(rounded, radius, |window| image.paint(window, cx));
+            });
+        },
+    )
+    .absolute()
+    .inset_0()
+}
+
+fn effect_layers(
+    card: &ProfileCard,
+    width: f32,
+    corner: f32,
+    top_only: bool,
+    cx: &App,
+) -> Vec<AnyElement> {
     let Some(item) = card
         .effect
         .as_ref()
@@ -620,16 +717,16 @@ fn effect_layers(card: &ProfileCard, width: f32, cx: &App) -> Vec<AnyElement> {
         return Vec::new();
     };
     let height = width * EFFECT_HEIGHT_RATIO;
+    let size = theme::image_px(height).min(EFFECT_MAX_PX);
     let states = item.effects.iter().enumerate().map(|(index, layer)| {
-        match animated::state(
-            &ImageSpec::Collectible {
-                url: layer.src.clone(),
-            },
-            theme::image_px(height).min(EFFECT_MAX_PX),
-            cx,
-        ) {
+        let spec = ImageSpec::Collectible {
+            url: layer.src.clone(),
+        };
+        match animated::state(&spec, size, cx) {
             animated::Load::Pending => EffectLoad::Pending,
-            animated::Load::Ready(image) => EffectLoad::Ready((index, image)),
+            animated::Load::Ready(image) => {
+                EffectLoad::Ready((index, image, animated::play_count(&spec, size, cx)))
+            }
             animated::Load::Failed => EffectLoad::Failed,
         }
     });
@@ -637,41 +734,34 @@ fn effect_layers(card: &ProfileCard, width: f32, cx: &App) -> Vec<AnyElement> {
     let Some(images) = settle_effect_layers(states) else {
         return Vec::new();
     };
-    let started = effect_start(&mut card.effect_started.borrow_mut(), Instant::now());
-    let elapsed = started.elapsed().as_millis() as u64;
+    let now = cx.background_executor().now();
+    let started = effect_start(&mut card.effect_started.borrow_mut(), now);
     let mut layers: Vec<_> = images
         .into_iter()
-        .filter_map(|(index, image)| {
+        .filter_map(|(index, image, plays)| {
             let layer = &item.effects[index];
-            let start = u64::from(layer.start);
-            let duration = u64::from(layer.duration).max(1);
-            let since = elapsed.checked_sub(start)?;
-            let replay = if layer.looped {
-                let period = duration + u64::from(layer.loop_delay);
-                (since % period < duration).then_some(since / period)?
+            let (replay, layer_started) = effect_playback(layer, started, now)?;
+            let plays = if layer.looped && layer.loop_delay == 0 {
+                plays
             } else {
-                (since < duration).then_some(0)?
+                Some(NonZeroU32::MIN)
             };
-            Some((layer.z_index, index, replay, image))
+            Some((layer.z_index, index, replay, image, layer_started, plays))
         })
         .collect();
     layers.sort_by_key(|(z, ..)| *z);
     layers
         .into_iter()
-        .map(|(_, index, replay, image)| {
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .w_full()
-                .child(
-                    animated::image(image)
-                        .id(SharedString::from(format!(
-                            "profile-effect-{index}-{replay}"
-                        )))
-                        .w(rpx(width)),
-                )
-                .into_any_element()
+        .map(|(_, index, replay, image, layer_started, plays)| {
+            effect_image(
+                image,
+                format!("profile-effect-{index}-{replay}").into(),
+                layer_started,
+                plays,
+                corner,
+                top_only,
+            )
+            .into_any_element()
         })
         .collect()
 }
@@ -679,7 +769,8 @@ fn effect_layers(card: &ProfileCard, width: f32, cx: &App) -> Vec<AnyElement> {
 #[cfg(test)]
 mod tests {
     use super::{
-        EffectLoad, THEME_OVERLAY, account_available_height, account_popout_position, effect_start,
+        EffectLoad, THEME_OVERLAY, account_available_height, account_popout_position,
+        effect_clip_geometry, effect_playback, effect_start,
         loading::outbox_application_ids,
         modal::{modal_backdrop_corners, profile_close_button},
         palette::{ProfilePalette, ProfileTheme, blend, contrast},
@@ -709,6 +800,147 @@ mod tests {
             effect_start(&mut started, now + Duration::from_secs(1)),
             now
         );
+    }
+
+    #[test]
+    fn profile_effect_intro_plays_once_and_only_the_loop_restarts() {
+        let products: Vec<model::CollectibleProduct> = serde_json::from_str(include_str!(
+            "../discord/fixtures/collectibles_products.json"
+        ))
+        .unwrap();
+        let effect = products.iter().find(|product| product.kind == 1).unwrap();
+        let intro = &effect.items[0].effects[0];
+        let repeat = &effect.items[0].effects[1];
+        let started = Instant::now();
+        let at = |ms| started + Duration::from_millis(ms);
+        for ms in [0, 1000, 4980] {
+            assert_eq!(effect_playback(intro, started, at(ms)), Some((0, started)));
+        }
+        for ms in [4981, 7981, 10_000, 15_961, 50_000] {
+            assert_eq!(effect_playback(intro, started, at(ms)), None);
+        }
+        for ms in [0, 4981, 7980, 12_961, 15_960] {
+            assert_eq!(effect_playback(repeat, started, at(ms)), None);
+        }
+        for ms in [7981, 10_000, 12_960] {
+            assert_eq!(
+                effect_playback(repeat, started, at(ms)),
+                Some((0, at(7981)))
+            );
+        }
+        for ms in [15_961, 16_000, 20_940] {
+            assert_eq!(
+                effect_playback(repeat, started, at(ms)),
+                Some((1, at(15_961)))
+            );
+        }
+        assert_eq!(effect_playback(repeat, started, at(20_941)), None);
+        assert_eq!(effect_playback(intro, at(1), started), None);
+    }
+
+    #[test]
+    fn profile_effect_zero_duration_never_divides_by_zero() {
+        let layer = model::EffectLayer {
+            src: String::new(),
+            looped: true,
+            duration: 0,
+            start: 100,
+            loop_delay: 10,
+            z_index: 0,
+        };
+        let started = Instant::now();
+        let at = |ms| started + Duration::from_millis(ms);
+        assert_eq!(effect_playback(&layer, started, at(99)), None);
+        assert_eq!(
+            effect_playback(&layer, started, at(100)),
+            Some((0, at(100)))
+        );
+        assert_eq!(effect_playback(&layer, started, at(101)), None);
+        assert_eq!(effect_playback(&layer, started, at(110)), None);
+        assert_eq!(
+            effect_playback(&layer, started, at(111)),
+            Some((1, at(111)))
+        );
+    }
+
+    #[test]
+    fn profile_effect_sakura_base_stays_mounted_while_the_overlay_repeats() {
+        let base = model::EffectLayer {
+            src: String::new(),
+            looped: true,
+            duration: 2880,
+            start: 0,
+            loop_delay: 0,
+            z_index: 100,
+        };
+        let overlay = model::EffectLayer {
+            start: 2880,
+            loop_delay: 2880,
+            z_index: 101,
+            ..base.clone()
+        };
+        let started = Instant::now();
+        let at = |ms| started + Duration::from_millis(ms);
+        for ms in [0, 2879, 2880, 2999, 3000, 5760, 8640, 50_000] {
+            assert_eq!(effect_playback(&base, started, at(ms)), Some((0, started)));
+        }
+        for ms in [0, 2879, 5760, 8639, 11_520] {
+            assert_eq!(effect_playback(&overlay, started, at(ms)), None);
+        }
+        for ms in [2880, 3000, 5759] {
+            assert_eq!(
+                effect_playback(&overlay, started, at(ms)),
+                Some((0, at(2880)))
+            );
+        }
+        for ms in [8640, 10_000, 11_519] {
+            assert_eq!(
+                effect_playback(&overlay, started, at(ms)),
+                Some((1, at(8640)))
+            );
+        }
+        let delayed = model::EffectLayer { start: 100, ..base };
+        assert_eq!(effect_playback(&delayed, started, at(99)), None);
+        assert_eq!(
+            effect_playback(&delayed, started, at(3000)),
+            Some((0, at(100)))
+        );
+    }
+
+    #[test]
+    fn profile_effect_clip_matches_popout_and_modal_corners_at_each_scale() {
+        for scale in [1., 1.125, 1.25, 1.5, 2.] {
+            let rem_size = px(crate::theme::BASE_FONT_SIZE * scale);
+            let bounds = Bounds::new(
+                point(px(20. * scale), px(40. * scale)),
+                size(px(300. * scale), px(420. * scale)),
+            );
+            for corner in [6., 8.] {
+                let (rounded, radius) = effect_clip_geometry(bounds, corner, false, rem_size);
+                assert_eq!(rounded, bounds);
+                assert_eq!(radius, px(corner * scale));
+            }
+            let (rounded, radius) = effect_clip_geometry(bounds, 16., true, rem_size);
+            assert_eq!(radius, px(16. * scale));
+            assert_eq!(rounded.origin, bounds.origin);
+            assert_eq!(rounded.size.width, bounds.size.width);
+            assert_eq!(rounded.bottom() - radius, bounds.bottom());
+        }
+    }
+
+    #[test]
+    fn profile_effect_clip_uses_the_visible_scroll_viewport_and_clamps_its_radius() {
+        let card = Bounds::new(point(px(20.), px(40.)), size(px(300.), px(600.)));
+        let viewport = Bounds::new(point(px(20.), px(100.)), size(px(300.), px(200.)));
+        let visible = card.intersect(&viewport);
+        let (rounded, radius) = effect_clip_geometry(visible, 8., false, px(16.));
+        assert_eq!(rounded, viewport);
+        assert_eq!(radius, px(8.));
+
+        let small = Bounds::new(point(px(0.), px(0.)), size(px(12.), px(8.)));
+        let (rounded, radius) = effect_clip_geometry(small, 16., true, px(16.));
+        assert_eq!(radius, px(4.));
+        assert_eq!(rounded.bottom() - radius, small.bottom());
     }
 
     #[test]
