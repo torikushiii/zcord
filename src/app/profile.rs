@@ -69,9 +69,9 @@ const EFFECT_MAX_PX: u32 = 1200;
 const THEME_OVERLAY: f32 = 0.6;
 const MAX_VISIBLE_BADGES: usize = 6;
 const BADGE_ART: f32 = 96.;
-const MUTUAL_ICON: f32 = 20.;
-/// Each stacked mutual icon starts 4px before the previous one ends.
-const MUTUAL_STEP: f32 = MUTUAL_ICON - 4.;
+const MUTUAL_ICON: f32 = 16.;
+/// Each stacked mutual icon starts 3px before the previous one ends.
+const MUTUAL_STEP: f32 = MUTUAL_ICON - 3.;
 /// Example questions Discord shows in your own empty status bubble.
 const STATUS_PROMPTS: [&str; 6] = [
     "Best thing you ate this week?",

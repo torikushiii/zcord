@@ -45,7 +45,7 @@ pub(super) fn mutuals_line(
         let icons = guilds
             .iter()
             .filter_map(|mutual| app.store.guild_by_id(mutual.id))
-            .take(3)
+            .take(if friend_count.is_some() { 0 } else { 3 })
             .map(|guild| guild_icon(guild, MUTUAL_ICON, cx));
         mutual_part(
             app,
@@ -56,18 +56,24 @@ pub(super) fn mutuals_line(
         )
     });
     let parts: Vec<_> = friends.into_iter().chain(servers).collect();
+    mutuals_row(parts, palette).map(|row| row.into_any_element())
+}
+
+pub(super) fn mutuals_row(parts: Vec<AnyElement>, palette: ProfilePalette) -> Option<Div> {
     if parts.is_empty() {
         return None;
     }
+    let compact = parts.len() > 1;
     Some(
         div()
             .flex()
             .flex_wrap()
             .items_center()
             .gap_x(rpx(6.))
-            .py(rpx(4.))
-            .text_size(rpx(14.))
-            .line_height(rpx(18.))
+            .gap_y(rpx(2.))
+            .text_size(rpx(if compact { 12. } else { 14. }))
+            .line_height(rpx(if compact { 16. } else { 18. }))
+            .font_weight(FontWeight::NORMAL)
             .text_color(rgb(palette.muted))
             .children(parts.into_iter().enumerate().flat_map(|(index, part)| {
                 let spacer = (index > 0).then(|| {
@@ -78,8 +84,7 @@ pub(super) fn mutuals_line(
                         .into_any_element()
                 });
                 spacer.into_iter().chain(std::iter::once(part))
-            }))
-            .into_any_element(),
+            })),
     )
 }
 
@@ -129,7 +134,8 @@ pub(super) fn mutual_entry(
         .id(id)
         .flex()
         .items_center()
-        .gap(rpx(6.))
+        .gap(rpx(4.))
+        .py(rpx(4.))
         .when(!icons.is_empty(), |this| {
             this.child(
                 div()

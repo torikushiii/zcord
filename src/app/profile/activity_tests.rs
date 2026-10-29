@@ -1,4 +1,6 @@
-use gpui::{Context, IntoElement, Render, Styled, TestAppContext, Window, div, prelude::*, px};
+use gpui::{
+    Context, FontWeight, IntoElement, Render, Styled, TestAppContext, Window, div, prelude::*, px,
+};
 
 use super::{
     ACTIVITY_PROMPTS, ProfilePalette, ProfileTheme,
@@ -129,32 +131,49 @@ fn mutual_icons_never_cover_the_count(cx: &mut TestAppContext) {
     impl Render for Line {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             let icons = (0..3).map(|_| div().size(rpx(16.)).rounded_full().into_any_element());
-            div()
-                .flex()
-                .flex_wrap()
-                .items_center()
-                .gap_x(rpx(6.))
-                .w(rpx(300.))
-                .text_size(rpx(12.))
-                .child(super::mutuals::mutual_entry(
-                    "mutual",
-                    icons,
-                    "16 Mutual Servers".into(),
-                ))
+            super::mutuals::mutuals_row(
+                vec![
+                    super::mutuals::mutual_entry("mutual", icons, "16 Mutual Servers".into())
+                        .debug_selector(|| "mutual-entry".into())
+                        .into_any_element(),
+                ],
+                ProfilePalette::of(None),
+            )
+            .unwrap()
+            .w(rpx(300.))
         }
     }
     let (_, cx) = cx.add_window_view(|_, _| Line);
-    cx.update(|window, cx| {
-        window.set_rem_size(px(16.));
-        let _ = window.draw(cx);
-    });
-    let icons = cx.debug_bounds("mutual-icons").unwrap();
-    let text = cx.debug_bounds("mutual-text").unwrap();
-    assert!(icons.size.width >= px(39.), "icons {:?}", icons);
-    assert!(
-        text.left() >= icons.right(),
-        "icons {:?} text {:?}",
-        icons,
-        text
-    );
+    for zoom in [1., 1.125, 1.5, 2.] {
+        cx.update(|window, cx| {
+            window.set_rem_size(px(16. * zoom));
+            window.refresh();
+            let _ = window.draw(cx);
+        });
+        let entry = cx.debug_bounds("mutual-entry").unwrap();
+        let icons = cx.debug_bounds("mutual-icons").unwrap();
+        let text = cx.debug_bounds("mutual-text").unwrap();
+        assert!((icons.size.width - px(42. * zoom)).abs() <= px(1.));
+        assert!((icons.size.height - px(16. * zoom)).abs() <= px(1.));
+        assert!((text.left() - icons.right() - px(4. * zoom)).abs() <= px(1.));
+        assert!((text.top() - entry.top() - px(4. * zoom)).abs() <= px(1.));
+        assert!((entry.bottom() - text.bottom() - px(4. * zoom)).abs() <= px(1.));
+    }
+}
+
+#[test]
+fn mutual_rows_use_discord_typography_and_spacing() {
+    assert!(super::mutuals::mutuals_row(Vec::new(), ProfilePalette::of(None)).is_none());
+    for (count, font_size, line_height) in [(1, 14., 18.), (2, 12., 16.)] {
+        let parts = (0..count).map(|_| div().into_any_element()).collect();
+        let mut row = super::mutuals::mutuals_row(parts, ProfilePalette::of(None)).unwrap();
+        let style = row.style();
+        assert_eq!(style.text.font_size, Some(rpx(font_size).into()));
+        assert_eq!(style.text.line_height, Some(rpx(line_height).into()));
+        assert_eq!(style.text.font_weight, Some(FontWeight::NORMAL));
+        assert_eq!(style.gap.width, Some(rpx(6.).into()));
+        assert_eq!(style.gap.height, Some(rpx(2.).into()));
+        assert!(style.padding.top.is_none());
+        assert!(style.padding.bottom.is_none());
+    }
 }
