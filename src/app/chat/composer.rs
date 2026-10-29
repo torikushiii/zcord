@@ -149,11 +149,16 @@ pub(super) fn emoji_token_overlay(input: &Entity<TextareaState>) -> impl IntoEle
                 if !state.text().chars().any(composer_tokens::is_token_char) {
                     return;
                 }
+                // Keyed by occurrence, not offset, so typing before an emoji keeps its clock.
+                let mut seen = std::collections::HashMap::<u64, usize>::new();
                 let tokens: Vec<_> = composer_tokens::tokens_in(&state.value())
                     .into_iter()
                     .filter_map(|(range, token)| {
+                        let occurrence = seen.entry(token.id).or_default();
+                        let key = (token.id, *occurrence);
+                        *occurrence += 1;
                         let bounds = state.range_to_bounds(&range)?;
-                        Some((range, bounds, token))
+                        Some((range, bounds, token, key))
                     })
                     .collect();
                 (tokens, state.input_bounds(), state.selected_range())
@@ -162,33 +167,55 @@ pub(super) fn emoji_token_overlay(input: &Entity<TextareaState>) -> impl IntoEle
                 return;
             }
             let size = rpx(18.).to_pixels(window.rem_size());
+            let pixels = theme::image_px(22.);
             window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
-                for (range, bounds, token) in tokens {
+                for (range, bounds, token, (id, occurrence)) in tokens {
+                    if bounds.intersect(&window.content_mask().bounds).is_empty() {
+                        continue;
+                    }
                     // The token's variation selectors have no glyph in the UI font and draw as
                     // small boxes, so cover the whole token with the input background first.
                     window.paint_quad(fill(bounds, rgb(theme::ELEVATED)));
                     if range.start >= selected.start && range.end <= selected.end {
                         window.paint_quad(fill(bounds, cx.theme().selection));
                     }
-                    let spec = ImageSpec::Emoji {
+                    // Keep a still visible while loading or when animation is disabled.
+                    let still = ImageSpec::Emoji {
                         id: token.id,
                         animated: false,
                     };
-                    let Some(image) = animated::resolve(&spec, theme::image_px(22.), cx) else {
+                    let image = token
+                        .animated
+                        .then_some(ImageSpec::Emoji {
+                            id: token.id,
+                            animated: true,
+                        })
+                        .and_then(|spec| animated::resolve(&spec, pixels, cx))
+                        .or_else(|| match animated::state(&still, pixels, cx) {
+                            animated::Load::Ready(image) => Some(image),
+                            animated::Load::Pending | animated::Load::Failed => None,
+                        });
+                    let Some(image) = image else {
                         continue;
                     };
+                    let frame = window.with_id(("composer-input", input.entity_id()), |window| {
+                        window.with_global_id(
+                            ElementId::Name(format!("composer-emoji-{id}-{occurrence}").into()),
+                            |id, window| animated::frame_index(&image, id, window, cx),
+                        )
+                    });
                     // Centred on the whole token: the EM SPACE plus whatever width the
                     // selector boxes take.
-                    let frame = image.size(0);
-                    let scale = size / px(frame.width.0.max(frame.height.0) as f32);
+                    let dimensions = image.size(frame);
+                    let scale = size / px(dimensions.width.0.max(dimensions.height.0) as f32);
                     let fitted = gpui::size(
-                        px(frame.width.0 as f32) * scale,
-                        px(frame.height.0 as f32) * scale,
+                        px(dimensions.width.0 as f32) * scale,
+                        px(dimensions.height.0 as f32) * scale,
                     );
                     let origin = bounds.center() - point(fitted.width / 2., fitted.height / 2.);
                     let target = Bounds::new(origin, fitted);
                     window
-                        .paint_image(target, Corners::default(), image, 0, false)
+                        .paint_image(target, Corners::default(), image, frame, false)
                         .ok();
                 }
             });

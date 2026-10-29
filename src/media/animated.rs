@@ -15,11 +15,13 @@ use image::{
     Limits,
     codecs::{gif::GifDecoder, png::PngDecoder, webp::WebPDecoder},
     imageops::{FilterType, resize},
+    metadata::LoopCount,
 };
 use std::{
     cell::RefCell,
     collections::HashMap,
     io::Cursor,
+    num::NonZeroU32,
     rc::Rc,
     sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
@@ -103,7 +105,7 @@ fn still_wanted(stamp: &Mutex<Instant>) -> bool {
 }
 
 enum DecodeOutcome {
-    Decoded(Arc<RenderImage>, usize),
+    Decoded(Arc<RenderImage>, usize, Option<NonZeroU32>),
     Cancelled,
 }
 
@@ -118,6 +120,7 @@ enum Entry {
     Ready {
         image: Arc<RenderImage>,
         bytes: usize,
+        plays: Option<NonZeroU32>,
         used: u64,
         ready_at: Instant,
         seen: Instant,
@@ -152,6 +155,8 @@ const FRAME_LEAD: Duration = Duration::from_millis(8);
 pub struct AnimatedImage {
     image: Arc<RenderImage>,
     object_fit: Fit,
+    started_at: Option<Instant>,
+    plays: Option<NonZeroU32>,
     interactivity: Interactivity,
 }
 
@@ -201,6 +206,8 @@ pub fn image(image: Arc<RenderImage>) -> AnimatedImage {
     AnimatedImage {
         image,
         object_fit: Fit::Contain,
+        started_at: None,
+        plays: None,
         interactivity: Interactivity::new(),
     }
 }
@@ -208,6 +215,13 @@ pub fn image(image: Arc<RenderImage>) -> AnimatedImage {
 impl AnimatedImage {
     pub fn object_fit(mut self, object_fit: ObjectFit) -> Self {
         self.object_fit = Fit::of(object_fit);
+        self
+    }
+
+    /// Uses an external timeline; a finite play count holds the final frame when exhausted.
+    pub(crate) fn play_from(mut self, started_at: Instant, plays: Option<NonZeroU32>) -> Self {
+        self.started_at = Some(started_at);
+        self.plays = plays;
         self
     }
 }
@@ -337,6 +351,8 @@ impl Element for AnimatedImage {
     ) {
         let image = self.image.clone();
         let object_fit = self.object_fit;
+        let started_at = self.started_at;
+        let plays = self.plays;
         self.interactivity.paint(
             global_id,
             inspector_id,
@@ -345,41 +361,17 @@ impl Element for AnimatedImage {
             window,
             cx,
             |style, window, cx| {
-                let (frame, wake) = match global_id {
-                    Some(global_id) => window.with_element_state(global_id, |state, window| {
-                        let mut state = state.unwrap_or_else(|| AnimatedState {
-                            image: image.clone(),
-                            started: cx.background_executor().now(),
-                            paused_at: None,
-                            frame: 0,
-                        });
-                        if state.image.id != image.id {
-                            state = AnimatedState {
-                                image: image.clone(),
-                                started: cx.background_executor().now(),
-                                paused_at: None,
-                                frame: 0,
-                            };
-                        }
-                        let wake = state.advance(&image, window, cx);
-                        ((state.frame, wake), state)
-                    }),
+                let frame = match (started_at, global_id) {
+                    (Some(started_at), _) => frame_index_at(&image, started_at, plays, window, cx),
+                    (None, Some(global_id)) => frame_index(&image, global_id, window, cx),
                     // Without an id there is nowhere to keep the clock; frame 0 is the
                     // only stable choice, matching `Img`'s stateless path.
-                    None => (0, Wake::None),
+                    (None, None) => 0,
                 };
                 if image.frame_count() == 0 {
                     return;
                 }
                 let frame = frame.min(image.frame_count() - 1);
-                match wake {
-                    Wake::AnimationFrame => window.request_animation_frame(),
-                    Wake::Timer(remaining) => {
-                        let view = window.current_view();
-                        schedule_wakeup(view, cx, remaining, window);
-                    }
-                    Wake::None => {}
-                }
                 let fitted = object_fit.bounds(bounds, image.size(frame));
                 let visible = bounds.intersect(&fitted);
                 let corner_radii = style
@@ -391,6 +383,69 @@ impl Element for AnimatedImage {
                     .ok();
             },
         );
+    }
+}
+
+/// Canvas overlays use the same playback clock and per-view wakeups as animated elements.
+pub(crate) fn frame_index(
+    image: &Arc<RenderImage>,
+    id: &GlobalElementId,
+    window: &mut Window,
+    cx: &mut App,
+) -> usize {
+    let (frame, wake) = window.with_element_state(id, |state: Option<AnimatedState>, window| {
+        let mut state = state
+            .filter(|state| state.image.id == image.id)
+            .unwrap_or_else(|| AnimatedState {
+                image: image.clone(),
+                started: cx.background_executor().now(),
+                paused_at: None,
+                frame: 0,
+            });
+        let wake = state.advance(image, window, cx);
+        ((state.frame, wake), state)
+    });
+    request_wakeup(wake, window, cx);
+    frame
+}
+
+fn frame_index_at(
+    image: &RenderImage,
+    started_at: Instant,
+    plays: Option<NonZeroU32>,
+    window: &mut Window,
+    cx: &mut App,
+) -> usize {
+    let reduced = cx.reduce_motion();
+    let elapsed = if reduced {
+        Duration::ZERO
+    } else {
+        cx.background_executor()
+            .now()
+            .saturating_duration_since(started_at)
+    };
+    let (frame, remaining) = frame_at(image, elapsed, plays);
+    request_wakeup(
+        wake(
+            remaining,
+            image.frame_count() > 1,
+            reduced,
+            window_active(window),
+        ),
+        window,
+        cx,
+    );
+    frame
+}
+
+fn request_wakeup(wake: Wake, window: &mut Window, cx: &mut App) {
+    match wake {
+        Wake::AnimationFrame => window.request_animation_frame(),
+        Wake::Timer(remaining) => {
+            let view = window.current_view();
+            schedule_wakeup(view, cx, remaining, window);
+        }
+        Wake::None => {}
     }
 }
 
@@ -435,14 +490,18 @@ impl AnimatedState {
             }
             now.saturating_duration_since(self.started)
         };
-        let (frame, remaining) = frame_at(image, elapsed);
+        let (frame, remaining) = frame_at(image, elapsed, None);
         self.frame = frame;
         wake(remaining, animated, reduced, active)
     }
 }
 
 /// The frame visible at `elapsed` and how long until the next one.
-fn frame_at(image: &RenderImage, elapsed: Duration) -> (usize, Duration) {
+fn frame_at(
+    image: &RenderImage,
+    elapsed: Duration,
+    plays: Option<NonZeroU32>,
+) -> (usize, Duration) {
     let count = image.frame_count();
     if count == 0 {
         return (0, Duration::ZERO);
@@ -454,6 +513,9 @@ fn frame_at(image: &RenderImage, elapsed: Duration) -> (usize, Duration) {
         .map(|index| Duration::from(image.delay(index)))
         .sum();
     let total = total.max(Duration::from_nanos(1));
+    if plays.is_some_and(|plays| elapsed.as_nanos() / total.as_nanos() >= u128::from(plays.get())) {
+        return (count - 1, Duration::MAX);
+    }
     let mut rest = Duration::from_nanos((elapsed.as_nanos() % total.as_nanos()) as u64);
     for index in 0..count {
         let delay = Duration::from(image.delay(index));
@@ -473,7 +535,7 @@ enum Wake {
 }
 
 fn wake(remaining: Duration, animated: bool, reduced: bool, active: bool) -> Wake {
-    if !animated || reduced || !active {
+    if !animated || reduced || !active || remaining == Duration::MAX {
         Wake::None
     } else if remaining <= FRAME_LEAD {
         Wake::AnimationFrame
@@ -579,6 +641,15 @@ pub fn resolve(spec: &ImageSpec, size: u32, cx: &App) -> Option<Arc<RenderImage>
     match state(spec, size, cx) {
         Load::Ready(image) => Some(image),
         Load::Pending | Load::Failed => None,
+    }
+}
+
+/// Intrinsic APNG play counts are retained for collectibles; `None` means unbounded.
+pub(crate) fn play_count(spec: &ImageSpec, size: u32, cx: &App) -> Option<NonZeroU32> {
+    let cache = cx.try_global::<AnimatedCache>()?.0.borrow();
+    match cache.entries.get(spec)?.get(&images::rounded_size(size))? {
+        Entry::Ready { plays, .. } => *plays,
+        _ => None,
     }
 }
 
@@ -897,14 +968,17 @@ fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
             if !still_wanted(&job_stamp) {
                 return Ok(DecodeOutcome::Cancelled);
             }
-            if matches!(lane, Lane::Gif)
-                && let Some((image, bytes)) =
-                    frames::load(&service.frames_path(&request.0, request.1)).await
-            {
-                if !still_wanted(&job_stamp) {
-                    return Ok(DecodeOutcome::Cancelled);
-                }
-                return Ok(DecodeOutcome::Decoded(image, bytes));
+            let collectible = matches!(&request.0, ImageSpec::Collectible { .. });
+            let cached = if matches!(lane, Lane::Gif) {
+                frames::load(&service.frames_path(&request.0, request.1)).await
+            } else {
+                None
+            };
+            if !still_wanted(&job_stamp) {
+                return Ok(DecodeOutcome::Cancelled);
+            }
+            if let Some((image, bytes, plays)) = cached {
+                return Ok(DecodeOutcome::Decoded(image, bytes, plays));
             }
             let path = service
                 .load(&request.0, request.1)
@@ -922,11 +996,16 @@ fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
                 return Ok(DecodeOutcome::Cancelled);
             }
             let frames_path = service.frames_path(&request.0, request.1);
-            let (image, bytes) = tokio::task::spawn_blocking(move || {
-                let bytes = std::fs::read(path)?;
-                let (image, bytes) = decode(&bytes, request.1)?;
+            let (image, bytes, plays) = tokio::task::spawn_blocking(move || {
+                let source = std::fs::read(path)?;
+                let plays = if collectible {
+                    source_play_count(&source)?
+                } else {
+                    None
+                };
+                let (image, bytes) = decode(&source, request.1)?;
                 if matches!(lane, Lane::Gif) {
-                    match frames::save(&frames_path, &image) {
+                    match frames::save(&frames_path, &image, plays) {
                         Ok(written) => service.record_frames_write(written),
                         Err(error) => log::debug!(
                             "Could not cache decoded frames at {}: {error}",
@@ -934,12 +1013,12 @@ fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
                         ),
                     }
                 }
-                Ok::<_, anyhow::Error>((image, bytes))
+                Ok::<_, anyhow::Error>((image, bytes, plays))
             })
             .await
             .context("decode worker failed")??;
             drop(_permit);
-            Ok(DecodeOutcome::Decoded(image, bytes))
+            Ok(DecodeOutcome::Decoded(image, bytes, plays))
         });
         let cache = cache.clone();
         cx.spawn(async move |cx| {
@@ -948,7 +1027,7 @@ fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
                 let mut state = cache.borrow_mut();
                 state.running[lane as usize] -= 1;
                 match result {
-                    Ok(DecodeOutcome::Decoded(image, bytes)) => {
+                    Ok(DecodeOutcome::Decoded(image, bytes, plays)) => {
                         state.bytes += bytes;
                         state.clock = state.clock.saturating_add(1);
                         let used = state.clock;
@@ -958,6 +1037,7 @@ fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
                             Entry::Ready {
                                 image,
                                 bytes,
+                                plays,
                                 used,
                                 ready_at: Instant::now(),
                                 seen: Instant::now(),
@@ -1018,6 +1098,20 @@ fn limits() -> Limits {
 fn still_frames(decoder: impl ImageDecoder) -> Result<Frames<'static>> {
     let frame = Frame::new(DynamicImage::from_decoder(decoder)?.into_rgba8());
     Ok(Frames::new(Box::new(std::iter::once(Ok(frame)))))
+}
+
+fn source_play_count(bytes: &[u8]) -> Result<Option<NonZeroU32>> {
+    if image::guess_format(bytes)? != ImageFormat::Png {
+        return Ok(None);
+    }
+    let decoder = PngDecoder::with_limits(Cursor::new(bytes), limits())?;
+    if !decoder.is_apng()? {
+        return Ok(None);
+    }
+    Ok(match decoder.apng()?.loop_count() {
+        LoopCount::Infinite => None,
+        LoopCount::Finite(plays) => Some(plays),
+    })
 }
 
 fn source_frames(bytes: &[u8]) -> Result<((u32, u32), Frames<'_>)> {
@@ -1215,13 +1309,13 @@ mod tests {
         0x8c, 0x09, 0x88, 0xe8, 0x7f, 0x04, 0x00,
     ];
 
-    fn apng(width: u32, height: u32, delays: &[u16]) -> Vec<u8> {
+    fn apng(width: u32, height: u32, delays: &[u16], plays: u32) -> Vec<u8> {
         let mut bytes = Vec::new();
         {
             let mut encoder = Encoder::new(&mut bytes, width, height);
             encoder.set_color(ColorType::Rgba);
             encoder.set_depth(BitDepth::Eight);
-            encoder.set_animated(delays.len() as u32, 0).unwrap();
+            encoder.set_animated(delays.len() as u32, plays).unwrap();
             let mut writer = encoder.write_header().unwrap();
             let pixels = RgbaImage::from_pixel(width, height, Rgba([255, 0, 0, 255]));
             for &delay in delays {
@@ -1276,17 +1370,54 @@ mod tests {
             (1000, 2, 80),
         ] {
             assert_eq!(
-                frame_at(&image, ms(elapsed)),
+                frame_at(&image, ms(elapsed), None),
                 (frame, ms(remaining)),
                 "elapsed {elapsed}ms"
             );
         }
         assert_eq!(
-            frame_at(&delayed_image(&[100]), ms(999)),
+            frame_at(&delayed_image(&[100]), ms(999), None),
             (0, Duration::MAX)
         );
         assert_eq!(
-            frame_at(&RenderImage::new(Vec::new()), ms(1)),
+            frame_at(&RenderImage::new(Vec::new()), ms(1), None),
+            (0, Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn one_shot_frames_hold_the_last_frame_instead_of_restarting() {
+        let frames = Arc::new(delayed_image(&[50, 100, 120]));
+        let ms = Duration::from_millis;
+        let started_at = Instant::now();
+        assert!(image(frames.clone()).started_at.is_none());
+        assert_eq!(
+            image(frames.clone())
+                .play_from(started_at, Some(NonZeroU32::MIN))
+                .started_at,
+            Some(started_at)
+        );
+        for (elapsed, frame, remaining) in [
+            (0, 0, ms(50)),
+            (50, 1, ms(100)),
+            (150, 2, ms(120)),
+            (269, 2, ms(1)),
+            (270, 2, Duration::MAX),
+            (305, 2, Duration::MAX),
+            (1000, 2, Duration::MAX),
+        ] {
+            assert_eq!(
+                frame_at(&frames, ms(elapsed), Some(NonZeroU32::MIN)),
+                (frame, remaining),
+                "elapsed {elapsed}ms"
+            );
+        }
+        assert_eq!(
+            frame_at(&delayed_image(&[100]), ms(999), Some(NonZeroU32::MIN)),
+            (0, Duration::MAX)
+        );
+        assert_eq!(
+            frame_at(&RenderImage::new(Vec::new()), ms(1), Some(NonZeroU32::MIN)),
             (0, Duration::ZERO)
         );
     }
@@ -1301,6 +1432,25 @@ mod tests {
         assert_eq!(wake(ms(100), false, false, true), Wake::None);
         assert_eq!(wake(ms(100), true, true, true), Wake::None);
         assert_eq!(wake(ms(100), true, false, false), Wake::None);
+        assert_eq!(wake(Duration::MAX, true, false, true), Wake::None);
+    }
+
+    #[test]
+    fn finite_play_counts_stop_only_after_the_last_play() {
+        let image = delayed_image(&[50, 100]);
+        let plays = NonZeroU32::new(2);
+        let ms = Duration::from_millis;
+        for (elapsed, frame, remaining) in [
+            (0, 0, ms(50)),
+            (50, 1, ms(100)),
+            (150, 0, ms(50)),
+            (299, 1, ms(1)),
+            (300, 1, Duration::MAX),
+            (1000, 1, Duration::MAX),
+        ] {
+            assert_eq!(frame_at(&image, ms(elapsed), plays), (frame, remaining));
+        }
+        assert_eq!(frame_at(&image, ms(300), None), (0, ms(50)));
     }
 
     #[test]
@@ -1339,6 +1489,7 @@ mod tests {
             Entry::Ready {
                 image,
                 bytes,
+                plays: None,
                 used,
                 ready_at,
                 seen: ready_at,
@@ -1368,7 +1519,7 @@ mod tests {
 
     #[test]
     fn apng_delays_are_preserved_and_short_delays_clamped() {
-        let (image, bytes) = decode(&apng(2, 1, &[50, 0, 120]), 2).unwrap();
+        let (image, bytes) = decode(&apng(2, 1, &[50, 0, 120], 0), 2).unwrap();
         assert_eq!(image.frame_count(), 3);
         assert_eq!(bytes, 24);
         assert_eq!(
@@ -1377,20 +1528,108 @@ mod tests {
                 .collect::<Vec<_>>(),
             [(50, 1), (100, 1), (120, 1)]
         );
-        let (image, _) = decode(&apng(1, 1, &[19, 20]), 1).unwrap();
+        let (image, _) = decode(&apng(1, 1, &[19, 20], 0), 1).unwrap();
         assert_eq!(image.delay(0).numer_denom_ms(), (100, 1));
         assert_eq!(image.delay(1).numer_denom_ms(), (20, 1));
     }
 
     #[test]
+    fn collectible_apng_preserves_the_source_play_count() {
+        for plays in [0, 1, 2, 17, 0x7FFF_FFFF] {
+            let source = apng(1, 1, &[80, 80], plays);
+            assert_eq!(source_play_count(&source).unwrap(), NonZeroU32::new(plays));
+        }
+        // The PNG decoder ignores animation-control values above its 31-bit limit.
+        assert_eq!(
+            source_play_count(&apng(1, 1, &[80, 80], u32::MAX)).unwrap(),
+            None
+        );
+        assert_eq!(source_play_count(DISPOSAL_OFFSET_WEBP).unwrap(), None);
+        assert!(source_play_count(b"not an image").is_err());
+    }
+
+    #[tokio::test]
+    async fn collectible_play_count_is_restored_alongside_cached_frames() {
+        let source = apng(1, 1, &[83; 36], 1);
+        let plays = source_play_count(&source).unwrap();
+        let (decoded, _) = decode(&source, 1).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "zcord-effect-frames-{:016x}.frames",
+            rand::random::<u64>()
+        ));
+        frames::save(&path, &decoded, plays).unwrap();
+        drop(source);
+        let cached = frames::load(&path).await;
+        std::fs::remove_file(&path).unwrap();
+        let (cached, _, cached_plays) = cached.unwrap();
+        assert_eq!(cached_plays, plays);
+        assert_same_frames(&decoded, &cached);
+        for (image, plays) in [(decoded, plays), (cached, cached_plays)] {
+            assert_eq!(image.frame_count(), 36);
+            assert_eq!(frame_at(&image, Duration::from_millis(2880), plays).0, 34);
+            for elapsed in [3000, 5760, 8640, 50_000] {
+                assert_eq!(
+                    frame_at(&image, Duration::from_millis(elapsed), plays),
+                    (35, Duration::MAX)
+                );
+            }
+        }
+        let repeated = apng(1, 1, &[80; 36], 0);
+        let (image, _) = decode(&repeated, 1).unwrap();
+        assert_eq!(
+            frame_at(
+                &image,
+                Duration::from_millis(2880),
+                source_play_count(&repeated).unwrap()
+            ),
+            (0, Duration::from_millis(80))
+        );
+    }
+
+    #[gpui::test]
+    fn collectible_cache_hits_keep_the_play_count(cx: &mut TestAppContext) {
+        cx.update(init);
+        cx.update(|cx| {
+            let spec = ImageSpec::Collectible {
+                url: "https://cdn.discordapp.com/assets/content/test-effect".into(),
+            };
+            let source = apng(1, 1, &[80, 80], 1);
+            let (image, bytes) = decode(&source, 64).unwrap();
+            let cache = cx.global::<AnimatedCache>().0.clone();
+            cache
+                .borrow_mut()
+                .entries
+                .entry(spec.clone())
+                .or_default()
+                .insert(
+                    64,
+                    Entry::Ready {
+                        image: image.clone(),
+                        bytes,
+                        plays: source_play_count(&source).unwrap(),
+                        used: 0,
+                        ready_at: Instant::now(),
+                        seen: Instant::now(),
+                    },
+                );
+            assert_eq!(play_count(&spec, 64, cx), Some(NonZeroU32::MIN));
+            let Load::Ready(cached) = state(&spec, 64, cx) else {
+                panic!("the existing cache entry should be ready");
+            };
+            assert!(Arc::ptr_eq(&image, &cached));
+            assert_eq!(play_count(&spec, 64, cx), Some(NonZeroU32::MIN));
+        });
+    }
+
+    #[test]
     fn red_rgba_becomes_bgra() {
-        let (image, _) = decode(&apng(1, 1, &[50]), 1).unwrap();
+        let (image, _) = decode(&apng(1, 1, &[50], 0), 1).unwrap();
         assert_eq!(image.as_bytes(0).unwrap(), &[0, 0, 255, 255]);
     }
 
     #[test]
     fn frames_downscale_without_upscaling() {
-        let input = apng(64, 32, &[50, 100]);
+        let input = apng(64, 32, &[50, 100], 0);
         for (size, width, height) in [(16, 16, 8), (128, 64, 32)] {
             let (image, bytes) = decode(&input, size).unwrap();
             for index in 0..image.frame_count() {
@@ -1474,6 +1713,7 @@ mod tests {
             writer.write_image_data(&[255, 0, 0, 255]).unwrap();
             writer.finish().unwrap();
         }
+        assert_eq!(source_play_count(&bytes).unwrap(), None);
         let (image, bytes) = decode(&bytes, 16).unwrap();
         assert_eq!(image.frame_count(), 1);
         assert_eq!(image.as_bytes(0).unwrap(), &[0, 0, 255, 255]);
@@ -1546,20 +1786,20 @@ mod tests {
         assert!(output_size(1, 1, 0, 1).is_err());
         assert!(output_size(1, 1, 16, 0).is_err());
         assert!(output_size(1, 1, 16, 601).is_err());
-        assert!(decode(&apng(1, 1, &vec![50; 601]), 1).is_err());
+        assert!(decode(&apng(1, 1, &vec![50; 601], 0), 1).is_err());
         assert_eq!(
-            decode(&apng(1, 1, &vec![50; 600]), 1)
+            decode(&apng(1, 1, &vec![50; 600], 0), 1)
                 .unwrap()
                 .0
                 .frame_count(),
             600
         );
-        assert!(decode(&apng(4097, 1, &[50]), 16).is_err());
+        assert!(decode(&apng(4097, 1, &[50], 0), 16).is_err());
     }
 
     #[test]
     fn decode_falls_back_to_streaming_with_identical_output() {
-        let input = apng(64, 32, &[50, 100, 120]);
+        let input = apng(64, 32, &[50, 100, 120], 0);
         let (single, single_bytes) = decode_with_budget(&input, 16, u64::MAX).unwrap();
         // Two 64x32 frames need 16KB, so one frame fits and the second triggers fallback.
         let budget = u64::from(64_u32 * 32 * 4);
@@ -1570,15 +1810,15 @@ mod tests {
 
     #[test]
     fn streaming_fallback_keeps_frame_and_dimension_limits() {
-        assert!(decode_with_budget(&apng(1, 1, &vec![50; 601]), 1, 0).is_err());
+        assert!(decode_with_budget(&apng(1, 1, &vec![50; 601], 0), 1, 0).is_err());
         assert_eq!(
-            decode_with_budget(&apng(1, 1, &vec![50; 600]), 1, 0)
+            decode_with_budget(&apng(1, 1, &vec![50; 600], 0), 1, 0)
                 .unwrap()
                 .0
                 .frame_count(),
             600
         );
-        assert!(decode_with_budget(&apng(4097, 1, &[50]), 16, 0).is_err());
+        assert!(decode_with_budget(&apng(4097, 1, &[50], 0), 16, 0).is_err());
     }
 
     #[test]
@@ -1913,6 +2153,68 @@ mod tests {
                 .size(px(32.))
                 .child(image(self.image.clone()).size(px(32.)).id("test-animation"))
         }
+    }
+
+    struct CanvasPlayback {
+        image: Arc<RenderImage>,
+        frame: Rc<Cell<usize>>,
+    }
+
+    impl Render for CanvasPlayback {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let image = self.image.clone();
+            let frame = self.frame.clone();
+            gpui::canvas(
+                |_, _, _| {},
+                move |bounds, _, window, cx| {
+                    let index = window.with_global_id("canvas-playback".into(), |id, window| {
+                        frame_index(&image, id, window, cx)
+                    });
+                    frame.set(index);
+                    window
+                        .paint_image(bounds, gpui::Corners::default(), image, index, false)
+                        .ok();
+                },
+            )
+            .size(px(32.))
+        }
+    }
+
+    #[gpui::test]
+    fn canvas_playback_advances_wraps_and_resets_when_its_image_changes(cx: &mut TestAppContext) {
+        cx.update(init);
+        FORCE_ACTIVE.set(true);
+        let clock = cx.clone();
+        let frame = Rc::new(Cell::new(usize::MAX));
+        let (view, cx) = cx.add_window_view(|_, _| CanvasPlayback {
+            image: Arc::new(delayed_image(&[50, 100])),
+            frame: frame.clone(),
+        });
+        for (elapsed, expected) in [(0, 0), (50, 1), (99, 1), (1, 0), (50, 1)] {
+            clock
+                .background_executor
+                .advance_clock(Duration::from_millis(elapsed));
+            view.update(cx, |_, cx| cx.notify());
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            assert_eq!(frame.get(), expected);
+        }
+        view.update(cx, |view, cx| {
+            view.image = blank_image();
+            cx.notify();
+        });
+        for elapsed in [0, 500] {
+            clock
+                .background_executor
+                .advance_clock(Duration::from_millis(elapsed));
+            view.update(cx, |_, cx| cx.notify());
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            assert_eq!(frame.get(), 0);
+        }
+        FORCE_ACTIVE.set(false);
     }
 
     struct StaticPanel {

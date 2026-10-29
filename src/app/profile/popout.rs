@@ -25,6 +25,7 @@ pub(super) fn popout(
     let theme = card.theme();
     let palette = card.palette();
     let layout = Layout::popout(theme.is_some());
+    let corner = if theme.is_some() { 6. } else { 8. };
     let surface = theme.map_or(theme::ELEVATED, ProfileTheme::surface);
     let outer_width = POPOUT_WIDTH + theme.map_or(0., |_| THEME_BORDER * 2.);
     let overflow = frame_overflow(card, outer_width).unwrap_or_default();
@@ -39,7 +40,7 @@ pub(super) fn popout(
         .relative()
         .flex()
         .flex_col()
-        .rounded(rpx(if theme.is_some() { 6. } else { 8. }))
+        .rounded(rpx(corner))
         .overflow_hidden()
         .pb(rpx(4.))
         .text_color(rgb(palette.text))
@@ -56,7 +57,7 @@ pub(super) fn popout(
             cx,
         ))
         .child(popout_body(app, card, &layout, window, menu_bounds, cx))
-        .children(effect_layers(card, layout.width, cx));
+        .children(effect_layers(card, layout.width, corner, false, cx));
     let inner = match card.account_max_height(window, &overflow) {
         Some(height) => {
             let inset = match theme {
@@ -69,7 +70,7 @@ pub(super) fn popout(
                 .flex()
                 .flex_col()
                 .max_h((height - inset).max(px(0.)))
-                .rounded(rpx(if theme.is_some() { 6. } else { 8. }))
+                .rounded(rpx(corner))
                 .overflow_hidden()
                 .overflow_y_scroll()
                 .child(inner.flex_none())

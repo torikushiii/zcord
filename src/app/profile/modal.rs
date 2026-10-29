@@ -118,7 +118,7 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
                         })),
                 ),
         )
-        .children(effect_layers(card, card_width, cx))
+        .children(effect_layers(card, card_width, layout.corner, true, cx))
         .into_any_element();
     let framed = framed(card, card_width, profile_card, true, cx);
     let banner_backdrop = banner_spec(card)

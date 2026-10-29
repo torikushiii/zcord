@@ -492,7 +492,7 @@ mod platform {
                 return Ok(DecodeOutcome::Cancelled);
             }
             let frames_path = service.frames_path(&request.0, request.1);
-            if let Some((image, bytes)) = frames::load(&frames_path).await {
+            if let Some((image, bytes, _)) = frames::load(&frames_path).await {
                 if !still_wanted(&job_stamp) {
                     return Ok(DecodeOutcome::Cancelled);
                 }
@@ -508,7 +508,7 @@ mod platform {
             let outcome = tokio::task::spawn_blocking(move || {
                 let outcome = decode(&path, request.1, &job_stamp)?;
                 if let DecodeOutcome::Decoded(image, _) = &outcome {
-                    match frames::save(&frames_path, image) {
+                    match frames::save(&frames_path, image, None) {
                         Ok(written) => service.record_frames_write(written),
                         Err(error) => log::debug!(
                             "Could not cache video frames at {}: {error}",
