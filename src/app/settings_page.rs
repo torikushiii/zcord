@@ -731,7 +731,9 @@ fn content(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> impl IntoElem
                 .flex_col()
                 .px(rpx(if voice_page { 0. } else { 40. }))
                 .pt(rpx(if voice_page { 64. } else { 48. }))
-                .pb(rpx(80.))
+                // Voice & Video is the tallest page. At 80 its content overflows the pane by
+                // the bottom padding alone, leaving a few pixels of empty scroll range.
+                .pb(rpx(if voice_page { 24. } else { 80. }))
                 // Each section is a direct child so the sidebar can scroll to it by index.
                 .children(
                     sections::page(app, settings, cx)
