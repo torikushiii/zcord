@@ -116,7 +116,9 @@ fn reddit_component_embeds_preserve_text_galleries_and_link_buttons() {
     };
     assert_eq!(*accent, Some(16729344));
     assert!(matches!(&components[0], Component::Text(text) if text == "-# vxReddit"));
-    assert!(matches!(&components[1], Component::Text(text) if text.contains("Sample multi-image post")));
+    assert!(
+        matches!(&components[1], Component::Text(text) if text.contains("Sample multi-image post"))
+    );
     let Component::Gallery(items) = &components[2] else {
         panic!("gallery expected");
     };

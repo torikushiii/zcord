@@ -214,7 +214,10 @@ fn wishlist_decodes_collectible_items() {
         collectible.asset.as_deref(),
         Some("a_f0000000000000000000000000000029")
     );
-    assert_eq!(collectible.label.as_deref(), Some("Sample green decoration"));
+    assert_eq!(
+        collectible.label.as_deref(),
+        Some("Sample green decoration")
+    );
     let price = item.price.as_ref().unwrap();
     assert_eq!(
         (price.amount, price.currency.as_str(), price.exponent),
@@ -945,7 +948,10 @@ fn application_identity_stats_include_primary_values() {
         ]
     );
     let stat = |name: &str| profile.stats.iter().find(|stat| stat.name == name).unwrap();
-    assert_eq!(stat("season").value, StatValue::Text("Sample Season".into()));
+    assert_eq!(
+        stat("season").value,
+        StatValue::Text("Sample Season".into())
+    );
     assert_eq!(stat("playtime_hours").value, StatValue::Number(0.78));
     assert_eq!(
         stat("featured_played_character_image").value,
@@ -1513,9 +1519,15 @@ fn application_widget_configs_carry_the_popout_mini_profile() {
         1191169178468352063,
     )
     .unwrap();
-    assert_eq!(config.title, Some(WidgetText::Literal("Sample heading".into())));
+    assert_eq!(
+        config.title,
+        Some(WidgetText::Literal("Sample heading".into()))
+    );
     let mini = config.mini.unwrap();
-    assert_eq!(mini.text, Some(WidgetText::Literal("Sample statistic".into())));
+    assert_eq!(
+        mini.text,
+        Some(WidgetText::Literal("Sample statistic".into()))
+    );
     assert!(
         matches!(mini.image, Some(WidgetImage::Asset(asset)) if asset.asset_id == 1191169186856960065)
     );
@@ -1889,7 +1901,10 @@ fn application_widget_configs_accept_known_shapes() {
 fn invite_links_extract_in_order_dedupe_and_cap() {
     let content = "join https://discord.gg/sampleInviteOne or https://www.discord.com/invite/sampleInviteTwo/ \
                    and (https://canary.discordapp.com/invite/abc_123?x=1) plus discord.gg/sampleInviteOne";
-    assert_eq!(invite_codes(content), ["sampleInviteOne", "sampleInviteTwo", "abc_123"]);
+    assert_eq!(
+        invite_codes(content),
+        ["sampleInviteOne", "sampleInviteTwo", "abc_123"]
+    );
 
     assert!(invite_codes(
         "https://notdiscord.gg/abc https://discord.gg.evil.com/abc https://evil.com/discord.gg/abc"
@@ -2002,7 +2017,10 @@ fn har_captures_decode() {
         let configs = parse_featured_widget_configs(serde_json::from_str(&text).unwrap());
         assert!(!configs.is_empty());
         assert!(configs.values().any(|config| {
-            config.display_name.as_ref().is_some_and(|name| !name.is_empty())
+            config
+                .display_name
+                .as_ref()
+                .is_some_and(|name| !name.is_empty())
                 && config.collection.len() == 4
                 && config.subtitles.iter().any(|subtitle| {
                     subtitle.label.is_some()
