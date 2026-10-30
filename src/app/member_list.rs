@@ -319,7 +319,7 @@ fn name_line(
 }
 
 fn activity_line(user: &User, online: bool) -> Option<impl IntoElement> {
-    let activity = user.activity.as_ref().filter(|_| online)?;
+    let (activity, icon) = member_activity(user).filter(|_| online)?;
     Some(
         div()
             .flex()
@@ -329,15 +329,48 @@ fn activity_line(user: &User, online: bool) -> Option<impl IntoElement> {
             .text_size(rpx(12.))
             .line_height(rpx(16.))
             .text_color(rgb(theme::MUTED))
-            .children(theme::activity_icon(user).map(|icon| theme::icon(icon, 14., theme::GREEN)))
+            .children(icon.map(|icon| theme::icon(icon, 14., theme::GREEN)))
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .child(label(("member-activity", user.id), activity)),
+                    .child(label(("member-activity", user.id), &activity)),
             ),
     )
+}
+
+/// A game outranks background listening, which shows as `artist · custom status`.
+fn member_activity(user: &User) -> Option<(String, Option<&'static str>)> {
+    let listening = user.listening.as_ref().filter(|_| {
+        user.activity_kind == Some(2) || (user.custom_status.is_some() && user.game.is_none())
+    });
+    if let Some(listening) = listening {
+        let artist = listening
+            .state
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty());
+        // A custom status without displayable text leaves the listening text in `activity`.
+        let custom = user
+            .activity
+            .as_deref()
+            .filter(|_| user.custom_status.is_some() && user.activity_kind.is_none())
+            .map(str::trim)
+            .filter(|text| !text.is_empty());
+        let mut parts = Vec::new();
+        for part in [artist, custom].into_iter().flatten() {
+            if !parts.contains(&part) {
+                parts.push(part);
+            }
+        }
+        if !parts.is_empty() {
+            return Some((parts.join(" · "), Some("music")));
+        }
+    }
+    user.activity
+        .clone()
+        .map(|activity| (activity, theme::activity_icon(user)))
 }
 
 fn palette_color(palette: &str) -> Option<u32> {
