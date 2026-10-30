@@ -3,9 +3,9 @@ use gpui::{
     div, list, prelude::*, px,
 };
 
-use super::{Layout, ROW_HEIGHT, WIDTH, group_row, placeholder_row};
+use super::{Layout, ROW_HEIGHT, WIDTH, group_row, member_activity, placeholder_row};
 use crate::{
-    store::{MemberList, MemberRow},
+    store::{CustomStatus, GameActivity, MemberList, MemberRow, Status, User},
     theme::rpx,
 };
 
@@ -239,5 +239,131 @@ fn resizing_the_list_moves_bottom_padding_without_replacing_other_rows(cx: &mut 
     assert_eq!(
         cx.debug_bounds("member-row-499").unwrap().size.height,
         px(60.)
+    );
+}
+
+fn user(
+    activity: Option<&str>,
+    activity_kind: Option<u8>,
+    custom_status: Option<&str>,
+    listening: Option<(&str, Option<&str>, Option<&str>)>,
+) -> User {
+    User {
+        id: 1,
+        username: "listener".into(),
+        name: "Listener".into(),
+        initials: "L".into(),
+        status: Status::Online,
+        bot: false,
+        role_color: None,
+        tag: None,
+        playing: false,
+        activity: activity.map(str::to_owned),
+        activity_kind,
+        game: None,
+        listening: listening.map(|(name, details, state)| GameActivity {
+            name: name.into(),
+            application_id: None,
+            kind: 2,
+            platform: None,
+            embedded: false,
+            playable: false,
+            started_at: None,
+            ends_at: None,
+            details: details.map(str::to_owned),
+            state: state.map(str::to_owned),
+            large_image: None,
+            small_image: None,
+        }),
+        custom_status: custom_status.map(|text| CustomStatus {
+            text: Some(text.into()),
+            emoji: None,
+            expires_at: None,
+        }),
+        avatar: None,
+        discriminator: None,
+        decoration: None,
+        nameplate: None,
+        name_style: None,
+    }
+}
+
+#[test]
+fn listening_activity_shows_the_artist_and_custom_status() {
+    let youtube = Some(("YouTube Music", Some("Colorful Universe"), Some("Laur")));
+
+    assert_eq!(
+        member_activity(&user(
+            Some("Listening to YouTube Music"),
+            Some(2),
+            None,
+            youtube
+        )),
+        Some(("Laur".into(), Some("music")))
+    );
+
+    assert_eq!(
+        member_activity(&user(Some("chilling"), None, Some("chilling"), youtube)),
+        Some(("Laur · chilling".into(), Some("music")))
+    );
+
+    assert_eq!(
+        member_activity(&user(Some("🎮 chilling"), None, Some("chilling"), youtube)),
+        Some(("Laur · 🎮 chilling".into(), Some("music")))
+    );
+
+    assert_eq!(
+        member_activity(&user(
+            Some("chilling"),
+            None,
+            Some("chilling"),
+            Some(("YouTube Music", Some("Colorful Universe"), None))
+        )),
+        Some(("chilling".into(), Some("music")))
+    );
+
+    let nameless = Some(("YouTube", None, None));
+    assert_eq!(
+        member_activity(&user(Some("Listening to YouTube"), Some(2), None, nameless)),
+        Some(("Listening to YouTube".into(), Some("music")))
+    );
+
+    let mut game = user(
+        Some("Example Game"),
+        Some(0),
+        None,
+        Some(("YouTube Music", Some("Song"), None)),
+    );
+    game.playing = true;
+    assert_eq!(
+        member_activity(&game),
+        Some(("Example Game".into(), Some("gamepad-2")))
+    );
+
+    let mut custom_over_game = user(Some("chilling"), None, Some("chilling"), youtube);
+    custom_over_game.game = custom_over_game.listening.clone();
+    assert_eq!(
+        member_activity(&custom_over_game),
+        Some(("chilling".into(), None))
+    );
+
+    assert_eq!(
+        member_activity(&user(
+            Some("Laur"),
+            None,
+            Some("Laur"),
+            Some(("YouTube Music", Some("Colorful Universe"), Some("Laur")))
+        )),
+        Some(("Laur".into(), Some("music")))
+    );
+
+    assert_eq!(
+        member_activity(&user(
+            Some("Listening to YouTube Music"),
+            Some(2),
+            Some("guild emoji only"),
+            youtube
+        )),
+        Some(("Laur".into(), Some("music")))
     );
 }
