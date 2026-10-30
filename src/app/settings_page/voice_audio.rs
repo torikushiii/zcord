@@ -1,7 +1,10 @@
-use std::{rc::Rc, time::Duration};
+use std::{cell::Cell, rc::Rc, time::Duration};
 
 use gpui::{prelude::*, *};
-use gpui_component::slider::{Slider, SliderEvent, SliderState};
+use gpui_component::{
+    ElementExt,
+    slider::{Slider, SliderEvent, SliderState},
+};
 
 use super::{
     SettingsPage, moved,
@@ -16,6 +19,7 @@ use crate::{
 
 const METER_TICK: Duration = Duration::from_millis(50);
 const AUTOMATIC_THRESHOLD: f32 = -50.;
+const DEVICE_LIST_MAX_HEIGHT: f32 = 260.;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum DeviceKind {
@@ -27,6 +31,7 @@ pub(super) enum DeviceKind {
 pub(super) struct VoiceAudio {
     devices: Option<(Vec<AudioDevice>, Vec<AudioDevice>)>,
     open_list: Option<DeviceKind>,
+    open_list_trigger: Rc<Cell<Option<Bounds<Pixels>>>>,
     input_volume: Entity<SliderState>,
     output_volume: Entity<SliderState>,
     sensitivity: Entity<SliderState>,
@@ -114,6 +119,7 @@ impl DiscordApp {
             settings.voice_audio = Some(VoiceAudio {
                 devices: None,
                 open_list: None,
+                open_list_trigger: Rc::default(),
                 input_volume,
                 output_volume,
                 sensitivity,
@@ -135,6 +141,13 @@ impl DiscordApp {
     fn toggle_device_list(&mut self, kind: DeviceKind, cx: &mut Context<Self>) {
         if let Some(audio) = self.voice_audio() {
             audio.open_list = (audio.open_list != Some(kind)).then_some(kind);
+            cx.notify();
+        }
+    }
+
+    fn close_device_list(&mut self, cx: &mut Context<Self>) {
+        if let Some(audio) = self.voice_audio() {
+            audio.open_list = None;
             cx.notify();
         }
     }
@@ -460,6 +473,7 @@ fn device_picker(
     let current = selected.unwrap_or("Windows default").to_owned();
     let open = audio.open_list == Some(kind);
     let toggle = app.entity.clone();
+    let trigger = audio.open_list_trigger.clone();
     let button = div()
         .id(id)
         .flex()
@@ -481,6 +495,9 @@ fn device_picker(
             toggle
                 .update(cx, |app, cx| app.toggle_device_list(kind, cx))
                 .ok();
+        })
+        .when(open, |this| {
+            this.on_prepaint(move |bounds, _, _| trigger.set(Some(bounds)))
         })
         .child(
             div()
@@ -508,58 +525,84 @@ fn device_picker(
             .collect(),
         None => vec![None],
     };
+
     let list = open.then(|| {
-        div()
-            .flex()
-            .flex_col()
-            .mt(rpx(4.))
-            .p(rpx(4.))
-            .rounded(rpx(8.))
-            .bg(rgb(theme::BG))
-            .border_1()
-            .border_color(rgba(theme::BORDER))
-            .children(names.into_iter().enumerate().map(|(index, name)| {
-                let chosen = name.as_deref() == selected;
-                let entity = app.entity.clone();
-                let text = name.clone().unwrap_or_else(|| "Windows default".to_owned());
-                div()
-                    .id((id, index as u64))
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(rpx(8.))
-                    .h(rpx(36.))
-                    .px(rpx(8.))
-                    .rounded(rpx(6.))
-                    .cursor_pointer()
-                    .hover(|style| style.bg(rgba(theme::HOVER)))
-                    .on_click(move |_, _, cx| {
-                        entity
-                            .update(cx, |app, cx| app.select_device(kind, name.clone(), cx))
-                            .ok();
-                    })
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(rpx(14.))
-                            .text_color(rgb(if chosen { theme::STRONG } else { theme::TEXT }))
-                            .child(text),
-                    )
-                    .when(chosen, |this| {
-                        this.child(theme::icon("check", 16., theme::BLURPLE))
-                    })
-            }))
-            .when(audio.devices.is_none(), |this| {
-                this.child(
+        let close = app.entity.clone();
+        let trigger = audio.open_list_trigger.clone();
+        deferred(
+            div()
+                .id("settings-device-list")
+                .absolute()
+                .top(rpx(40.))
+                .left_0()
+                .right_0()
+                .flex()
+                .flex_col()
+                .mt(rpx(4.))
+                .p(rpx(4.))
+                .rounded(rpx(8.))
+                .bg(rgb(theme::BG))
+                .border_1()
+                .border_color(rgba(theme::BORDER))
+                .max_h(rpx(DEVICE_LIST_MAX_HEIGHT))
+                .overflow_y_scroll()
+                .occlude()
+                .on_mouse_down_out(move |event, _, cx| {
+                    // The trigger closes on click; closing on mouse-down would reopen it.
+                    if trigger
+                        .get()
+                        .is_some_and(|bounds| bounds.contains(&event.position))
+                    {
+                        return;
+                    }
+                    close.update(cx, |app, cx| app.close_device_list(cx)).ok();
+                })
+                .children(names.into_iter().enumerate().map(|(index, name)| {
+                    let chosen = name.as_deref() == selected;
+                    let entity = app.entity.clone();
+                    let text = name.clone().unwrap_or_else(|| "Windows default".to_owned());
                     div()
+                        .id((id, index as u64))
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .justify_between()
+                        .gap(rpx(8.))
+                        .h(rpx(36.))
                         .px(rpx(8.))
-                        .py(rpx(6.))
-                        .text_size(rpx(14.))
-                        .text_color(rgb(theme::MUTED))
-                        .child("Looking for devices…"),
-                )
-            })
+                        .rounded(rpx(6.))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(rgba(theme::HOVER)))
+                        .on_click(move |_, _, cx| {
+                            entity
+                                .update(cx, |app, cx| app.select_device(kind, name.clone(), cx))
+                                .ok();
+                        })
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(rpx(14.))
+                                .text_color(rgb(if chosen { theme::STRONG } else { theme::TEXT }))
+                                .child(text),
+                        )
+                        .when(chosen, |this| {
+                            this.child(theme::icon("check", 16., theme::BLURPLE))
+                        })
+                }))
+                .when(audio.devices.is_none(), |this| {
+                    this.child(
+                        div()
+                            .flex_none()
+                            .px(rpx(8.))
+                            .py(rpx(6.))
+                            .text_size(rpx(14.))
+                            .text_color(rgb(theme::MUTED))
+                            .child("Looking for devices…"),
+                    )
+                }),
+        )
+        .with_priority(1)
     });
     div()
         .flex()
@@ -568,7 +611,14 @@ fn device_picker(
         .min_w_0()
         .gap(rpx(8.))
         .child(field_label(label))
-        .child(div().flex().flex_col().child(button).children(list))
+        .child(
+            div()
+                .relative()
+                .flex()
+                .flex_col()
+                .child(button)
+                .children(list),
+        )
 }
 
 fn labeled_slider(label: &'static str, state: &Entity<SliderState>, cx: &App) -> impl IntoElement {
