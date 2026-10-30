@@ -688,11 +688,13 @@ mod tests {
             [
                 GifCategory {
                     name: "Actions".into(),
-                    src: "https://media1.giphy.com/media/v1.abc/sampleGiphyCategoryOne/200.gif".into(),
+                    src: "https://media1.giphy.com/media/v1.abc/sampleGiphyCategoryOne/200.gif"
+                        .into(),
                 },
                 GifCategory {
                     name: "Adjectives".into(),
-                    src: "https://media0.giphy.com/media/v1.abc/sampleGiphyCategoryTwo/200.gif".into(),
+                    src: "https://media0.giphy.com/media/v1.abc/sampleGiphyCategoryTwo/200.gif"
+                        .into(),
                 }
             ]
         );

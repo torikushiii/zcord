@@ -1352,10 +1352,8 @@ mod tests {
             Some("https://media.tenor.com/WBMoHT5SvJAAAAAM/shia-labeouf-clapping.gif")
         );
         assert_eq!(
-            image_rendition(
-                "https://media4.giphy.com/media/v1.abc/sampleGiphyOne/giphy.mp4?cid=1"
-            )
-            .as_deref(),
+            image_rendition("https://media4.giphy.com/media/v1.abc/sampleGiphyOne/giphy.mp4?cid=1")
+                .as_deref(),
             Some("https://media4.giphy.com/media/v1.abc/sampleGiphyOne/giphy.webp")
         );
         for unmapped in [

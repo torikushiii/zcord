@@ -55,7 +55,15 @@ impl Store {
                 None,
                 Some("Watching over 100 demo users"),
             ),
-            ("Demo Helper Bot", "HB", Offline, true, Some(0xF23F43), None, None),
+            (
+                "Demo Helper Bot",
+                "HB",
+                Offline,
+                true,
+                Some(0xF23F43),
+                None,
+                None,
+            ),
         ]
         .into_iter()
         .enumerate()

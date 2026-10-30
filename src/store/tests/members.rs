@@ -74,7 +74,10 @@ fn supplemental_chunk_names_colors_avatars_and_missing_members() {
     assert_eq!(store.member_name(200, 2), Some("Writer Nick"));
     assert_eq!(store.member_name(100, 2), Some("Other Nick"));
     assert!(store.user(2).unwrap().status == Status::Idle);
-    assert_eq!(store.user(2).unwrap().activity.as_deref(), Some("Example Game"));
+    assert_eq!(
+        store.user(2).unwrap().activity.as_deref(),
+        Some("Example Game")
+    );
     assert!(store.user(2).unwrap().playing);
     let chunk = serde_json::from_value(social_fixture("chunk")).unwrap();
     assert_eq!(
