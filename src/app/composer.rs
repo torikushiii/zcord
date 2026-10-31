@@ -220,7 +220,13 @@ impl DiscordApp {
     }
 
     pub(super) fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.close_expression_info(cx) {
+        if self.close_message_menu(cx)
+            || self.close_thread_menu(cx)
+            || self.close_create_thread(cx)
+            || self.close_channel_popout(cx)
+            || self.close_expression_info(cx)
+            || self.close_share_picker(cx)
+        {
             return;
         }
         if self.close_quick_switcher(window, cx) {
@@ -249,7 +255,7 @@ impl DiscordApp {
             self.set_profile_menu(false, cx);
             return;
         }
-        if self.close_profile(cx) {
+        if self.cancel_remove_friend(cx) || self.close_profile(cx) {
             return;
         }
         if self.close_settings(cx) {

@@ -86,6 +86,15 @@ pub(super) fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) 
             "THREAD_LIST_SYNC" => serde_json::from_value(value)
                 .ok()
                 .map(|sync| Event::ThreadListSync(Box::new(sync))),
+            "THREAD_MEMBERS_UPDATE" => serde_json::from_value(value)
+                .ok()
+                .map(|update| Event::ThreadMembersUpdate(Box::new(update))),
+            "THREAD_MEMBER_UPDATE" => serde_json::from_value(value)
+                .ok()
+                .map(|update| Event::ThreadMemberUpdate(Box::new(update))),
+            "CHANNEL_PINS_UPDATE" => serde_json::from_value(value)
+                .ok()
+                .map(Event::ChannelPinsUpdate),
             "GUILD_CREATE" | "GUILD_UPDATE" => serde_json::from_value::<model::Guild>(value)
                 .ok()
                 .map(|mut guild| {
@@ -436,5 +445,46 @@ mod tests {
         assert_eq!(guild.voice_states[0].guild_id, Some(7));
         assert_eq!(guild.voice_states[0].channel_id, Some(8));
         assert_eq!(guild.voice_states[0].user_id, 9);
+    }
+
+    #[test]
+    fn thread_and_pin_events_dispatch() {
+        let mut ignored = HashSet::new();
+        let event = dispatch(
+            "CHANNEL_PINS_UPDATE",
+            json!({"guild_id": "2", "channel_id": "20", "last_pin_timestamp": "2026-09-10T12:00:00Z"}),
+            &mut ignored,
+        );
+        assert!(matches!(
+            event,
+            Some(Event::ChannelPinsUpdate(update))
+                if update.channel_id == 20
+                    && update.guild_id == Some(2)
+                    && update.last_pin_timestamp.as_deref() == Some("2026-09-10T12:00:00Z")
+        ));
+
+        let event = dispatch(
+            "THREAD_MEMBERS_UPDATE",
+            json!({"id": "30", "guild_id": "2", "member_count": 3,
+                "added_members": [{"id": "30", "user_id": "1"}], "removed_member_ids": []}),
+            &mut ignored,
+        );
+        assert!(matches!(
+            event,
+            Some(Event::ThreadMembersUpdate(update))
+                if update.id == 30 && update.member_count == 3
+        ));
+
+        let event = dispatch(
+            "THREAD_MEMBER_UPDATE",
+            json!({"id": "30", "guild_id": "2", "user_id": "1", "member_count": 4}),
+            &mut ignored,
+        );
+        assert!(matches!(
+            event,
+            Some(Event::ThreadMemberUpdate(update))
+                if update.id == 30 && update.user_id == Some(1)
+        ));
+        assert!(ignored.is_empty());
     }
 }

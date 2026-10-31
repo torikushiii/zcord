@@ -310,6 +310,33 @@ pub(super) fn map_webhook_author(id: Option<u64>, author: &model::User) -> Optio
     })
 }
 
+pub(super) fn message_thread(thread: &model::Channel) -> MessageThread {
+    MessageThread {
+        id: thread.id,
+        name: thread.name.clone().unwrap_or_default(),
+        message_count: thread.message_count.unwrap_or(0),
+        archived: thread
+            .thread_metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.archived),
+        recent: None,
+    }
+}
+
+/// A THREAD_CREATED notice names its thread in `content` and `message_reference`, with no `thread`.
+fn thread_notice(message: &model::Message) -> Option<MessageThread> {
+    if message.kind != 18 {
+        return None;
+    }
+    Some(MessageThread {
+        id: message.message_reference.as_ref()?.channel_id?,
+        name: message.content.clone(),
+        message_count: 0,
+        archived: false,
+        recent: None,
+    })
+}
+
 pub(super) fn map_message(message: &model::Message) -> Option<Message> {
     Some(Message {
         id: message.id,
@@ -330,6 +357,15 @@ pub(super) fn map_message(message: &model::Message) -> Option<Message> {
         forward: map_forward(message),
         mentions_me: false,
         uploads: Vec::new(),
+        thread: message
+            .thread
+            .as_ref()
+            .map(message_thread)
+            .or_else(|| thread_notice(message)),
+        reference_id: message
+            .message_reference
+            .as_ref()
+            .and_then(|reference| reference.message_id),
     })
 }
 

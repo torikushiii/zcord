@@ -30,6 +30,18 @@ impl Store {
         if self.source.is_none() {
             return true;
         }
+        if let Some((_, thread)) = self.source_channel_guild(channel_id)
+            && matches!(thread.kind, Some(10..=12))
+        {
+            let permissions = self.permissions(channel_id).unwrap_or(0);
+            let locked = thread
+                .thread_metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.locked);
+            return permissions & discord::VIEW_CHANNEL != 0
+                && permissions & discord::SEND_MESSAGES_IN_THREADS != 0
+                && (!locked || permissions & discord::MANAGE_THREADS != 0);
+        }
         if self
             .source_channel_guild(channel_id)
             .is_some_and(|(_, channel)| matches!(channel.kind, Some(15 | 16)))
@@ -224,23 +236,87 @@ impl Store {
     }
 
     pub(super) fn thread_list_sync(&mut self, sync: Box<model::ThreadListSync>) -> Change {
-        let sync = *sync;
-        let guild_id = sync.guild_id;
-        if let Some(source) = &mut self.source {
-            if let Some(guild) = source.guilds.iter_mut().find(|g| g.id == guild_id) {
-                let threads = guild.threads.get_or_insert_with(Vec::new);
-                for thread in sync.threads {
-                    if let Some(existing) =
-                        threads.iter_mut().find(|existing| existing.id == thread.id)
-                    {
-                        existing.merge(&thread);
-                    } else {
-                        threads.push(thread);
-                    }
+        let model::ThreadListSync {
+            guild_id,
+            threads,
+            most_recent_messages,
+            members,
+        } = *sync;
+        let current_user_id = self.current_user_id;
+        let thread_ids: Vec<_> = threads.iter().map(|thread| thread.id).collect();
+        for thread in &threads {
+            if let Some(member) = &thread.member {
+                self.record_thread_join(
+                    thread.id,
+                    member
+                        .user_id
+                        .or_else(|| member.user.as_ref().map(|user| user.id)),
+                    member.join_timestamp.as_deref(),
+                );
+            }
+            if let Some(owner) = &thread.owner
+                && let Some(user) = &owner.user
+            {
+                self.register_author(user);
+            }
+        }
+        for member in &members {
+            if let Some(user) = member
+                .member
+                .as_ref()
+                .and_then(|member| member.user.as_ref())
+            {
+                self.register_author(user);
+            }
+            self.record_thread_join(
+                member.id,
+                member
+                    .user_id
+                    .or_else(|| member.member.as_ref().and_then(model::Member::id)),
+                member.join_timestamp.as_deref(),
+            );
+        }
+        for message in most_recent_messages {
+            self.register_author(&message.author);
+            let entry = self
+                .thread_recent
+                .entry(message.channel_id)
+                .or_insert_with(|| message.clone());
+            if message.id > entry.id {
+                *entry = message;
+            }
+        }
+        if let Some(source) = &mut self.source
+            && let Some(guild) = source.guilds.iter_mut().find(|g| g.id == guild_id)
+        {
+            let stored = guild.threads.get_or_insert_with(Vec::new);
+            for mut thread in threads {
+                if let Some(member) = members.iter().find(|member| {
+                    member.id == thread.id && member.user_id.is_none_or(|id| id == current_user_id)
+                }) {
+                    thread.member = Some(
+                        member
+                            .member
+                            .as_ref()
+                            .map(model::PartialMember::from)
+                            .unwrap_or_else(|| model::PartialMember {
+                                user_id: member.user_id,
+                                ..Default::default()
+                            }),
+                    );
+                }
+                if let Some(existing) = stored.iter_mut().find(|existing| existing.id == thread.id)
+                {
+                    existing.merge(&thread);
+                } else {
+                    stored.push(thread);
                 }
             }
         }
         self.rebuild_structure(Some(guild_id));
+        for thread_id in thread_ids {
+            self.refresh_thread_chips(thread_id);
+        }
         Change::Structure
     }
 
@@ -248,8 +324,38 @@ impl Store {
         for user in &update.recipients {
             self.register_author(user);
         }
+        for user in update
+            .owner
+            .iter()
+            .filter_map(|owner| owner.user.as_ref())
+            .chain(
+                update
+                    .member
+                    .iter()
+                    .filter_map(|member| member.user.as_ref()),
+            )
+        {
+            self.register_author(user);
+        }
         if update.recipient_ids.is_empty() {
             update.recipient_ids = update.recipients.iter().map(|user| user.id).collect();
+        }
+        let thread_id = (matches!(update.kind, Some(10..=12))
+            || matches!(
+                self.source_channels.get(&update.id),
+                Some(SourceChannel::Thread { .. })
+            ))
+        .then_some(update.id);
+        if let Some(thread_id) = thread_id
+            && let Some(member) = &update.member
+        {
+            self.record_thread_join(
+                thread_id,
+                member
+                    .user_id
+                    .or_else(|| member.user.as_ref().map(|user| user.id)),
+                member.join_timestamp.as_deref(),
+            );
         }
         let mut guild_id = None;
         if let Some(source) = &mut self.source {
@@ -285,10 +391,16 @@ impl Store {
             }
         }
         self.rebuild_structure(guild_id);
+        if let Some(thread_id) = thread_id {
+            self.refresh_thread_chips(thread_id);
+        }
         Change::Structure
     }
 
     pub(super) fn channel_delete(&mut self, id: u64) -> Change {
+        self.thread_recent.remove(&id);
+        self.thread_joins.remove(&id);
+        self.clear_thread_chips(id);
         self.voice_start_times
             .retain(|(_, channel), _| *channel != id);
         self.clear_message_info(id);

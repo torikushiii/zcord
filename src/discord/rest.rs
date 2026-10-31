@@ -13,10 +13,13 @@ use std::{collections::HashMap, time::Duration};
 mod expressions;
 mod gifs;
 mod messages;
+mod pins;
 mod profiles;
 mod rate_limits;
 mod requests;
 mod settings;
+mod streams;
+mod threads;
 pub(crate) use messages::{put_upload, upload_client};
 use rate_limits::{Limiter, Permit, Route};
 

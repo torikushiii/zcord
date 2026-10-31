@@ -72,6 +72,8 @@ pub struct PartialMember {
     pub collectibles: Option<Option<Collectibles>>,
     #[serde(default)]
     pub presence: Option<Presence>,
+    #[serde(default, deserialize_with = "optional_timestamp")]
+    pub join_timestamp: Option<String>,
 }
 
 impl PartialMember {
@@ -92,6 +94,7 @@ impl From<&Member> for PartialMember {
             display_name_styles: member.display_name_styles.clone(),
             collectibles: member.collectibles.clone(),
             presence: None,
+            join_timestamp: None,
         }
     }
 }

@@ -25,6 +25,7 @@ const VAD_HANGOVER: Duration = Duration::from_millis(300);
 const RNNOISE_FRAME_SAMPLES: usize = 480;
 const PLAYBACK_LIMIT: usize = FRAME_VALUES * 10;
 const MAX_OPUS_PAYLOAD: usize = 1275;
+const STREAM_AUDIO_LIMIT: usize = 8;
 
 static MISSING_DEVICES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
@@ -61,6 +62,7 @@ pub(super) struct Flags {
     pub noise_suppression: AtomicBool,
     input_gain: AtomicU32,
     output_gain: AtomicU32,
+    stream_volume: AtomicU32,
     sensitivity: AtomicU32,
     input_level: AtomicU32,
     gate_open: AtomicBool,
@@ -68,10 +70,17 @@ pub(super) struct Flags {
     output_device: Mutex<Option<String>>,
     input_generation: AtomicU64,
     output_generation: AtomicU64,
+    stream_audio: Mutex<VecDeque<StreamPacket>>,
+    stream_generation: AtomicU64,
 }
 
 #[derive(Clone)]
-pub(super) struct AudioFlags(Arc<Flags>);
+pub(crate) struct AudioFlags(Arc<Flags>);
+
+struct StreamPacket {
+    sequence: u16,
+    opus: Vec<u8>,
+}
 
 impl AudioFlags {
     pub fn new() -> Self {
@@ -81,6 +90,7 @@ impl AudioFlags {
             noise_suppression: AtomicBool::new(true),
             input_gain: AtomicU32::new(1.0f32.to_bits()),
             output_gain: AtomicU32::new(1.0f32.to_bits()),
+            stream_volume: AtomicU32::new(1.0f32.to_bits()),
             sensitivity: AtomicU32::new(f32::NAN.to_bits()),
             input_level: AtomicU32::new(f32::NAN.to_bits()),
             gate_open: AtomicBool::new(false),
@@ -88,6 +98,8 @@ impl AudioFlags {
             output_device: Mutex::new(None),
             input_generation: AtomicU64::new(0),
             output_generation: AtomicU64::new(0),
+            stream_audio: Mutex::new(VecDeque::new()),
+            stream_generation: AtomicU64::new(0),
         }))
     }
 
@@ -126,6 +138,76 @@ impl AudioFlags {
 
     fn output_gain(&self) -> f32 {
         load_f32(&self.0.output_gain)
+    }
+
+    pub fn set_stream_volume(&self, gain: f32) {
+        if gain.is_finite() {
+            store_f32(&self.0.stream_volume, gain.clamp(0.0, 2.0));
+        }
+    }
+
+    fn stream_volume(&self) -> f32 {
+        load_f32(&self.0.stream_volume).clamp(0.0, 2.0)
+    }
+
+    pub(super) fn begin_stream_audio(&self) -> u64 {
+        let mut queue = self
+            .0
+            .stream_audio
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        queue.clear();
+        self.0
+            .stream_generation
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1)
+    }
+
+    pub(super) fn push_stream_audio(&self, generation: u64, sequence: u16, opus: Vec<u8>) {
+        let mut queue = match self.0.stream_audio.try_lock() {
+            Ok(queue) => queue,
+            Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return,
+        };
+        if self.0.stream_generation.load(Ordering::Acquire) != generation {
+            return;
+        }
+        if queue.len() >= STREAM_AUDIO_LIMIT {
+            queue.pop_front();
+        }
+        queue.push_back(StreamPacket { sequence, opus });
+    }
+
+    fn take_stream_audio(&self, packets: &mut Vec<StreamPacket>) {
+        let mut queue = self
+            .0
+            .stream_audio
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        packets.extend(queue.drain(..));
+    }
+
+    pub(super) fn clear_stream_audio(&self) {
+        let mut queue = self
+            .0
+            .stream_audio
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        queue.clear();
+        self.0.stream_generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn stream_generation(&self) -> u64 {
+        self.0.stream_generation.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(super) fn queued_stream_audio(&self) -> usize {
+        self.0
+            .stream_audio
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
     }
 
     pub fn set_sensitivity(&self, threshold: Option<f32>) {
@@ -1014,6 +1096,9 @@ fn run_output(
     started.store(true, Ordering::Release);
 
     let mut decoders: HashMap<u32, DecoderState> = HashMap::new();
+    let mut stream: Option<DecoderState> = None;
+    let mut stream_generation = flags.stream_generation();
+    let mut stream_packets = Vec::new();
     let mut packets = 0u64;
     let mut decoded = 0u64;
     let mut audible = 0u64;
@@ -1047,6 +1132,20 @@ fn run_output(
                 .push(packet.sequence, packet.opus);
         }
 
+        let generation = flags.stream_generation();
+        if generation != stream_generation {
+            stream = None;
+            stream_generation = generation;
+        }
+        stream_packets.clear();
+        flags.take_stream_audio(&mut stream_packets);
+        if !stream_packets.is_empty() {
+            let state = stream.get_or_insert_with(DecoderState::new);
+            for packet in stream_packets.drain(..) {
+                state.jitter.push(packet.sequence, packet.opus);
+            }
+        }
+
         if let Some(reason) = failure.take() {
             return SideExit {
                 incoming: Some(incoming),
@@ -1057,6 +1156,12 @@ fn run_output(
 
         let now = Instant::now();
         decoders.retain(|_, state| state.jitter.fresh(now));
+        if stream
+            .as_ref()
+            .is_some_and(|state| !state.jitter.fresh(now))
+        {
+            stream = None;
+        }
         if let Some(output) = &mut output {
             let target = playback_target(output.frame_values);
             let limit = PLAYBACK_LIMIT.max(target.saturating_mul(2));
@@ -1071,6 +1176,8 @@ fn run_output(
                 }
                 let mut mixed = mix(
                     &mut decoders,
+                    &mut stream,
+                    flags.stream_volume(),
                     flags.deafened(),
                     now,
                     &mut decoded,
@@ -1153,8 +1260,16 @@ fn decode(decoder: &mut Option<Decoder>, packet: &[u8]) -> Option<Vec<i16>> {
     Some(pcm)
 }
 
+fn add_pcm(mix: &mut [f32], pcm: &[i16], gain: f32) {
+    for (index, sample) in pcm.iter().take(mix.len()).enumerate() {
+        mix[index] += f32::from(*sample) / f32::from(i16::MAX) * gain;
+    }
+}
+
 fn mix(
     decoders: &mut HashMap<u32, DecoderState>,
+    stream: &mut Option<DecoderState>,
+    stream_gain: f32,
     deafened: bool,
     now: Instant,
     decoded: &mut u64,
@@ -1165,21 +1280,16 @@ fn mix(
         for state in decoders.values_mut() {
             state.jitter.discard();
         }
+        if let Some(state) = stream {
+            state.jitter.discard();
+        }
         return mix;
     }
     for state in decoders.values_mut() {
-        let pcm = match state.jitter.take(now) {
-            Ready::Frame(packet) => decode(&mut state.decoder, &packet),
-            Ready::Gap => decode(&mut state.decoder, &[]),
-            Ready::Wait => None,
-        };
-        let Some(pcm) = pcm else {
-            continue;
-        };
-        *decoded = decoded.saturating_add(1);
-        for (index, sample) in pcm.iter().take(FRAME_VALUES).enumerate() {
-            mix[index] += f32::from(*sample) / f32::from(i16::MAX);
-        }
+        mix_state(&mut mix, state, 1.0, now, decoded);
+    }
+    if let Some(state) = stream {
+        mix_state(&mut mix, state, stream_gain, now, decoded);
     }
     for sample in &mut mix {
         *sample = sample.clamp(-1.0, 1.0);
@@ -1188,6 +1298,25 @@ fn mix(
         *audible = audible.saturating_add(1);
     }
     mix
+}
+
+fn mix_state(
+    mix: &mut [f32],
+    state: &mut DecoderState,
+    gain: f32,
+    now: Instant,
+    decoded: &mut u64,
+) {
+    let pcm = match state.jitter.take(now) {
+        Ready::Frame(packet) => decode(&mut state.decoder, &packet),
+        Ready::Gap => decode(&mut state.decoder, &[]),
+        Ready::Wait => None,
+    };
+    let Some(pcm) = pcm else {
+        return;
+    };
+    *decoded = decoded.saturating_add(1);
+    add_pcm(mix, &pcm, gain);
 }
 
 struct DecoderState {
@@ -2090,5 +2219,97 @@ mod tests {
         assert_eq!(pick(&names, Some("Microphone B")), Some(1));
         assert_eq!(pick(&names, Some("Microphone C")), None);
         assert_eq!(pick(&names, None), None);
+    }
+
+    #[test]
+    fn stream_volume_clamps_and_ignores_non_finite_gain() {
+        let flags = AudioFlags::new();
+        assert_eq!(flags.stream_volume(), 1.0);
+        flags.set_stream_volume(3.0);
+        assert_eq!(flags.stream_volume(), 2.0);
+        flags.set_stream_volume(-1.0);
+        assert_eq!(flags.stream_volume(), 0.0);
+        flags.set_stream_volume(0.5);
+        flags.set_stream_volume(f32::NAN);
+        assert_eq!(flags.stream_volume(), 0.5);
+        flags.set_stream_volume(f32::INFINITY);
+        assert_eq!(flags.stream_volume(), 0.5);
+    }
+
+    #[test]
+    fn stream_audio_queue_is_bounded_and_cleared() {
+        let flags = AudioFlags::new();
+        let generation = flags.begin_stream_audio();
+        for sequence in 0..STREAM_AUDIO_LIMIT as u16 + 4 {
+            flags.push_stream_audio(generation, sequence, vec![sequence as u8]);
+        }
+        let mut packets = Vec::new();
+        flags.take_stream_audio(&mut packets);
+        assert_eq!(packets.len(), STREAM_AUDIO_LIMIT);
+        assert_eq!(packets.first().unwrap().sequence, 4);
+        assert_eq!(
+            packets.last().unwrap().sequence,
+            STREAM_AUDIO_LIMIT as u16 + 3
+        );
+
+        let next = flags.begin_stream_audio();
+        flags.push_stream_audio(generation, 1, vec![1]);
+        flags.push_stream_audio(next, 1, vec![1]);
+        let mut packets = Vec::new();
+        flags.take_stream_audio(&mut packets);
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].sequence, 1);
+        flags.clear_stream_audio();
+        assert_eq!(flags.stream_generation(), next + 1);
+        let mut packets = Vec::new();
+        flags.take_stream_audio(&mut packets);
+        assert!(packets.is_empty());
+    }
+
+    #[test]
+    fn stream_gain_applies_to_mixed_samples() {
+        let mut mixed = vec![0.25, 0.0];
+        add_pcm(&mut mixed, &[i16::MAX, -i16::MAX], 0.5);
+        assert!((mixed[0] - 0.75).abs() < 1e-6);
+        assert!((mixed[1] + 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn stream_audio_is_audible_and_deafen_silences_it() {
+        let mut encoder = Encoder::new(SAMPLE_RATE, Channels::Stereo, Application::Audio).unwrap();
+        let pcm = vec![8_000i16; FRAME_VALUES];
+        let opus = encoder.encode_vec(&pcm, MAX_OPUS_PAYLOAD).unwrap();
+        let now = Instant::now();
+        let mut decoded = 0;
+        let mut audible = 0;
+        let mut state = DecoderState::new();
+        state.jitter.push(1, opus.clone());
+        let mixed = mix(
+            &mut HashMap::new(),
+            &mut Some(state),
+            0.5,
+            false,
+            now,
+            &mut decoded,
+            &mut audible,
+        );
+        assert!(decoded > 0);
+        assert!(audible > 0);
+        assert!(mixed.iter().any(|sample| *sample != 0.0));
+
+        let mut state = DecoderState::new();
+        state.jitter.push(1, opus);
+        decoded = 0;
+        audible = 0;
+        let mixed = mix(
+            &mut HashMap::new(),
+            &mut Some(state),
+            0.5,
+            true,
+            now,
+            &mut decoded,
+            &mut audible,
+        );
+        assert!(mixed.iter().all(|sample| *sample == 0.0));
     }
 }

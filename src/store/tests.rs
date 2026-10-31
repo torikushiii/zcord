@@ -16,6 +16,7 @@ mod invites;
 mod members;
 mod messages;
 mod performance;
+mod pins_threads;
 mod reactions;
 mod read_state;
 mod settings;
@@ -67,7 +68,7 @@ pub(super) fn forum_ready(
     let mut payload: serde_json::Value =
         serde_json::from_str(include_str!("../discord/fixtures/ready.json")).unwrap();
     let guild = &mut payload["guilds"][0];
-    guild["roles"][1]["permissions"] = json!("3072");
+    guild["roles"][1]["permissions"] = json!("274877910016");
     let channels = guild["channels"].as_array_mut().unwrap();
     let forum = channels
         .iter_mut()

@@ -165,8 +165,8 @@ fn voice_preview_keeps_rows_inside_anchored_bubble_at_each_zoom(cx: &mut TestApp
                     ),
                 ] {
                     let row = cx.debug_bounds(row_selector).unwrap();
-                    let horizontal_inset = px(13. * zoom - 1.);
-                    let vertical_inset = px(9. * zoom - 1.);
+                    let horizontal_inset = px(12. * zoom - 1.);
+                    let vertical_inset = px(8. * zoom - 1.);
                     assert!(row.left() >= tooltip.left() + horizontal_inset);
                     assert!(row.right() <= tooltip.right() - horizontal_inset);
                     assert!(row.top() >= tooltip.top() + vertical_inset);

@@ -459,6 +459,7 @@ fn thread_message_create_bumps_forum_post_and_thread_channel_loads() {
         last_message_id: Some(3000),
         mention_count: 1,
         kind: 0,
+        last_pin_timestamp: None,
     });
     let mut store = Store::from_ready(ready);
     let thread = store.guild_by_id(200).unwrap().channel(3001).unwrap();

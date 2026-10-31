@@ -471,7 +471,7 @@ fn choice_name(choice: &EmojiChoice) -> &str {
 
 /// Resolves an emoji through the image service. The footer uses this path for
 /// its single animated preview; other previews use [`emoji_preview_image`] instead.
-fn emoji_image(choice: &EmojiChoice, size: f32, animate: bool, cx: &App) -> AnyElement {
+pub(crate) fn emoji_image(choice: &EmojiChoice, size: f32, animate: bool, cx: &App) -> AnyElement {
     let image: Option<ImageSource> = match choice {
         EmojiChoice::Custom(custom) => images::resolve(
             &images::ImageSpec::Emoji {

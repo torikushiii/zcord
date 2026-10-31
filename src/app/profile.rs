@@ -115,6 +115,7 @@ pub(crate) struct ProfileCard {
     /// Unlike `guild_id`, kept while viewing the main profile so the menu can switch back.
     pub(crate) source_guild_id: Option<u64>,
     pub(crate) more_menu_open: bool,
+    hovered_action: Option<&'static str>,
     status_menu: popout::status::State,
     scope_snapshots: HashMap<Option<u64>, Arc<model::Profile>>,
     origin: ProfileOrigin,

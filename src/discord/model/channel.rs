@@ -22,6 +22,10 @@ pub struct ThreadMetadata {
     pub locked: bool,
     #[serde(default)]
     pub create_timestamp: Option<String>,
+    #[serde(default)]
+    pub auto_archive_duration: Option<u32>,
+    #[serde(default, deserialize_with = "optional_timestamp")]
+    pub archive_timestamp: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -60,6 +64,16 @@ pub struct Channel {
     pub thread_metadata: Option<ThreadMetadata>,
     #[serde(default)]
     pub message_count: Option<u32>,
+    #[serde(default)]
+    pub member_count: Option<u32>,
+    #[serde(default, deserialize_with = "optional_ids")]
+    pub member_ids_preview: Option<Vec<u64>>,
+    #[serde(default)]
+    pub owner: Option<Member>,
+    #[serde(default)]
+    pub member: Option<PartialMember>,
+    #[serde(default, deserialize_with = "optional_timestamp")]
+    pub last_pin_timestamp: Option<String>,
     #[serde(default, deserialize_with = "optional_ids")]
     pub applied_tags: Option<Vec<u64>>,
     #[serde(default)]
@@ -94,6 +108,11 @@ impl Channel {
             owner_id,
             thread_metadata,
             message_count,
+            member_count,
+            member_ids_preview,
+            owner,
+            member,
+            last_pin_timestamp,
             applied_tags,
             flags,
             available_tags,
@@ -127,4 +146,8 @@ pub struct ThreadListSync {
     pub guild_id: u64,
     #[serde(default, deserialize_with = "entries")]
     pub threads: Vec<Channel>,
+    #[serde(default, deserialize_with = "entries")]
+    pub most_recent_messages: Vec<Message>,
+    #[serde(default, deserialize_with = "entries")]
+    pub members: Vec<ThreadMember>,
 }

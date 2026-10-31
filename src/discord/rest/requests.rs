@@ -1,8 +1,38 @@
 use super::*;
 
+const RELATIONSHIPS_URL: &str = "https://discord.com/api/v9/users/@me/relationships";
+
 #[derive(Serialize)]
 struct OpenDm {
     recipients: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct AddFriend<'a> {
+    username: &'a str,
+    discriminator: Option<String>,
+}
+
+#[derive(Serialize)]
+struct EmptyBody {}
+
+fn relationship_url(user_id: u64) -> String {
+    format!("{RELATIONSHIPS_URL}/{user_id}")
+}
+
+fn friend_request(client: &Client, username: &str) -> RequestBuilder {
+    client.post(RELATIONSHIPS_URL).json(&AddFriend {
+        username,
+        discriminator: None,
+    })
+}
+
+fn relationship_put(client: &Client, user_id: u64) -> RequestBuilder {
+    client.put(relationship_url(user_id)).json(&EmptyBody {})
+}
+
+fn relationship_delete(client: &Client, user_id: u64) -> RequestBuilder {
+    client.delete(relationship_url(user_id))
 }
 
 #[derive(Serialize)]
@@ -11,6 +41,23 @@ struct AcceptMessageRequest {
 }
 
 impl Rest {
+    pub async fn send_friend_request(&self, username: &str) -> Result<(), Error> {
+        self.send(|| friend_request(&self.client, username)).await?;
+        Ok(())
+    }
+
+    pub async fn put_relationship(&self, user_id: u64) -> Result<(), Error> {
+        self.send(|| relationship_put(&self.client, user_id))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn delete_relationship(&self, user_id: u64) -> Result<(), Error> {
+        self.send(|| relationship_delete(&self.client, user_id))
+            .await?;
+        Ok(())
+    }
+
     pub async fn open_dm(&self, user_id: u64) -> Result<model::Channel, Error> {
         let body = OpenDm {
             recipients: vec![user_id.to_string()],
@@ -77,5 +124,46 @@ impl Rest {
             previews.extend(model::parse_entries(value));
         }
         Ok(previews)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::Client;
+
+    #[test]
+    fn relationship_requests_use_the_friend_routes() {
+        let client = Client::new();
+
+        let request = friend_request(&client, "a.b_c1").build().unwrap();
+        assert_eq!(request.method(), reqwest::Method::POST);
+        assert_eq!(
+            request.url().as_str(),
+            "https://discord.com/api/v9/users/@me/relationships"
+        );
+        assert_eq!(
+            request.body().and_then(reqwest::Body::as_bytes),
+            Some(br#"{"username":"a.b_c1","discriminator":null}"#.as_slice())
+        );
+
+        let request = relationship_put(&client, 42).build().unwrap();
+        assert_eq!(request.method(), reqwest::Method::PUT);
+        assert_eq!(
+            request.url().as_str(),
+            "https://discord.com/api/v9/users/@me/relationships/42"
+        );
+        assert_eq!(
+            request.body().and_then(reqwest::Body::as_bytes),
+            Some(b"{}".as_slice())
+        );
+
+        let request = relationship_delete(&client, 42).build().unwrap();
+        assert_eq!(request.method(), reqwest::Method::DELETE);
+        assert_eq!(
+            request.url().as_str(),
+            "https://discord.com/api/v9/users/@me/relationships/42"
+        );
+        assert!(request.body().is_none());
     }
 }

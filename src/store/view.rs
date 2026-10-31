@@ -446,6 +446,18 @@ pub struct Message {
     pub forward: Option<Forward>,
     pub mentions_me: bool,
     pub uploads: Vec<PendingUpload>,
+    pub thread: Option<MessageThread>,
+    /// The message a pin notice points at.
+    pub reference_id: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MessageThread {
+    pub id: u64,
+    pub name: String,
+    pub message_count: u32,
+    pub archived: bool,
+    pub recent: Option<(u64, String, Timestamp)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -612,6 +624,24 @@ impl ChannelKind {
     pub fn is_forum(self) -> bool {
         self == Self::Forum
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThreadRow {
+    pub id: u64,
+    pub name: String,
+    pub parent_id: u64,
+    pub owner_id: Option<u64>,
+    pub joined: bool,
+    pub archived: bool,
+    pub locked: bool,
+    pub private: bool,
+    pub member_count: u32,
+    pub member_ids: Vec<u64>,
+    /// Newest message: author and flattened text, cut to 200 bytes.
+    pub recent: Option<(u64, String, Timestamp)>,
+    /// `archive_timestamp`, or the newest message's time when there is one.
+    pub last_active: Option<Timestamp>,
 }
 
 pub struct Channel {

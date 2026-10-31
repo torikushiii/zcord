@@ -32,17 +32,30 @@ use std::{
 use tokio::sync::{Mutex as AsyncMutex, watch};
 
 pub use permissions::{
-    CONNECT, MANAGE_MESSAGES, SEND_MESSAGES, USE_EXTERNAL_EMOJIS, VIEW_CHANNEL, can_view,
-    channel_permissions,
+    CONNECT, CREATE_PRIVATE_THREADS, CREATE_PUBLIC_THREADS, MANAGE_MESSAGES, MANAGE_THREADS,
+    READ_MESSAGE_HISTORY, SEND_MESSAGES, SEND_MESSAGES_IN_THREADS, USE_EXTERNAL_EMOJIS,
+    VIEW_CHANNEL, can_view, channel_permissions,
 };
 pub use presence::{SelfStatus, StatusDuration};
 pub use properties::USER_AGENT;
-pub use voice::{AudioDevice, MicTest, audio_devices};
+pub use voice::{
+    AudioDevice, FrameSlot, MicTest, ScreenSource, ScreenSourceId, StreamFrame, audio_devices,
+};
 
 pub(crate) use cache::ProfileDetails;
 use cache::{Cache, CacheRequest, insert_bounded, insert_missing, missing_ids};
 pub use error::*;
 pub use event::*;
+pub use model::{PinPage, ThreadPage};
+
+pub fn valid_friend_username(username: &str) -> bool {
+    (2..=32).contains(&username.len())
+        // Discord usernames cannot contain two consecutive periods.
+        && !username.contains("..")
+        && username
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'_' | b'.'))
+}
 
 #[derive(Clone)]
 pub struct Secret(String);
@@ -274,6 +287,53 @@ impl Session {
         }
     }
 
+    pub fn watch_stream(&self, user_id: u64) {
+        if let Some(payload) = self.inner.voice.watch(user_id) {
+            self.voice_command(payload);
+        }
+    }
+
+    pub fn stop_watching(&self) {
+        if let Some(payload) = self.inner.voice.stop_watching() {
+            self.voice_command(payload);
+        }
+    }
+
+    pub fn stream_frames(&self) -> FrameSlot {
+        self.inner.voice.stream_frames()
+    }
+
+    pub fn screen_sources(&self) -> Vec<ScreenSource> {
+        self.inner.voice.screen_sources()
+    }
+
+    pub fn screen_thumbnail(&self, source: &ScreenSource) -> Option<StreamFrame> {
+        self.inner.voice.screen_thumbnail(source)
+    }
+
+    pub async fn stream_preview(
+        &self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        user_id: u64,
+    ) -> Result<String, Error> {
+        let key = voice::stream_key(guild_id, channel_id, user_id);
+        self.rest(async |rest| rest.stream_preview(&key).await)
+            .await
+    }
+
+    pub fn start_share(&self, source: ScreenSource) {
+        if let Some(payload) = self.inner.voice.start_share(source) {
+            self.voice_command(payload);
+        }
+    }
+
+    pub fn stop_share(&self) {
+        if let Some(payload) = self.inner.voice.stop_sharing() {
+            self.voice_command(payload);
+        }
+    }
+
     pub fn set_self_mute(&self, mute: bool) {
         if let Some(payload) = self.inner.voice.set_mute(mute) {
             self.voice_command(payload);
@@ -304,6 +364,10 @@ impl Session {
 
     pub fn set_output_volume(&self, gain: f32) {
         self.inner.voice.set_output_volume(gain);
+    }
+
+    pub fn set_stream_volume(&self, gain: f32) {
+        self.inner.voice.set_stream_volume(gain);
     }
 
     pub fn set_input_sensitivity(&self, threshold_db: Option<f32>) {
@@ -340,3 +404,22 @@ pub enum ProfileKind {
 const PROFILE_TTL: Duration = Duration::from_secs(5 * 60);
 const FAILURE_TTL: Duration = Duration::from_secs(60);
 const CACHE_LIMIT: usize = 256;
+
+#[cfg(test)]
+mod tests {
+    use super::valid_friend_username;
+
+    #[test]
+    fn friend_usernames_match_serein_validation() {
+        assert!(!valid_friend_username("a"));
+        assert!(valid_friend_username("ab"));
+        assert!(valid_friend_username(&"a".repeat(32)));
+        assert!(!valid_friend_username(&"a".repeat(33)));
+        assert!(valid_friend_username("a.b_c1"));
+        assert!(!valid_friend_username("a b"));
+        assert!(!valid_friend_username("a-b"));
+        assert!(!valid_friend_username(""));
+        assert!(!valid_friend_username("a..b"));
+        assert!(!valid_friend_username("AB"));
+    }
+}

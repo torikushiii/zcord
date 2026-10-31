@@ -158,6 +158,7 @@ impl Store {
                 last_message_id: Some(last_message_id),
                 mention_count: 0,
                 kind: 0,
+                last_pin_timestamp: None,
             });
             index
         });

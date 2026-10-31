@@ -1026,7 +1026,7 @@ impl Connection {
             let Some(user_id) = mapped else {
                 return;
             };
-            let Some(decrypted) = dave.decrypt(user_id, &payload) else {
+            let Some(decrypted) = dave.decrypt(user_id, davey::MediaType::AUDIO, &payload) else {
                 self.rx.dave_failed = self.rx.dave_failed.saturating_add(1);
                 return;
             };
@@ -1105,14 +1105,14 @@ impl Connection {
     }
 }
 
-fn unix_ms() -> u64 {
+pub(super) fn unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
 }
 
-fn ws_request(url: &str) -> Option<Request> {
+pub(super) fn ws_request(url: &str) -> Option<Request> {
     let mut request = url.into_client_request().ok()?;
     for (name, value) in [
         ("user-agent", properties::USER_AGENT),
@@ -1126,21 +1126,21 @@ fn ws_request(url: &str) -> Option<Request> {
     Some(request)
 }
 
-async fn send_json(socket: &mut Socket, value: Value) -> Result<(), ()> {
+pub(super) async fn send_json(socket: &mut Socket, value: Value) -> Result<(), ()> {
     timeout(SEND_TIMEOUT, socket.send(Message::Text(value.to_string())))
         .await
         .map_err(|_| ())?
         .map_err(|_| ())
 }
 
-fn binary_frame(op: u8, payload: &[u8]) -> Vec<u8> {
+pub(super) fn binary_frame(op: u8, payload: &[u8]) -> Vec<u8> {
     let mut frame = Vec::with_capacity(payload.len() + 1);
     frame.push(op);
     frame.extend_from_slice(payload);
     frame
 }
 
-fn commit_welcome_body(commit: Vec<u8>, welcome: Option<Vec<u8>>) -> Vec<u8> {
+pub(super) fn commit_welcome_body(commit: Vec<u8>, welcome: Option<Vec<u8>>) -> Vec<u8> {
     let mut body = commit;
     if let Some(welcome) = welcome {
         body.extend_from_slice(&welcome);
@@ -1148,15 +1148,15 @@ fn commit_welcome_body(commit: Vec<u8>, welcome: Option<Vec<u8>>) -> Vec<u8> {
     body
 }
 
-fn ready_payload(transition_id: u16) -> Value {
+pub(super) fn ready_payload(transition_id: u16) -> Value {
     json!({"op": 23, "d": {"transition_id": transition_id}})
 }
 
-fn ready_on_prepare(transition: u16, version: u16, epoch_reset: bool) -> bool {
+pub(super) fn ready_on_prepare(transition: u16, version: u16, epoch_reset: bool) -> bool {
     transition != 0 && (version == 0 || !epoch_reset)
 }
 
-async fn send_binary(socket: &mut Socket, op: u8, payload: &[u8]) {
+pub(super) async fn send_binary(socket: &mut Socket, op: u8, payload: &[u8]) {
     let _ = timeout(
         SEND_TIMEOUT,
         socket.send(Message::Binary(binary_frame(op, payload))),
@@ -1164,12 +1164,12 @@ async fn send_binary(socket: &mut Socket, op: u8, payload: &[u8]) {
     .await;
 }
 
-async fn send_key_package(socket: &mut Socket, key_package: &[u8]) {
+pub(super) async fn send_key_package(socket: &mut Socket, key_package: &[u8]) {
     log::info!("DAVE tx op=26 key_package len={}", key_package.len());
     send_binary(socket, 26, key_package).await;
 }
 
-async fn send_ready(socket: &mut Socket, transition_id: u16, version: u16) {
+pub(super) async fn send_ready(socket: &mut Socket, transition_id: u16, version: u16) {
     log::info!("DAVE tx op=23 ready transition={transition_id} version={version}");
     let _ = send_json(socket, ready_payload(transition_id)).await;
 }
@@ -1226,7 +1226,7 @@ fn select_protocol_payload(address: &str, port: u16, mode: Mode) -> Value {
     }})
 }
 
-fn parse_binary_seq(bytes: &[u8]) -> Option<u64> {
+pub(super) fn parse_binary_seq(bytes: &[u8]) -> Option<u64> {
     (bytes.len() >= 2).then(|| u64::from(u16::from_be_bytes([bytes[0], bytes[1]])))
 }
 

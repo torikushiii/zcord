@@ -31,8 +31,6 @@ pub(super) fn popout(
     let outer_width = POPOUT_WIDTH + theme.map_or(0., |_| THEME_BORDER * 2.);
     let overflow = frame_overflow(card, outer_width).unwrap_or_default();
     let position = card.popout_position(window, &overflow);
-    let menu_bounds = Rc::new(Cell::new(None));
-    let outside_menu = menu_bounds.clone();
     let entity = app.entity.clone();
     let open_full = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
         entity.update(cx, |app, cx| app.open_full_profile(cx)).ok();
@@ -57,7 +55,7 @@ pub(super) fn popout(
             Some(Box::new(open_full)),
             cx,
         ))
-        .child(popout_body(app, card, &layout, window, menu_bounds, cx))
+        .child(popout_body(app, card, &layout, window, cx))
         .children(effect_layers(card, layout.width, corner, false, cx));
     let inner = match card.account_max_height(window, &overflow) {
         Some(height) => {
@@ -115,12 +113,6 @@ pub(super) fn popout(
                     .occlude()
                     .on_mouse_down_out(move |event, _, cx| {
                         if in_status_menu(event.position) {
-                            return;
-                        }
-                        if outside_menu
-                            .get()
-                            .is_some_and(|bounds: Bounds<Pixels>| bounds.contains(&event.position))
-                        {
                             return;
                         }
                         close.update(cx, |app, cx| app.close_profile(cx)).ok();
@@ -546,7 +538,6 @@ fn popout_body(
     card: &ProfileCard,
     layout: &Layout,
     window: &Window,
-    menu_bounds: menu::MenuBounds,
     cx: &App,
 ) -> impl IntoElement {
     let user = app.store.user(card.user_id);
@@ -568,7 +559,6 @@ fn popout_body(
             })),
             cx,
         ))
-        .children(profile_actions(app, card, window, Some(menu_bounds)))
         .map(|this| {
             if card.loading() {
                 return this.child(skeleton(card.user_id));

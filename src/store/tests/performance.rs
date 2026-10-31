@@ -28,6 +28,7 @@ fn thousand_message_creates_with_large_ready_are_fast() {
             last_message_id: Some(5000),
             mention_count: 0,
             kind: 0,
+            last_pin_timestamp: None,
         })
         .collect();
     ready.users = (0..20_000)

@@ -58,7 +58,7 @@ pub(super) fn subscription(guild_id: u64, channel_id: u64, ranges: &[(u32, u32)]
         presence_revision: None,
         completion: None,
         payload: json!({"op":37,"d":{"subscriptions":{
-            guild_id.to_string(): {"typing":true,"activities":true,"threads":false,
+            guild_id.to_string(): {"typing":true,"activities":true,"threads":true,
                 "member_updates":false,"channels":{channel_id.to_string():ranges}}
         }}}),
     }
@@ -270,7 +270,7 @@ mod tests {
         assert_eq!(
             payload,
             json!({"op":37,"d":{"subscriptions":{"1":{
-                "typing":true,"activities":true,"threads":false,"member_updates":false,
+                "typing":true,"activities":true,"threads":true,"member_updates":false,
                 "channels":{"2":[[0,99],[100,199],[200,299],[300,399],[400,499]]}
             }}}})
         );

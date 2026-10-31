@@ -79,6 +79,9 @@ impl DiscordApp {
 
     pub(crate) fn select_channel(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         self.profile = None;
+        self.message_menu = None;
+        self.channel_popout = None;
+        self.thread_menu = None;
         let found = match self.guild() {
             Some(guild) => guild.channel(id).map(|channel| {
                 (
@@ -104,7 +107,8 @@ impl DiscordApp {
         let Some((name, kind, count, messages_loaded, parent_id, is_thread)) = found else {
             return;
         };
-        if !kind.is_selectable() {
+        let stream_chat = kind == crate::store::ChannelKind::Voice && self.stream_chat_open();
+        if !kind.is_selectable() && !stream_chat {
             return;
         }
         let forum = kind.is_forum();

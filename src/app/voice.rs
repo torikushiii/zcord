@@ -1,15 +1,20 @@
 use std::{
+    cell::Cell,
     collections::HashSet,
+    rc::Rc,
     time::{Duration, Instant},
 };
 
 use gpui::{prelude::*, *};
+use gpui_component::ElementExt;
 
 mod details;
+pub(crate) mod share_picker;
+pub(crate) mod stream_card;
 
 use crate::{
     app::{DiscordApp, message_body::label},
-    discord::VoiceEvent,
+    discord::{ShareEvent, VoiceEvent},
     settings::SavedChannel,
     store::{Store, VoiceMember},
     theme::{self, rpx},
@@ -45,6 +50,22 @@ pub(crate) struct Voice {
     privacy_copied_reset: Option<Task<()>>,
     restored: bool,
     clock: Option<Task<()>>,
+    sharing: Sharing,
+    share_picker: Option<share_picker::SharePicker>,
+    share_error: Option<String>,
+    stream_card: Option<stream_card::StreamCard>,
+    stream_card_close: Option<Task<()>>,
+    stream_card_hovered: bool,
+    /// `(channel, user)` to watch once the call that was joined for it connects.
+    pending_watch: Option<(u64, u64)>,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Sharing {
+    #[default]
+    Off,
+    Starting,
+    Live,
 }
 
 #[derive(Clone, Copy)]
@@ -54,6 +75,16 @@ pub(crate) struct Joined {
 }
 
 impl Voice {
+    pub(crate) fn joined_call(&self) -> Option<(u64, u64)> {
+        self.call
+            .as_ref()
+            .map(|call| (call.guild_id, call.channel_id))
+    }
+
+    pub(crate) fn sharing_screen(&self) -> bool {
+        self.sharing != Sharing::Off
+    }
+
     pub(crate) fn joined(&self, store: &Store) -> Option<Joined> {
         self.call.as_ref().map(|call| Joined {
             channel_id: call.channel_id,
@@ -80,6 +111,7 @@ enum Control {
     Signal,
     NoiseSuppression,
     Disconnect,
+    Screen,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -203,6 +235,7 @@ impl DiscordApp {
             session.leave_voice();
         }
         remember_channel(None, cx);
+        self.voice.pending_watch = None;
         self.voice.speaking.clear();
         self.voice.menu = None;
         self.voice.hovered_control = None;
@@ -424,12 +457,20 @@ impl DiscordApp {
                     }),
                     cx,
                 );
+                if let Some((_, user_id)) = self
+                    .voice
+                    .pending_watch
+                    .take_if(|(channel, _)| *channel == channel_id)
+                {
+                    self.watch_stream(user_id, None, cx);
+                }
             }
             VoiceEvent::Disconnected { reason } => {
                 if let Some(reason) = reason {
                     log::warn!("Voice disconnected: {reason}");
                 }
                 voice.call = None;
+                voice.pending_watch = None;
                 voice.menu = None;
                 voice.menu_close = None;
                 voice.hovered_control = None;
@@ -489,6 +530,15 @@ impl DiscordApp {
                 cx.notify();
                 return;
             }
+            VoiceEvent::Stream(event) => self.handle_stream_event(event, cx),
+            VoiceEvent::Share(event) => match event {
+                ShareEvent::Starting => voice.sharing = Sharing::Starting,
+                ShareEvent::Live => voice.sharing = Sharing::Live,
+                ShareEvent::Ended { reason } => {
+                    voice.sharing = Sharing::Off;
+                    voice.share_error = reason;
+                }
+            },
         }
         self.sync_channel_rows();
         cx.notify();
@@ -562,6 +612,19 @@ fn remember_channel(channel: Option<SavedChannel>, cx: &mut App) {
     crate::settings::update(cx, |settings| settings.voice_channel = channel);
 }
 
+pub(crate) fn live_badge() -> Div {
+    div()
+        .flex_none()
+        .px(rpx(6.))
+        .rounded(rpx(8.))
+        .bg(rgb(theme::RED))
+        .text_size(rpx(11.))
+        .line_height(rpx(16.))
+        .font_weight(FontWeight::BOLD)
+        .text_color(white())
+        .child("LIVE")
+}
+
 pub(crate) fn member_row(
     app: &DiscordApp,
     guild_id: u64,
@@ -589,8 +652,24 @@ pub(crate) fn member_row(
         .and_then(|user| user.tag.as_ref())
         .map(|tag| theme::guild_tag(tag, cx));
     let muted_color = |server: bool| if server { theme::RED } else { theme::MUTED };
+    let can_watch = user_id != app.store.current_user_id;
+    let watch = app.entity.clone();
+    let streamer = can_watch && member.streaming;
+    let card = app.entity.clone();
+    let row_bounds = Rc::new(Cell::new(Bounds::default()));
+    let row_paint = row_bounds.clone();
     let row = div()
         .id(("voice-member", user_id))
+        .when(streamer, |this| {
+            this.on_prepaint(move |bounds, _, _| row_paint.set(bounds))
+                .on_hover(move |hovered, window, cx| {
+                    let position = stream_card::position(row_bounds.get(), window);
+                    card.update(cx, |app, cx| {
+                        app.hover_streamer((guild_id, channel_id, user_id), *hovered, position, cx)
+                    })
+                    .ok();
+                })
+        })
         .flex()
         .items_center()
         .gap_2()
@@ -649,16 +728,18 @@ pub(crate) fn member_row(
         .child(div().flex_1())
         .when(member.streaming, |this| {
             this.child(
-                div()
-                    .flex_none()
-                    .px(rpx(6.))
-                    .rounded(rpx(8.))
-                    .bg(rgb(theme::RED))
-                    .text_size(rpx(11.))
-                    .line_height(rpx(16.))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(white())
-                    .child("LIVE"),
+                live_badge()
+                    .id(("voice-member-live", user_id))
+                    .when(can_watch, |this| {
+                        this.cursor_pointer().on_click(move |_, window, cx| {
+                            cx.stop_propagation();
+                            watch
+                                .update(cx, |app, cx| {
+                                    app.watch_or_join((guild_id, channel_id, user_id), window, cx)
+                                })
+                                .ok();
+                        })
+                    }),
             )
         })
         .when(member.video, |this| {
@@ -835,29 +916,51 @@ pub(crate) fn panel(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
                     Transformation::rotate(radians(std::f32::consts::FRAC_PI_4 * 3.)),
                 )),
         );
-    let actions = div().flex().gap_2().children(
-        [
-            ("voice-camera", "video-off", "Camera"),
-            ("voice-screen", "monitor-up", "Screen share"),
-            ("voice-activities", "shapes", "Activities"),
-            ("voice-soundboard", "megaphone", "Soundboard"),
-        ]
-        .map(|(id, icon, feature)| {
-            unavailable(
-                div()
-                    .id(id)
-                    .flex()
-                    .flex_1()
-                    .items_center()
-                    .justify_center()
-                    .h(rpx(32.))
-                    .rounded(rpx(8.))
-                    .bg(rgba(theme::HOVER))
-                    .child(theme::icon(icon, 20., theme::TEXT)),
-                feature,
+    let action = |id: &'static str, icon: &'static str| {
+        div()
+            .id(id)
+            .flex()
+            .flex_1()
+            .items_center()
+            .justify_center()
+            .h(rpx(32.))
+            .rounded(rpx(8.))
+            .bg(rgba(theme::HOVER))
+            .child(theme::icon(icon, 20., theme::TEXT))
+    };
+    let sharing = app.voice.sharing != Sharing::Off;
+    let share = app.entity.clone();
+    let screen = action("voice-screen", "monitor-up")
+        .cursor_pointer()
+        .when(sharing, |this| this.bg(rgb(theme::GREEN)))
+        .on_click(move |_, _, cx| {
+            share.update(cx, |app, cx| app.screen_button(cx)).ok();
+        })
+        .map(|this| {
+            with_tooltip(
+                this,
+                app,
+                Control::Screen,
+                if sharing {
+                    "Stop Streaming"
+                } else {
+                    "Share Your Screen"
+                },
             )
-        }),
-    );
+        });
+    let actions = div()
+        .flex()
+        .gap_2()
+        .child(unavailable(action("voice-camera", "video-off"), "Camera"))
+        .child(screen)
+        .child(unavailable(
+            action("voice-activities", "shapes"),
+            "Activities",
+        ))
+        .child(unavailable(
+            action("voice-soundboard", "megaphone"),
+            "Soundboard",
+        ));
     Some(
         div()
             .flex()

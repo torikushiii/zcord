@@ -773,6 +773,7 @@ impl ProfileCard {
             guild_id,
             source_guild_id: guild_id,
             more_menu_open: false,
+            hovered_action: None,
             status_menu: popout::status::State::default(),
             scope_snapshots: HashMap::new(),
             origin,
