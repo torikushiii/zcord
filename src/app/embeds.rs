@@ -233,7 +233,7 @@ pub(super) fn animated(source: impl Into<ImageSource>, key: &str) -> Stateful<Im
 
 /// Animated media is served as GIF/WebP/APNG files; the spec's `animated` flag is
 /// only set for some embed providers, so the extension is the fallback signal.
-fn animated_media(media: &Media) -> bool {
+pub(super) fn animated_media(media: &Media) -> bool {
     media.animated
         || media
             .url
@@ -248,16 +248,6 @@ fn image_box(media: &Media, width: f32, height: f32, radius: f32, cx: &App) -> D
     let frames = animated_media(media)
         .then(|| crate::media::animated::resolve(&spec, pixels, cx))
         .flatten();
-    let still_spec = if media.animated {
-        images::ImageSpec::Media {
-            url: media.url.clone(),
-            width: media.width,
-            height: media.height,
-            animated: false,
-        }
-    } else {
-        spec
-    };
     let child = match frames {
         Some(image) => Some(
             crate::media::animated::image(image)
@@ -269,7 +259,27 @@ fn image_box(media: &Media, width: f32, height: f32, radius: f32, cx: &App) -> D
                 .id(animated_id(&media.url))
                 .into_any_element(),
         ),
-        None => images::resolve(&still_spec, pixels, cx).map(|path| {
+        None if animated_media(media) => {
+            crate::media::animated::poster(&spec, pixels, cx).map(|image| {
+                image
+                    .absolute()
+                    .inset_0()
+                    .size_full()
+                    .object_fit(ObjectFit::Cover)
+                    .rounded(rpx(radius))
+                    .id(animated_id(&media.url))
+                    .into_any_element()
+            })
+        }
+        None => None,
+    }
+    .or_else(|| {
+        let fallback = if animated_media(media) {
+            crate::media::animated::fallback(&spec, pixels, cx)?
+        } else {
+            spec.clone()
+        };
+        images::resolve(&fallback, pixels, cx).map(|path| {
             animated(path, &media.url)
                 .absolute()
                 .inset_0()
@@ -277,8 +287,8 @@ fn image_box(media: &Media, width: f32, height: f32, radius: f32, cx: &App) -> D
                 .object_fit(ObjectFit::Cover)
                 .rounded(rpx(radius))
                 .into_any_element()
-        }),
-    };
+        })
+    });
     div()
         .relative()
         .flex_none()
@@ -345,6 +355,7 @@ fn lightbox_box(
 ) -> Stateful<Div> {
     let entity = app.entity.clone();
     let spec = media.spec();
+    let animated = animated_media(media);
     let url = media.source.clone();
     let preview = theme::image_px(width.max(height));
     let (original_width, original_height) = if media.width > 0 && media.height > 0 {
@@ -360,6 +371,7 @@ fn lightbox_box(
                 .update(cx, |app, cx| {
                     app.open_lightbox(
                         spec.clone(),
+                        animated,
                         (original_width, original_height),
                         preview,
                         url.clone(),

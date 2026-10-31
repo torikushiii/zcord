@@ -182,7 +182,8 @@ pub(super) fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &
             .into_any_element();
     }
     let preview = theme::image_px(width.max(height));
-    let frames = animated_attachment(attachment)
+    let animate = animated_attachment(attachment);
+    let frames = animate
         .then(|| animated::resolve(&spec, preview, cx))
         .flatten();
     let entity = app.entity.clone();
@@ -196,14 +197,30 @@ pub(super) fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &
                 .id(("animated", attachment.id))
                 .into_any_element(),
         ),
-        None => images::resolve(&spec, preview, cx).map(|path| {
+        None if animate => animated::poster(&spec, preview, cx).map(|image| {
+            image
+                .size_full()
+                .object_fit(ObjectFit::Cover)
+                .rounded(rpx(8.))
+                .id(("attachment-still", attachment.id))
+                .into_any_element()
+        }),
+        None => None,
+    }
+    .or_else(|| {
+        let fallback = if animate {
+            animated::fallback(&spec, preview, cx)?
+        } else {
+            spec.clone()
+        };
+        images::resolve(&fallback, preview, cx).map(|path| {
             embeds::animated(path, &attachment.url)
                 .size_full()
                 .object_fit(ObjectFit::Cover)
                 .rounded(rpx(8.))
                 .into_any_element()
-        }),
-    };
+        })
+    });
     div()
         .id(("lightbox-open", attachment.id))
         .relative()
@@ -219,6 +236,7 @@ pub(super) fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &
                 .update(cx, |app, cx| {
                     app.open_lightbox(
                         spec.clone(),
+                        animate,
                         (original_width, original_height),
                         preview,
                         url.clone(),

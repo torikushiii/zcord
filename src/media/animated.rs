@@ -12,7 +12,7 @@ use gpui::{
 use gpui_tokio::Tokio;
 use image::{
     AnimationDecoder, Delay, DynamicImage, Frame, Frames, ImageDecoder, ImageFormat, ImageReader,
-    Limits,
+    Limits, RgbaImage,
     codecs::{gif::GifDecoder, png::PngDecoder, webp::WebPDecoder},
     imageops::{FilterType, resize},
     metadata::LoopCount,
@@ -26,6 +26,8 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
 };
+
+pub(crate) mod stream;
 
 const MAX_IMAGE: usize = 32 * 1024 * 1024;
 const MAX_TOTAL: usize = 256 * 1024 * 1024;
@@ -106,6 +108,7 @@ fn still_wanted(stamp: &Mutex<Instant>) -> bool {
 
 enum DecodeOutcome {
     Decoded(Arc<RenderImage>, usize, Option<NonZeroU32>),
+    Stream(Arc<RenderImage>, std::path::PathBuf, std::path::PathBuf),
     Cancelled,
 }
 
@@ -147,6 +150,7 @@ impl Global for AnimatedCache {}
 pub fn init(cx: &mut App) {
     cx.set_global(AnimatedCache(Rc::new(RefCell::new(Cache::default()))));
     cx.set_global(AnimatedWakeups(Rc::new(RefCell::new(Wakeups::default()))));
+    stream::init(cx);
 }
 
 /// A frame change this close is worth waiting for the compositor instead of a timer.
@@ -154,6 +158,7 @@ const FRAME_LEAD: Duration = Duration::from_millis(8);
 
 pub struct AnimatedImage {
     image: Arc<RenderImage>,
+    animate: bool,
     object_fit: Fit,
     started_at: Option<Instant>,
     plays: Option<NonZeroU32>,
@@ -205,11 +210,18 @@ impl Fit {
 pub fn image(image: Arc<RenderImage>) -> AnimatedImage {
     AnimatedImage {
         image,
+        animate: true,
         object_fit: Fit::Contain,
         started_at: None,
         plays: None,
         interactivity: Interactivity::new(),
     }
+}
+
+pub(crate) fn poster_image(frame: Arc<RenderImage>) -> AnimatedImage {
+    let mut poster = image(frame);
+    poster.animate = false;
+    poster
 }
 
 impl AnimatedImage {
@@ -353,6 +365,7 @@ impl Element for AnimatedImage {
         let object_fit = self.object_fit;
         let started_at = self.started_at;
         let plays = self.plays;
+        let animate = self.animate;
         self.interactivity.paint(
             global_id,
             inspector_id,
@@ -361,7 +374,14 @@ impl Element for AnimatedImage {
             window,
             cx,
             |style, window, cx| {
+                if bounds.intersect(&window.content_mask().bounds).is_empty() {
+                    return;
+                }
+                let streamed = stream::paint(&image, animate, window, cx);
+                let image = streamed.as_ref().unwrap_or(&image);
                 let frame = match (started_at, global_id) {
+                    _ if !animate => 0,
+                    _ if streamed.is_some() => 0,
                     (Some(started_at), _) => frame_index_at(&image, started_at, plays, window, cx),
                     (None, Some(global_id)) => frame_index(&image, global_id, window, cx),
                     // Without an id there is nowhere to keep the clock; frame 0 is the
@@ -379,7 +399,7 @@ impl Element for AnimatedImage {
                     .to_pixels(window.rem_size())
                     .clamp_radii_for_quad_size(visible.size);
                 window
-                    .paint_image_fitted(visible, fitted, corner_radii, image, frame, false)
+                    .paint_image_fitted(visible, fitted, corner_radii, image.clone(), frame, false)
                     .ok();
             },
         );
@@ -626,9 +646,10 @@ fn schedule_wakeup(view: EntityId, cx: &mut App, remaining: Duration, window: &W
 fn animations_enabled(spec: &ImageSpec) -> bool {
     match spec {
         ImageSpec::Emoji { .. } => crate::settings::emoji_animation(),
-        ImageSpec::Media { .. } | ImageSpec::Sticker { .. } | ImageSpec::Attachment { .. } => {
-            crate::settings::gif_autoplay()
-        }
+        ImageSpec::Media { .. }
+        | ImageSpec::Sticker { .. }
+        | ImageSpec::Attachment { .. }
+        | ImageSpec::LocalGif { .. } => crate::settings::gif_autoplay(),
         ImageSpec::Animated { still } => animations_enabled(still),
         _ => true,
     }
@@ -641,6 +662,35 @@ pub fn resolve(spec: &ImageSpec, size: u32, cx: &App) -> Option<Arc<RenderImage>
     match state(spec, size, cx) {
         Load::Ready(image) => Some(image),
         Load::Pending | Load::Failed => None,
+    }
+}
+
+pub fn poster(spec: &ImageSpec, size: u32, cx: &App) -> Option<AnimatedImage> {
+    if !stream::selected(spec) {
+        return None;
+    }
+    match state(spec, size, cx) {
+        Load::Ready(frame) => Some(poster_image(frame)),
+        Load::Pending | Load::Failed => None,
+    }
+}
+
+pub fn fallback(spec: &ImageSpec, size: u32, cx: &App) -> Option<ImageSpec> {
+    fallback_spec(spec, matches!(state(spec, size, cx), Load::Failed))
+}
+
+fn fallback_spec(spec: &ImageSpec, failed: bool) -> Option<ImageSpec> {
+    match spec {
+        ImageSpec::Media {
+            url, width, height, ..
+        } => Some(ImageSpec::Media {
+            url: url.clone(),
+            width: *width,
+            height: *height,
+            animated: false,
+        }),
+        ImageSpec::Attachment { .. } if failed => Some(spec.clone()),
+        _ => None,
     }
 }
 
@@ -837,7 +887,7 @@ impl Cache {
                         ready_at,
                         seen,
                         ..
-                    } if Arc::strong_count(image) == 1
+                    } if Arc::strong_count(image) == 1 + usize::from(stream::selected(spec))
                         && ready_at.elapsed() >= FRESH_FOR
                         && seen.elapsed() >= VISIBLE_GRACE =>
                     {
@@ -893,7 +943,9 @@ pub(crate) fn drop_images(images: Vec<Arc<RenderImage>>, cx: &App) {
         cx.update(|cx| {
             // gpui's sprite atlas keeps every frame until drop_image is called.
             for image in images {
-                cx.drop_image(image, None);
+                if !stream::forget(image.id, cx) {
+                    cx.drop_image(image, None);
+                }
             }
         });
     })
@@ -969,7 +1021,8 @@ fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
                 return Ok(DecodeOutcome::Cancelled);
             }
             let collectible = matches!(&request.0, ImageSpec::Collectible { .. });
-            let cached = if matches!(lane, Lane::Gif) {
+            let streaming = stream::selected(&request.0);
+            let cached = if matches!(lane, Lane::Gif) && !streaming {
                 frames::load(&service.frames_path(&request.0, request.1)).await
             } else {
                 None
@@ -980,12 +1033,30 @@ fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
             if let Some((image, bytes, plays)) = cached {
                 return Ok(DecodeOutcome::Decoded(image, bytes, plays));
             }
+            let source_spec = if streaming {
+                // Some embeds omit `animated`; never fetch the still-converted cache file.
+                stream::source_spec(&request.0)
+            } else {
+                request.0.clone()
+            };
             let path = service
-                .load(&request.0, request.1)
+                .load(&source_spec, request.1)
                 .await
                 .context("animation download failed")?;
             if !still_wanted(&job_stamp) {
                 return Ok(DecodeOutcome::Cancelled);
+            }
+            if streaming {
+                let spool = service
+                    .frames_path(&request.0, request.1)
+                    .with_extension("spool");
+                let image = stream::first(path.clone(), request.1, job_stamp.clone()).await?;
+                return Ok(match image {
+                    Some(image) if still_wanted(&job_stamp) => {
+                        DecodeOutcome::Stream(image, path, spool)
+                    }
+                    _ => DecodeOutcome::Cancelled,
+                });
             }
             let _permit = decode_permits(lane)
                 .acquire()
@@ -1023,6 +1094,17 @@ fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
         let cache = cache.clone();
         cx.spawn(async move |cx| {
             let result = task.await;
+            let result = cx.update(|cx| match result {
+                Ok(DecodeOutcome::Stream(image, path, spool)) => {
+                    if !still_wanted(&stamp) {
+                        return Ok(DecodeOutcome::Cancelled);
+                    }
+                    let bytes =
+                        stream::register(&key.0, key.1, path, Some(spool), image.clone(), cx);
+                    Ok(DecodeOutcome::Decoded(image, bytes, None))
+                }
+                other => other,
+            });
             let (success, cancelled) = {
                 let mut state = cache.borrow_mut();
                 state.running[lane as usize] -= 1;
@@ -1201,6 +1283,10 @@ fn process_frame(frame: Frame, target: (u32, u32)) -> Frame {
         delay
     };
     let mut pixels = frame.into_buffer();
+    let factor = (pixels.width() / target.0).min(pixels.height() / target.1);
+    if factor >= 2 {
+        pixels = box_shrink(&pixels, factor);
+    }
     if pixels.dimensions() != target {
         pixels = resize(&pixels, target.0, target.1, FilterType::Triangle);
     }
@@ -1208,6 +1294,39 @@ fn process_frame(frame: Frame, target: (u32, u32)) -> Frame {
         pixel.0.swap(0, 2);
     }
     Frame::from_parts(pixels, 0, 0, delay)
+}
+
+fn box_shrink(pixels: &RgbaImage, factor: u32) -> RgbaImage {
+    let factor = factor as usize;
+    let source_width = pixels.width() as usize;
+    let width = source_width / factor;
+    let height = pixels.height() as usize / factor;
+    let raw = pixels.as_raw();
+    let area = (factor * factor) as u32;
+    let mut output = vec![0; width * height * 4];
+    let mut sums = vec![[0u32; 4]; width];
+    for y in 0..height {
+        sums.fill([0; 4]);
+        for offset in 0..factor {
+            let row = (y * factor + offset) * source_width * 4;
+            for (x, sum) in sums.iter_mut().enumerate() {
+                let start = row + x * factor * 4;
+                for pixel in raw[start..start + factor * 4].chunks_exact(4) {
+                    sum[0] += u32::from(pixel[0]);
+                    sum[1] += u32::from(pixel[1]);
+                    sum[2] += u32::from(pixel[2]);
+                    sum[3] += u32::from(pixel[3]);
+                }
+            }
+        }
+        for (x, sum) in sums.iter().enumerate() {
+            let out = (y * width + x) * 4;
+            for channel in 0..4 {
+                output[out + channel] = (sum[channel] / area) as u8;
+            }
+        }
+    }
+    RgbaImage::from_raw(width as u32, height as u32, output).expect("shrunk dimensions fit")
 }
 
 fn decode(bytes: &[u8], size: u32) -> Result<(Arc<RenderImage>, usize)> {
@@ -1291,6 +1410,39 @@ mod tests {
     use image::{Rgba, RgbaImage};
     use png::{BitDepth, BlendOp, ColorType, DisposeOp, Encoder};
     use std::cell::Cell;
+
+    #[test]
+    fn fallback_selection_freezes_media_but_only_retries_failed_attachments() {
+        for animated in [false, true] {
+            let spec = ImageSpec::Media {
+                url: "https://media.discordapp.net/test.gif".into(),
+                width: 8192,
+                height: 4096,
+                animated,
+            };
+            let expected = ImageSpec::Media {
+                url: "https://media.discordapp.net/test.gif".into(),
+                width: 8192,
+                height: 4096,
+                animated: false,
+            };
+            for failed in [false, true] {
+                assert_eq!(fallback_spec(&spec, failed), Some(expected.clone()));
+            }
+        }
+        let attachment = ImageSpec::Attachment {
+            id: 1,
+            url: "https://cdn.discordapp.com/test.gif".into(),
+            width: 8192,
+            height: 4096,
+        };
+        assert_eq!(fallback_spec(&attachment, false), None);
+        assert_eq!(fallback_spec(&attachment, true), Some(attachment));
+        assert_eq!(
+            fallback_spec(&ImageSpec::DefaultAvatar { index: 0 }, true),
+            None
+        );
+    }
 
     // 4x2 canvas. Frame 0 is a 2x2 opaque red square at the origin and is disposed to
     // background. Frame 1 is a 2x2 alpha-blended subframe at x=2, with one blue pixel
@@ -1638,6 +1790,55 @@ mod tests {
             }
             assert_eq!(bytes, width as usize * height as usize * 4 * 2);
         }
+    }
+
+    #[test]
+    fn box_shrink_averages_blocks_and_drops_leftovers() {
+        let mut pixels = RgbaImage::new(4, 4);
+        for y in 0..4 {
+            for x in 0..4 {
+                let value = match (x / 2, y / 2) {
+                    (0, 0) => [0, 0, 0, 0],
+                    (1, 0) => [10, 11, 12, 13],
+                    (0, 1) => [20, 21, 22, 23],
+                    _ => [255, 255, 255, 255],
+                };
+                pixels.put_pixel(x, y, Rgba(value));
+            }
+        }
+        for (x, y) in [(2, 2), (2, 3), (3, 2)] {
+            pixels.put_pixel(x, y, Rgba([0, 0, 0, 0]));
+        }
+        let shrunk = box_shrink(&pixels, 2);
+        assert_eq!(shrunk.dimensions(), (2, 2));
+        assert_eq!(
+            shrunk.as_raw(),
+            &[0, 0, 0, 0, 10, 11, 12, 13, 20, 21, 22, 23, 63, 63, 63, 63]
+        );
+
+        let leftovers = RgbaImage::from_fn(5, 5, |x, y| {
+            if x < 4 && y < 4 {
+                Rgba([1, 2, 3, 4])
+            } else {
+                Rgba([200, 200, 200, 200])
+            }
+        });
+        let shrunk = box_shrink(&leftovers, 2);
+        assert_eq!(shrunk.dimensions(), (2, 2));
+        assert_eq!(shrunk.as_raw(), &[1u8, 2, 3, 4].repeat(4));
+    }
+
+    #[test]
+    fn process_frame_box_shrinks_large_downscales_to_the_exact_target() {
+        let frame = Frame::from_parts(
+            RgbaImage::from_pixel(64, 32, Rgba([10, 20, 30, 255])),
+            0,
+            0,
+            Delay::from_numer_denom_ms(50, 1),
+        );
+        let processed = process_frame(frame, (8, 4));
+        assert_eq!(processed.buffer().dimensions(), (8, 4));
+        assert_eq!(processed.buffer().get_pixel(0, 0).0, [30, 20, 10, 255]);
     }
 
     #[test]

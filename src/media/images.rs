@@ -87,6 +87,12 @@ pub enum ImageSpec {
         width: u32,
         height: u32,
     },
+    LocalGif {
+        path: PathBuf,
+    },
+    LocalVideo {
+        path: PathBuf,
+    },
     AvatarDecoration {
         asset: String,
         animated: bool,
@@ -449,6 +455,7 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
         | ImageSpec::VideoPoster { url, .. }
         | ImageSpec::Collectible { url } => url.clone(),
         ImageSpec::Animated { .. } => return None,
+        ImageSpec::LocalGif { .. } | ImageSpec::LocalVideo { .. } => return None,
     };
     let mut url = reqwest::Url::parse(&raw).ok()?;
     if !allowed_url(&url) && !spotify_image_url(&url) && !gif_provider_media_url(&url) {
@@ -953,6 +960,13 @@ impl Service {
     }
 
     pub(crate) async fn load(&self, spec: &ImageSpec, size: u32) -> Option<PathBuf> {
+        if let ImageSpec::LocalGif { path } | ImageSpec::LocalVideo { path } = spec {
+            return if path.is_file() {
+                Some(path.clone())
+            } else {
+                None
+            };
+        }
         let url = image_url(spec, size)?;
         if !self.initialize().await {
             return None;
@@ -2316,6 +2330,63 @@ mod tests {
         ] {
             assert!(!still_spec(&spec), "{spec:?}");
         }
+    }
+
+    #[test]
+    fn local_variants_have_no_remote_url() {
+        for spec in [
+            ImageSpec::LocalGif {
+                path: PathBuf::from("/tmp/zcord-staged.gif"),
+            },
+            ImageSpec::LocalVideo {
+                path: PathBuf::from("/tmp/zcord-staged.mp4"),
+            },
+        ] {
+            assert!(image_url(&spec, 128).is_none(), "{spec:?}");
+            assert!(spec.animated().is_none(), "{spec:?}");
+        }
+    }
+
+    #[test]
+    fn local_paths_get_distinct_cache_names() {
+        let first = ImageSpec::LocalGif {
+            path: PathBuf::from("/tmp/zcord-a.gif"),
+        };
+        let second = ImageSpec::LocalGif {
+            path: PathBuf::from("/tmp/zcord-b.gif"),
+        };
+        assert_ne!(file_name(&first, 128), file_name(&second, 128));
+    }
+
+    #[tokio::test]
+    async fn local_files_load_without_network_or_cache_directories() {
+        let root = temp_directory("local");
+        std::fs::create_dir_all(&root).unwrap();
+        let gif = root.join("staged.gif");
+        std::fs::write(&gif, b"GIF89a").unwrap();
+        let service = Service {
+            client: reqwest::Client::new(),
+            directory: root.join("images"),
+            video_directory: root.join("videos"),
+            frames_directory: root.join("frames"),
+            permits: tokio::sync::Semaphore::new(6),
+            video_permits: tokio::sync::Semaphore::new(2),
+            initialized: tokio::sync::OnceCell::new(),
+            image_written: AtomicU64::new(0),
+            video_written: AtomicU64::new(0),
+            frames_written: AtomicU64::new(0),
+            pruning: Arc::new(AtomicBool::new(false)),
+        };
+        let local = ImageSpec::LocalGif { path: gif.clone() };
+        assert_eq!(service.load(&local, 128).await, Some(gif.clone()));
+        let missing = ImageSpec::LocalVideo {
+            path: root.join("missing.mp4"),
+        };
+        assert_eq!(service.load(&missing, 128).await, None);
+        assert!(!root.join("images").exists());
+        assert!(!root.join("videos").exists());
+        assert!(!root.join("frames").exists());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[tokio::test]

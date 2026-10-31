@@ -15,6 +15,7 @@ const FADE: Duration = Duration::from_millis(200);
 #[derive(Clone)]
 pub(crate) struct Lightbox {
     spec: ImageSpec,
+    animated: bool,
     poster: Option<ImageSpec>,
     width: u32,
     height: u32,
@@ -32,6 +33,7 @@ impl Lightbox {
             .unwrap_or(still);
         Self {
             spec: video.map_or_else(|| still.spec(), Media::video_spec),
+            animated: video.is_none() && embeds::animated_media(still),
             poster: video.map(|_| still.spec()),
             width: dimensions.width.max(1),
             height: dimensions.height.max(1),
@@ -82,6 +84,28 @@ mod tests {
         assert_eq!((fallback.width, fallback.height), (400, 300));
         assert!(matches!(fallback.spec, ImageSpec::Video { .. }));
     }
+
+    #[test]
+    fn lightboxes_only_stream_flagged_animations_or_gif_urls() {
+        for extension in ["jpg", "png", "avif"] {
+            let still = media(
+                &format!("https://media.discordapp.net/photo.{extension}?size=8192"),
+                8192,
+                6144,
+            );
+            let lightbox = Lightbox::gifv(&still, None, 512);
+            assert!(!lightbox.animated);
+            assert_eq!(lightbox.spec, still.spec());
+            assert_eq!((lightbox.width, lightbox.height), (8192, 6144));
+        }
+        let gif = media("https://media.discordapp.net/clip.GIF?token=keep", 400, 300);
+        assert!(Lightbox::gifv(&gif, None, 512).animated);
+        let mut webp = media("https://media.discordapp.net/clip.webp", 400, 300);
+        webp.animated = true;
+        assert!(Lightbox::gifv(&webp, None, 512).animated);
+        let video = media("https://media.discordapp.net/clip.mp4", 400, 300);
+        assert!(!Lightbox::gifv(&gif, Some(&video), 512).animated);
+    }
 }
 
 pub(super) fn gifv_opener(
@@ -106,6 +130,7 @@ impl DiscordApp {
     pub(crate) fn open_lightbox(
         &mut self,
         spec: ImageSpec,
+        animated: bool,
         (width, height): (u32, u32),
         preview: u32,
         url: String,
@@ -113,6 +138,7 @@ impl DiscordApp {
     ) {
         self.lightbox = Some(Lightbox {
             spec,
+            animated,
             poster: None,
             width: width.max(1),
             height: height.max(1),
@@ -146,12 +172,17 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
         (original_width * scale).floor().max(1.),
         (original_height * scale).floor().max(1.),
     );
-    let frames = matches!(lightbox.spec, ImageSpec::Video { .. })
-        .then(|| {
-            crate::media::video::resolve(&lightbox.spec, theme::image_px(width.max(height)), cx)
-                .or_else(|| crate::media::video::resolve(&lightbox.spec, lightbox.preview, cx))
-        })
-        .flatten();
+    let frames = if matches!(
+        lightbox.spec,
+        ImageSpec::Video { .. } | ImageSpec::LocalVideo { .. }
+    ) {
+        crate::media::video::resolve(&lightbox.spec, theme::image_px(width.max(height)), cx)
+            .or_else(|| crate::media::video::resolve(&lightbox.spec, lightbox.preview, cx))
+    } else if lightbox.animated {
+        crate::media::animated::resolve(&lightbox.spec, theme::image_px(width.max(height)), cx)
+    } else {
+        None
+    };
     let image = frames
         .map(|frames| {
             crate::media::animated::image(frames)
@@ -163,8 +194,24 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
         })
         .or_else(|| {
             let spec = lightbox.poster.as_ref().unwrap_or(&lightbox.spec);
-            images::resolve(spec, lightbox.width.max(lightbox.height), cx)
-                .or_else(|| images::resolve(spec, lightbox.preview, cx))
+            let fallback = if lightbox.animated {
+                let pixels = theme::image_px(width.max(height));
+                if let Some(image) = crate::media::animated::poster(spec, pixels, cx) {
+                    return Some(
+                        image
+                            .size_full()
+                            .object_fit(ObjectFit::Contain)
+                            .rounded(rpx(4.))
+                            .id("lightbox-still")
+                            .into_any_element(),
+                    );
+                }
+                crate::media::animated::fallback(spec, pixels, cx)?
+            } else {
+                spec.clone()
+            };
+            images::resolve(&fallback, lightbox.width.max(lightbox.height), cx)
+                .or_else(|| images::resolve(&fallback, lightbox.preview, cx))
                 .map(|path| {
                     embeds::animated(path, &lightbox.key)
                         .size_full()
@@ -175,6 +222,7 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
         });
     let close = app.entity.clone();
     let url = lightbox.url.clone();
+    let has_url = !url.is_empty();
     let animation = Animation::new(FADE).with_easing(ease_out_quint());
     Some(
         div()
@@ -208,25 +256,27 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
                             .on_click(|_, _, cx| cx.stop_propagation())
                             .children(image),
                     )
-                    .child(
-                        div()
-                            .id("lightbox-open-browser")
-                            .absolute()
-                            .top(rpx(height + 8.))
-                            .left_0()
-                            .text_size(rpx(14.))
-                            .line_height(rpx(18.))
-                            .whitespace_nowrap()
-                            .text_color(rgb(theme::MUTED))
-                            .cursor_pointer()
-                            .hover(|style| style.text_color(rgb(theme::STRONG)).underline())
-                            .without_text_selection()
-                            .on_click(move |_, _, cx| {
-                                cx.stop_propagation();
-                                cx.open_url(&url);
-                            })
-                            .child("Open in Browser"),
-                    ),
+                    .when(has_url, |this| {
+                        this.child(
+                            div()
+                                .id("lightbox-open-browser")
+                                .absolute()
+                                .top(rpx(height + 8.))
+                                .left_0()
+                                .text_size(rpx(14.))
+                                .line_height(rpx(18.))
+                                .whitespace_nowrap()
+                                .text_color(rgb(theme::MUTED))
+                                .cursor_pointer()
+                                .hover(|style| style.text_color(rgb(theme::STRONG)).underline())
+                                .without_text_selection()
+                                .on_click(move |_, _, cx| {
+                                    cx.stop_propagation();
+                                    cx.open_url(&url);
+                                })
+                                .child("Open in Browser"),
+                        )
+                    }),
             )
             .into_any_element(),
     )
