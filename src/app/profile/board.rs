@@ -7,7 +7,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use gpui::{prelude::*, *};
-use gpui_component::{ActiveTheme, tooltip::Tooltip};
+use gpui_component::ActiveTheme;
 
 use super::{ArtSlot, ProfileCard, ProfilePalette};
 use crate::{

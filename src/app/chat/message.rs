@@ -881,7 +881,7 @@ fn message_actions(app: &DiscordApp, message: &Message) -> Option<AnyElement> {
     let can_delete = own || app.store.can_manage_messages(channel_id);
     let button = |key: &'static str, icon: &str, color: u32, tip: &'static str| {
         theme::icon_button((key, id), icon, 20., color)
-            .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
+            .tooltip(move |_, cx| theme::text_tooltip(tip, cx))
     };
     let hover = app.entity.clone();
     let edit = app.entity.clone();

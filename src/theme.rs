@@ -1,6 +1,9 @@
 use gpui::{prelude::*, *};
 use gpui_component::Theme;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::{
+    sync::atomic::{AtomicU32, Ordering},
+    time::Duration,
+};
 
 use crate::{
     media::animated,
@@ -379,6 +382,7 @@ fn status_cutout(status: Status, dot: f32, ring: u32) -> Option<Div> {
 }
 
 pub const TOOLTIP_BG: u32 = SURFACE_HIGHEST;
+const TOOLTIP_ENTER: Duration = Duration::from_millis(120);
 
 /// Body of a Discord-style tooltip. Pair it with a `tooltip-arrow*` icon and
 /// position it with `deferred(anchored())`; callers set the text size.
@@ -397,30 +401,77 @@ pub fn tooltip_bubble() -> Div {
 /// Tooltip shown centred above an element, arrow pointing down. Add it as a
 /// child of a `relative()` element while that element is hovered.
 pub fn tooltip_above(label: impl Into<SharedString>) -> impl IntoElement {
-    div()
-        .absolute()
-        .top(rpx(-4.))
-        .left(relative(0.5))
-        .size_0()
-        .child(
-            deferred(
-                anchored().anchor(Anchor::BottomCenter).child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .items_center()
-                        .child(
-                            tooltip_bubble()
-                                .text_size(rpx(14.))
-                                .line_height(rpx(18.))
-                                .child(label.into()),
-                        )
-                        .child(icon("tooltip-arrow-down", 12., TOOLTIP_BG).h(rpx(6.))),
-                ),
-            )
-            // Tooltips also appear inside deferred popouts, so they must outrank them.
-            .with_priority(2),
+    TooltipAbove {
+        label: label.into(),
+    }
+}
+
+/// Fades a tooltip in with a small rise; `relative` keeps it out of the anchor's layout.
+pub fn tooltip_entrance(body: Div, cx: &App) -> AnyElement {
+    if cx.reduce_motion() {
+        return body.into_any_element();
+    }
+    let animation = Animation::new(TOOLTIP_ENTER).with_easing(ease_out_quint());
+    body.relative()
+        .with_animation("tooltip-enter", animation, |this, delta| {
+            this.opacity(delta).top(rpx(4. * (1. - delta)))
+        })
+        .into_any_element()
+}
+
+struct TextTooltip(SharedString);
+
+impl Render for TextTooltip {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        tooltip_entrance(
+            tooltip_bubble()
+                .text_size(rpx(14.))
+                .line_height(rpx(18.))
+                .child(self.0.clone()),
+            cx,
         )
+    }
+}
+
+/// For `.tooltip(..)` on elements without their own hover state.
+pub fn text_tooltip(label: impl Into<SharedString>, cx: &mut App) -> AnyView {
+    let label = label.into();
+    cx.new(|_| TextTooltip(label)).into()
+}
+
+#[derive(IntoElement)]
+struct TooltipAbove {
+    label: SharedString,
+}
+
+impl RenderOnce for TooltipAbove {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let body = div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .child(
+                tooltip_bubble()
+                    .text_size(rpx(14.))
+                    .line_height(rpx(18.))
+                    .child(self.label),
+            )
+            .child(icon("tooltip-arrow-down", 12., TOOLTIP_BG).h(rpx(6.)));
+        div()
+            .absolute()
+            .top(rpx(-4.))
+            .left(relative(0.5))
+            .size_0()
+            .child(
+                deferred(
+                    anchored()
+                        .anchor(Anchor::BottomCenter)
+                        .child(tooltip_entrance(body, cx)),
+                )
+                // Tooltips also appear inside deferred popouts, so they must outrank them.
+                .with_priority(2),
+            )
+    }
 }
 
 pub fn badge(count: u32, ring: u32) -> impl IntoElement {
