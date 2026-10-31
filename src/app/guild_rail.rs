@@ -544,8 +544,6 @@ fn activity_tooltip_bubble(key: u64, name: &str) -> Div {
         .flex()
         .flex_col()
         .gap(rpx(6.))
-        .border_1()
-        .border_color(rgba(theme::BORDER))
         .child(
             div()
                 .id(("guild-tooltip-header", key))
@@ -643,13 +641,16 @@ fn positioned_tooltip(body: Div) -> Div {
                         .anchor(Anchor::LeftCenter)
                         .snap_to_window_with_margin(px(8.))
                         .child(theme::tooltip_entrance(
-                            div()
-                                .flex()
-                                .items_center()
-                                .child(
-                                    theme::icon("tooltip-arrow", 6., theme::TOOLTIP_BG).h(rpx(12.)),
-                                )
-                                .child(body),
+                            div().relative().pl(rpx(8.)).child(body).child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .bottom_0()
+                                    .left_0()
+                                    .flex()
+                                    .items_center()
+                                    .child(theme::tooltip_arrow_left()),
+                            ),
                             cx,
                         ))
                         .into_any_element();

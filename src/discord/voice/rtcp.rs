@@ -64,6 +64,94 @@ pub(super) fn report_block_for(packet: &[u8], local_ssrc: u32) -> Option<ReportB
     None
 }
 
+/// RFC 4585 generic NACK, with one FCI per run of at most 17 lost packets.
+pub(super) fn generic_nack(sender: u32, media: u32, sequences: &[u16]) -> Vec<u8> {
+    let mut sequences = sequences.to_vec();
+    sequences.sort_unstable();
+    sequences.dedup();
+    let mut fcis = Vec::new();
+    let mut index = 0;
+    while index < sequences.len() {
+        let first = sequences[index];
+        let mut mask = 0u16;
+        index += 1;
+        while index < sequences.len() {
+            let distance = sequences[index].wrapping_sub(first);
+            if distance == 0 || distance > 16 {
+                break;
+            }
+            mask |= 1 << (distance - 1);
+            index += 1;
+        }
+        fcis.push((first, mask));
+    }
+    let length = u16::try_from(2 + fcis.len()).unwrap_or(u16::MAX);
+    let mut packet = Vec::with_capacity(12 + fcis.len() * 4);
+    packet.extend_from_slice(&[0x81, 205]);
+    packet.extend_from_slice(&length.to_be_bytes());
+    packet.extend_from_slice(&sender.to_be_bytes());
+    packet.extend_from_slice(&media.to_be_bytes());
+    for (pid, mask) in fcis {
+        packet.extend_from_slice(&pid.to_be_bytes());
+        packet.extend_from_slice(&mask.to_be_bytes());
+    }
+    packet
+}
+
+/// RFC 4585 Picture Loss Indication.
+pub(super) fn pli(sender: u32, media: u32) -> Vec<u8> {
+    let mut packet = vec![0x81, 206, 0, 2];
+    packet.extend_from_slice(&sender.to_be_bytes());
+    packet.extend_from_slice(&media.to_be_bytes());
+    packet
+}
+
+pub(super) struct ReceiverReport {
+    pub media_ssrc: u32,
+    pub fraction_lost: u8,
+    pub cumulative_lost: i32,
+    pub highest_sequence: u32,
+    pub jitter: u32,
+    pub lsr: u32,
+    pub dlsr: u32,
+}
+
+/// RFC 3550 receiver report with one report block.
+pub(super) fn receiver_report(sender: u32, report: &ReceiverReport) -> Vec<u8> {
+    let mut packet = vec![0x81, 201, 0, 7];
+    packet.extend_from_slice(&sender.to_be_bytes());
+    packet.extend_from_slice(&report.media_ssrc.to_be_bytes());
+    packet.push(report.fraction_lost);
+    let cumulative = report.cumulative_lost.clamp(-(1 << 23), (1 << 23) - 1);
+    packet.extend_from_slice(&cumulative.to_be_bytes()[1..]);
+    packet.extend_from_slice(&report.highest_sequence.to_be_bytes());
+    packet.extend_from_slice(&report.jitter.to_be_bytes());
+    packet.extend_from_slice(&report.lsr.to_be_bytes());
+    packet.extend_from_slice(&report.dlsr.to_be_bytes());
+    packet
+}
+
+/// The LSR field of a sender report: the middle 32 bits of its NTP timestamp.
+pub(super) fn sender_report_lsr(packet: &[u8], ssrc: u32) -> Option<u32> {
+    let mut offset = 0;
+    while let Some(header) = packet.get(offset..offset + 4) {
+        if header[0] >> 6 != 2 {
+            return None;
+        }
+        let length = (usize::from(u16::from_be_bytes([header[2], header[3]])) + 1) * 4;
+        let end = offset.checked_add(length)?;
+        let body = packet.get(offset..end)?;
+        if header[1] == 200 && body.len() >= 28 {
+            let sender = u32::from_be_bytes([body[4], body[5], body[6], body[7]]);
+            if sender == ssrc {
+                return Some(u32::from_be_bytes([body[10], body[11], body[12], body[13]]));
+            }
+        }
+        offset = end;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,7 +166,7 @@ mod tests {
         bytes
     }
 
-    fn receiver_report(blocks: &[[u8; 24]]) -> Vec<u8> {
+    fn receiver_report_fixture(blocks: &[[u8; 24]]) -> Vec<u8> {
         let mut packet = vec![0x80 | blocks.len() as u8, 201, 0, 0];
         packet[2..4].copy_from_slice(&(blocks.len() as u16 * 6 + 1).to_be_bytes());
         packet.extend_from_slice(&0u32.to_be_bytes());
@@ -88,7 +176,7 @@ mod tests {
         packet
     }
 
-    fn sender_report(blocks: &[[u8; 24]]) -> Vec<u8> {
+    fn sender_report_fixture(blocks: &[[u8; 24]]) -> Vec<u8> {
         let mut packet = vec![0x80 | blocks.len() as u8, 200, 0, 0];
         packet[2..4].copy_from_slice(&(blocks.len() as u16 * 6 + 6).to_be_bytes());
         packet.extend_from_slice(&[0; 24]);
@@ -111,7 +199,7 @@ mod tests {
 
     #[test]
     fn receiver_report_block_for_own_ssrc() {
-        let packet = receiver_report(&[block(OWN_SSRC, 64, 3)]);
+        let packet = receiver_report_fixture(&[block(OWN_SSRC, 64, 3)]);
         let block = report_block_for(&packet, OWN_SSRC).unwrap();
         assert_eq!(block.ssrc, OWN_SSRC);
         assert_eq!(block.fraction_lost, 64);
@@ -121,7 +209,7 @@ mod tests {
 
     #[test]
     fn sender_report_block() {
-        let packet = sender_report(&[block(0xAAAA_BBBB, 0, 0), block(OWN_SSRC, 255, 7)]);
+        let packet = sender_report_fixture(&[block(0xAAAA_BBBB, 0, 0), block(OWN_SSRC, 255, 7)]);
         let block = report_block_for(&packet, OWN_SSRC).unwrap();
         assert_eq!(block.fraction_lost, 255);
         assert_eq!(block.cumulative_lost, 7);
@@ -130,7 +218,7 @@ mod tests {
 
     #[test]
     fn compound_sender_report_and_sdes() {
-        let mut packet = sender_report(&[block(OWN_SSRC, 32, -2)]);
+        let mut packet = sender_report_fixture(&[block(OWN_SSRC, 32, -2)]);
         packet.extend_from_slice(&[0x81, 202, 0, 2, 0, 0, 0, 0, 1, 1, b'x', 0]);
         let block = report_block_for(&packet, OWN_SSRC).unwrap();
         assert_eq!(block.fraction_lost, 32);
@@ -140,7 +228,7 @@ mod tests {
 
     #[test]
     fn block_for_a_different_ssrc_is_ignored() {
-        let packet = receiver_report(&[block(0xAAAA_BBBB, 10, 1)]);
+        let packet = receiver_report_fixture(&[block(0xAAAA_BBBB, 10, 1)]);
         assert!(report_block_for(&packet, OWN_SSRC).is_none());
     }
 
@@ -150,7 +238,7 @@ mod tests {
         assert!(report_block_for(&[0x80], OWN_SSRC).is_none());
         assert!(report_block_for(&[0x80, 201, 0], OWN_SSRC).is_none());
 
-        let mut packet = receiver_report(&[block(OWN_SSRC, 4, 0)]);
+        let mut packet = receiver_report_fixture(&[block(OWN_SSRC, 4, 0)]);
         packet.truncate(packet.len() - 1);
         assert!(report_block_for(&packet, OWN_SSRC).is_none());
 
@@ -158,8 +246,209 @@ mod tests {
         oversized.extend_from_slice(&[0; 8]);
         assert!(report_block_for(&oversized, OWN_SSRC).is_none());
 
-        let mut missing_block = sender_report(&[]);
+        let mut missing_block = sender_report_fixture(&[]);
         missing_block[0] |= 1;
         assert!(report_block_for(&missing_block, OWN_SSRC).is_none());
     }
+
+    #[test]
+    fn generic_nack_groups_lost_packets_into_fcis() {
+        assert_eq!(
+            generic_nack(9, 42, &[5]),
+            [0x81, 205, 0, 3, 0, 0, 0, 9, 0, 0, 0, 42, 0, 5, 0, 0]
+        );
+        assert_eq!(
+            generic_nack(9, 42, &[5, 6, 7]),
+            [0x81, 205, 0, 3, 0, 0, 0, 9, 0, 0, 0, 42, 0, 5, 0, 3]
+        );
+        let sequences: Vec<_> = (1..=18).collect();
+        let packet = generic_nack(9, 42, &sequences);
+        assert_eq!(&packet[2..4], &[0, 4]);
+        assert_eq!(&packet[12..16], &[0, 1, 0xff, 0xff]);
+        assert_eq!(&packet[16..20], &[0, 18, 0, 0]);
+    }
+
+    #[test]
+    fn pli_and_receiver_report_have_rfc_shapes() {
+        assert_eq!(pli(9, 42), [0x81, 206, 0, 2, 0, 0, 0, 9, 0, 0, 0, 42]);
+        let report = ReceiverReport {
+            media_ssrc: 42,
+            fraction_lost: 32,
+            cumulative_lost: 3,
+            highest_sequence: 7,
+            jitter: 8,
+            lsr: 9,
+            dlsr: 10,
+        };
+        assert_eq!(
+            receiver_report(9, &report),
+            [
+                0x81, 201, 0, 7, 0, 0, 0, 9, 0, 0, 0, 42, 32, 0, 0, 3, 0, 0, 0, 7, 0, 0, 0, 8, 0,
+                0, 0, 9, 0, 0, 0, 10
+            ]
+        );
+    }
+
+    fn feedback_packet(kind: u8, format: u8, body: &[u8]) -> Vec<u8> {
+        let mut packet = vec![0x80 | format, kind];
+        packet.extend_from_slice(&((body.len() / 4) as u16).to_be_bytes());
+        packet.extend_from_slice(body);
+        packet
+    }
+
+    #[test]
+    fn nack_pli_and_remb_are_parsed() {
+        let mut nack = 9u32.to_be_bytes().to_vec();
+        nack.extend_from_slice(&42u32.to_be_bytes());
+        nack.extend_from_slice(&[0x00, 0x05, 0x00, 0x03]);
+        let parsed = feedback(&feedback_packet(205, 1, &nack), 42).unwrap();
+        assert_eq!(parsed.nacks, [5, 6, 7]);
+        assert!(!parsed.keyframe);
+
+        let pli = [9u32.to_be_bytes(), 42u32.to_be_bytes()].concat();
+        assert!(
+            feedback(&feedback_packet(206, 1, &pli), 42)
+                .unwrap()
+                .keyframe
+        );
+
+        let mut remb = 9u32.to_be_bytes().to_vec();
+        remb.extend_from_slice(&42u32.to_be_bytes());
+        remb.extend_from_slice(b"REMB");
+        remb.extend_from_slice(&[0, 0x0f, 0xa0, 0]);
+        let parsed = feedback(&feedback_packet(206, 15, &remb), 42).unwrap();
+        assert_eq!(parsed.bitrate, Some(4_000));
+    }
+
+    #[test]
+    fn sender_report_has_the_rfc3550_shape() {
+        let stats = SenderStats {
+            ntp_seconds: 0x0102_0304,
+            ntp_fraction: 0x0506_0708,
+            rtp_timestamp: 0x090A_0B0C,
+            packet_count: 0x0D0E_0F10,
+            octet_count: 0x1112_1314,
+        };
+        assert_eq!(
+            sender_report(9, &stats),
+            [
+                0x80, 200, 0, 6, 0, 0, 0, 9, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+                17, 18, 19, 20
+            ]
+        );
+    }
+
+    #[test]
+    fn sender_report_lsr_uses_the_middle_ntp_bits() {
+        let mut packet = vec![0x80, 200, 0, 6];
+        packet.extend_from_slice(&42u32.to_be_bytes());
+        packet.extend_from_slice(&[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]);
+        packet.extend_from_slice(&[0; 20]);
+        assert_eq!(sender_report_lsr(&packet, 42), Some(0x0304_0506));
+        assert_eq!(sender_report_lsr(&packet, 43), None);
+        assert_eq!(sender_report_lsr(&packet[..20], 42), None);
+    }
+}
+
+#[derive(Default)]
+pub(super) struct Feedback {
+    pub keyframe: bool,
+    pub nacks: Vec<u16>,
+    pub bitrate: Option<u32>,
+    pub loss: Option<u8>,
+}
+
+pub(super) fn feedback(packet: &[u8], media_ssrc: u32) -> Option<Feedback> {
+    if media_ssrc == 0 {
+        return None;
+    }
+    let mut feedback = Feedback::default();
+    let mut offset = 0;
+    while let Some(header) = packet.get(offset..offset + 4) {
+        if header[0] >> 6 != 2 {
+            return None;
+        }
+        let length = (usize::from(u16::from_be_bytes([header[2], header[3]])) + 1) * 4;
+        let end = offset.checked_add(length)?;
+        let body = packet.get(offset..end)?;
+        let format = header[0] & 0x1f;
+        match (header[1], format) {
+            (205, 1) => {
+                if body.len() < 12 {
+                    return None;
+                }
+                if u32::from_be_bytes([body[8], body[9], body[10], body[11]]) != media_ssrc {
+                    offset = end;
+                    continue;
+                }
+                for fci in body[12..].chunks_exact(4) {
+                    let pid = u16::from_be_bytes([fci[0], fci[1]]);
+                    let mask = u16::from_be_bytes([fci[2], fci[3]]);
+                    for bit in 0..17u16 {
+                        if bit == 0 || mask & (1 << (bit - 1)) != 0 {
+                            let sequence = pid.wrapping_add(bit);
+                            if feedback.nacks.len() < 128 && !feedback.nacks.contains(&sequence) {
+                                feedback.nacks.push(sequence);
+                            }
+                        }
+                    }
+                }
+            }
+            (206, 1) => {
+                if body.len() >= 12
+                    && u32::from_be_bytes([body[8], body[9], body[10], body[11]]) == media_ssrc
+                {
+                    feedback.keyframe = true;
+                }
+            }
+            (206, 15) => {
+                if body.len() >= 20 && body[12..16] == *b"REMB" {
+                    let media = u32::from_be_bytes([body[8], body[9], body[10], body[11]]);
+                    if media == 0 || media == media_ssrc {
+                        let exponent = body[16] >> 2;
+                        let mantissa = (u32::from(body[16] & 0x03) << 16)
+                            | (u32::from(body[17]) << 8)
+                            | u32::from(body[18]);
+                        let bitrate = mantissa.checked_shl(u32::from(exponent))?;
+                        feedback.bitrate =
+                            Some(feedback.bitrate.map_or(bitrate, |old| old.min(bitrate)));
+                    }
+                }
+            }
+            (201, _) => {
+                for index in 0..format as usize {
+                    let start = 8 + index * 24;
+                    let Some(block) = body.get(start..start + 24) else {
+                        break;
+                    };
+                    if u32::from_be_bytes([block[0], block[1], block[2], block[3]]) == media_ssrc {
+                        feedback.loss =
+                            Some(feedback.loss.map_or(block[4], |old: u8| old.max(block[4])));
+                    }
+                }
+            }
+            _ => {}
+        }
+        offset = end;
+    }
+    Some(feedback)
+}
+
+pub(super) struct SenderStats {
+    pub ntp_seconds: u32,
+    pub ntp_fraction: u32,
+    pub rtp_timestamp: u32,
+    pub packet_count: u32,
+    pub octet_count: u32,
+}
+
+pub(super) fn sender_report(sender: u32, stats: &SenderStats) -> Vec<u8> {
+    let mut packet = vec![0x80, 200, 0, 6];
+    packet.extend_from_slice(&sender.to_be_bytes());
+    packet.extend_from_slice(&stats.ntp_seconds.to_be_bytes());
+    packet.extend_from_slice(&stats.ntp_fraction.to_be_bytes());
+    packet.extend_from_slice(&stats.rtp_timestamp.to_be_bytes());
+    packet.extend_from_slice(&stats.packet_count.to_be_bytes());
+    packet.extend_from_slice(&stats.octet_count.to_be_bytes());
+    packet
 }

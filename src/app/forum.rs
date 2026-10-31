@@ -259,7 +259,7 @@ fn post_card(app: &DiscordApp, post: &ForumPost, tags: &[ForumTag], cx: &App) ->
         }))
 }
 
-fn relative_time(timestamp: Timestamp) -> String {
+pub(super) fn relative_time(timestamp: Timestamp) -> String {
     let at = NaiveDate::from_ymd_opt(
         i32::from(timestamp.year),
         u32::from(timestamp.month),

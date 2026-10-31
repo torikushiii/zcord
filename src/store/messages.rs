@@ -37,6 +37,8 @@ impl Store {
             forward: None,
             mentions_me: false,
             uploads: Vec::new(),
+            thread: None,
+            reference_id: None,
         });
         self.next_message_id += 1;
         Some(index)
@@ -168,6 +170,8 @@ impl Store {
             forward: None,
             mentions_me: false,
             uploads,
+            thread: None,
+            reference_id: None,
         });
         order_messages(&mut channel.messages);
         let index = channel.message_index(nonce).expect("queued message");
@@ -354,6 +358,39 @@ impl Store {
     }
 
     pub(super) fn message_create(&mut self, message: Box<model::Message>) -> Change {
+        let thread_id =
+            self.source_channels
+                .get(&message.channel_id)
+                .and_then(|entry| match entry {
+                    SourceChannel::Thread { .. } => Some(message.channel_id),
+                    _ => None,
+                });
+        if let Some(thread_id) = thread_id {
+            let entry = self
+                .thread_recent
+                .entry(thread_id)
+                .or_insert_with(|| (*message).clone());
+            if message.id > entry.id {
+                *entry = (*message).clone();
+            }
+            if let Some(source) = &mut self.source
+                && let Some(thread) = source
+                    .guilds
+                    .iter_mut()
+                    .flat_map(|guild| guild.threads.iter_mut().flatten())
+                    .find(|thread| thread.id == thread_id)
+            {
+                if thread
+                    .last_message_id
+                    .flatten()
+                    .is_none_or(|last| last < message.id)
+                {
+                    thread.message_count =
+                        Some(thread.message_count.unwrap_or(0).saturating_add(1));
+                }
+            }
+            self.refresh_thread_chips(thread_id);
+        }
         let mut loaded = false;
         let present = self
             .channel_locations
@@ -448,6 +485,10 @@ impl Store {
 
     pub(super) fn message_update(&mut self, update: Box<model::MessageUpdate>) -> Change {
         let (reply, mentions_me, embeds) = self.update_message_info(&update);
+        let thread = update
+            .thread
+            .as_ref()
+            .map(|thread| thread.as_ref().map(|thread| self.message_thread(thread)));
         let Some(channel) = self.network_channel_mut(update.channel_id) else {
             return Change::None;
         };
@@ -463,6 +504,9 @@ impl Store {
         }
         message.reply = reply;
         message.mentions_me = mentions_me;
+        if let Some(thread) = thread {
+            message.thread = thread;
+        }
         if let Some(content) = update.content {
             message.content = content;
         }

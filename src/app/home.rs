@@ -9,7 +9,8 @@ use std::{
 
 use crate::{
     app::{
-        DiscordApp, chat, member_list, message_body::label, profile::presence_art, set_text, voice,
+        DiscordApp, chat, friends, member_list, message_body::label, profile::presence_art,
+        set_text, voice,
     },
     discord::{Event, model::PublicApplication},
     media::images::{self, ImageSpec},
@@ -37,6 +38,7 @@ pub(crate) enum FriendsTab {
     Online,
     All,
     Pending,
+    Add,
 }
 
 impl FriendsTab {
@@ -45,6 +47,7 @@ impl FriendsTab {
             Self::Online => "Online",
             Self::All => "All",
             Self::Pending => "Pending",
+            Self::Add => "Add Friend",
         }
     }
 }
@@ -67,6 +70,7 @@ enum RequestsTab {
 pub(crate) struct Home {
     pub(crate) page: HomePage,
     tab: FriendsTab,
+    pub(crate) friends: friends::Friends,
     requests_tab: RequestsTab,
     previews_requested: HashSet<u64>,
     applications: HashMap<u64, Arc<PublicApplication>>,
@@ -146,6 +150,7 @@ impl DiscordApp {
             }));
             self.home.search = Some(search);
         }
+        self.ensure_friend_input(window, cx);
         if self.live {
             crate::settings::update(cx, |settings| {
                 settings.guild_channels.remove(&0);
@@ -308,7 +313,10 @@ impl DiscordApp {
                     app.apply_change(change, window, cx);
                     app.select_dm(channel_id, window, cx);
                 }
-                Ok(Err(error)) => log::warn!("Could not open DM: {error}"),
+                Ok(Err(error)) => {
+                    log::warn!("Could not open DM: {error}");
+                    app.note_dm_failure(user_id, &error, cx);
+                }
                 Err(error) => log::warn!("Open DM task failed: {error}"),
             })
             .ok();
@@ -693,6 +701,31 @@ pub(crate) fn friends_header(app: &DiscordApp) -> impl IntoElement + use<> {
                     .ok();
             })
     };
+    let adding = app.home.tab == FriendsTab::Add;
+    let open_add = app.entity.clone();
+    let add_tab = div()
+        .id("friends-add-tab")
+        .flex()
+        .flex_none()
+        .items_center()
+        .h(rpx(28.))
+        .px(rpx(10.))
+        .rounded(rpx(8.))
+        .text_size(rpx(14.))
+        .font_weight(FontWeight::MEDIUM)
+        .cursor_pointer()
+        .text_color(rgb(if adding { theme::BLURPLE } else { 0xFFFFFF }))
+        .when(adding, |this| this.bg(rgba(theme::SELECTED)))
+        .when(!adding, |this| {
+            this.bg(rgb(theme::BLURPLE))
+                .hover(|style| style.bg(rgb(theme::BLURPLE_ACTIVE)))
+        })
+        .child(FriendsTab::Add.label())
+        .on_click(move |_, _, cx| {
+            open_add
+                .update(cx, |app, cx| app.select_friends_tab(FriendsTab::Add, cx))
+                .ok();
+        });
     div()
         .flex()
         .items_center()
@@ -721,6 +754,7 @@ pub(crate) fn friends_header(app: &DiscordApp) -> impl IntoElement + use<> {
         .child(tab(FriendsTab::Online, 0))
         .child(tab(FriendsTab::All, 0))
         .child(tab(FriendsTab::Pending, app.store.pending_count()))
+        .child(add_tab)
 }
 
 fn search_query(app: &DiscordApp, cx: &App) -> String {
@@ -755,10 +789,19 @@ fn status_text(user: Option<&User>, kind: RelationshipKind) -> String {
 pub(crate) fn friends_page(app: &DiscordApp, cx: &App) -> AnyElement {
     let query = search_query(app, cx);
     let tab = app.home.tab;
+    if tab == FriendsTab::Add {
+        return div()
+            .flex()
+            .size_full()
+            .child(friends::add_friend_page(app))
+            .child(active_now(app, cx))
+            .into_any_element();
+    }
     let ids = match tab {
         FriendsTab::Online => app.store.online_friends(),
         FriendsTab::All => app.store.friends(),
         FriendsTab::Pending => app.store.pending_requests(),
+        FriendsTab::Add => Vec::new(),
     };
     let ids: Vec<u64> = ids
         .into_iter()
@@ -777,6 +820,7 @@ pub(crate) fn friends_page(app: &DiscordApp, cx: &App) -> AnyElement {
             FriendsTab::Online => "Online",
             FriendsTab::All => "All friends",
             FriendsTab::Pending => "Pending",
+            FriendsTab::Add => "",
         },
         ids.len()
     );
@@ -829,6 +873,20 @@ pub(crate) fn friends_page(app: &DiscordApp, cx: &App) -> AnyElement {
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(rgb(theme::MUTED))
                         .child(heading),
+                )
+                .children(
+                    (tab == FriendsTab::Pending)
+                        .then(|| app.pending_error())
+                        .flatten()
+                        .map(|text| {
+                            div()
+                                .flex_none()
+                                .mx_6()
+                                .mb(rpx(8.))
+                                .text_size(rpx(14.))
+                                .text_color(rgb(theme::RED))
+                                .child(text)
+                        }),
                 )
                 .child(
                     div()
@@ -894,6 +952,12 @@ fn friend_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement + us
         .and_then(|user| user.tag.as_ref())
         .map(|tag| theme::guild_tag(tag, cx));
     let entity = app.entity.clone();
+    let entity_for_accept = app.entity.clone();
+    let entity_for_drop = app.entity.clone();
+    let pending = matches!(
+        kind,
+        RelationshipKind::Incoming | RelationshipKind::Outgoing
+    );
     div()
         .id(("friend", user_id))
         .group("friend-row")
@@ -980,7 +1044,39 @@ fn friend_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement + us
                 .flex()
                 .flex_none()
                 .gap(rpx(10.))
-                .child(round_action(("friend-message", user_id), "message-circle")),
+                .when(kind == RelationshipKind::Incoming, |this| {
+                    let accept = entity_for_accept.clone();
+                    this.child(
+                        round_action(("friend-accept", user_id), "check")
+                            .tooltip(|_, cx| theme::text_tooltip("Accept", cx))
+                            .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                accept
+                                    .update(cx, |app, cx| app.add_friend(user_id, cx))
+                                    .ok();
+                            }),
+                    )
+                })
+                .when(pending, |this| {
+                    let tip = if kind == RelationshipKind::Incoming {
+                        "Ignore"
+                    } else {
+                        "Cancel"
+                    };
+                    this.child(
+                        round_action(("friend-drop", user_id), "x")
+                            .tooltip(move |_, cx| theme::text_tooltip(tip, cx))
+                            .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                entity_for_drop
+                                    .update(cx, |app, cx| app.drop_friend_request(user_id, cx))
+                                    .ok();
+                            }),
+                    )
+                })
+                .when(!pending, |this| {
+                    this.child(round_action(("friend-message", user_id), "message-circle"))
+                }),
         )
 }
 
@@ -1328,7 +1424,7 @@ pub(crate) fn dm_header(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> 
                 )
         }))
         .child(div().flex_1())
-        .child(theme::icon_button("pins", "pin", 20., theme::MUTED))
+        .child(chat::pins_button(app))
 }
 
 fn header_avatar(app: &DiscordApp, dm: &PrivateChannel, cx: &App) -> AnyElement {

@@ -917,6 +917,11 @@ impl Store {
             referenced: message.referenced_message.clone(),
         };
         let mut mapped = map_message(message)?;
+        if let Some(thread) = &message.thread {
+            mapped.thread = Some(self.message_thread(thread));
+        } else {
+            self.refresh_thread_notice(&mut mapped);
+        }
         mapped.reply = Self::reply(&info);
         mapped.mentions_me = self.mentioned(&info);
         self.social

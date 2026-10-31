@@ -261,6 +261,8 @@ impl Store {
             channel_locations: HashMap::new(),
             thread_locations: HashMap::new(),
             forum_posts: HashMap::new(),
+            thread_recent: HashMap::new(),
+            thread_joins: HashMap::new(),
             guild_badges: Vec::new(),
             dm_badges: 77,
             private: Vec::new(),
@@ -466,6 +468,8 @@ fn seed_messages(
             forward: None,
             mentions_me: false,
             uploads: Vec::new(),
+            thread: None,
+            reference_id: None,
         });
         *next_message_id += 1;
     }

@@ -641,6 +641,46 @@ async fn drive(
                                 .map(str::to_owned);
                             voice.voice_server(guild_id, Secret(token.to_owned()), endpoint);
                         }
+                    } else if kind == "STREAM_CREATE" {
+                        let key = payload.d.get("stream_key").and_then(Value::as_str);
+                        let rtc_server_id =
+                            payload.d.get("rtc_server_id").and_then(model::id_value);
+                        if let (Some(key), Some(rtc_server_id)) = (key, rtc_server_id)
+                            && key.len() <= 128
+                        {
+                            let rtc_channel_id =
+                                payload.d.get("rtc_channel_id").and_then(model::id_value);
+                            voice.stream_created(key, rtc_server_id, rtc_channel_id);
+                        }
+                    } else if kind == "STREAM_SERVER_UPDATE" {
+                        let key = payload.d.get("stream_key").and_then(Value::as_str);
+                        let token = payload.d.get("token").and_then(Value::as_str);
+                        if let (Some(key), Some(token)) = (key, token)
+                            && key.len() <= 128
+                        {
+                            let endpoint = payload.d.get("endpoint").and_then(Value::as_str);
+                            voice.stream_server(key, token, endpoint);
+                        }
+                    } else if kind == "STREAM_UPDATE" {
+                        let key = payload.d.get("stream_key").and_then(Value::as_str);
+                        let viewers = payload
+                            .d
+                            .get("viewer_ids")
+                            .and_then(Value::as_array)
+                            .map_or(0, Vec::len);
+                        if let Some(key) = key.filter(|key| key.len() <= 128) {
+                            voice.stream_updated(key, viewers);
+                        }
+                    } else if kind == "STREAM_DELETE" {
+                        let key = payload.d.get("stream_key").and_then(Value::as_str);
+                        if let Some(key) = key.filter(|key| key.len() <= 128) {
+                            let reason = payload
+                                .d
+                                .get("reason")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned);
+                            voice.stream_deleted(key, reason);
+                        }
                     } else if let Some(event) = dispatch(kind, payload.d, ignored) {
                         if let Event::SettingsUpdate(update) = &event
                             && update.settings.kind == 1

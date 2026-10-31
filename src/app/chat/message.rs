@@ -1,3 +1,4 @@
+use super::actions::message_actions;
 use super::composer::{emoji_token_overlay, flush_textarea};
 use super::media::{render_attachment, render_sticker};
 use super::rows::is_system;
@@ -116,11 +117,7 @@ fn system_text(message: &Message) -> Option<(&'static str, u32, String)> {
                 JOIN_MESSAGES[(created % JOIN_MESSAGES.len() as u64) as usize].into(),
             ));
         }
-        6 => (
-            "pin",
-            theme::MUTED,
-            "{} pinned a message to this channel.".into(),
-        ),
+        6 => ("pin", theme::MUTED, "{}".into()),
         8 => ("gem", 0xFF73FA, "{} just boosted the server!".into()),
         9..=11 => (
             "gem",
@@ -130,11 +127,7 @@ fn system_text(message: &Message) -> Option<(&'static str, u32, String)> {
                 message.kind - 8
             ),
         ),
-        18 => (
-            "messages-square",
-            theme::MUTED,
-            "{} started a thread.".into(),
-        ),
+        18 => ("messages-square", theme::MUTED, "{}".into()),
         _ => return None,
     };
     Some(template)
@@ -147,7 +140,7 @@ fn render_system(app: &DiscordApp, message: &Message, cx: &App) -> Option<AnyEle
         div()
             .id(("message", message.id))
             .flex()
-            .items_center()
+            .flex_col()
             .w_full()
             .pr_4()
             .py(rpx(2.))
@@ -156,49 +149,57 @@ fn render_system(app: &DiscordApp, message: &Message, cx: &App) -> Option<AnyEle
             .child(
                 div()
                     .flex()
-                    .flex_none()
-                    .justify_center()
-                    .w(rpx(GUTTER))
-                    .child(theme::icon(icon, 16., color)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .items_baseline()
-                    .gap(rpx(4.))
-                    .min_w_0()
-                    .text_size(rpx(16.))
-                    .line_height(rpx(22.))
-                    .text_color(rgb(theme::MUTED))
+                    .items_center()
+                    .w_full()
                     .child(
                         div()
                             .flex()
-                            .child(before.to_owned())
-                            .child(
-                                div()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(author_color(app, message.author_id))
-                                    .child(display_name::render(
-                                        ("system-author", message.id),
-                                        &author_name(app, message.author_id),
-                                        app.store.member_name_style(
-                                            app.selected_guild_id,
-                                            message.author_id,
-                                        ),
-                                        Surface::FontOnly,
-                                        cx,
-                                    )),
-                            )
-                            .child(after.to_owned()),
+                            .flex_none()
+                            .justify_center()
+                            .w(rpx(GUTTER))
+                            .child(theme::icon(icon, 16., color)),
                     )
                     .child(
                         div()
-                            .text_size(rpx(12.))
-                            .text_color(rgb(theme::FAINT))
-                            .child(message.timestamp.full()),
+                            .flex()
+                            .flex_wrap()
+                            .items_baseline()
+                            .gap(rpx(4.))
+                            .min_w_0()
+                            .text_size(rpx(16.))
+                            .line_height(rpx(22.))
+                            .text_color(rgb(theme::MUTED))
+                            .child(
+                                div()
+                                    .flex()
+                                    .child(before.to_owned())
+                                    .child(
+                                        div()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(author_color(app, message.author_id))
+                                            .child(display_name::render(
+                                                ("system-author", message.id),
+                                                &author_name(app, message.author_id),
+                                                app.store.member_name_style(
+                                                    app.selected_guild_id,
+                                                    message.author_id,
+                                                ),
+                                                Surface::FontOnly,
+                                                cx,
+                                            )),
+                                    )
+                                    .child(after.to_owned()),
+                            )
+                            .children(super::thread_ui::system_tail(app, message))
+                            .child(
+                                div()
+                                    .text_size(rpx(12.))
+                                    .text_color(rgb(theme::FAINT))
+                                    .child(message.timestamp.full()),
+                            ),
                     ),
             )
+            .children(super::thread_ui::thread_notice_chip(app, message, cx))
             .into_any_element(),
     )
 }
@@ -771,11 +772,14 @@ pub(super) fn render_message(
                             message.id,
                             &message.reactions,
                             cx,
-                        )),
+                        ))
+                        .when(!preview, |this| {
+                            this.children(super::thread_ui::thread_chip(app, message, cx))
+                        }),
                 ),
         )
         .when(!preview && editing.is_none(), |this| {
-            this.children(message_actions(app, message))
+            this.children(message_actions(app, message, cx))
         })
         .into_any_element()
 }
@@ -871,88 +875,4 @@ fn send_failure(app: &DiscordApp, message_id: u64) -> impl IntoElement {
                     .ok();
             }),
         )
-}
-
-fn message_actions(app: &DiscordApp, message: &Message) -> Option<AnyElement> {
-    let id = message.id;
-    if !(app.hovered_message == Some(id) || app.hovered_actions == Some(id))
-        || message.delivery != Delivery::Sent
-        || is_system(message.kind) && !matches!(message.kind, 19)
-    {
-        return None;
-    }
-    let channel_id = app.selected_channel_id;
-    let own = message.author_id == app.store.current_user_id;
-    let can_reply = app.store.can_send(channel_id);
-    let can_delete = own || app.store.can_manage_messages(channel_id);
-    let button = |key: &'static str, icon: &str, color: u32, tip: &'static str| {
-        theme::icon_button((key, id), icon, 20., color)
-            .tooltip(move |_, cx| theme::text_tooltip(tip, cx))
-    };
-    let hover = app.entity.clone();
-    let edit = app.entity.clone();
-    let reply = app.entity.clone();
-    let delete = app.entity.clone();
-    let unread = app.entity.clone();
-    let can_mark_unread = app.live
-        && app
-            .store
-            .last_read(channel_id)
-            .is_some_and(|read| id <= read);
-    Some(
-        div()
-            .id(("message-actions", id))
-            .absolute()
-            .top(rpx(-16.))
-            .right(rpx(14.))
-            .flex()
-            .p(rpx(2.))
-            .rounded(rpx(8.))
-            .bg(rgb(theme::ELEVATED))
-            .border_1()
-            .border_color(rgba(theme::BORDER))
-            .block_mouse_except_scroll()
-            .on_hover(move |hovered, _, cx| {
-                hover
-                    .update(cx, |app, cx| app.set_message_hover(id, *hovered, true, cx))
-                    .ok();
-            })
-            .when(own && matches!(message.kind, 0 | 19), |this| {
-                this.child(button("edit", "pencil", theme::MUTED, "Edit").on_click(
-                    move |_, window, cx| {
-                        edit.update(cx, |app, cx| app.start_edit(id, window, cx))
-                            .ok();
-                    },
-                ))
-            })
-            .when(can_reply, |this| {
-                this.child(button("reply", "reply", theme::MUTED, "Reply").on_click(
-                    move |_, window, cx| {
-                        reply
-                            .update(cx, |app, cx| app.start_reply(id, window, cx))
-                            .ok();
-                    },
-                ))
-            })
-            .when(can_mark_unread, |this| {
-                this.child(
-                    button("unread", "mail", theme::MUTED, "Mark Unread").on_click(
-                        move |_, _, cx| {
-                            unread.update(cx, |app, cx| app.mark_unread(id, cx)).ok();
-                        },
-                    ),
-                )
-            })
-            .when(can_delete, |this| {
-                this.child(button("delete", "trash-2", theme::RED, "Delete").on_click(
-                    move |event, window, cx| {
-                        let confirmed = event.modifiers().shift;
-                        delete
-                            .update(cx, |app, cx| app.request_delete(id, confirmed, window, cx))
-                            .ok();
-                    },
-                ))
-            })
-            .into_any_element(),
-    )
 }

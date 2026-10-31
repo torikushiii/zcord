@@ -12,7 +12,7 @@ use crate::{
     app::{DiscordApp, home, member_list, message_body::label, profile, voice},
     media::animated,
     media::images::{self, ImageSpec},
-    store::{Channel, ChannelKind, Guild, Status, StatusEmoji, User},
+    store::{Channel, ChannelKind, Guild, Status, StatusEmoji, ThreadRow, User},
     text::emoji,
     theme::{self, WithoutTextSelection, rpx},
 };
@@ -41,6 +41,11 @@ enum Row {
         channel: usize,
     },
     VoiceMember {
+        category: usize,
+        channel: usize,
+        index: usize,
+    },
+    Thread {
         category: usize,
         channel: usize,
         index: usize,
@@ -144,7 +149,7 @@ impl Rows {
 
     #[cfg(test)]
     pub fn sync(&mut self, guild: Option<&Guild>, selected_channel_id: u64) {
-        self.sync_with_banner(guild, None, selected_channel_id, |_| 0, None);
+        self.sync_with_banner(guild, None, selected_channel_id, |_| 0, |_| 0, None);
     }
 
     /// Returns whether the category is now collapsed.
@@ -184,6 +189,7 @@ impl Rows {
         banner: Option<ImageSpec>,
         selected_channel_id: u64,
         voice_members: impl Fn(u64) -> usize,
+        threads: impl Fn(u64) -> usize,
         voice_channel_id: Option<u64>,
     ) {
         let now = Instant::now();
@@ -213,6 +219,13 @@ impl Rows {
                 rows.push(Row::Channel { category, channel });
                 if entry.kind == ChannelKind::Voice && (!collapsed || joined) {
                     rows.extend((0..voice_members(entry.id)).map(|index| Row::VoiceMember {
+                        category,
+                        channel,
+                        index,
+                    }));
+                }
+                if !collapsed || entry.id == selected_channel_id {
+                    rows.extend((0..threads(entry.id)).map(|index| Row::Thread {
                         category,
                         channel,
                         index,
@@ -341,10 +354,32 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
                         None => div().into_any_element(),
                     };
                 }
+                if let Row::Thread {
+                    category,
+                    channel,
+                    index,
+                } = row
+                {
+                    let thread = app
+                        .guild()
+                        .and_then(|guild| guild.categories.get(category))
+                        .and_then(|category| category.channels.get(channel))
+                        .and_then(|channel| {
+                            app.store
+                                .sidebar_threads(channel.id, app.selected_channel_id)
+                                .into_iter()
+                                .nth(index)
+                        });
+                    return match thread {
+                        Some(thread) => thread_row(app, &thread).into_any_element(),
+                        None => div().into_any_element(),
+                    };
+                }
                 let group = match row {
                     Row::Category(category)
                     | Row::Channel { category, .. }
-                    | Row::VoiceMember { category, .. } => {
+                    | Row::VoiceMember { category, .. }
+                    | Row::Thread { category, .. } => {
                         app.guild().and_then(|guild| guild.categories.get(category))
                     }
                     _ => None,
@@ -609,7 +644,7 @@ fn row_content(
     voice: Option<voice::Joined>,
 ) -> Div {
     let content = match row {
-        Row::Banner | Row::VoiceMember { .. } => div().into_any_element(),
+        Row::Banner | Row::VoiceMember { .. } | Row::Thread { .. } => div().into_any_element(),
         Row::Shortcuts => div()
             .child(shortcut_row("events", "calendar", "Events"))
             .child(shortcut_row("boosts", "gem", "Server Boosts"))
@@ -672,6 +707,84 @@ fn row_content(
         },
     };
     div().w_full().px_2().child(content)
+}
+
+fn thread_row(app: &DiscordApp, thread: &ThreadRow) -> impl IntoElement + use<> {
+    let id = thread.id;
+    let selected = app.selected_channel_id == id;
+    let mentions = app.store.thread_mentions(id);
+    let unread = (app.store.thread_unread(id) || mentions > 0) && !selected;
+    let entity = app.entity.clone();
+    div().w_full().pl(rpx(24.)).pr_2().child(
+        div()
+            .id(("thread-row", id))
+            .relative()
+            .flex()
+            .items_center()
+            .gap_2()
+            .h(rpx(CHANNEL_HEIGHT))
+            .mb(rpx(CHANNEL_GAP))
+            .px_2()
+            .rounded(rpx(6.))
+            .cursor_pointer()
+            .text_size(rpx(14.))
+            .font_weight(if unread {
+                FontWeight::SEMIBOLD
+            } else {
+                FontWeight::MEDIUM
+            })
+            .text_color(rgb(if selected || unread {
+                theme::STRONG
+            } else {
+                theme::MUTED
+            }))
+            .when(selected, |this| this.bg(rgba(theme::SELECTED)))
+            .when(!selected, |this| {
+                this.hover(|style| style.bg(rgba(theme::HOVER)))
+            })
+            .on_click(move |_, window, cx| {
+                entity
+                    .update(cx, |app, cx| app.select_channel(id, window, cx))
+                    .ok();
+            })
+            .child(
+                div()
+                    .absolute()
+                    .left(rpx(-12.))
+                    .top(rpx(-CHANNEL_GAP - 8.))
+                    .w(rpx(10.))
+                    .h(rpx(CHANNEL_HEIGHT / 2. + CHANNEL_GAP + 8.))
+                    .border_l_1()
+                    .border_b_1()
+                    .rounded_bl(rpx(6.))
+                    .border_color(rgba(theme::BORDER)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(thread.name.clone()),
+            )
+            .when(mentions > 0, |this| {
+                this.child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .justify_center()
+                        .h(rpx(16.))
+                        .min_w(rpx(16.))
+                        .px(rpx(4.))
+                        .rounded_full()
+                        .bg(rgb(theme::NOTIFICATION))
+                        .text_size(rpx(12.))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(white())
+                        .child(mentions.to_string()),
+                )
+            }),
+    )
 }
 
 fn shortcut_row(id: &'static str, icon: &str, label: &'static str) -> impl IntoElement {

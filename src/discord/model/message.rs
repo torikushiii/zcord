@@ -103,6 +103,8 @@ pub struct Message {
     pub message_snapshots: Vec<MessageSnapshot>,
     #[serde(default, deserialize_with = "nullable")]
     pub referenced_message: Option<Option<Box<ReferencedMessage>>>,
+    #[serde(default)]
+    pub thread: Option<Channel>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -159,6 +161,8 @@ pub struct MessageUpdate {
     pub message_snapshots: Option<Vec<MessageSnapshot>>,
     #[serde(default, deserialize_with = "nullable")]
     pub referenced_message: Option<Option<Box<ReferencedMessage>>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub thread: Option<Option<Channel>>,
 }
 
 #[derive(Clone, Default, PartialEq, Eq, Deserialize)]

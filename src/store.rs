@@ -8,6 +8,7 @@ mod guilds;
 mod home;
 mod mapping;
 mod messages;
+mod pins;
 mod reactions;
 mod read_state;
 mod seed;
@@ -15,6 +16,7 @@ mod settings;
 mod social;
 #[cfg(test)]
 mod tests;
+mod threads;
 mod view;
 mod voice;
 
@@ -48,6 +50,8 @@ pub struct Store {
     channel_locations: HashMap<u64, ChannelLocation>,
     thread_locations: HashMap<u64, ThreadLocation>,
     forum_posts: HashMap<u64, ForumPost>,
+    thread_recent: HashMap<u64, model::Message>,
+    thread_joins: HashMap<u64, i64>,
     guild_badges: Vec<GuildBadges>,
     dm_badges: u64,
     private: Vec<PrivateChannel>,
@@ -231,6 +235,21 @@ impl Store {
         {
             users.insert(user.id, map_user(user));
         }
+        for thread in ready.guilds.iter().flat_map(|g| g.threads.iter().flatten()) {
+            for user in thread
+                .owner
+                .iter()
+                .filter_map(|owner| owner.user.as_ref())
+                .chain(
+                    thread
+                        .member
+                        .iter()
+                        .filter_map(|member| member.user.as_ref()),
+                )
+            {
+                users.insert(user.id, map_user(user));
+            }
+        }
         let guilds = ready
             .guilds
             .iter()
@@ -259,6 +278,8 @@ impl Store {
             channel_locations: HashMap::new(),
             thread_locations: HashMap::new(),
             forum_posts: HashMap::new(),
+            thread_recent: HashMap::new(),
+            thread_joins: HashMap::new(),
             guild_badges: Vec::new(),
             dm_badges: 0,
             private: Vec::new(),
@@ -277,6 +298,7 @@ impl Store {
         };
         store.init_social();
         store.init_relationships();
+        store.seed_thread_joins();
         store.apply_own_status(settings.status.as_ref(), false);
         store.index_channels();
         store
@@ -360,6 +382,9 @@ impl Store {
             Event::GuildStickersUpdate(update) => self.guild_stickers_update(update),
             Event::GuildDelete { id } => self.guild_delete(id),
             Event::ThreadListSync(sync) => self.thread_list_sync(sync),
+            Event::ThreadMembersUpdate(update) => self.thread_members_update(update),
+            Event::ThreadMemberUpdate(update) => self.thread_member_update(update),
+            Event::ChannelPinsUpdate(update) => self.channel_pins_update(update),
             Event::ChannelUpsert(update) => self.channel_upsert(update),
             Event::ChannelDelete { id } => self.channel_delete(id),
             Event::UserUpdate(update) => self.user_update(update),

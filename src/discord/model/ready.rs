@@ -13,6 +13,8 @@ pub struct ReadState {
     pub mention_count: u32,
     #[serde(default, rename = "read_state_type")]
     pub kind: u8,
+    #[serde(default, deserialize_with = "optional_timestamp")]
+    pub last_pin_timestamp: Option<String>,
 }
 
 #[derive(Clone, Default, Deserialize)]

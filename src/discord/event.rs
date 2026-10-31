@@ -28,6 +28,9 @@ pub enum Event {
     RelationshipUpdate(Box<model::RelationshipUpdate>),
     RelationshipRemove { id: u64 },
     ThreadListSync(Box<model::ThreadListSync>),
+    ThreadMembersUpdate(Box<model::ThreadMembersUpdate>),
+    ThreadMemberUpdate(Box<model::ThreadMemberUpdate>),
+    ChannelPinsUpdate(model::ChannelPinsUpdate),
     GuildUpsert(Box<model::Guild>),
     GuildEmojisUpdate(model::GuildEmojisUpdate),
     GuildStickersUpdate(model::GuildStickersUpdate),
@@ -66,6 +69,31 @@ pub enum VoiceEvent {
     Server(String),
     /// Outbound packet loss from an RTCP receiver report, in percent.
     PacketLoss(f32),
+    Stream(StreamEvent),
+    Share(ShareEvent),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum StreamEvent {
+    Connecting {
+        user_id: u64,
+    },
+    Live {
+        user_id: u64,
+        width: u32,
+        height: u32,
+    },
+    Ended {
+        user_id: u64,
+        reason: Option<String>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ShareEvent {
+    Starting,
+    Live,
+    Ended { reason: Option<String> },
 }
 
 #[derive(Debug)]

@@ -381,21 +381,52 @@ fn status_cutout(status: Status, dot: f32, ring: u32) -> Option<Div> {
     }
 }
 
-pub const TOOLTIP_BG: u32 = SURFACE_HIGHEST;
+pub const TOOLTIP_BG: u32 = 0x0A0A0C;
+const TOOLTIP_RING: u32 = 0x262629;
 const TOOLTIP_ENTER: Duration = Duration::from_millis(120);
 
-/// Body of a Discord-style tooltip. Pair it with a `tooltip-arrow*` icon and
-/// position it with `deferred(anchored())`; callers set the text size.
 pub fn tooltip_bubble() -> Div {
     div()
         .max_w(rpx(196.))
-        .px(rpx(12.))
-        .py(rpx(8.))
+        .px(rpx(11.))
+        .py(rpx(7.))
         .rounded(rpx(8.))
         .bg(rgb(TOOLTIP_BG))
-        .shadow_lg()
+        .border_1()
+        .border_color(rgb(TOOLTIP_RING))
+        .shadow(vec![BoxShadow {
+            color: rgba(0x0000003D).into(),
+            offset: point(px(0.), px(12.)),
+            blur_radius: px(24.),
+            spread_radius: px(0.),
+            inset: false,
+        }])
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(rgb(STRONG))
+}
+
+fn tooltip_arrow(fill: &str, edge: &str, width: f32, height: f32) -> Div {
+    div()
+        .relative()
+        .flex_none()
+        .w(rpx(width))
+        .h(rpx(height))
+        .child(icon(fill, width, TOOLTIP_BG).h(rpx(height)))
+        .child(
+            icon(edge, width, TOOLTIP_RING)
+                .h(rpx(height))
+                .absolute()
+                .top_0()
+                .left_0(),
+        )
+}
+
+pub fn tooltip_arrow_left() -> Div {
+    tooltip_arrow("tooltip-arrow", "tooltip-arrow-edge", 9., 16.).mr(rpx(-1.))
+}
+
+fn tooltip_arrow_down() -> Div {
+    tooltip_arrow("tooltip-arrow-down", "tooltip-arrow-down-edge", 16., 9.).mt(rpx(-1.))
 }
 
 /// Tooltip shown centred above an element, arrow pointing down. Add it as a
@@ -406,7 +437,7 @@ pub fn tooltip_above(label: impl Into<SharedString>) -> impl IntoElement {
     }
 }
 
-/// Fades a tooltip in with a small rise; `relative` keeps it out of the anchor's layout.
+/// `relative` keeps the rise out of the anchor's layout.
 pub fn tooltip_entrance(body: Div, cx: &App) -> AnyElement {
     if cx.reduce_motion() {
         return body.into_any_element();
@@ -456,7 +487,7 @@ impl RenderOnce for TooltipAbove {
                     .line_height(rpx(18.))
                     .child(self.label),
             )
-            .child(icon("tooltip-arrow-down", 12., TOOLTIP_BG).h(rpx(6.)));
+            .child(tooltip_arrow_down());
         div()
             .absolute()
             .top(rpx(-4.))

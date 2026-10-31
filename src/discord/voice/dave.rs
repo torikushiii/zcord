@@ -1,4 +1,4 @@
-use davey::{DAVE_PROTOCOL_VERSION, DaveSession, MediaType, ProposalsOperationType};
+use davey::{Codec, DAVE_PROTOCOL_VERSION, DaveSession, MediaType, ProposalsOperationType};
 use std::{
     collections::{HashMap, HashSet},
     num::NonZeroU16,
@@ -205,7 +205,17 @@ impl Dave {
         }
     }
 
-    pub fn decrypt(&mut self, user_id: u64, packet: &[u8]) -> Option<Vec<u8>> {
+    pub fn encrypt_video(&mut self, frame: &[u8]) -> Option<Vec<u8>> {
+        if !self.session.is_ready() {
+            return None;
+        }
+        self.session
+            .encrypt(MediaType::VIDEO, Codec::H264, frame)
+            .ok()
+            .map(std::borrow::Cow::into_owned)
+    }
+
+    pub fn decrypt(&mut self, user_id: u64, media: MediaType, packet: &[u8]) -> Option<Vec<u8>> {
         if packet == SILENCE {
             return Some(packet.to_vec());
         }
@@ -215,7 +225,7 @@ impl Dave {
         if !self.session.is_ready() {
             return self.passthrough_allowed().then(|| packet.to_vec());
         }
-        match self.session.decrypt(user_id, MediaType::AUDIO, packet) {
+        match self.session.decrypt(user_id, media, packet) {
             Ok(plaintext) => Some(plaintext),
             Err(_) if self.passthrough_allowed() => Some(packet.to_vec()),
             Err(_) => None,
@@ -243,9 +253,12 @@ mod tests {
         let mut dave = Dave::new(1, 42, 99).unwrap();
         assert!(Dave::new(2, 42, 99).is_none());
         assert!(matches!(dave.encrypt(&SILENCE), EncryptOutcome::NotReady));
-        assert_eq!(dave.decrypt(7, &SILENCE).unwrap(), SILENCE);
+        assert_eq!(
+            dave.decrypt(7, MediaType::AUDIO, &SILENCE).unwrap(),
+            SILENCE
+        );
         assert!(matches!(dave.encrypt(&[1, 2, 3]), EncryptOutcome::NotReady));
-        assert!(dave.decrypt(7, &[1, 2, 3]).is_none());
+        assert!(dave.decrypt(7, MediaType::AUDIO, &[1, 2, 3]).is_none());
         assert!(dave.execute_transition(9).is_none());
         assert!(dave.prepare_transition(0, 4));
         assert_eq!(dave.execute_transition(4), Some(None));
@@ -254,7 +267,7 @@ mod tests {
             dave.encrypt(&[4, 5, 6]),
             EncryptOutcome::Plaintext(_)
         ));
-        assert!(dave.decrypt(7, &[4, 5, 6]).is_some());
+        assert!(dave.decrypt(7, MediaType::AUDIO, &[4, 5, 6]).is_some());
     }
 
     #[test]

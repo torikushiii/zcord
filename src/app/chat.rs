@@ -23,21 +23,29 @@ use crate::{
     theme::{self, WithoutTextSelection, rpx},
 };
 
+mod actions;
 mod bars;
 mod composer;
 mod dialog;
 mod media;
 mod message;
+mod popouts;
 mod rows;
 mod skeleton;
+mod thread_ui;
 use crate::app::invite_card;
+pub(super) use actions::{MessageMenu, message_menu};
 use bars::{is_detached, jump_missing_notice, new_messages_bar, older_messages_bar};
 pub(crate) use composer::composer;
 pub(super) use dialog::delete_dialog;
 pub(super) use media::file_size;
 pub(super) use message::{author_name, body_context};
+pub(in crate::app) use popouts::{
+    ChannelPopout, PopoutKind, channel_popout, pins_button, threads_button,
+};
 use rows::{render_row, request_invites, welcome};
 use skeleton::skeleton;
+pub(in crate::app) use thread_ui::{CreateThread, ThreadMenu, create_thread_dialog, thread_menu};
 
 const GROUP_MINUTES: u32 = 7;
 const GUTTER: f32 = 72.;
@@ -101,19 +109,15 @@ pub fn header(app: &DiscordApp) -> impl IntoElement + use<> {
                 )),
         )
         .child(div().flex_1())
-        .child(theme::icon_button(
-            "threads",
-            "messages-square",
-            20.,
-            theme::MUTED,
-        ))
+        .child(threads_button(app))
         .child(theme::icon_button(
             "notifications",
             "bell",
             20.,
             theme::MUTED,
         ))
-        .child(theme::icon_button("pins", "pin", 20., theme::MUTED))
+        .child(pins_button(app))
+        .children(thread_ui::thread_menu_button(app))
         .child(
             theme::icon_button(
                 "members",

@@ -93,7 +93,7 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
                         .pb(rpx(layout.padding))
                         .overflow_y_scroll()
                         .child(display_names(app, card, true, None, cx))
-                        .children(profile_actions(app, card, window, None))
+                        .children(profile_actions(app, card, window))
                         .children(
                             bio(app, card, false, cx).map(|bio| section("About Me", bio, palette)),
                         )

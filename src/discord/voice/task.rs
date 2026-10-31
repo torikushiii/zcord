@@ -2,8 +2,9 @@ use super::{
     audio::AudioFlags,
     emit,
     gateway::{Config, Connection, Outcome},
+    stream::{self, FrameSlot, ScreenSource, sender::SenderConfig, viewer::ViewerConfig},
 };
-use crate::discord::{Event, Secret, VoiceEvent, commands, model};
+use crate::discord::{Event, Secret, ShareEvent, StreamEvent, VoiceEvent, commands, model};
 use futures::channel::mpsc::UnboundedSender;
 use rand::Rng;
 use serde_json::{Value, json};
@@ -11,7 +12,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -32,6 +33,37 @@ struct Task {
     endpoint: String,
 }
 
+struct StreamWatch {
+    user_id: u64,
+    key: String,
+    guild_id: u64,
+    rtc_server_id: Option<u64>,
+    rtc_channel_id: Option<u64>,
+    token: Option<Secret>,
+    endpoint: Option<String>,
+    shutdown: Option<watch::Sender<bool>>,
+    ended: Arc<AtomicBool>,
+    started: bool,
+}
+
+struct StreamShare {
+    key: String,
+    guild_id: u64,
+    source: Option<ScreenSource>,
+    rtc_server_id: Option<u64>,
+    rtc_channel_id: Option<u64>,
+    token: Option<Secret>,
+    endpoint: Option<String>,
+    shutdown: Option<watch::Sender<bool>>,
+    ended: Arc<AtomicBool>,
+    started: bool,
+    keyframe: Arc<AtomicBool>,
+    bitrate: Arc<AtomicU32>,
+    stop: Arc<AtomicBool>,
+    reannounce: Arc<AtomicBool>,
+    failure: Arc<Mutex<Option<String>>>,
+}
+
 struct Shared {
     user_id: Option<u64>,
     mute: bool,
@@ -43,6 +75,9 @@ struct Shared {
     gateway_session_id: Option<Secret>,
     servers: HashMap<u64, Server>,
     task: Option<Task>,
+    stream: Option<StreamWatch>,
+    share: Option<StreamShare>,
+    frames: FrameSlot,
     flags: AudioFlags,
     generation: u64,
     dirty: bool,
@@ -72,6 +107,9 @@ impl Default for VoiceManager {
                 gateway_session_id: None,
                 servers: HashMap::new(),
                 task: None,
+                stream: None,
+                share: None,
+                frames: Arc::new(Mutex::new(None)),
                 flags: AudioFlags::new(),
                 generation: 0,
                 dirty: false,
@@ -143,6 +181,8 @@ impl VoiceManager {
         shared.session_id = None;
         shared.dirty = true;
         shared.restart = None;
+        self.end_stream(&mut shared, Some("Left the call".into()));
+        self.end_share(&mut shared, Some("Left the call".into()));
         if let Some(guild_id) = shared.last_guild {
             shared.servers.remove(&guild_id);
         }
@@ -155,6 +195,413 @@ impl VoiceManager {
             self.emit(VoiceEvent::Disconnected { reason: None });
         }
         payload
+    }
+
+    pub fn watch(&self, user_id: u64) -> Option<Value> {
+        let mut shared = self.lock();
+        if user_id == 0 || shared.user_id == Some(user_id) {
+            return None;
+        }
+        let (guild_id, channel_id) = shared.confirmed?;
+        shared.session_id.as_ref()?;
+        let key = stream::stream_key((guild_id != 0).then_some(guild_id), channel_id, user_id);
+        self.end_stream(&mut shared, Some("Watching another stream".into()));
+        shared.stream = Some(StreamWatch {
+            user_id,
+            key: key.clone(),
+            guild_id,
+            rtc_server_id: None,
+            rtc_channel_id: None,
+            token: None,
+            endpoint: None,
+            shutdown: None,
+            ended: Arc::new(AtomicBool::new(false)),
+            started: false,
+        });
+        *shared.frames.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        Some(json!({"op": 20, "d": {"stream_key": key}}))
+    }
+
+    pub fn stop_watching(&self) -> Option<Value> {
+        let mut shared = self.lock();
+        let key = shared.stream.as_ref()?.key.clone();
+        self.end_stream(&mut shared, None);
+        Some(json!({"op": 19, "d": {"stream_key": key}}))
+    }
+
+    pub fn stream_created(&self, key: &str, rtc_server_id: u64, rtc_channel_id: Option<u64>) {
+        let mut shared = self.lock();
+        if shared.share.as_ref().is_some_and(|share| share.key == key) {
+            let next = (rtc_server_id, rtc_channel_id.unwrap_or(rtc_server_id));
+            if shared.share.as_ref().is_some_and(|share| {
+                share
+                    .rtc_server_id
+                    .is_some_and(|server| (server, share.rtc_channel_id.unwrap_or(server)) != next)
+            }) {
+                self.end_share(
+                    &mut shared,
+                    Some("Discord changed the stream connection identity".into()),
+                );
+                return;
+            }
+            if let Some(share) = shared.share.as_mut() {
+                share.rtc_server_id = Some(rtc_server_id);
+                share.rtc_channel_id = rtc_channel_id;
+            }
+            self.spawn_share(&mut shared);
+            return;
+        }
+        if shared
+            .stream
+            .as_ref()
+            .is_none_or(|stream| stream.key != key)
+        {
+            return;
+        }
+        let next = (rtc_server_id, rtc_channel_id.unwrap_or(rtc_server_id));
+        if shared.stream.as_ref().is_some_and(|stream| {
+            stream
+                .rtc_server_id
+                .is_some_and(|server| (server, stream.rtc_channel_id.unwrap_or(server)) != next)
+        }) {
+            self.end_stream(
+                &mut shared,
+                Some("Discord changed the stream connection identity".into()),
+            );
+            return;
+        }
+        if let Some(stream) = shared.stream.as_mut() {
+            stream.rtc_server_id = Some(rtc_server_id);
+            stream.rtc_channel_id = rtc_channel_id;
+        }
+        self.spawn_stream(&mut shared);
+    }
+
+    pub fn stream_server(&self, key: &str, token: &str, endpoint: Option<&str>) {
+        let mut shared = self.lock();
+        if shared.share.as_ref().is_some_and(|share| share.key == key) {
+            if token.len() > 2048 || endpoint.is_some_and(|endpoint| endpoint.len() > 512) {
+                self.end_share(
+                    &mut shared,
+                    Some("Discord sent oversized stream server data".into()),
+                );
+                return;
+            }
+            if let Some(share) = shared.share.as_mut() {
+                share.token = Some(Secret(token.to_owned()));
+                share.endpoint = endpoint.map(str::to_owned);
+            }
+            self.spawn_share(&mut shared);
+            return;
+        }
+        if shared
+            .stream
+            .as_ref()
+            .is_none_or(|stream| stream.key != key)
+        {
+            return;
+        }
+        if token.len() > 2048 || endpoint.is_some_and(|endpoint| endpoint.len() > 512) {
+            self.end_stream(
+                &mut shared,
+                Some("Discord sent oversized stream server data".into()),
+            );
+            return;
+        }
+        if let Some(stream) = shared.stream.as_mut() {
+            stream.token = Some(Secret(token.to_owned()));
+            stream.endpoint = endpoint.map(str::to_owned);
+        }
+        self.spawn_stream(&mut shared);
+    }
+
+    pub fn stream_deleted(&self, key: &str, reason: Option<String>) {
+        let mut shared = self.lock();
+        if shared.share.as_ref().is_some_and(|share| share.key == key) {
+            self.end_share(&mut shared, reason);
+            return;
+        }
+        if shared
+            .stream
+            .as_ref()
+            .is_none_or(|stream| stream.key != key)
+        {
+            return;
+        }
+        self.end_stream(&mut shared, reason);
+    }
+
+    pub fn screen_sources(&self) -> Vec<ScreenSource> {
+        stream::share::sources()
+    }
+
+    pub fn screen_thumbnail(&self, source: &ScreenSource) -> Option<stream::StreamFrame> {
+        stream::share::thumbnail(source)
+    }
+
+    pub fn go_live(&self) -> Option<Value> {
+        self.begin_share(None)
+    }
+
+    pub fn start_share(&self, source: ScreenSource) -> Option<Value> {
+        self.begin_share(Some(source))
+    }
+
+    pub fn stop_sharing(&self) -> Option<Value> {
+        let mut shared = self.lock();
+        let key = shared.share.as_ref()?.key.clone();
+        self.end_share_with(&mut shared, None, false);
+        Some(json!({"op": 19, "d": {"stream_key": key}}))
+    }
+
+    fn begin_share(&self, source: Option<ScreenSource>) -> Option<Value> {
+        let mut shared = self.lock();
+        let (guild_id, channel_id) = shared.confirmed?;
+        let user_id = shared.user_id?;
+        shared.session_id.as_ref()?;
+        let key = stream::stream_key((guild_id != 0).then_some(guild_id), channel_id, user_id);
+        self.end_share(&mut shared, Some("Sharing replaced".into()));
+        shared.share = Some(StreamShare {
+            key,
+            guild_id,
+            source,
+            rtc_server_id: None,
+            rtc_channel_id: None,
+            token: None,
+            endpoint: None,
+            shutdown: None,
+            ended: Arc::new(AtomicBool::new(false)),
+            started: false,
+            keyframe: Arc::new(AtomicBool::new(true)),
+            bitrate: Arc::new(AtomicU32::new(3_500_000)),
+            stop: Arc::new(AtomicBool::new(false)),
+            reannounce: Arc::new(AtomicBool::new(false)),
+            failure: Arc::new(Mutex::new(None)),
+        });
+        Some(json!({"op": 18, "d": {
+            "type": if guild_id == 0 { "call" } else { "guild" },
+            "guild_id": if guild_id == 0 { Value::Null } else { json!(guild_id.to_string()) },
+            "channel_id": channel_id.to_string(),
+            "preferred_region": null,
+        }}))
+    }
+
+    fn end_share(&self, shared: &mut Shared, reason: Option<String>) {
+        self.end_share_with(shared, reason, true);
+    }
+
+    fn end_share_with(&self, shared: &mut Shared, reason: Option<String>, notify: bool) {
+        let Some(mut share) = shared.share.take() else {
+            return;
+        };
+        share.stop.store(true, Ordering::Release);
+        if let Some(shutdown) = share.shutdown.take() {
+            let _ = shutdown.send(true);
+        }
+        if notify
+            && let (Some(sender), Some(generation)) = (
+                self.commands.clone(),
+                self.gateway_generation
+                    .as_ref()
+                    .map(|generation| generation.load(Ordering::Acquire)),
+            )
+            && generation % 2 == 1
+        {
+            let payload = json!({"op": 19, "d": {"stream_key": share.key}});
+            let _ = sender.send((generation, commands::voice_state(payload)));
+        }
+        if !share.ended.swap(true, Ordering::AcqRel) {
+            self.emit_share(ShareEvent::Ended { reason });
+        }
+    }
+
+    fn spawn_share(&self, shared: &mut Shared) {
+        let Some(share) = shared.share.as_ref() else {
+            return;
+        };
+        if share.started {
+            return;
+        }
+        let (Some(source), Some(rtc_server_id), Some(token)) = (
+            share.source.clone(),
+            share.rtc_server_id,
+            share.token.clone(),
+        ) else {
+            return;
+        };
+        let Some(endpoint) = share
+            .endpoint
+            .clone()
+            .or_else(|| shared.servers.get(&share.guild_id)?.endpoint.clone())
+        else {
+            return;
+        };
+        let (Some(user_id), Some(session_id)) = (shared.user_id, shared.session_id.clone()) else {
+            return;
+        };
+        let (Some(runtime), Some(events)) = (&self.runtime, &self.events) else {
+            return;
+        };
+        let key = share.key.clone();
+        let ended = share.ended.clone();
+        let keyframe = share.keyframe.clone();
+        let bitrate = share.bitrate.clone();
+        let stop = share.stop.clone();
+        let reannounce = share.reannounce.clone();
+        let failure = share.failure.clone();
+        let (frame_sender, frame_receiver) = std::sync::mpsc::sync_channel(2);
+        if let Err(reason) = stream::share::spawn(
+            source,
+            bitrate.clone(),
+            keyframe.clone(),
+            stop.clone(),
+            frame_sender,
+            failure.clone(),
+        ) {
+            self.end_share(shared, Some(reason));
+            return;
+        }
+        let (shutdown, cancel) = watch::channel(false);
+        let Some(share) = shared.share.as_mut() else {
+            return;
+        };
+        share.shutdown = Some(shutdown);
+        share.started = true;
+        self.emit_share(ShareEvent::Starting);
+        let config = SenderConfig {
+            user_id,
+            session_id,
+            token,
+            endpoint,
+            rtc_server_id,
+            key,
+            keyframe,
+            bitrate,
+            reannounce,
+            failure,
+            events: events.clone(),
+            ended: ended.clone(),
+        };
+        let manager = self.clone();
+        runtime.spawn(async move {
+            let result = stream::sender::run(config, frame_receiver, cancel).await;
+            stop.store(true, Ordering::Release);
+            let mut shared = manager.lock();
+            manager.end_share_with(&mut shared, result.err(), true);
+        });
+    }
+
+    fn emit_share(&self, event: ShareEvent) {
+        if let Some(events) = &self.events {
+            emit(events, VoiceEvent::Share(event));
+        }
+    }
+
+    pub fn stream_updated(&self, key: &str, viewers: usize) {
+        let shared = self.lock();
+        if let Some(share) = shared.share.as_ref().filter(|share| share.key == key)
+            && viewers > 0
+        {
+            share.reannounce.store(true, Ordering::Release);
+        }
+    }
+
+    pub fn stream_frames(&self) -> FrameSlot {
+        self.lock().frames.clone()
+    }
+
+    fn end_stream(&self, shared: &mut Shared, reason: Option<String>) {
+        shared.flags.clear_stream_audio();
+        let Some(mut stream) = shared.stream.take() else {
+            return;
+        };
+        if let Some(shutdown) = stream.shutdown.take() {
+            let _ = shutdown.send(true);
+        }
+        *shared.frames.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        if !stream.ended.swap(true, Ordering::AcqRel) {
+            self.emit_stream(StreamEvent::Ended {
+                user_id: stream.user_id,
+                reason,
+            });
+        }
+    }
+
+    fn spawn_stream(&self, shared: &mut Shared) {
+        let Some(stream) = shared.stream.as_ref() else {
+            return;
+        };
+        if stream.started {
+            return;
+        }
+        let (Some(rtc_server_id), Some(token)) = (stream.rtc_server_id, stream.token.clone())
+        else {
+            return;
+        };
+        let Some(endpoint) = stream
+            .endpoint
+            .clone()
+            .or_else(|| shared.servers.get(&stream.guild_id)?.endpoint.clone())
+        else {
+            return;
+        };
+        let (Some(user_id), Some(session_id)) = (shared.user_id, shared.session_id.clone()) else {
+            return;
+        };
+        let (Some(runtime), Some(events)) = (&self.runtime, &self.events) else {
+            return;
+        };
+        let frames = shared.frames.clone();
+        let flags = shared.flags.clone();
+        let Some(stream) = shared.stream.as_mut() else {
+            return;
+        };
+        let streamer_id = stream.user_id;
+        let ended = stream.ended.clone();
+        let watch_ended = ended.clone();
+        let (shutdown, cancel) = watch::channel(false);
+        stream.shutdown = Some(shutdown);
+        stream.started = true;
+        self.emit_stream(StreamEvent::Connecting {
+            user_id: streamer_id,
+        });
+        let audio_generation = flags.begin_stream_audio();
+        let config = ViewerConfig {
+            user_id,
+            streamer_id,
+            session_id,
+            token,
+            endpoint,
+            rtc_server_id,
+            frames,
+            events: events.clone(),
+            ended,
+            flags,
+            audio_generation,
+        };
+        let manager = self.clone();
+        runtime.spawn(async move {
+            let result = stream::viewer::run(config, cancel).await;
+            manager.stream_viewer_ended(&watch_ended, result);
+        });
+    }
+
+    fn stream_viewer_ended(&self, ended: &Arc<AtomicBool>, result: Result<(), String>) {
+        let mut shared = self.lock();
+        if shared
+            .stream
+            .as_ref()
+            .is_none_or(|stream| !Arc::ptr_eq(&stream.ended, ended))
+        {
+            return;
+        }
+        self.end_stream(&mut shared, result.err());
+    }
+
+    fn emit_stream(&self, event: StreamEvent) {
+        if let Some(events) = &self.events {
+            emit(events, VoiceEvent::Stream(event));
+        }
     }
 
     pub fn set_mute(&self, mute: bool) -> Option<Value> {
@@ -184,6 +631,10 @@ impl VoiceManager {
 
     pub fn set_output_volume(&self, gain: f32) {
         self.lock().flags.set_output_gain(gain);
+    }
+
+    pub fn set_stream_volume(&self, gain: f32) {
+        self.lock().flags.set_stream_volume(gain);
     }
 
     pub fn set_input_sensitivity(&self, threshold: Option<f32>) {
@@ -231,6 +682,8 @@ impl VoiceManager {
                 shared.session_id = None;
                 shared.dirty = false;
                 shared.restart = None;
+                self.end_stream(&mut shared, Some("Voice moved to another device".into()));
+                self.end_share(&mut shared, Some("Voice moved to another device".into()));
                 if let Some(task) = shared.task.take() {
                     let _ = task.shutdown.send(true);
                 }
@@ -251,6 +704,8 @@ impl VoiceManager {
             shared.session_id = None;
             shared.dirty = false;
             shared.restart = None;
+            self.end_stream(&mut shared, Some("Disconnected from voice".into()));
+            self.end_share(&mut shared, Some("Disconnected from voice".into()));
             if let Some(task) = shared.task.take() {
                 let _ = task.shutdown.send(true);
             }
@@ -277,6 +732,13 @@ impl VoiceManager {
             .is_some_and(|task| task.guild_id != guild_id || task.channel_id != channel_id)
         {
             shared.restart = Some("channel changed");
+        }
+        if shared
+            .confirmed
+            .is_some_and(|previous| previous != (guild_id, channel_id))
+        {
+            self.end_stream(&mut shared, Some("Changed voice channel".into()));
+            self.end_share(&mut shared, Some("Changed voice channel".into()));
         }
         shared.confirmed = Some((guild_id, channel_id));
         shared.session_id = session_id.map(Secret);
@@ -331,12 +793,17 @@ impl VoiceManager {
         let mut shared = self.lock();
         shared.user_id = Some(user_id);
         shared.gateway_session_id = Some(Secret(session_id.to_owned()));
+        if fresh {
+            self.end_stream(&mut shared, Some("Discord reset the voice session".into()));
+            self.end_share(&mut shared, Some("Discord reset the voice session".into()));
+        }
         if fresh && (shared.desired.is_some() || shared.confirmed.is_some()) {
             shared.desired = None;
             shared.confirmed = None;
             shared.session_id = None;
             shared.dirty = false;
             shared.restart = None;
+            self.end_stream(&mut shared, Some("Discord reset the voice session".into()));
             if let Some(task) = shared.task.take() {
                 let _ = task.shutdown.send(true);
             }
@@ -366,6 +833,8 @@ impl VoiceManager {
         shared.session_id = None;
         shared.dirty = false;
         shared.restart = None;
+        self.end_stream(&mut shared, Some("Voice disconnected".into()));
+        self.end_share(&mut shared, Some("Voice disconnected".into()));
         let payload = (leave && shared.last_guild.is_some()).then(|| {
             shared.dirty = true;
             op4(&shared)
@@ -389,6 +858,8 @@ impl VoiceManager {
         shared.confirmed = None;
         shared.session_id = None;
         shared.restart = None;
+        self.end_stream(&mut shared, None);
+        self.end_share(&mut shared, None);
         if let Some(task) = shared.task.take() {
             let _ = task.shutdown.send(true);
         }
@@ -527,7 +998,7 @@ fn server_restart_reason(token_changed: bool, endpoint_changed: bool) -> Option<
     }
 }
 
-fn ws_url(endpoint: &str) -> Option<String> {
+pub(super) fn ws_url(endpoint: &str) -> Option<String> {
     let endpoint = endpoint.trim().trim_end_matches('/');
     if endpoint.is_empty() {
         return None;
@@ -541,7 +1012,7 @@ fn ws_url(endpoint: &str) -> Option<String> {
     )
 }
 
-fn server_name(endpoint: &str) -> Option<String> {
+pub(super) fn server_name(endpoint: &str) -> Option<String> {
     let endpoint = endpoint.trim();
     let authority = endpoint
         .split_once("://")
@@ -860,6 +1331,129 @@ mod tests {
     }
 
     #[test]
+    fn watch_and_stop_payloads_refuse_the_own_user() {
+        let manager = VoiceManager::default();
+        manager.gateway_ready(1, "own-session", false);
+        manager.join(10, 20);
+        let state: model::VoiceState = serde_json::from_value(json!({
+            "guild_id": "10", "channel_id": "20", "user_id": "1"
+        }))
+        .unwrap();
+        manager.voice_state(&state, Some("own-session".into()));
+
+        assert_eq!(
+            manager.watch(2),
+            Some(json!({"op": 20, "d": {"stream_key": "guild:10:20:2"}}))
+        );
+        assert_eq!(manager.watch(1), None);
+        assert_eq!(
+            manager.stop_watching(),
+            Some(json!({"op": 19, "d": {"stream_key": "guild:10:20:2"}}))
+        );
+        assert!(manager.stop_watching().is_none());
+    }
+
+    #[test]
+    fn stream_setup_ignores_another_key_and_leaving_ends_the_watch() {
+        let manager = VoiceManager::default();
+        manager.gateway_ready(1, "own-session", false);
+        manager.join(10, 20);
+        let state: model::VoiceState = serde_json::from_value(json!({
+            "guild_id": "10", "channel_id": "20", "user_id": "1"
+        }))
+        .unwrap();
+        manager.voice_state(&state, Some("own-session".into()));
+        manager.watch(2);
+
+        manager.stream_created("guild:10:20:3", 30, Some(31));
+        assert!(
+            manager
+                .lock()
+                .stream
+                .as_ref()
+                .unwrap()
+                .rtc_server_id
+                .is_none()
+        );
+        manager.stream_created("guild:10:20:2", 30, Some(31));
+        assert_eq!(
+            manager.lock().stream.as_ref().unwrap().rtc_server_id,
+            Some(30)
+        );
+
+        manager.leave();
+        assert!(manager.lock().stream.is_none());
+    }
+
+    #[test]
+    fn go_live_and_stop_sharing_use_the_call_key() {
+        let manager = VoiceManager::default();
+        manager.gateway_ready(1, "own-session", false);
+        manager.join(10, 20);
+        let state: model::VoiceState = serde_json::from_value(json!({
+            "guild_id": "10", "channel_id": "20", "user_id": "1"
+        }))
+        .unwrap();
+        manager.voice_state(&state, Some("own-session".into()));
+
+        assert_eq!(
+            manager.go_live(),
+            Some(json!({"op": 18, "d": {
+                "type": "guild", "guild_id": "10", "channel_id": "20",
+                "preferred_region": null,
+            }}))
+        );
+        assert_eq!(
+            manager.stop_sharing(),
+            Some(json!({"op": 19, "d": {"stream_key": "guild:10:20:1"}}))
+        );
+        assert!(manager.stop_sharing().is_none());
+    }
+
+    #[test]
+    fn share_and_watch_state_are_separate_and_route_by_key() {
+        let manager = VoiceManager::default();
+        manager.gateway_ready(1, "own-session", false);
+        manager.join(10, 20);
+        let state: model::VoiceState = serde_json::from_value(json!({
+            "guild_id": "10", "channel_id": "20", "user_id": "1"
+        }))
+        .unwrap();
+        manager.voice_state(&state, Some("own-session".into()));
+
+        assert!(manager.watch(2).is_some());
+        assert!(
+            manager
+                .start_share(ScreenSource {
+                    id: super::super::stream::ScreenSourceId::Monitor(7),
+                    name: "Display".into(),
+                    is_window: false,
+                })
+                .is_some()
+        );
+        manager.stream_created("guild:10:20:1", 40, Some(41));
+        assert!(
+            manager
+                .lock()
+                .stream
+                .as_ref()
+                .unwrap()
+                .rtc_server_id
+                .is_none()
+        );
+        assert_eq!(
+            manager.lock().share.as_ref().unwrap().rtc_server_id,
+            Some(40)
+        );
+        manager.stream_created("guild:10:20:2", 30, Some(31));
+        assert_eq!(
+            manager.lock().stream.as_ref().unwrap().rtc_server_id,
+            Some(30)
+        );
+        assert!(manager.lock().stream.is_some() && manager.lock().share.is_some());
+    }
+
+    #[test]
     fn fresh_gateway_ready_drops_voice_state() {
         let manager = VoiceManager::default();
         manager.gateway_ready(1, "own-session", false);
@@ -874,5 +1468,24 @@ mod tests {
         let shared = manager.lock();
         assert_eq!(shared.confirmed, None);
         assert_eq!(shared.desired, None);
+    }
+
+    #[test]
+    fn stopping_a_watch_clears_queued_stream_audio() {
+        let manager = VoiceManager::default();
+        manager.gateway_ready(1, "own-session", false);
+        manager.join(10, 20);
+        let state: model::VoiceState = serde_json::from_value(json!({
+            "guild_id": "10", "channel_id": "20", "user_id": "1"
+        }))
+        .unwrap();
+        manager.voice_state(&state, Some("own-session".into()));
+        manager.watch(2);
+        let flags = manager.lock().flags.clone();
+        let generation = flags.begin_stream_audio();
+        flags.push_stream_audio(generation, 1, vec![1, 2, 3]);
+        assert_eq!(flags.queued_stream_audio(), 1);
+        manager.stop_watching();
+        assert_eq!(flags.queued_stream_audio(), 0);
     }
 }

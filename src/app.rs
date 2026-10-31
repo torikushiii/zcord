@@ -9,6 +9,7 @@ mod emoji_picker;
 mod expression_info;
 mod forum;
 mod forum_actions;
+mod friends;
 mod gif_picker;
 mod guild_rail;
 mod history;
@@ -28,6 +29,7 @@ mod selection;
 mod sending;
 mod settings_page;
 mod smooth_scroll;
+mod stream_view;
 mod switcher;
 mod titlebar;
 mod typing;
@@ -51,6 +53,7 @@ use std::{
 use futures::StreamExt;
 use gpui::{prelude::*, *};
 use gpui_component::input::{InputEvent, RopeExt, TextareaState};
+use gpui_component::slider::SliderState;
 use gpui_tokio::Tokio;
 
 use crate::{
@@ -184,6 +187,12 @@ pub struct DiscordApp {
     upload_ticking: bool,
     pub(crate) hovered_message: Option<u64>,
     pub(crate) hovered_actions: Option<u64>,
+    pub(crate) message_menu: Option<chat::MessageMenu>,
+    pub(crate) shift_held: bool,
+    pub(crate) channel_popout: Option<chat::ChannelPopout>,
+    pub(crate) popout_closed: Option<(chat::PopoutKind, Instant)>,
+    pub(crate) create_thread: Option<chat::CreateThread>,
+    pub(crate) thread_menu: Option<chat::ThreadMenu>,
     pub(crate) hovered_member: Option<u64>,
     pub(crate) hovered_account: bool,
     pub(crate) profile: Option<profile::ProfileCard>,
@@ -191,6 +200,12 @@ pub struct DiscordApp {
     pub(crate) settings_page: Option<settings_page::SettingsPage>,
     settings_animation: u64,
     pub(crate) lightbox: Option<lightbox::Lightbox>,
+    pub(crate) stream_view: Option<stream_view::StreamView>,
+    stream_nonce: u64,
+    pub(crate) stream_members_shown: bool,
+    pub(crate) stream_members_toggles: u64,
+    pub(crate) stream_volume: Option<(Entity<SliderState>, Subscription)>,
+    pub(crate) hovered_stage_control: Option<&'static str>,
     pub(crate) emoji_picker: Option<emoji_picker::EmojiPicker>,
     emoji_picker_closing: Option<Task<()>>,
     emoji_picker_animation: u64,
@@ -330,6 +345,12 @@ impl DiscordApp {
             upload_ticking: false,
             hovered_message: None,
             hovered_actions: None,
+            message_menu: None,
+            shift_held: false,
+            channel_popout: None,
+            popout_closed: None,
+            create_thread: None,
+            thread_menu: None,
             hovered_member: None,
             hovered_account: false,
             profile: None,
@@ -381,6 +402,12 @@ impl DiscordApp {
             hovered_rail: None,
             hovered_add_reaction: None,
             hovered_upload_button: None,
+            stream_view: None,
+            stream_nonce: 0,
+            stream_members_shown: true,
+            stream_members_toggles: 0,
+            stream_volume: None,
+            hovered_stage_control: None,
             expression_info: expression_info::State::default(),
             player: None,
             video_fullscreen: None,
@@ -775,6 +802,7 @@ impl DiscordApp {
             .find(|guild| guild.id == self.selected_guild_id);
         let banner = guild.and_then(|guild| self.store.guild_banner(guild.id));
         let selected = self.thread_parent().unwrap_or(self.selected_channel_id);
+        let opened = self.selected_channel_id;
         let guild_id = self.selected_guild_id;
         let store = &self.store;
         let joined = self
@@ -788,6 +816,7 @@ impl DiscordApp {
             banner,
             selected,
             |channel_id| store.voice_members(guild_id, channel_id).len(),
+            |channel_id| store.sidebar_threads(channel_id, opened).len(),
             joined,
         );
         self.request_voice_members();
@@ -952,6 +981,9 @@ impl Render for DiscordApp {
                                 .flex_1()
                                 .min_w_0()
                                 .h_full()
+                                .when(self.stream_chat_open(), |this| {
+                                    this.flex_none().ml_auto().w(rpx(stream_view::CHAT_WIDTH))
+                                })
                                 .child(
                                     self.views
                                         .chat_header
@@ -984,14 +1016,19 @@ impl Render for DiscordApp {
                                                     ),
                                                 )),
                                         )
-                                        .when(self.show_members && !self.is_home(), |this| {
-                                            this.child(
-                                                self.views
-                                                    .members
-                                                    .clone()
-                                                    .cached(views::member_list_style()),
-                                            )
-                                        }),
+                                        .when(
+                                            self.show_members
+                                                && !self.is_home()
+                                                && !self.stream_chat_open(),
+                                            |this| {
+                                                this.child(
+                                                    self.views
+                                                        .members
+                                                        .clone()
+                                                        .cached(views::member_list_style()),
+                                                )
+                                            },
+                                        ),
                                 ),
                         ),
                 )
@@ -999,6 +1036,14 @@ impl Render for DiscordApp {
         };
         div()
             .track_focus(&self.focus_handle)
+            .on_modifiers_changed(cx.listener(|app, event: &ModifiersChangedEvent, _, cx| {
+                if app.shift_held != event.modifiers.shift {
+                    app.shift_held = event.modifiers.shift;
+                    if app.hovered_message.is_some() || app.hovered_actions.is_some() {
+                        cx.notify();
+                    }
+                }
+            }))
             .on_action(cx.listener(|app, _: &JumpToPresent, window, cx| app.escape(window, cx)))
             .on_scroll_wheel(cx.listener(|app, _, _, cx| {
                 app.close_expression_info(cx);
