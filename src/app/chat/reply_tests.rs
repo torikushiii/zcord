@@ -33,10 +33,10 @@ fn local_first_unread_matches_the_full_scan_with_placeholders() {
             for complete in [false, true] {
                 for index in 0..channel.messages.len() {
                     let start = index == 0 && complete;
-                    let expected =
-                        (index > 0 || start) && channel.first_unread_index(since) == Some(index);
+                    let expected = (index > 0 || start)
+                        && channel.first_unread_index(since, 9999) == Some(index);
                     assert_eq!(
-                        super::rows::is_first_unread(&channel.messages, index, since, start),
+                        super::rows::is_first_unread(&channel.messages, index, since, start, 9999),
                         expected,
                         "pattern={pattern}, since={since}, complete={complete}, index={index}",
                     );

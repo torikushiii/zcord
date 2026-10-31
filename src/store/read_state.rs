@@ -48,6 +48,41 @@ impl Store {
         read_state(source, &self.read_states, channel_id)?.last_message_id
     }
 
+    /// Returns the ack cursor and badge count for Discord, or None if `message_id` isn't read yet.
+    pub fn mark_unread(&mut self, channel_id: u64, message_id: u64) -> Option<(u64, u32)> {
+        let previous = self.last_read(channel_id)?;
+        if message_id == 0 || message_id > previous {
+            return None;
+        }
+        let cursor = message_id - 1;
+        let private = self.private_locations.contains_key(&channel_id);
+        let mut count = if private {
+            0
+        } else {
+            self.mention_count(channel_id)
+        };
+        if let Some(channel) = self.network_channel(channel_id) {
+            for message in &channel.messages {
+                if message.delivery != Delivery::Sent
+                    || message.id < message_id
+                    || message.author_id == self.current_user_id
+                {
+                    continue;
+                }
+                if private || (message.mentions_me && message.id <= previous) {
+                    count = count.saturating_add(1);
+                }
+            }
+        }
+        let previous_mentions = self.mention_count(channel_id);
+        self.apply_ack(channel_id, cursor);
+        if let Some(state) = self.read_state_mut(channel_id, cursor) {
+            state.mention_count = count;
+        }
+        self.refresh_badges(channel_id, previous_mentions);
+        Some((cursor, count))
+    }
+
     pub fn channel_ack(&self, channel_id: u64) -> Option<u64> {
         let source = self.source.as_ref()?;
         let channel = self.source_channels.get(&channel_id)?.get(source)?;

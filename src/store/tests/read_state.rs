@@ -53,6 +53,58 @@ fn ack_resets_channel_and_guild_mentions() {
 }
 
 #[test]
+fn mark_unread_returns_the_cursor_and_counts_guild_mentions() {
+    let mut store = Store::from_ready(ready());
+    store.set_messages(
+        2002,
+        vec![
+            server_message(40, 2002, 2, None),
+            server_message(45, 2002, 2, None),
+            server_message(50, 2002, 1, None),
+        ],
+    );
+    let channel = store.guilds[0].channel_mut(2002).unwrap();
+    channel.messages[0].mentions_me = true;
+    channel.messages[1].mentions_me = true;
+    channel.messages[2].mentions_me = true;
+
+    assert_eq!(store.mark_unread(2002, 45), Some((44, 3)));
+    assert_eq!(store.last_read(2002), Some(44));
+    assert_eq!(store.guilds[0].channel(2002).unwrap().mentions, 3);
+    assert!(store.channel_ack(2002).is_some());
+}
+
+#[test]
+fn mark_unread_counts_every_dm_message_from_someone_else() {
+    let mut store = Store::from_ready(ready());
+    store.apply(Event::MessageAck {
+        channel_id: 900,
+        message_id: 500,
+    });
+    store.set_messages(
+        900,
+        vec![
+            server_message(400, 900, 2, None),
+            server_message(450, 900, 2, None),
+            server_message(500, 900, 2, None),
+            server_message(600, 900, 1, None),
+        ],
+    );
+
+    assert_eq!(store.mark_unread(900, 450), Some((449, 2)));
+    assert_eq!(store.last_read(900), Some(449));
+    assert_eq!(store.private_channel(900).unwrap().channel.mentions, 2);
+}
+
+#[test]
+fn mark_unread_rejects_an_unread_message() {
+    let mut store = Store::from_ready(ready());
+    assert_eq!(store.last_read(2002), Some(50));
+    assert_eq!(store.mark_unread(2002, 51), None);
+    assert_eq!(store.mark_unread(2002, 0), None);
+}
+
+#[test]
 fn structure_rebuild_preserves_channel_mentions() {
     let mut store = Store::from_ready(ready());
     let update = serde_json::from_value(json!({

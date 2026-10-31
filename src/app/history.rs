@@ -14,6 +14,7 @@ impl DiscordApp {
         smooth_scroll::cancel(cx);
         self.unread_since = None;
         self.unread_bar = false;
+        self.manual_unread = None;
         let channel_id = self.selected_channel_id;
         let needs_present = self.live
             && (self.pending_sends.has_channel(channel_id)
@@ -32,7 +33,7 @@ impl DiscordApp {
     pub(super) fn scroll_to_unread(&self, since: u64) {
         let Some(index) = self
             .channel()
-            .and_then(|channel| channel.first_unread_index(since))
+            .and_then(|channel| channel.first_unread_index(since, self.store.current_user_id))
         else {
             return;
         };
@@ -70,6 +71,7 @@ impl DiscordApp {
             self.jump = Some(JumpScroll { message_id, nonce });
             self.step_jump(nonce, window, cx);
         } else if self.live {
+            self.pending_jump = Some(message_id);
             self.fetch_history(self.selected_channel_id, Some(message_id), window, cx);
         }
     }
@@ -140,6 +142,25 @@ impl DiscordApp {
         .detach();
     }
 
+    fn flash_jump_missing(&mut self, cx: &mut Context<Self>) {
+        self.jump_missing = true;
+        self.views.messages.update(cx, |_, cx| cx.notify());
+        self.jump_missing_nonce += 1;
+        let nonce = self.jump_missing_nonce;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(JUMP_MISSING).await;
+            this.update(cx, |app, cx| {
+                if app.jump_missing && app.jump_missing_nonce == nonce {
+                    app.jump_missing = false;
+                    app.views.messages.update(cx, |_, cx| cx.notify());
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     pub(super) fn fetch_history(
         &mut self,
         channel_id: u64,
@@ -161,6 +182,11 @@ impl DiscordApp {
             .map(|guild| guild.id);
         let request = Tokio::spawn(cx, async move {
             match around {
+                Some(0) => {
+                    session
+                        .fetch_messages_after(guild_id, channel_id, 0, MESSAGE_PAGE)
+                        .await
+                }
                 Some(message_id) => {
                     session
                         .fetch_messages_around(guild_id, channel_id, message_id, MESSAGE_PAGE)
@@ -189,13 +215,34 @@ impl DiscordApp {
                                 app.store.set_messages(channel_id, messages);
                             }
                         }
+                        if around == Some(0) {
+                            app.history_complete.insert(channel_id);
+                        }
                         app.request_missing_members(channel_id);
                         if app.selected_channel_id == channel_id {
                             let count = app.channel().map_or(0, |channel| channel.messages.len());
                             app.reset_messages(count);
                             if let Some(since) = around {
                                 app.messages.set_follow_mode(FollowMode::Normal);
-                                if let Some(index) = app.message_index(since) {
+                                if app.pending_jump.take() == Some(since) {
+                                    if let Some(index) = app.message_index(since) {
+                                        app.messages.scroll_to(ListOffset {
+                                            item_ix: index,
+                                            offset_in_item: px(0.),
+                                        });
+                                        let entity = app.entity.clone();
+                                        window.on_next_frame(move |window, cx| {
+                                            entity
+                                                .update(cx, |app, cx| {
+                                                    app.jump_to_message(since, window, cx)
+                                                })
+                                                .ok();
+                                        });
+                                    } else {
+                                        app.scroll_to_unread(since);
+                                        app.flash_jump_missing(cx);
+                                    }
+                                } else if let Some(index) = app.message_index(since) {
                                     app.messages.scroll_to(ListOffset {
                                         item_ix: index,
                                         offset_in_item: px(0.),
@@ -212,8 +259,14 @@ impl DiscordApp {
                             app.flush_pending_sends(channel_id, window, cx);
                         }
                     }
-                    Ok(Err(error)) => log::warn!("Could not load messages: {error}"),
-                    Err(error) => log::warn!("History task failed: {error}"),
+                    Ok(Err(error)) => {
+                        app.pending_jump = None;
+                        log::warn!("Could not load messages: {error}");
+                    }
+                    Err(error) => {
+                        app.pending_jump = None;
+                        log::warn!("History task failed: {error}");
+                    }
                 }
                 if app.pending_present.remove(&channel_id) && around.is_some() {
                     app.fetch_history(channel_id, None, window, cx);

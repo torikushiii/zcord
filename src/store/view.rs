@@ -663,16 +663,18 @@ impl Channel {
             .find(|message| message.in_history())
     }
 
-    pub fn first_unread_index(&self, since: u64) -> Option<usize> {
-        self.messages
-            .iter()
-            .position(|message| message.delivery == Delivery::Sent && message.id > since)
+    pub fn first_unread_index(&self, since: u64, me: u64) -> Option<usize> {
+        self.messages.iter().position(|message| {
+            message.delivery == Delivery::Sent && message.author_id != me && message.id > since
+        })
     }
 
-    pub fn unread_message_count(&self, since: u64) -> usize {
+    pub fn unread_message_count(&self, since: u64, me: u64) -> usize {
         self.messages
             .iter()
-            .filter(|message| message.delivery == Delivery::Sent && message.id > since)
+            .filter(|message| {
+                message.delivery == Delivery::Sent && message.author_id != me && message.id > since
+            })
             .count()
     }
 }

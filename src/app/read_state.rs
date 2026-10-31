@@ -1,11 +1,46 @@
 use super::*;
 
+fn viewing_allows_channel(manual_unread: Option<u64>, selected_channel_id: u64) -> bool {
+    manual_unread != Some(selected_channel_id)
+}
+
 impl DiscordApp {
     pub(crate) fn mark_channel_read(&mut self, cx: &mut Context<Self>) {
         self.unread_since = None;
         self.unread_bar = false;
+        self.manual_unread = None;
         self.ack_channel(cx);
         cx.notify();
+    }
+
+    pub(crate) fn mark_unread(&mut self, message_id: u64, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone().filter(|_| self.live) else {
+            return;
+        };
+        let channel_id = self.selected_channel_id;
+        let Some((cursor, mention_count)) = self.store.mark_unread(channel_id, message_id) else {
+            return;
+        };
+        self.manual_unread = Some(channel_id);
+        self.unread_since = Some(cursor);
+        self.unread_bar = true;
+        self.ack_timer = None;
+        // The divider adds height to a row that may already be measured.
+        self.messages.remeasure_items(0..self.messages.item_count());
+        self.views.messages.update(cx, |_, cx| cx.notify());
+        cx.notify();
+        let guild_id = self.request_guild();
+        let request = Tokio::spawn(cx, async move {
+            session
+                .ack_manual(guild_id, channel_id, cursor, mention_count)
+                .await
+        });
+        cx.spawn(async move |_, _| match request.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => log::warn!("Could not mark channel unread: {error}"),
+            Err(error) => log::warn!("Mark unread task failed: {error}"),
+        })
+        .detach();
     }
 
     pub(super) fn schedule_ack(&mut self, cx: &mut Context<Self>) {
@@ -32,6 +67,7 @@ impl DiscordApp {
             && self.window_active
             && matches!(self.screen, Screen::Chat)
             && self.messages.is_following_tail()
+            && viewing_allows_channel(self.manual_unread, self.selected_channel_id)
             && self
                 .channel()
                 .is_some_and(|channel| channel.messages_loaded)
@@ -79,6 +115,7 @@ impl DiscordApp {
         let guild_id = self.selected_guild_id;
         self.unread_since = None;
         self.unread_bar = false;
+        self.manual_unread = None;
         cx.notify();
         let acks = self.store.unread_acks(guild_id, now_snowflake());
         if acks.is_empty() {
@@ -100,5 +137,17 @@ impl DiscordApp {
             Err(error) => log::warn!("Mark read task failed: {error}"),
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::viewing_allows_channel;
+
+    #[test]
+    fn manual_unread_holds_viewing_for_its_channel() {
+        assert!(!viewing_allows_channel(Some(7), 7));
+        assert!(viewing_allows_channel(None, 7));
+        assert!(viewing_allows_channel(Some(8), 7));
     }
 }

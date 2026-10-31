@@ -147,6 +147,10 @@ impl DiscordApp {
             self.close_lightbox(cx);
         }
         self.selected_channel_id = id;
+        self.pending_jump = None;
+        self.jump_missing = false;
+        self.jump_missing_nonce += 1;
+        self.manual_unread = None;
         self.recent_channels.visit(id);
         self.sync_channel_rows();
         if forum {
@@ -156,7 +160,7 @@ impl DiscordApp {
             self.unread_since = self
                 .store
                 .channel_ack(id)
-                .and_then(|_| self.store.last_read(id));
+                .map(|_| self.store.last_read(id).unwrap_or(0));
             self.unread_bar = self.unread_since.is_some();
         }
         let unread_since = self.unread_since;
@@ -187,9 +191,9 @@ impl DiscordApp {
             self.ack_channel(cx);
         }
         if needs_history {
-            self.fetch_history(id, unread_since.filter(|since| *since > 0), window, cx);
+            self.fetch_history(id, unread_since, window, cx);
         } else if self.live
-            && let Some(since) = unread_since.filter(|since| *since > 0)
+            && let Some(since) = unread_since
         {
             let (oldest, inside) = self.channel().map_or((None, false), |channel| {
                 (

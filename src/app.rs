@@ -92,6 +92,7 @@ const JUMP_STEP_FRACTION: f32 = 0.2;
 /// Targets further than this many viewports are first approached by an instant jump.
 const JUMP_GLIDE_VIEWPORTS: f32 = 3.;
 pub(crate) const JUMP_HIGHLIGHT: Duration = Duration::from_millis(2000);
+pub(crate) const JUMP_MISSING: Duration = Duration::from_secs(4);
 
 struct JumpScroll {
     message_id: u64,
@@ -212,6 +213,7 @@ pub struct DiscordApp {
     reaction_requests: HashSet<(u64, u64, String)>,
     /// Channels waiting for a latest-page fetch before jumping to the present.
     pending_present: HashSet<u64>,
+    pending_jump: Option<u64>,
     pending_sends: sending::PendingSends,
     history_complete: HashSet<u64>,
     forum_pages: HashMap<u64, ForumPage>,
@@ -228,6 +230,8 @@ pub struct DiscordApp {
     jump: Option<JumpScroll>,
     /// Message flashed after a reply jump lands, with a per-jump id to replay the fade.
     pub(crate) jump_highlight: Option<(u64, u64)>,
+    pub(crate) jump_missing: bool,
+    jump_missing_nonce: u64,
     pub(crate) hovered_video: Option<u64>,
     video_drag: Option<(u64, VideoDrag)>,
     video_dragged_at: Option<Instant>,
@@ -243,6 +247,7 @@ pub struct DiscordApp {
     pub(crate) unread_since: Option<u64>,
     /// Whether the top "new messages" bar is still shown; `unread_since` keeps the divider.
     pub(crate) unread_bar: bool,
+    pub(crate) manual_unread: Option<u64>,
     ack_timer: Option<Task<()>>,
     status_expiry: Option<SystemTime>,
     status_expiry_timer: Option<Task<()>>,
@@ -348,6 +353,7 @@ impl DiscordApp {
             loading_newer: HashSet::new(),
             reaction_requests: HashSet::new(),
             pending_present: HashSet::new(),
+            pending_jump: None,
             pending_sends: sending::PendingSends::default(),
             history_complete: HashSet::new(),
             forum_pages: HashMap::new(),
@@ -363,6 +369,8 @@ impl DiscordApp {
             video_fullscreen: None,
             jump: None,
             jump_highlight: None,
+            jump_missing: false,
+            jump_missing_nonce: 0,
             hovered_video: None,
             video_drag: None,
             video_dragged_at: None,
@@ -376,6 +384,7 @@ impl DiscordApp {
             window_active: window.is_window_active(),
             unread_since: None,
             unread_bar: false,
+            manual_unread: None,
             ack_timer: None,
             status_expiry: None,
             status_expiry_timer: None,
