@@ -410,7 +410,7 @@ fn queued_and_forwarded_gif_replies_use_the_same_media_preview_rule() {
         "embeds":[{"type":"gifv","url":url}]
     });
     store.set_messages(2002, vec![serde_json::from_value(original).unwrap()]);
-    store.queue_message(2002, 600, "reply".into(), Some(400));
+    store.queue_message(2002, 600, "reply".into(), Some(400), Vec::new());
     let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
     assert_eq!(channel.messages[0].content, url);
     let Some(ReplyState::Loaded(reply)) = &channel.messages[1].reply else {
@@ -771,7 +771,7 @@ fn open_at_detached_channel_ignores_live_message() {
     assert!(channel.unread);
     assert_eq!(store.channel_ack(2002), Some(70));
     assert_eq!(
-        store.queue_message(2002, 90, "mine".into(), None),
+        store.queue_message(2002, 90, "mine".into(), None, Vec::new()),
         Change::None
     );
 
@@ -797,7 +797,7 @@ fn open_at_detached_channel_ignores_live_message() {
         .collect();
     assert_eq!(ids, [55, 70]);
     assert_eq!(
-        store.queue_message(2002, 90, "mine".into(), None),
+        store.queue_message(2002, 90, "mine".into(), None, Vec::new()),
         Change::MessageInserted {
             channel_id: 2002,
             index: 2
@@ -863,7 +863,7 @@ fn queued_message_is_replaced_by_rest_then_gateway_duplicate() {
     let mut store = Store::from_ready(ready());
     store.set_messages(2002, messages());
     assert_eq!(
-        store.queue_message(2002, 1000, "hello".into(), Some(61)),
+        store.queue_message(2002, 1000, "hello".into(), Some(61), Vec::new()),
         Change::MessageInserted {
             channel_id: 2002,
             index: 2
@@ -879,7 +879,7 @@ fn queued_message_is_replaced_by_rest_then_gateway_duplicate() {
     assert_eq!(queued.author_id, 1);
     assert!(matches!(&queued.reply, Some(ReplyState::Loaded(reply)) if reply.message_id == 61));
     assert_eq!(
-        store.queue_message(2002, 1002, "missing".into(), Some(9999)),
+        store.queue_message(2002, 1002, "missing".into(), Some(9999), Vec::new()),
         Change::MessageInserted {
             channel_id: 2002,
             index: 3
@@ -933,7 +933,7 @@ fn queued_message_is_replaced_by_rest_then_gateway_duplicate() {
 fn queued_message_is_replaced_by_gateway_then_rest_duplicate() {
     let mut store = Store::from_ready(ready());
     store.set_messages(2002, messages());
-    store.queue_message(2002, 2000, "first".into(), None);
+    store.queue_message(2002, 2000, "first".into(), None, Vec::new());
     let created = server_message(2001, 2002, 1, Some(2000));
     assert_eq!(
         store.apply(Event::MessageCreate(Box::new(created.clone()))),
@@ -953,7 +953,7 @@ fn queued_message_is_replaced_by_gateway_then_rest_duplicate() {
 fn replacement_indices_account_for_messages_arriving_between() {
     let mut store = Store::from_ready(ready());
     store.set_messages(2002, messages());
-    store.queue_message(2002, 1000, "mine".into(), None);
+    store.queue_message(2002, 1000, "mine".into(), None, Vec::new());
     assert_eq!(
         store.apply(Event::MessageCreate(Box::new(server_message(
             1500, 2002, 2, None
@@ -992,7 +992,7 @@ fn replacement_indices_account_for_messages_arriving_between() {
 fn failed_and_discarded_messages_and_sent_rows_stay() {
     let mut store = Store::from_ready(ready());
     store.set_messages(2002, messages());
-    store.queue_message(2002, 5000, "oops".into(), None);
+    store.queue_message(2002, 5000, "oops".into(), None, Vec::new());
     assert_eq!(
         store.fail_message(2002, 5000),
         Change::MessageChanged {
@@ -1083,7 +1083,7 @@ fn multiple_outbound_messages_keep_composer_order_for_every_ack_arrival_order() 
         let mut store = Store::from_ready(ready());
         store.set_messages(2002, messages());
         for (nonce, content) in [(1000, "A"), (1001, "B"), (1002, "C")] {
-            store.queue_message(2002, nonce, content.into(), None);
+            store.queue_message(2002, nonce, content.into(), None, Vec::new());
         }
         store.apply(Event::MessageCreate(Box::new(server_message(
             2500, 2002, 2, None,
@@ -1123,8 +1123,8 @@ fn multiple_outbound_messages_keep_composer_order_for_every_ack_arrival_order() 
 fn optimistic_display_indices_support_edits_reactions_deletes_and_pagination() {
     let mut store = Store::from_ready(ready());
     store.set_messages(2002, messages());
-    store.queue_message(2002, 1000, "A".into(), None);
-    store.queue_message(2002, 1001, "B".into(), None);
+    store.queue_message(2002, 1000, "A".into(), None, Vec::new());
+    store.queue_message(2002, 1001, "B".into(), None, Vec::new());
     store.apply(Event::MessageCreate(Box::new(outbound_confirmation(
         3000, 1001, "B",
     ))));
@@ -1222,9 +1222,9 @@ fn history_refresh_preserves_and_reconciles_outstanding_local_messages() {
     for around in [false, true] {
         let mut store = Store::from_ready(ready());
         store.set_messages(2002, messages());
-        store.queue_message(2002, 1000, "A".into(), None);
-        store.queue_message(2002, 1001, "B".into(), None);
-        store.queue_message(2002, 1002, "C".into(), None);
+        store.queue_message(2002, 1000, "A".into(), None, Vec::new());
+        store.queue_message(2002, 1001, "B".into(), None, Vec::new());
+        store.queue_message(2002, 1002, "C".into(), None, Vec::new());
         store.fail_message(2002, 1002);
         store.apply(Event::MessageCreate(Box::new(outbound_confirmation(
             3000, 1001, "B",
@@ -1254,7 +1254,7 @@ fn history_refresh_preserves_and_reconciles_outstanding_local_messages() {
             Change::None
         );
         store.discard_message(2002, 1002);
-        store.queue_message(2002, 5000, "Retry".into(), None);
+        store.queue_message(2002, 5000, "Retry".into(), None, Vec::new());
         assert_display_and_lookup_invariants(&store, &["A", "B", "Retry"]);
         assert_eq!(
             store.append_messages(2002, vec![outbound_confirmation(6000, 5000, "Retry")], 50),
@@ -1271,8 +1271,8 @@ fn history_refresh_preserves_and_reconciles_outstanding_local_messages() {
 fn failed_first_send_stays_before_its_successor_but_a_retry_joins_the_tail() {
     let mut store = Store::from_ready(ready());
     store.set_messages(2002, messages());
-    store.queue_message(2002, 1000, "A".into(), None);
-    store.queue_message(2002, 1001, "B".into(), None);
+    store.queue_message(2002, 1000, "A".into(), None, Vec::new());
+    store.queue_message(2002, 1001, "B".into(), None, Vec::new());
     store.fail_message(2002, 1000);
     store.apply(Event::MessageCreate(Box::new(outbound_confirmation(
         3000, 1001, "B",
@@ -1282,7 +1282,7 @@ fn failed_first_send_stays_before_its_successor_but_a_retry_joins_the_tail() {
     ))));
     assert_display_and_lookup_invariants(&store, &["A", "B"]);
     store.discard_message(2002, 1000);
-    store.queue_message(2002, 5000, "Retry".into(), None);
+    store.queue_message(2002, 5000, "Retry".into(), None, Vec::new());
     assert_display_and_lookup_invariants(&store, &["B", "Retry"]);
     store.apply(Event::MessageCreate(Box::new(outbound_confirmation(
         6000, 5000, "Retry",
@@ -1294,8 +1294,8 @@ fn failed_first_send_stays_before_its_successor_but_a_retry_joins_the_tail() {
 fn pending_and_failed_nonces_are_never_history_or_unread_boundaries() {
     let mut store = Store::from_ready(ready());
     store.set_messages(2002, messages());
-    store.queue_message(2002, 10, "A".into(), None);
-    store.queue_message(2002, 10000, "B".into(), None);
+    store.queue_message(2002, 10, "A".into(), None, Vec::new());
+    store.queue_message(2002, 10000, "B".into(), None, Vec::new());
     store.fail_message(2002, 10000);
     let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
     assert_eq!(channel.oldest_message().unwrap().id, 61);
@@ -1322,8 +1322,8 @@ fn pending_and_failed_nonces_are_never_history_or_unread_boundaries() {
 fn an_outbound_ack_reconciles_a_retained_row_even_while_viewing_older_history() {
     let mut store = Store::from_ready(ready());
     store.set_messages(2002, messages());
-    store.queue_message(2002, 1000, "A".into(), None);
-    store.queue_message(2002, 1001, "B".into(), None);
+    store.queue_message(2002, 1000, "A".into(), None, Vec::new());
+    store.queue_message(2002, 1001, "B".into(), None, Vec::new());
     store.set_around_messages(2002, vec![server_message(50, 2002, 2, None)]);
     assert!(!store.at_present(2002));
     let confirmation = outbound_confirmation(2000, 1000, "A");
@@ -1352,7 +1352,7 @@ fn an_outbound_ack_reconciles_a_retained_row_even_while_viewing_older_history() 
 fn a_stale_refresh_cannot_erase_a_send_confirmed_after_the_request_started() {
     let mut store = Store::from_ready(ready());
     store.set_messages(2002, messages());
-    store.queue_message(2002, 1000, "A".into(), None);
+    store.queue_message(2002, 1000, "A".into(), None, Vec::new());
     let confirmation = outbound_confirmation(2000, 1000, "A");
     store.apply(Event::MessageCreate(Box::new(confirmation.clone())));
     assert_eq!(
@@ -1377,8 +1377,8 @@ fn a_stale_refresh_cannot_erase_a_send_confirmed_after_the_request_started() {
 fn retained_outbox_confirmations_do_not_skip_unloaded_history() {
     let mut store = Store::from_ready(ready());
     store.set_messages(2002, messages());
-    store.queue_message(2002, 1000, "A".into(), None);
-    store.queue_message(2002, 1001, "B".into(), None);
+    store.queue_message(2002, 1000, "A".into(), None, Vec::new());
+    store.queue_message(2002, 1001, "B".into(), None, Vec::new());
     store.fail_message(2002, 1000);
     let confirmation = outbound_confirmation(3000, 1001, "B");
     store.apply(Event::MessageCreate(Box::new(confirmation.clone())));
@@ -1413,7 +1413,7 @@ fn retained_outbox_confirmations_do_not_skip_unloaded_history() {
 fn stale_history_retains_confirmation_metadata_for_partial_updates() {
     let mut store = Store::from_ready(ready());
     store.set_messages(2002, messages());
-    store.queue_message(2002, 1000, "A".into(), None);
+    store.queue_message(2002, 1000, "A".into(), None, Vec::new());
     let mut confirmation = outbound_confirmation(2000, 1000, "A");
     confirmation.message_reference = Some(
         serde_json::from_value(json!({
@@ -1434,4 +1434,25 @@ fn stale_history_retains_confirmation_metadata_for_partial_updates() {
     let message = &channel.messages[channel.message_index(2000).unwrap()];
     assert!(matches!(&message.reply, Some(ReplyState::Deleted)));
     assert_eq!(message.content, "updated sent");
+}
+
+#[test]
+fn queued_message_keeps_pending_uploads() {
+    let mut store = Store::from_ready(ready());
+    store.set_messages(2002, messages());
+    let uploads = vec![PendingUpload {
+        name: "cat.png".into(),
+        size: 13726,
+    }];
+    store.queue_message(2002, 1000, "files".into(), None, uploads.clone());
+    let message = store
+        .guild_by_id(200)
+        .unwrap()
+        .channel(2002)
+        .unwrap()
+        .messages
+        .iter()
+        .find(|message| message.id == 1000)
+        .unwrap();
+    assert_eq!(message.uploads, uploads);
 }

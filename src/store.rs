@@ -141,6 +141,30 @@ impl Store {
         self.premium_type
             .is_some_and(|premium_type| premium_type != 0)
     }
+
+    pub fn upload_limit(&self, channel_id: u64) -> u64 {
+        let premium_tier = self
+            .guilds
+            .iter()
+            .find(|guild| guild.channel(channel_id).is_some())
+            .map_or(0, |guild| guild.premium_tier);
+        file_limit(self.premium_type, premium_tier)
+    }
+}
+
+fn file_limit(premium_type: Option<u8>, premium_tier: u8) -> u64 {
+    const MIB: u64 = 1024 * 1024;
+    let own = match premium_type {
+        Some(2) => 500 * MIB,
+        Some(1 | 3) => 50 * MIB,
+        _ => 20 * MIB,
+    };
+    let boosted = match premium_tier {
+        3 => 100 * MIB,
+        2 => 50 * MIB,
+        _ => 0,
+    };
+    own.max(boosted)
 }
 
 #[derive(Debug, PartialEq, Eq)]

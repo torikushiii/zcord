@@ -445,6 +445,13 @@ pub struct Message {
     pub reply: Option<ReplyState>,
     pub forward: Option<Forward>,
     pub mentions_me: bool,
+    pub uploads: Vec<PendingUpload>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingUpload {
+    pub name: String,
+    pub size: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -792,6 +799,7 @@ pub struct Guild {
     pub icon_color: u32,
     pub unread: bool,
     pub mentions: u32,
+    pub premium_tier: u8,
     pub categories: Vec<Category>,
     pub threads: Vec<Channel>,
     pub member_ids: Vec<u64>,

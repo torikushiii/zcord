@@ -190,3 +190,36 @@ pub(super) fn settings_update(kind: u8, proto: &[u8], partial: bool) -> Event {
         partial,
     }))
 }
+
+#[test]
+fn upload_limits_follow_nitro_and_boost_tiers() {
+    const MIB: u64 = 1024 * 1024;
+    let mut store = Store::from_ready(ready());
+    for (premium_type, tier, expected) in [
+        (None, 0, 20 * MIB),
+        (Some(0), 0, 20 * MIB),
+        (Some(1), 0, 50 * MIB),
+        (Some(3), 0, 50 * MIB),
+        (Some(2), 0, 500 * MIB),
+        (Some(0), 1, 20 * MIB),
+        (Some(0), 2, 50 * MIB),
+        (Some(0), 3, 100 * MIB),
+        (Some(1), 3, 100 * MIB),
+        (Some(2), 3, 500 * MIB),
+    ] {
+        store.premium_type = premium_type;
+        store
+            .guilds
+            .iter_mut()
+            .find(|guild| guild.id == 200)
+            .unwrap()
+            .premium_tier = tier;
+        assert_eq!(
+            store.upload_limit(2002),
+            expected,
+            "{premium_type:?} with tier {tier}"
+        );
+    }
+    store.premium_type = Some(2);
+    assert_eq!(store.upload_limit(999_999), 500 * MIB);
+}

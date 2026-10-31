@@ -1,3 +1,4 @@
+pub(crate) mod attachments;
 mod channel_list;
 mod chat;
 mod composer;
@@ -34,7 +35,9 @@ mod video;
 mod views;
 mod voice;
 
-use crate::discord::{self, Event, FatalError, OutgoingMessage, OutgoingReply, Session};
+use crate::discord::{
+    self, Event, FatalError, OutgoingMessage, OutgoingReply, Session, UploadProgress,
+};
 use login::LoginForm;
 
 use std::{
@@ -144,6 +147,7 @@ pub(crate) struct Editing {
 
 pub(crate) struct FailedSend {
     reply: Option<ReplyTarget>,
+    files: Vec<attachments::StagedFile>,
     pub error: String,
 }
 
@@ -173,6 +177,11 @@ pub struct DiscordApp {
     pub(crate) confirm_delete: Option<u64>,
     delete_closing: Option<Task<()>>,
     pub(crate) failed_sends: HashMap<u64, FailedSend>,
+    staged: HashMap<u64, Vec<attachments::StagedFile>>,
+    upload_refusal: Option<attachments::Refusal>,
+    upload_progress: HashMap<u64, Arc<UploadProgress>>,
+    next_staged_id: u64,
+    upload_ticking: bool,
     pub(crate) hovered_message: Option<u64>,
     pub(crate) hovered_actions: Option<u64>,
     pub(crate) hovered_member: Option<u64>,
@@ -224,6 +233,7 @@ pub struct DiscordApp {
     pub(crate) revealed_spoilers: HashSet<(u64, u16)>,
     pub(crate) hovered_rail: Option<u64>,
     pub(crate) hovered_add_reaction: Option<u64>,
+    pub(crate) hovered_upload_button: Option<attachments::UploadButton>,
     pub(crate) expression_info: expression_info::State,
     pub(crate) player: Option<Player>,
     pub(crate) video_fullscreen: Option<Fullscreen>,
@@ -270,6 +280,7 @@ fn is_background_change(change: &Change, selected_channel_id: u64) -> bool {
 
 impl DiscordApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        attachments::clear_pasted(cx);
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(1, 15)
@@ -312,6 +323,11 @@ impl DiscordApp {
             confirm_delete: None,
             delete_closing: None,
             failed_sends: HashMap::new(),
+            staged: HashMap::new(),
+            upload_refusal: None,
+            upload_progress: HashMap::new(),
+            next_staged_id: 1,
+            upload_ticking: false,
             hovered_message: None,
             hovered_actions: None,
             hovered_member: None,
@@ -364,6 +380,7 @@ impl DiscordApp {
             revealed_spoilers: HashSet::new(),
             hovered_rail: None,
             hovered_add_reaction: None,
+            hovered_upload_button: None,
             expression_info: expression_info::State::default(),
             player: None,
             video_fullscreen: None,
@@ -865,6 +882,7 @@ fn send_error_text(error: &discord::Error) -> String {
         }
         discord::Error::Rejected { message, .. } => message.clone(),
         discord::Error::RateLimited { .. } => "You are sending messages too quickly.".into(),
+        discord::Error::Http(413) => "That file is too large to upload.".into(),
         error => error.to_string(),
     }
 }
@@ -1029,6 +1047,16 @@ impl Render for DiscordApp {
             })
             .child(body)
             .child(self.views.overlays.clone().cached(views::overlays_style()))
+            .when(
+                cx.has_active_drag() && self.store.can_send(self.selected_channel_id),
+                |this| {
+                    this.child(attachments::drop_overlay(self, cx).on_drop(cx.listener(
+                        |app, paths: &ExternalPaths, window, cx| {
+                            app.drop_paths(paths.paths().to_vec(), window, cx);
+                        },
+                    )))
+                },
+            )
     }
 }
 

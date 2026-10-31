@@ -1,4 +1,7 @@
-use super::{Error, OutgoingMessage, ProfileKind, model, properties};
+use super::{
+    Error, OutgoingMessage, ProfileKind, UploadFile, UploadProgress, UploadTarget, model,
+    properties,
+};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use reqwest::{
     Client, Request, RequestBuilder, Response,
@@ -14,10 +17,12 @@ mod profiles;
 mod rate_limits;
 mod requests;
 mod settings;
+pub(crate) use messages::{put_upload, upload_client};
 use rate_limits::{Limiter, Permit, Route};
 
 pub(super) struct Rest {
     client: Client,
+    pub(super) upload_client: Client,
     limits: Limiter,
 }
 
@@ -37,6 +42,7 @@ impl Rest {
             .map_err(|_| Error::Network)?;
         Ok(Self {
             client,
+            upload_client: upload_client()?,
             limits: Limiter::default(),
         })
     }
@@ -176,10 +182,14 @@ fn seconds(value: Option<f64>) -> Option<Duration> {
 
 #[cfg(test)]
 mod tests {
-    use super::messages::{forum_search_query, history_query, message_body, reaction_url};
+    use super::messages::{
+        forum_search_query, history_query, message_body, parse_uploads, put_request, reaction_url,
+        upload_stream, uploads_body,
+    };
     use super::profiles::profile_query;
     use super::*;
     use crate::discord::OutgoingReply;
+    use std::sync::atomic::Ordering;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::{TcpListener, TcpStream},
@@ -193,6 +203,7 @@ mod tests {
                 .timeout(Duration::from_secs(2))
                 .build()
                 .unwrap(),
+            upload_client: upload_client().unwrap(),
             limits: Limiter::default(),
         }
     }
@@ -208,6 +219,44 @@ mod tests {
                 request.extend_from_slice(&bytes[..count]);
             }
             stream
+        })
+        .await
+        .unwrap()
+    }
+
+    async fn accept_upload(listener: &TcpListener) -> (TcpStream, String) {
+        timeout(Duration::from_secs(2), async {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut bytes = [0; 1024];
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let count = stream.read(&mut bytes).await.unwrap();
+                assert!(count > 0 && request.len() < 16384);
+                request.extend_from_slice(&bytes[..count]);
+            }
+            let split = request
+                .windows(4)
+                .position(|bytes| bytes == b"\r\n\r\n")
+                .unwrap()
+                + 4;
+            let headers = String::from_utf8_lossy(&request[..split]).to_string();
+            let length = headers
+                .lines()
+                .filter_map(|line| line.split_once(':'))
+                .find_map(|(name, value)| {
+                    if name.eq_ignore_ascii_case("content-length") {
+                        value.trim().parse::<usize>().ok()
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+            while request.len() - split < length {
+                let count = stream.read(&mut bytes).await.unwrap();
+                assert!(count > 0);
+                request.extend_from_slice(&bytes[..count]);
+            }
+            (stream, headers)
         })
         .await
         .unwrap()
@@ -405,6 +454,17 @@ mod tests {
             content: "hi".into(),
             nonce: 123,
             reply,
+            attachments: Vec::new(),
+        }
+    }
+
+    fn upload_file(name: &str, size: u64, content_type: &str) -> UploadFile {
+        UploadFile {
+            path: std::path::PathBuf::from(name),
+            filename: name.to_owned(),
+            size,
+            content_type: content_type.to_owned(),
+            spoiler: false,
         }
     }
 
@@ -444,6 +504,199 @@ mod tests {
             ),
             r#"{"mobile_network_type":"unknown","content":"hi","nonce":"123","tts":false,"message_reference":{"channel_id":"20","message_id":"30","type":0},"flags":0}"#
         );
+    }
+
+    #[test]
+    fn send_payload_attachments_follow_flags() {
+        let mut message = outgoing(None);
+        message.attachments = vec![crate::discord::OutgoingAttachment {
+            filename: "image.png".into(),
+            uploaded_filename: "uuid/image.png".into(),
+            content_type: "image/png".into(),
+            spoiler: true,
+        }];
+        assert_eq!(
+            serde_json::to_string(&message_body(None, 20, &message)).unwrap(),
+            r#"{"mobile_network_type":"unknown","content":"hi","nonce":"123","tts":false,"flags":0,"attachments":[{"id":"0","description":"","filename":"image.png","uploaded_filename":"uuid/image.png","is_spoiler":true,"original_content_type":"image/png"}]}"#
+        );
+        message.attachments[0].spoiler = false;
+        assert!(
+            !serde_json::to_string(&message_body(None, 20, &message))
+                .unwrap()
+                .contains("is_spoiler")
+        );
+    }
+
+    #[test]
+    fn upload_delete_encodes_the_slash_as_captured() {
+        assert_eq!(
+            messages::delete_upload_url("uuid/Cargo.toml"),
+            "https://discord.com/api/v9/attachments/uuid%2FCargo.toml"
+        );
+    }
+
+    #[test]
+    fn create_uploads_body_and_response_match_captured_traffic() {
+        let files = [upload_file("image.png", 13726, "image/png")];
+        assert_eq!(
+            serde_json::to_string(&uploads_body(&files)).unwrap(),
+            r#"{"files":[{"filename":"image.png","file_size":13726,"id":"0","is_clip":false,"original_content_type":"image/png"}]}"#
+        );
+        let response = r#"{"attachments":[{"id":0,"upload_url":"https://cdn.discordapp.com/attachments/1/2/uuid/image.png","upload_filename":"uuid/image.png"}]}"#;
+        let targets = parse_uploads(response).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].id, 0);
+        assert_eq!(
+            targets[0].upload_url,
+            "https://cdn.discordapp.com/attachments/1/2/uuid/image.png"
+        );
+        assert_eq!(targets[0].upload_filename, "uuid/image.png");
+        assert!(matches!(parse_uploads("{}"), Err(Error::Decode)));
+    }
+
+    #[test]
+    fn upload_request_adds_no_authorization() {
+        let client = upload_client().unwrap();
+        let file = upload_file("image.png", 13726, "image/png");
+        let request = put_request(
+            &client,
+            "https://example.test/upload",
+            &file,
+            reqwest::Body::from(Vec::new()),
+        )
+        .build()
+        .unwrap();
+        assert!(request.headers().get(AUTHORIZATION).is_none());
+        assert_eq!(
+            request
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .unwrap(),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get(reqwest::header::CONTENT_LENGTH)
+                .unwrap(),
+            "13726"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_client_sends_no_account_authorization() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/upload", listener.local_addr().unwrap());
+        let rest = Rest::new("secret-token").unwrap();
+        let path = std::env::temp_dir().join(format!("zcord-upload-auth-{}", std::process::id()));
+        tokio::fs::write(&path, b"hello").await.unwrap();
+        let file = UploadFile {
+            path: path.clone(),
+            filename: "hello.txt".into(),
+            size: 5,
+            content_type: "text/plain".into(),
+            spoiler: false,
+        };
+        let progress = UploadProgress::new(5);
+        let client = rest.upload_client.clone();
+        let server = async {
+            let (mut stream, headers) = accept_upload(&listener).await;
+            assert!(!headers.to_ascii_lowercase().contains("\r\nauthorization:"));
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            stream.shutdown().await.unwrap();
+        };
+        let transfer = put_upload(&client, &url, &file, &progress);
+        timeout(Duration::from_secs(5), async {
+            let ((), result) = tokio::join!(server, transfer);
+            result.unwrap();
+        })
+        .await
+        .unwrap();
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    fn stalled_upload(
+        name: &str,
+    ) -> (
+        std::path::PathBuf,
+        UploadFile,
+        std::sync::Arc<UploadProgress>,
+    ) {
+        let path = std::env::temp_dir().join(format!("zcord-{name}-{}", std::process::id()));
+        std::fs::write(&path, b"hello").unwrap();
+        let file = UploadFile {
+            path: path.clone(),
+            filename: "hello.txt".into(),
+            size: 5,
+            content_type: "text/plain".into(),
+            spoiler: false,
+        };
+        (path, file, UploadProgress::new(5))
+    }
+
+    #[tokio::test]
+    async fn stalled_upload_gives_up_and_cancels_without_a_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/upload", listener.local_addr().unwrap());
+        let held = tokio::spawn(async move {
+            let mut streams = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                streams.push(stream);
+            }
+        });
+        let client = upload_client().unwrap();
+
+        let (path, file, progress) = stalled_upload("upload-stall");
+        let stalled = messages::put_upload_watched(
+            &client,
+            &url,
+            &file,
+            &progress,
+            Duration::from_millis(100),
+        );
+        let result = timeout(Duration::from_secs(5), stalled).await.unwrap();
+        assert!(matches!(result, Err(Error::Network)));
+        let _ = std::fs::remove_file(&path);
+
+        let (path, file, progress) = stalled_upload("upload-stall-cancel");
+        progress.cancelled.store(true, Ordering::Release);
+        let cancelled =
+            messages::put_upload_watched(&client, &url, &file, &progress, Duration::from_secs(60));
+        let result = timeout(Duration::from_secs(5), cancelled).await.unwrap();
+        assert!(matches!(result, Err(Error::Cancelled)));
+        let _ = std::fs::remove_file(&path);
+        held.abort();
+    }
+
+    #[tokio::test]
+    async fn upload_stream_reads_in_chunks_and_stops_when_cancelled() {
+        use futures::StreamExt;
+        let path = std::env::temp_dir().join(format!("zcord-upload-stream-{}", std::process::id()));
+        let bytes = vec![7u8; 150_000];
+        tokio::fs::write(&path, &bytes).await.unwrap();
+        let progress = UploadProgress::new(bytes.len() as u64);
+        let file = tokio::fs::File::open(&path).await.unwrap();
+        let mut stream = Box::pin(upload_stream(file, progress.clone()));
+        let mut seen = Vec::new();
+        let mut chunks = 0;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.unwrap();
+            assert!(chunk.len() <= 64 * 1024);
+            seen.extend_from_slice(&chunk);
+            chunks += 1;
+        }
+        assert_eq!(chunks, 3);
+        assert_eq!(seen, bytes);
+        assert_eq!(progress.sent.load(Ordering::Acquire), bytes.len() as u64);
+        let file = tokio::fs::File::open(&path).await.unwrap();
+        let cancelled = UploadProgress::new(bytes.len() as u64);
+        cancelled.cancelled.store(true, Ordering::Release);
+        let mut stream = Box::pin(upload_stream(file, cancelled));
+        assert!(matches!(stream.next().await, Some(Err(Error::Cancelled))));
+        let _ = tokio::fs::remove_file(&path).await;
     }
 
     #[test]

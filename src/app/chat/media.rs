@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::attachments::UploadButton;
 use crate::app::expression_info::{Expression, HoverOwner};
 
 const MEDIA_MAX: (f32, f32) = (550., 350.);
@@ -293,6 +294,67 @@ fn file_card(attachment: &Attachment) -> impl IntoElement + use<> {
                         .child(file_size(attachment.size)),
                 ),
         )
+}
+
+pub(super) fn upload_card(
+    app: &DiscordApp,
+    nonce: u64,
+    upload: &PendingUpload,
+) -> impl IntoElement + use<> {
+    let fraction = app.upload_fraction(nonce);
+    let cancel = app.entity.clone();
+    div()
+        .flex()
+        .items_center()
+        .gap_3()
+        .mt_1()
+        .max_w(rpx(432.))
+        .p_3()
+        .rounded(rpx(8.))
+        .bg(rgb(theme::ELEVATED))
+        .border_1()
+        .border_color(rgba(theme::BORDER))
+        .child(theme::icon("file", 32., theme::MUTED))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .gap_1()
+                .child(div().truncate().child(upload.name.clone()))
+                .child(
+                    div()
+                        .text_size(rpx(12.))
+                        .text_color(rgb(theme::FAINT))
+                        .child(file_size(upload.size)),
+                )
+                .children(fraction.map(|fraction| {
+                    div()
+                        .h(rpx(4.))
+                        .rounded(rpx(2.))
+                        .overflow_hidden()
+                        .bg(rgba(theme::BORDER))
+                        .child(
+                            div()
+                                .h_full()
+                                .w(relative(fraction.clamp(0., 1.)))
+                                .bg(rgb(theme::BLURPLE)),
+                        )
+                })),
+        )
+        .when(fraction.is_some(), |this| {
+            this.child(
+                app.upload_tip(
+                    UploadButton::Cancel(nonce),
+                    "Cancel Upload",
+                    theme::icon_button(("cancel-upload", nonce), "x", 16., theme::MUTED),
+                )
+                .on_click(move |_, _, cx| {
+                    cancel.update(cx, |app, _| app.cancel_upload(nonce)).ok();
+                }),
+            )
+        })
 }
 
 pub(in crate::app) fn file_size(bytes: u64) -> String {

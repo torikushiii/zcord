@@ -1,5 +1,5 @@
 use super::super::*;
-use crate::discord::rest::Anchor;
+use crate::discord::rest::{Anchor, put_upload};
 
 impl Session {
     pub async fn fetch_messages(
@@ -54,13 +54,15 @@ impl Session {
         .await
     }
 
-    pub fn send_message(
+    /// The ticket is taken here, before spawning, so sends keep composer order.
+    fn begin_send(
         &self,
-        guild_id: Option<u64>,
         channel_id: u64,
-        message: OutgoingMessage,
-    ) -> impl Future<Output = Result<model::Message, Error>> + Send + 'static {
-        // The ticket is taken here, before spawning, so sends keep composer order.
+    ) -> (
+        Session,
+        Option<tokio::sync::oneshot::Receiver<()>>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
         let (done, turn) = tokio::sync::oneshot::channel::<()>();
         let previous = self
             .inner
@@ -68,7 +70,16 @@ impl Session {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(channel_id, turn);
-        let session = self.clone();
+        (self.clone(), previous, done)
+    }
+
+    pub fn send_message(
+        &self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        message: OutgoingMessage,
+    ) -> impl Future<Output = Result<model::Message, Error>> + Send + 'static {
+        let (session, previous, done) = self.begin_send(channel_id);
         async move {
             if let Some(previous) = previous {
                 let _ = previous.await;
@@ -78,6 +89,87 @@ impl Session {
                 .await;
             drop(done);
             result
+        }
+    }
+
+    pub fn send_with_files(
+        &self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        mut message: OutgoingMessage,
+        files: Vec<UploadFile>,
+        progress: Arc<UploadProgress>,
+    ) -> impl Future<Output = Result<model::Message, Error>> + Send + 'static {
+        let (session, previous, done) = self.begin_send(channel_id);
+        async move {
+            if let Some(previous) = previous {
+                let _ = previous.await;
+            }
+            let result = session
+                .send_with_files_inner(guild_id, channel_id, &mut message, &files, &progress)
+                .await;
+            drop(done);
+            result
+        }
+    }
+
+    async fn send_with_files_inner(
+        &self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        message: &mut OutgoingMessage,
+        files: &[UploadFile],
+        progress: &Arc<UploadProgress>,
+    ) -> Result<model::Message, Error> {
+        let slots = self
+            .rest(async |rest| rest.create_uploads(guild_id, channel_id, files).await)
+            .await?;
+        let upload_client = self
+            .inner
+            .rest
+            .as_ref()
+            .map_err(Clone::clone)?
+            .upload_client
+            .clone();
+        let mut uploaded = Vec::with_capacity(files.len());
+        for (index, file) in files.iter().enumerate() {
+            let Some(slot) = slots.iter().find(|slot| slot.id == index as u64) else {
+                self.discard_uploads(&uploaded).await;
+                return Err(Error::Decode);
+            };
+            if let Err(error) = put_upload(&upload_client, &slot.upload_url, file, progress).await {
+                self.discard_uploads(&uploaded).await;
+                return Err(error);
+            }
+            uploaded.push(slot.clone());
+        }
+        message.attachments = files
+            .iter()
+            .zip(&uploaded)
+            .map(|(file, slot)| OutgoingAttachment {
+                filename: file.filename.clone(),
+                uploaded_filename: slot.upload_filename.clone(),
+                content_type: file.content_type.clone(),
+                spoiler: file.spoiler,
+            })
+            .collect();
+        match self
+            .rest(async |rest| rest.send_message(guild_id, channel_id, message).await)
+            .await
+        {
+            Ok(message) => Ok(message),
+            Err(error) => {
+                self.discard_uploads(&uploaded).await;
+                Err(error)
+            }
+        }
+    }
+
+    async fn discard_uploads(&self, uploads: &[UploadTarget]) {
+        for upload in uploads {
+            let _ = self
+                .rest(async |rest| rest.delete_upload(&upload.upload_filename).await)
+                .await;
         }
     }
 

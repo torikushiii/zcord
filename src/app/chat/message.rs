@@ -747,6 +747,12 @@ pub(super) fn render_message(
                         )
                         .children(
                             message
+                                .uploads
+                                .iter()
+                                .map(|upload| super::media::upload_card(app, message.id, upload)),
+                        )
+                        .children(
+                            message
                                 .stickers
                                 .iter()
                                 .map(|sticker| render_sticker(app, message.id, sticker, cx)),
