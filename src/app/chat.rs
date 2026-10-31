@@ -31,7 +31,7 @@ mod message;
 mod rows;
 mod skeleton;
 use crate::app::invite_card;
-use bars::{is_detached, new_messages_bar, older_messages_bar};
+use bars::{is_detached, jump_missing_notice, new_messages_bar, older_messages_bar};
 pub(crate) use composer::composer;
 pub(super) use dialog::delete_dialog;
 pub(super) use media::file_size;
@@ -240,6 +240,7 @@ pub fn messages(app: &DiscordApp, cx: &App) -> AnyElement {
                     new_messages_bar(app, app.entity.clone())
                 };
                 let older = older_messages_bar(app, app.entity.clone());
+                let missing = jump_missing_notice(app);
                 this.child(
                     div()
                         .relative()
@@ -261,7 +262,8 @@ pub fn messages(app: &DiscordApp, cx: &App) -> AnyElement {
                             .w_full(),
                         )
                         .children(bar)
-                        .children(older),
+                        .children(older)
+                        .children(missing),
                 )
             }
         })

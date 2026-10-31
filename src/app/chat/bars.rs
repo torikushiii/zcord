@@ -14,12 +14,12 @@ pub(super) fn new_messages_bar(
     }
     let since = app.unread_since?;
     let channel = app.channel()?;
-    let index = channel.first_unread_index(since)?;
+    let index = channel.first_unread_index(since, app.store.current_user_id)?;
     if app.messages.item_is_above_viewport(index) != Some(true) {
         return None;
     }
     let truncated = index == 0 && !app.history_complete.contains(&channel.id);
-    let count = channel.unread_message_count(since);
+    let count = channel.unread_message_count(since, app.store.current_user_id);
     let timestamp = channel.messages[index].timestamp;
     let today = chrono::Local::now().date_naive();
     let since_text = if (
@@ -83,6 +83,34 @@ pub(super) fn new_messages_bar(
             )
             .into_any_element(),
     )
+}
+
+pub(super) fn jump_missing_notice(app: &DiscordApp) -> Option<AnyElement> {
+    app.jump_missing.then(|| {
+        div()
+            .absolute()
+            .top(rpx(8.))
+            .left_0()
+            .right_0()
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .px(rpx(16.))
+                    .py(rpx(6.))
+                    .rounded(rpx(12.))
+                    .border_1()
+                    .border_color(rgb(theme::PLACEHOLDER_STRONG))
+                    .bg(rgb(theme::ELEVATED))
+                    .shadow_lg()
+                    .text_size(rpx(15.))
+                    .line_height(rpx(20.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(theme::TEXT))
+                    .child("Couldn't find that message"),
+            )
+            .into_any_element()
+    })
 }
 
 pub(super) fn older_messages_bar(

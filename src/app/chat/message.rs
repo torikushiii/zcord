@@ -887,6 +887,12 @@ fn message_actions(app: &DiscordApp, message: &Message) -> Option<AnyElement> {
     let edit = app.entity.clone();
     let reply = app.entity.clone();
     let delete = app.entity.clone();
+    let unread = app.entity.clone();
+    let can_mark_unread = app.live
+        && app
+            .store
+            .last_read(channel_id)
+            .is_some_and(|read| id <= read);
     Some(
         div()
             .id(("message-actions", id))
@@ -921,6 +927,15 @@ fn message_actions(app: &DiscordApp, message: &Message) -> Option<AnyElement> {
                             .ok();
                     },
                 ))
+            })
+            .when(can_mark_unread, |this| {
+                this.child(
+                    button("unread", "mail", theme::MUTED, "Mark Unread").on_click(
+                        move |_, _, cx| {
+                            unread.update(cx, |app, cx| app.mark_unread(id, cx)).ok();
+                        },
+                    ),
+                )
             })
             .when(can_delete, |this| {
                 this.child(button("delete", "trash-2", theme::RED, "Delete").on_click(

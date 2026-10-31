@@ -1141,10 +1141,10 @@ fn optimistic_display_indices_support_edits_reactions_deletes_and_pagination() {
             .collect::<Vec<_>>(),
         [61, 62, 2500, 1000, 3000]
     );
-    assert_eq!(channel.first_unread_index(2500), Some(4));
-    assert_eq!(channel.first_unread_index(3000), None);
-    assert_eq!(channel.unread_message_count(2500), 1);
-    assert_eq!(channel.unread_message_count(3000), 0);
+    assert_eq!(channel.first_unread_index(2500, 9999), Some(4));
+    assert_eq!(channel.first_unread_index(3000, 9999), None);
+    assert_eq!(channel.unread_message_count(2500, 9999), 1);
+    assert_eq!(channel.unread_message_count(3000, 9999), 0);
     assert!(matches!(
         store.edit_message_locally(2002, 1000, "edited pending".into()),
         Change::MessageChanged { index: 3, .. }
@@ -1300,8 +1300,8 @@ fn pending_and_failed_nonces_are_never_history_or_unread_boundaries() {
     let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
     assert_eq!(channel.oldest_message().unwrap().id, 61);
     assert_eq!(channel.newest_message().unwrap().id, 62);
-    assert_eq!(channel.first_unread_index(62), None);
-    assert_eq!(channel.unread_message_count(62), 0);
+    assert_eq!(channel.first_unread_index(62, 9999), None);
+    assert_eq!(channel.unread_message_count(62, 9999), 0);
     assert_eq!(
         store.prepend_messages(2002, vec![server_message(60, 2002, 2, None)]),
         1

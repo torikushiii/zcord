@@ -95,6 +95,12 @@ struct AckMessage {
 }
 
 #[derive(Serialize)]
+struct AckManual {
+    manual: bool,
+    mention_count: u32,
+}
+
+#[derive(Serialize)]
 struct AckBulk {
     read_states: Vec<ReadStateAck>,
 }
@@ -333,5 +339,41 @@ impl Rest {
         self.send(|| self.client.post(&url).header(REFERER, &referer).json(&body))
             .await?;
         Ok(())
+    }
+
+    pub async fn ack_manual(
+        &self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        message_id: u64,
+        mention_count: u32,
+    ) -> Result<(), Error> {
+        let referer = referer(guild_id, channel_id);
+        let url =
+            format!("https://discord.com/api/v9/channels/{channel_id}/messages/{message_id}/ack");
+        let body = AckManual {
+            manual: true,
+            mention_count,
+        };
+        self.send(|| self.client.post(&url).header(REFERER, &referer).json(&body))
+            .await?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AckManual;
+
+    #[test]
+    fn ack_manual_body_matches_discord() {
+        let body = AckManual {
+            manual: true,
+            mention_count: 3,
+        };
+        assert_eq!(
+            serde_json::to_string(&body).unwrap(),
+            r#"{"manual":true,"mention_count":3}"#
+        );
     }
 }

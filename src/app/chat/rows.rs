@@ -45,9 +45,9 @@ pub(super) fn render_row(app: &DiscordApp, index: usize, cx: &App) -> AnyElement
             && !is_system(message.kind)
     });
     let start = index == 0 && app.history_complete.contains(&app.selected_channel_id);
-    let first_unread = app
-        .unread_since
-        .is_some_and(|since| is_first_unread(messages, index, since, start));
+    let first_unread = app.unread_since.is_some_and(|since| {
+        is_first_unread(messages, index, since, start, app.store.current_user_id)
+    });
     div()
         .w_full()
         .when(start, |this| this.children(welcome(app, cx)))
@@ -67,15 +67,22 @@ pub(super) fn render_row(app: &DiscordApp, index: usize, cx: &App) -> AnyElement
         .into_any_element()
 }
 
-pub(super) fn is_first_unread(messages: &[Message], index: usize, since: u64, start: bool) -> bool {
+pub(super) fn is_first_unread(
+    messages: &[Message],
+    index: usize,
+    since: u64,
+    start: bool,
+    me: u64,
+) -> bool {
     let message = &messages[index];
     (index > 0 || start)
         && message.delivery == Delivery::Sent
+        && message.author_id != me
         && message.id > since
         && messages[..index]
             .iter()
             .rev()
-            .find(|previous| previous.delivery == Delivery::Sent)
+            .find(|previous| previous.delivery == Delivery::Sent && previous.author_id != me)
             .is_none_or(|previous| previous.id <= since)
 }
 

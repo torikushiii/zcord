@@ -214,6 +214,7 @@ impl DiscordApp {
         self.typing_sent = None;
         self.unread_since = None;
         self.unread_bar = false;
+        self.manual_unread = None;
         if !self.live {
             self.messages.set_follow_mode(FollowMode::Tail);
             if let Some(index) =

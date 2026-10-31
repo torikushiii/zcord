@@ -40,6 +40,20 @@ impl Session {
         .await
     }
 
+    pub async fn ack_manual(
+        &self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        message_id: u64,
+        mention_count: u32,
+    ) -> Result<(), Error> {
+        self.rest(async |rest| {
+            rest.ack_manual(guild_id, channel_id, message_id, mention_count)
+                .await
+        })
+        .await
+    }
+
     pub fn send_message(
         &self,
         guild_id: Option<u64>,
