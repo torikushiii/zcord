@@ -1285,21 +1285,44 @@ fn media(
             .id(("gif-media", key))
             .into_any_element();
     }
+    if !video {
+        let spec = ImageSpec::Media {
+            url: src.clone(),
+            width,
+            height,
+            animated: true,
+        };
+        return animated::poster(&spec, pixels, cx)
+            .map(|image| {
+                image
+                    .absolute()
+                    .inset_0()
+                    .size_full()
+                    .object_fit(ObjectFit::Cover)
+                    .rounded(rpx(RADIUS))
+                    .id(("gif-still", key))
+                    .into_any_element()
+            })
+            .or_else(|| {
+                let fallback = animated::fallback(&spec, pixels, cx)?;
+                crate::media::images::resolve(&fallback, pixels, cx).map(|path| {
+                    img(path)
+                        .absolute()
+                        .inset_0()
+                        .size_full()
+                        .object_fit(ObjectFit::Cover)
+                        .rounded(rpx(RADIUS))
+                        .into_any_element()
+                })
+            })
+            .unwrap_or_else(|| div().into_any_element());
+    }
     // Discord's media proxy renders a still frame for its own videos while the clip decodes.
-    let still = if video {
-        ImageSpec::VideoPoster {
-            id: key,
-            url: src.clone(),
-            width,
-            height,
-        }
-    } else {
-        ImageSpec::Media {
-            url: src.clone(),
-            width,
-            height,
-            animated: false,
-        }
+    let still = ImageSpec::VideoPoster {
+        id: key,
+        url: src.clone(),
+        width,
+        height,
     };
     match crate::media::images::resolve(&still, pixels, cx) {
         Some(path) => img(path)
