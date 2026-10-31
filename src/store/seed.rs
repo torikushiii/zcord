@@ -223,6 +223,7 @@ impl Store {
                         icon_color,
                         unread,
                         mentions,
+                        premium_tier: 0,
                         categories: vec![
                             Category {
                                 id: guild_id * 10,
@@ -464,6 +465,7 @@ fn seed_messages(
             },
             forward: None,
             mentions_me: false,
+            uploads: Vec::new(),
         });
         *next_message_id += 1;
     }

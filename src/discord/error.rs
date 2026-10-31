@@ -16,6 +16,7 @@ pub enum Error {
     Decode,
     InvalidCredential,
     Closed,
+    Cancelled,
     SettingsOutdated,
 }
 
@@ -38,6 +39,7 @@ impl fmt::Display for Error {
             Self::Decode => f.write_str("Malformed Discord response"),
             Self::InvalidCredential => f.write_str("Invalid credential header"),
             Self::Closed => f.write_str("Session closed"),
+            Self::Cancelled => f.write_str("Upload cancelled"),
             Self::SettingsOutdated => f.write_str("Status changed on another client; choose again"),
         }
     }

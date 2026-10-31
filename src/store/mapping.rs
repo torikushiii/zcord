@@ -329,6 +329,7 @@ pub(super) fn map_message(message: &model::Message) -> Option<Message> {
         reply: None,
         forward: map_forward(message),
         mentions_me: false,
+        uploads: Vec::new(),
     })
 }
 
@@ -632,6 +633,7 @@ pub(super) fn map_guild(
         name: guild.name().to_owned(),
         initials: initials(guild.name()),
         icon_color: color,
+        premium_tier: guild.premium_tier,
         unread: mapped
             .iter()
             .flat_map(|c| &c.channels)

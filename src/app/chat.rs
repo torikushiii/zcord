@@ -18,7 +18,7 @@ use crate::{
     },
     media::animated,
     media::images::{self, ImageSpec},
-    store::{Attachment, Delivery, Forward, Message, ReplyState, Sticker},
+    store::{Attachment, Delivery, Forward, Message, PendingUpload, ReplyState, Sticker},
     text::composer_tokens,
     theme::{self, WithoutTextSelection, rpx},
 };

@@ -1,4 +1,17 @@
 use super::*;
+use futures::Stream;
+use reqwest::{
+    Body,
+    header::{CONTENT_LENGTH, CONTENT_TYPE},
+};
+use serde::Deserialize;
+use std::sync::{Arc, atomic::Ordering};
+use tokio::io::AsyncReadExt;
+
+const UPLOAD_CHUNK: usize = 64 * 1024;
+const UPLOAD_STALL: Duration = Duration::from_secs(60);
+const UPLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const CHAT_INPUT_CONTEXT: &str = "eyJsb2NhdGlvbiI6ImNoYXRfaW5wdXQifQ==";
 
 pub(super) fn history_query(anchor: Anchor, limit: usize) -> Vec<(&'static str, String)> {
     let mut query = Vec::new();
@@ -35,6 +48,19 @@ pub(super) struct CreateMessage<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     allowed_mentions: Option<AllowedMentions>,
     flags: u64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    attachments: Vec<AttachmentBody<'a>>,
+}
+
+#[derive(Serialize)]
+struct AttachmentBody<'a> {
+    id: String,
+    description: &'a str,
+    filename: &'a str,
+    uploaded_filename: &'a str,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    is_spoiler: bool,
+    original_content_type: &'a str,
 }
 
 #[derive(Serialize)]
@@ -85,6 +111,174 @@ pub(super) fn message_body<'a>(
                 replied_user: false,
             }),
         flags: 0,
+        attachments: message
+            .attachments
+            .iter()
+            .enumerate()
+            .map(|(index, attachment)| AttachmentBody {
+                id: index.to_string(),
+                description: "",
+                filename: &attachment.filename,
+                uploaded_filename: &attachment.uploaded_filename,
+                is_spoiler: attachment.spoiler,
+                original_content_type: &attachment.content_type,
+            })
+            .collect(),
+    }
+}
+
+#[derive(Serialize)]
+pub(super) struct CreateUploads<'a> {
+    files: Vec<UploadFileBody<'a>>,
+}
+
+#[derive(Serialize)]
+struct UploadFileBody<'a> {
+    filename: &'a str,
+    file_size: u64,
+    id: String,
+    is_clip: bool,
+    original_content_type: &'a str,
+}
+
+#[derive(Deserialize)]
+struct UploadsResponse {
+    attachments: Vec<UploadSlot>,
+}
+
+#[derive(Deserialize)]
+struct UploadSlot {
+    id: u64,
+    upload_url: String,
+    upload_filename: String,
+}
+
+pub(super) fn uploads_body(files: &[UploadFile]) -> CreateUploads<'_> {
+    CreateUploads {
+        files: files
+            .iter()
+            .enumerate()
+            .map(|(index, file)| UploadFileBody {
+                filename: &file.filename,
+                file_size: file.size,
+                id: index.to_string(),
+                is_clip: false,
+                original_content_type: &file.content_type,
+            })
+            .collect(),
+    }
+}
+
+// The whole `<uuid>/<name>` is one path segment, so its slash is encoded too.
+pub(super) fn delete_upload_url(uploaded_filename: &str) -> String {
+    format!(
+        "https://discord.com/api/v9/attachments/{}",
+        percent_encode(uploaded_filename)
+    )
+}
+
+pub(crate) fn upload_client() -> Result<Client, Error> {
+    Client::builder()
+        .connect_timeout(UPLOAD_CONNECT_TIMEOUT)
+        .build()
+        .map_err(|_| Error::Network)
+}
+
+pub(super) fn parse_uploads(body: &str) -> Result<Vec<UploadTarget>, Error> {
+    let response: UploadsResponse = serde_json::from_str(body).map_err(|_| Error::Decode)?;
+    Ok(response
+        .attachments
+        .into_iter()
+        .map(|slot| UploadTarget {
+            id: slot.id,
+            upload_url: slot.upload_url,
+            upload_filename: slot.upload_filename,
+        })
+        .collect())
+}
+
+pub(super) fn put_request(
+    client: &Client,
+    target_url: &str,
+    file: &UploadFile,
+    body: Body,
+) -> RequestBuilder {
+    client
+        .put(target_url)
+        .header(CONTENT_TYPE, "application/octet-stream")
+        .header(CONTENT_LENGTH, file.size)
+        .body(body)
+}
+
+pub(super) fn upload_stream(
+    file: tokio::fs::File,
+    progress: Arc<UploadProgress>,
+) -> impl Stream<Item = Result<Vec<u8>, Error>> + Send + 'static {
+    futures::stream::try_unfold((file, progress), |(mut file, progress)| async move {
+        if progress.cancelled.load(Ordering::Acquire) {
+            return Err(Error::Cancelled);
+        }
+        let mut buffer = vec![0; UPLOAD_CHUNK];
+        let read = file.read(&mut buffer).await.map_err(|_| Error::Network)?;
+        if read == 0 {
+            return Ok(None);
+        }
+        buffer.truncate(read);
+        progress.sent.fetch_add(read as u64, Ordering::AcqRel);
+        Ok(Some((buffer, (file, progress))))
+    })
+}
+
+pub(crate) async fn put_upload(
+    client: &Client,
+    target_url: &str,
+    file: &UploadFile,
+    progress: &Arc<UploadProgress>,
+) -> Result<(), Error> {
+    put_upload_watched(client, target_url, file, progress, UPLOAD_STALL).await
+}
+
+pub(super) async fn put_upload_watched(
+    client: &Client,
+    target_url: &str,
+    file: &UploadFile,
+    progress: &Arc<UploadProgress>,
+    stall: Duration,
+) -> Result<(), Error> {
+    let handle = tokio::fs::File::open(&file.path)
+        .await
+        .map_err(|_| Error::Network)?;
+    let body = Body::wrap_stream(upload_stream(handle, progress.clone()));
+    let send = put_request(client, target_url, file, body).send();
+    tokio::pin!(send);
+    // A stalled socket stops polling the body, so the body can't notice a cancel or a stall.
+    let mut watch = tokio::time::interval((stall / 4).min(Duration::from_secs(1)));
+    let mut seen = 0;
+    let mut moved = tokio::time::Instant::now();
+    let result = loop {
+        tokio::select! {
+            result = &mut send => break result,
+            _ = watch.tick() => {
+                if progress.cancelled.load(Ordering::Acquire) {
+                    return Err(Error::Cancelled);
+                }
+                let sent = progress.sent.load(Ordering::Acquire);
+                if sent != seen {
+                    seen = sent;
+                    moved = tokio::time::Instant::now();
+                } else if moved.elapsed() >= stall {
+                    return Err(Error::Network);
+                }
+            }
+        }
+    };
+    let cancelled = progress.cancelled.load(Ordering::Acquire);
+    match result {
+        Ok(response) if response.status().is_success() => Ok(()),
+        Ok(_) if cancelled => Err(Error::Cancelled),
+        Ok(response) => Err(Error::Http(response.status().as_u16())),
+        Err(_) if cancelled => Err(Error::Cancelled),
+        Err(_) => Err(Error::Network),
     }
 }
 
@@ -247,6 +441,28 @@ impl Rest {
         Ok(())
     }
 
+    pub async fn create_uploads(
+        &self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        files: &[UploadFile],
+    ) -> Result<Vec<UploadTarget>, Error> {
+        let referer = referer(guild_id, channel_id);
+        let url = format!("https://discord.com/api/v9/channels/{channel_id}/attachments");
+        let body = uploads_body(files);
+        let response = self
+            .send(|| self.client.post(&url).header(REFERER, &referer).json(&body))
+            .await?;
+        let body = response.text().await.map_err(|_| Error::Decode)?;
+        parse_uploads(&body)
+    }
+
+    pub async fn delete_upload(&self, uploaded_filename: &str) -> Result<(), Error> {
+        let url = delete_upload_url(uploaded_filename);
+        self.send(|| self.client.delete(&url)).await?;
+        Ok(())
+    }
+
     pub async fn send_message(
         &self,
         guild_id: Option<u64>,
@@ -257,7 +473,13 @@ impl Rest {
         let url = format!("https://discord.com/api/v9/channels/{channel_id}/messages");
         let body = message_body(guild_id, channel_id, message);
         let response = self
-            .send(|| self.client.post(&url).header(REFERER, &referer).json(&body))
+            .send(|| {
+                self.client
+                    .post(&url)
+                    .header(REFERER, &referer)
+                    .header("x-context-properties", CHAT_INPUT_CONTEXT)
+                    .json(&body)
+            })
             .await?;
         response
             .json::<model::Message>()

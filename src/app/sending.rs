@@ -1,11 +1,14 @@
+use super::attachments::{StagedFile, remove_pasted};
 use super::*;
+use crate::discord::UploadFile;
+use crate::store::PendingUpload;
 
 #[cfg(test)]
 mod tests;
 
 #[derive(Default)]
 pub(super) struct PendingSends {
-    entries: Vec<(u64, String, Option<ReplyTarget>)>,
+    entries: Vec<(u64, String, Option<ReplyTarget>, Vec<StagedFile>)>,
 }
 
 impl PendingSends {
@@ -17,11 +20,20 @@ impl PendingSends {
         self.entries.iter().any(|entry| entry.0 == channel_id)
     }
 
-    fn push(&mut self, channel_id: u64, content: String, reply: Option<ReplyTarget>) {
-        self.entries.push((channel_id, content, reply));
+    fn push(
+        &mut self,
+        channel_id: u64,
+        content: String,
+        reply: Option<ReplyTarget>,
+        files: Vec<StagedFile>,
+    ) {
+        self.entries.push((channel_id, content, reply, files));
     }
 
-    fn take_channel(&mut self, channel_id: u64) -> Vec<(u64, String, Option<ReplyTarget>)> {
+    fn take_channel(
+        &mut self,
+        channel_id: u64,
+    ) -> Vec<(u64, String, Option<ReplyTarget>, Vec<StagedFile>)> {
         let (ready, waiting) = std::mem::take(&mut self.entries)
             .into_iter()
             .partition(|entry| entry.0 == channel_id);
@@ -175,8 +187,8 @@ impl DiscordApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        for (channel, content, reply) in self.pending_sends.take_channel(channel_id) {
-            self.dispatch_send(channel, content, reply, window, cx);
+        for (channel, content, reply, files) in self.pending_sends.take_channel(channel_id) {
+            self.dispatch_send(channel, content, reply, files, window, cx);
         }
     }
 
@@ -185,7 +197,8 @@ impl DiscordApp {
         let content = composer_tokens::to_wire(&self.composer.read(cx).value());
         let content = content.trim().to_owned();
         let channel_id = self.selected_channel_id;
-        if content.is_empty() || !self.store.can_send(channel_id) {
+        let has_files = !self.staged_files().is_empty();
+        if (content.is_empty() && !has_files) || !self.store.can_send(channel_id) {
             return;
         }
         let (content, used_emoji) = self.encode_emoji_text(&content);
@@ -197,12 +210,14 @@ impl DiscordApp {
         }
         self.composer
             .update(cx, |input, cx| input.set_value("", window, cx));
-        self.send_content(content, window, cx);
+        let files = self.staged.remove(&channel_id).unwrap_or_default();
+        self.send_content(content, files, window, cx);
     }
 
     pub(crate) fn send_content(
         &mut self,
         content: String,
+        files: Vec<StagedFile>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -229,7 +244,7 @@ impl DiscordApp {
             return;
         }
         self.messages.set_follow_mode(FollowMode::Tail);
-        self.submit_send(channel_id, content, reply, window, cx);
+        self.submit_send(channel_id, content, reply, files, window, cx);
     }
 
     fn submit_send(
@@ -237,6 +252,7 @@ impl DiscordApp {
         channel_id: u64,
         content: String,
         reply: Option<ReplyTarget>,
+        files: Vec<StagedFile>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -245,14 +261,14 @@ impl DiscordApp {
             self.store.at_present(channel_id),
             self.loading.contains(&channel_id),
         ) {
-            self.pending_sends.push(channel_id, content, reply);
+            self.pending_sends.push(channel_id, content, reply, files);
             self.pending_present.insert(channel_id);
             smooth_scroll::cancel(cx);
             // Refresh even if another response already marked the channel present. A later
             // submission retries a failed refresh.
             self.fetch_history(channel_id, None, window, cx);
         } else {
-            self.dispatch_send(channel_id, content, reply, window, cx);
+            self.dispatch_send(channel_id, content, reply, files, window, cx);
         }
     }
 
@@ -261,6 +277,7 @@ impl DiscordApp {
         channel_id: u64,
         content: String,
         reply: Option<ReplyTarget>,
+        files: Vec<StagedFile>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -275,11 +292,19 @@ impl DiscordApp {
             .map(|guild| guild.id);
         self.last_nonce = now_snowflake().max(self.last_nonce + 1);
         let nonce = self.last_nonce;
+        let uploads = files
+            .iter()
+            .map(|file| PendingUpload {
+                name: file.name.clone(),
+                size: file.size,
+            })
+            .collect();
         let change = self.store.queue_message(
             channel_id,
             nonce,
             content.clone(),
             reply.as_ref().map(|reply| reply.message_id),
+            uploads,
         );
         self.apply_change(change, window, cx);
         let outgoing = OutgoingMessage {
@@ -289,14 +314,37 @@ impl DiscordApp {
                 message_id: reply.message_id,
                 mention: reply.mention,
             }),
+            attachments: Vec::new(),
         };
-        let send = session.send_message(guild_id, channel_id, outgoing);
-        let request = Tokio::spawn(cx, send);
+        let request = if files.is_empty() {
+            Tokio::spawn(cx, session.send_message(guild_id, channel_id, outgoing))
+        } else {
+            let total = files.iter().map(|file| file.size).sum();
+            let upload_files = files
+                .iter()
+                .map(|file| UploadFile {
+                    path: file.path.clone(),
+                    filename: file.name.clone(),
+                    size: file.size,
+                    content_type: file.content_type.clone(),
+                    spoiler: file.spoiler,
+                })
+                .collect();
+            let progress = UploadProgress::new(total);
+            self.upload_progress.insert(nonce, progress.clone());
+            self.start_upload_ticker(cx);
+            Tokio::spawn(
+                cx,
+                session.send_with_files(guild_id, channel_id, outgoing, upload_files, progress),
+            )
+        };
         cx.spawn_in(window, async move |this, cx| {
             let result = request.await;
             this.update_in(cx, |app, window, cx| {
+                app.upload_progress.remove(&nonce);
                 let error = match result {
                     Ok(Ok(message)) => {
+                        remove_pasted(&files, cx);
                         let change = app.store.apply(Event::MessageCreate(Box::new(message)));
                         app.apply_change(change, window, cx);
                         return;
@@ -304,11 +352,19 @@ impl DiscordApp {
                     Ok(Err(error)) => error,
                     Err(_) => discord::Error::Closed,
                 };
+                if matches!(error, discord::Error::Cancelled) {
+                    let change = app.store.discard_message(channel_id, nonce);
+                    app.apply_change(change, window, cx);
+                    app.staged.entry(channel_id).or_default().extend(files);
+                    cx.notify();
+                    return;
+                }
                 log::warn!("Could not send message: {error}");
                 app.failed_sends.insert(
                     nonce,
                     FailedSend {
                         reply,
+                        files,
                         error: send_error_text(&error),
                     },
                 );
@@ -316,6 +372,35 @@ impl DiscordApp {
                 app.apply_change(change, window, cx);
             })
             .ok();
+        })
+        .detach();
+    }
+
+    fn start_upload_ticker(&mut self, cx: &mut Context<Self>) {
+        if self.upload_ticking {
+            return;
+        }
+        self.upload_ticking = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+                let running = this
+                    .update(cx, |app, cx| {
+                        if app.upload_progress.is_empty() {
+                            app.upload_ticking = false;
+                            false
+                        } else {
+                            cx.notify();
+                            true
+                        }
+                    })
+                    .unwrap_or(false);
+                if !running {
+                    break;
+                }
+            }
         })
         .detach();
     }
@@ -334,14 +419,13 @@ impl DiscordApp {
         else {
             return;
         };
-        let reply = self
-            .failed_sends
-            .remove(&nonce)
-            .and_then(|failed| failed.reply);
+        let failed = self.failed_sends.remove(&nonce);
+        let reply = failed.as_ref().and_then(|failed| failed.reply.clone());
+        let files = failed.map_or_else(Vec::new, |failed| failed.files);
         let change = self.store.discard_message(channel_id, nonce);
         self.apply_change(change, window, cx);
         self.messages.set_follow_mode(FollowMode::Tail);
-        self.submit_send(channel_id, content, reply, window, cx);
+        self.submit_send(channel_id, content, reply, files, window, cx);
     }
 
     pub(crate) fn discard_message(
@@ -350,7 +434,9 @@ impl DiscordApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.failed_sends.remove(&nonce);
+        if let Some(failed) = self.failed_sends.remove(&nonce) {
+            remove_pasted(&failed.files, cx);
+        }
         let change = self.store.discard_message(self.selected_channel_id, nonce);
         self.apply_change(change, window, cx);
     }

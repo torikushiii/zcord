@@ -1,6 +1,9 @@
 use super::message::{author_name, message_author_name};
 use super::*;
-use gpui_component::ActiveTheme;
+use crate::app::attachments::{MAX_FILES, Refusal, STAGED_PREVIEW, StagedFile, UploadButton};
+use gpui_component::{ActiveTheme, input::Paste};
+
+const PREVIEW_MAX_BYTES: u64 = 20 * 1024 * 1024;
 
 pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
     let can_send = app.store.can_send(app.selected_channel_id);
@@ -13,6 +16,10 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
     };
     let remaining = MESSAGE_LIMIT as i64 - length as i64;
     let picker_anchor = Rc::new(Cell::new(None));
+    let staged = app.staged_files();
+    let joined_top = app.reply.is_some() || !staged.is_empty();
+    let paste = app.entity.clone();
+    let composer_input = app.composer.clone();
     div()
         .relative()
         .px_2()
@@ -29,7 +36,23 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 )));
             }
         })
+        .capture_action(move |_: &Paste, window, cx| {
+            if !composer_input.read(cx).focus_handle(cx).is_focused(window) {
+                return;
+            }
+            let handled = paste
+                .update(cx, |app, cx| app.paste_clipboard_files(cx))
+                .unwrap_or(false);
+            if handled {
+                cx.stop_propagation();
+            }
+        })
+        .children(
+            app.upload_refusal
+                .map(|refusal| refusal_banner(app, refusal)),
+        )
         .children(app.reply.as_ref().map(|reply| reply_banner(app, reply, cx)))
+        .children((!staged.is_empty()).then(|| staged_row(app, staged, cx)))
         .child(
             div()
                 .relative()
@@ -40,7 +63,7 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 .pl(rpx(12.))
                 .pr(rpx(8.))
                 .map(|this| {
-                    if app.reply.is_some() {
+                    if joined_top {
                         this.rounded_b(rpx(8.))
                     } else {
                         this.rounded(rpx(8.))
@@ -50,12 +73,22 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 .border_1()
                 .border_color(rgba(theme::BORDER))
                 .children(emoji_picker::suggestions(app, cx))
-                .child(div().my(rpx(12.)).child(theme::icon_button(
-                    "attach",
-                    "circle-plus",
-                    24.,
-                    theme::MUTED,
-                )))
+                .child(div().my(rpx(12.)).child({
+                    let entity = app.entity.clone();
+                    app.upload_tip(
+                        UploadButton::Attach,
+                        "Upload a File",
+                        theme::icon_button("attach", "circle-plus", 24., theme::MUTED),
+                    )
+                    .when(!can_send || staged.len() >= MAX_FILES, |this| {
+                        this.opacity(0.5)
+                    })
+                    .when(can_send && staged.len() < MAX_FILES, |this| {
+                        this.on_click(move |_, window, cx| {
+                            entity.update(cx, |app, cx| app.pick_files(window, cx)).ok();
+                        })
+                    })
+                }))
                 .child(
                     div()
                         .relative()
@@ -236,6 +269,253 @@ pub(super) fn flush_textarea(textarea: Textarea) -> Textarea {
         .px_0()
         .ml(px(-TEXTAREA_BUILTIN_INSET_X))
         .my(px(-TEXTAREA_BUILTIN_INSET_Y))
+}
+
+fn refusal_banner(app: &DiscordApp, refusal: Refusal) -> impl IntoElement + use<> {
+    let (title, help) = match refusal {
+        Refusal::Invalid => (
+            "Invalid file type",
+            "That file type is not supported.".to_owned(),
+        ),
+        Refusal::TooMany => (
+            "Too many uploads!",
+            format!("You can only upload {MAX_FILES} files at a time!"),
+        ),
+        Refusal::TooLarge(limit) => (
+            "Your files are too powerful",
+            format!(
+                "Max file size is {} please.",
+                super::media::file_size(limit)
+            ),
+        ),
+    };
+    let entity = app.entity.clone();
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .mb_2()
+        .px_3()
+        .py_2()
+        .rounded(rpx(8.))
+        .bg(rgb(theme::RED))
+        .text_color(rgb(theme::STRONG))
+        .text_size(rpx(14.))
+        .child(
+            div()
+                .min_w_0()
+                .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
+                .child(help),
+        )
+        .child(
+            theme::icon_button("dismiss-refusal", "x", 16., theme::STRONG).on_click(
+                move |_, _, cx| {
+                    entity
+                        .update(cx, |app, cx| app.dismiss_upload_refusal(cx))
+                        .ok();
+                },
+            ),
+        )
+}
+
+fn staged_row(app: &DiscordApp, files: &[StagedFile], cx: &App) -> impl IntoElement + use<> {
+    div()
+        .id("staged-files")
+        .flex()
+        .gap(rpx(24.))
+        .pt(rpx(20.))
+        .pl(rpx(10.))
+        .pb(rpx(10.))
+        // The action bar hangs 24 past the last tile, and a scroller clips it otherwise.
+        .pr(rpx(34.))
+        .overflow_x_scroll()
+        .when(app.reply.is_none(), |this| this.rounded_t(rpx(8.)))
+        .bg(rgb(theme::ELEVATED))
+        .border_1()
+        .border_b_0()
+        .border_color(rgba(theme::BORDER))
+        .children(files.iter().map(|file| staged_tile(app, file, cx)))
+}
+
+fn staged_preview(file: &StagedFile, cx: &App) -> Option<AnyElement> {
+    let pixels = theme::image_px(STAGED_PREVIEW);
+    let fitted = |image: animated::AnimatedImage| {
+        image
+            .size_full()
+            .object_fit(ObjectFit::Contain)
+            .id(("staged-preview", file.id))
+            .into_any_element()
+    };
+    if file.content_type == "image/gif" {
+        let spec = ImageSpec::LocalGif {
+            path: file.path.clone(),
+        };
+        // A covered GIF would decode for nothing.
+        let playing = (!file.spoiler)
+            .then(|| animated::resolve(&spec, pixels, cx))
+            .flatten();
+        return match playing {
+            Some(frames) => Some(fitted(animated::image(frames))),
+            None => animated::poster(&spec, pixels, cx).map(fitted),
+        };
+    }
+    if file.content_type.starts_with("video/") {
+        let spec = ImageSpec::LocalVideo {
+            path: file.path.clone(),
+        };
+        return crate::media::video::poster(&spec, pixels, cx).map(fitted);
+    }
+    let still = file.size <= PREVIEW_MAX_BYTES
+        && matches!(
+            file.content_type.as_str(),
+            "image/png" | "image/jpeg" | "image/webp"
+        );
+    still.then(|| {
+        img(file.path.clone())
+            .size_full()
+            .object_fit(ObjectFit::Contain)
+            .into_any_element()
+    })
+}
+
+const STAGED_BAR: u32 = 0x26272B;
+const STAGED_BAR_BORDER: u32 = 0x3F4046;
+const STAGED_BAR_HOVER: u32 = 0x35363B;
+
+fn tile_shadow() -> BoxShadow {
+    BoxShadow {
+        color: rgba(0x00000024).into(),
+        offset: point(px(0.), px(1.)),
+        blur_radius: px(4.),
+        spread_radius: px(0.),
+        inset: false,
+    }
+}
+
+fn staged_tile(app: &DiscordApp, file: &StagedFile, cx: &App) -> impl IntoElement + use<> {
+    let id = file.id;
+    let preview = staged_preview(file, cx);
+    let spoiler_toggle = app.entity.clone();
+    let open = app.entity.clone();
+    let can_open = preview.is_some();
+    let remove = app.entity.clone();
+    let tile =
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .p(rpx(8.))
+            .rounded(rpx(8.))
+            .bg(rgb(theme::SURFACE_HIGH))
+            .border_1()
+            .border_color(rgba(theme::BORDER))
+            .shadow(vec![tile_shadow()])
+            .child(
+                div()
+                    .id(("staged-open", id))
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .flex_none()
+                    .h(rpx(174.))
+                    .when(can_open, |this| {
+                        this.cursor_pointer().on_click(move |_, _, cx| {
+                            open.update(cx, |app, cx| app.open_staged_lightbox(id, cx))
+                                .ok();
+                        })
+                    })
+                    .rounded(rpx(8.))
+                    .bg(rgba(theme::HOVER))
+                    .overflow_hidden()
+                    .child(preview.unwrap_or_else(|| {
+                        theme::icon("file", 48., theme::MUTED).into_any_element()
+                    }))
+                    .when(file.spoiler, |this| {
+                        this.child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .bg(rgb(theme::ELEVATED))
+                                .text_size(rpx(12.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(theme::STRONG))
+                                .child("SPOILER"),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .mt(rpx(8.))
+                    .truncate()
+                    .text_size(rpx(14.))
+                    .line_height(rpx(18.))
+                    .text_color(rgb(theme::TEXT))
+                    .child(file.name.clone()),
+            );
+    // gpui paints a border over its children, so the bar can't sit inside the tile.
+    div()
+        .relative()
+        .flex_none()
+        .size(rpx(217.78))
+        .child(tile)
+        .child(
+            div()
+                .absolute()
+                .top(rpx(0.))
+                .right(rpx(-24.))
+                .flex()
+                .rounded(rpx(4.))
+                .bg(rgb(STAGED_BAR))
+                .border_1()
+                .border_color(rgb(STAGED_BAR_BORDER))
+                .shadow(vec![tile_shadow()])
+                .occlude()
+                .child(
+                    app.upload_tip(
+                        UploadButton::Spoiler(id),
+                        if file.spoiler {
+                            "Remove Spoiler"
+                        } else {
+                            "Mark as Spoiler"
+                        },
+                        theme::icon_button_with_hover(
+                            ("staged-spoiler", id),
+                            if file.spoiler { "eye-off" } else { "eye" },
+                            20.,
+                            theme::MUTED,
+                            rgb(STAGED_BAR_HOVER).into(),
+                        ),
+                    )
+                    .size(rpx(32.))
+                    .on_click(move |_, _, cx| {
+                        spoiler_toggle
+                            .update(cx, |app, cx| app.toggle_staged_spoiler(id, cx))
+                            .ok();
+                    }),
+                )
+                .child(
+                    app.upload_tip(
+                        UploadButton::Remove(id),
+                        "Remove Attachment",
+                        theme::icon_button_with_hover(
+                            ("staged-remove", id),
+                            "trash-2",
+                            20.,
+                            theme::RED,
+                            rgb(STAGED_BAR_HOVER).into(),
+                        ),
+                    )
+                    .size(rpx(32.))
+                    .on_click(move |_, _, cx| {
+                        remove.update(cx, |app, cx| app.remove_staged(id, cx)).ok();
+                    }),
+                ),
+        )
 }
 
 fn reply_banner(app: &DiscordApp, reply: &ReplyTarget, cx: &App) -> impl IntoElement + use<> {

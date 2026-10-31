@@ -40,6 +40,8 @@ pub struct Guild {
     pub voice_states: Vec<VoiceState>,
     #[serde(default)]
     pub unavailable: Option<bool>,
+    #[serde(default)]
+    pub premium_tier: u8,
 }
 
 impl Guild {
@@ -136,6 +138,7 @@ impl Guild {
         if update.unavailable.is_some() {
             self.unavailable = update.unavailable;
         }
+        self.premium_tier = update.premium_tier;
     }
 }
 

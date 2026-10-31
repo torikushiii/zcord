@@ -22,9 +22,10 @@ use std::{
     collections::{HashMap, HashSet},
     fmt,
     future::Future,
+    path::PathBuf,
     sync::{
         Arc, Mutex, MutexGuard, PoisonError, Weak,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -92,11 +93,51 @@ pub struct OutgoingMessage {
     pub content: String,
     pub nonce: u64,
     pub reply: Option<OutgoingReply>,
+    pub attachments: Vec<OutgoingAttachment>,
 }
 
 pub struct OutgoingReply {
     pub message_id: u64,
     pub mention: bool,
+}
+
+pub struct OutgoingAttachment {
+    pub filename: String,
+    pub uploaded_filename: String,
+    pub content_type: String,
+    pub spoiler: bool,
+}
+
+#[derive(Clone)]
+pub struct UploadFile {
+    pub path: PathBuf,
+    pub filename: String,
+    pub size: u64,
+    pub content_type: String,
+    pub spoiler: bool,
+}
+
+pub struct UploadProgress {
+    pub sent: AtomicU64,
+    pub total: u64,
+    pub cancelled: AtomicBool,
+}
+
+impl UploadProgress {
+    pub fn new(total: u64) -> Arc<Self> {
+        Arc::new(Self {
+            sent: AtomicU64::new(0),
+            total,
+            cancelled: AtomicBool::new(false),
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct UploadTarget {
+    pub id: u64,
+    pub upload_url: String,
+    pub upload_filename: String,
 }
 
 impl Session {

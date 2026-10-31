@@ -155,7 +155,7 @@ fn loaded_and_optimistic_replies_preserve_the_webhook_author_snapshot() {
         "New Sender",
         Some("new"),
     ))));
-    store.queue_message(2002, 1000, "Reply".into(), Some(500));
+    store.queue_message(2002, 1000, "Reply".into(), Some(500), Vec::new());
     let messages = &store
         .guild_by_id(200)
         .unwrap()

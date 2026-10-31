@@ -36,6 +36,7 @@ impl Store {
             reply: None,
             forward: None,
             mentions_me: false,
+            uploads: Vec::new(),
         });
         self.next_message_id += 1;
         Some(index)
@@ -87,6 +88,7 @@ impl Store {
         nonce: u64,
         content: String,
         reply_to: Option<u64>,
+        uploads: Vec<PendingUpload>,
     ) -> Change {
         let reply = reply_to.map(|message_id| {
             match self
@@ -165,6 +167,7 @@ impl Store {
             reply,
             forward: None,
             mentions_me: false,
+            uploads,
         });
         order_messages(&mut channel.messages);
         let index = channel.message_index(nonce).expect("queued message");

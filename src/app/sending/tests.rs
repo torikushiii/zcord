@@ -5,14 +5,14 @@ use crate::app::ReplyTarget;
 fn staged_sends_cannot_be_bypassed_when_another_response_marks_present() {
     let mut sends = PendingSends::default();
     assert!(sends.should_stage(10, false, false));
-    sends.push(10, "A".into(), None);
+    sends.push(10, "A".into(), None, Vec::new());
     assert!(sends.should_stage(10, true, true));
-    sends.push(10, "B".into(), None);
+    sends.push(10, "B".into(), None, Vec::new());
     assert!(
         sends.should_stage(10, true, false),
         "the backlog itself is a barrier"
     );
-    sends.push(10, "C".into(), None);
+    sends.push(10, "C".into(), None, Vec::new());
     let flushed = sends.take_channel(10);
     assert_eq!(
         flushed
@@ -37,13 +37,13 @@ fn failed_refresh_retains_content_and_retries_join_the_tail_without_blocking_oth
         webhook_name: None,
         mention: false,
     };
-    sends.push(10, "A".into(), Some(reply.clone()));
-    sends.push(20, "Other".into(), None);
+    sends.push(10, "A".into(), Some(reply.clone()), Vec::new());
+    sends.push(20, "Other".into(), None, Vec::new());
     // A failed refresh does not drain the queue. A later submission initiates another
     // refresh even when an unrelated response already set at_present.
     assert!(sends.should_stage(10, true, false));
-    sends.push(10, "B".into(), None);
-    sends.push(10, "Retry".into(), Some(reply));
+    sends.push(10, "B".into(), None, Vec::new());
+    sends.push(10, "Retry".into(), Some(reply), Vec::new());
     assert!(!sends.should_stage(30, true, false));
     assert!(
         sends.should_stage(30, true, true),
@@ -77,6 +77,7 @@ fn staged_webhook_reply_retains_its_display_name() {
             webhook_name: Some("Webhook display name".into()),
             mention: false,
         }),
+        Vec::new(),
     );
     let flushed = sends.take_channel(10);
     let reply = flushed[0].2.as_ref().unwrap();

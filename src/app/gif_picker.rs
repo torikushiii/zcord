@@ -523,7 +523,7 @@ impl DiscordApp {
 
     fn pick_gif(&mut self, url: String, window: &mut Window, cx: &mut Context<Self>) {
         self.close_gif_picker(cx);
-        self.send_content(url, window, cx);
+        self.send_content(url, Vec::new(), window, cx);
     }
 
     fn toggle_favorite_gif(&mut self, item: &GifItem, cx: &mut Context<Self>) {
