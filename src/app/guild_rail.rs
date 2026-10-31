@@ -642,7 +642,7 @@ fn positioned_tooltip(body: Div) -> Div {
                         .position(bounds.origin)
                         .anchor(Anchor::LeftCenter)
                         .snap_to_window_with_margin(px(8.))
-                        .child(
+                        .child(theme::tooltip_entrance(
                             div()
                                 .flex()
                                 .items_center()
@@ -650,7 +650,8 @@ fn positioned_tooltip(body: Div) -> Div {
                                     theme::icon("tooltip-arrow", 6., theme::TOOLTIP_BG).h(rpx(12.)),
                                 )
                                 .child(body),
-                        )
+                            cx,
+                        ))
                         .into_any_element();
                     // Measure outside the cached, scrollable rail; only its anchor belongs there.
                     popup.layout_as_root(

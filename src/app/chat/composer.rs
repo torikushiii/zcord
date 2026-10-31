@@ -309,7 +309,7 @@ fn reply_banner(app: &DiscordApp, reply: &ReplyTarget, cx: &App) -> impl IntoEle
                     .cursor_pointer()
                     .font_weight(FontWeight::BOLD)
                     .text_color(rgb(if reply.mention { LINK } else { theme::MUTED }))
-                    .tooltip(|window, cx| Tooltip::new("Mention the author").build(window, cx))
+                    .tooltip(|_, cx| theme::text_tooltip("Mention the author", cx))
                     .on_click(move |_, _, cx| {
                         toggle
                             .update(cx, |app, cx| app.toggle_reply_mention(cx))

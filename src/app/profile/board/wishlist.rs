@@ -292,7 +292,7 @@ fn wishlist_tile(
         .aspect_ratio(1.)
         .rounded(rpx(12.))
         .bg(palette.hover)
-        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+        .tooltip(move |_, cx| theme::text_tooltip(tip.clone(), cx))
         .children(decoration)
         .children(layers.into_iter().map(|path| {
             img(path)

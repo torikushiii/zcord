@@ -4,7 +4,6 @@ use gpui::{prelude::*, *};
 use gpui_component::{
     ElementExt,
     input::{Textarea, TextareaState},
-    tooltip::Tooltip,
 };
 
 use crate::{

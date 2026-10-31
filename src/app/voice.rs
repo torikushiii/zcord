@@ -4,7 +4,6 @@ use std::{
 };
 
 use gpui::{prelude::*, *};
-use gpui_component::tooltip::Tooltip;
 
 mod details;
 
@@ -902,8 +901,8 @@ fn with_tooltip(
 /// Discord's voice controls that zcord doesn't implement yet: shown for familiarity, with a
 /// tooltip saying so instead of doing nothing silently.
 fn unavailable(button: Stateful<Div>, feature: &'static str) -> Stateful<Div> {
-    button.tooltip(move |window, cx| {
-        Tooltip::new(format!("{feature} isn't available in zcord yet")).build(window, cx)
+    button.tooltip(move |_, cx| {
+        theme::text_tooltip(format!("{feature} isn't available in zcord yet"), cx)
     })
 }
 

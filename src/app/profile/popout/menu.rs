@@ -4,17 +4,6 @@ use super::super::*;
 
 pub(in crate::app::profile) type MenuBounds = Rc<Cell<Option<Bounds<Pixels>>>>;
 
-struct MoreTooltip;
-
-impl Render for MoreTooltip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        theme::tooltip_bubble()
-            .text_size(rpx(14.))
-            .line_height(rpx(18.))
-            .child("More")
-    }
-}
-
 fn menu_entry(
     id: &'static str,
     title: &'static str,
@@ -86,7 +75,7 @@ pub(in crate::app::profile) fn profile_actions(
             .focus_visible(move |style| style.bg(palette.raised))
             .without_text_selection()
             .on_prepaint(move |bounds, _, _| trigger_paint.set(Some(bounds)))
-            .tooltip(|_, cx| cx.new(|_| MoreTooltip).into())
+            .tooltip(|_, cx| theme::text_tooltip("More", cx))
             .on_click(move |_, _, cx| {
                 cx.stop_propagation();
                 toggle
