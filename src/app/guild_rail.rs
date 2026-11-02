@@ -13,7 +13,7 @@ use crate::{
     },
     media::animated,
     media::images::{self, ImageSpec},
-    store::{Folder, Guild, RailEntry, VoiceActivity},
+    store::{Folder, Guild, RailEntry, VoiceActivity, VoiceMember},
     theme::{self, rpx},
 };
 
@@ -227,7 +227,7 @@ pub fn render(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                     .justify_center()
                     .size(rpx(ICON))
                     .bg(rgb(if app.is_home() {
-                        theme::BLURPLE
+                        theme::SURFACE_HIGHEST
                     } else {
                         theme::ELEVATED
                     }))
@@ -573,12 +573,11 @@ fn guild_tooltip(app: &DiscordApp, guild: &Guild, cx: &App) -> AnyElement {
     if members.is_empty() {
         return tooltip(guild.id, &guild.name).into_any_element();
     }
-    let voice: Vec<u64> = members.iter().map(|member| member.user_id).collect();
-    let streaming: Vec<u64> = members
-        .iter()
-        .filter(|member| member.streaming)
-        .map(|member| member.user_id)
-        .collect();
+    let (streaming, voice): (Vec<_>, Vec<_>) = members.iter().partition(|member| member.streaming);
+    let ids = |members: Vec<&VoiceMember>| -> Vec<u64> {
+        members.iter().map(|member| member.user_id).collect()
+    };
+    let (streaming, voice) = (ids(streaming), ids(voice));
     let row = |icon, members: &[u64]| {
         activity_row(
             icon,
@@ -597,9 +596,11 @@ fn guild_tooltip(app: &DiscordApp, guild: &Guild, cx: &App) -> AnyElement {
     };
     positioned_tooltip(
         activity_tooltip_bubble(guild.id, &guild.name)
-            .child(row("volume-2", &voice))
+            .when(!voice.is_empty(), |this| {
+                this.child(row("video-volume", &voice))
+            })
             .when(!streaming.is_empty(), |this| {
-                this.child(row("monitor-filled", &streaming))
+                this.child(row("monitor-share", &streaming))
             }),
     )
     .into_any_element()
