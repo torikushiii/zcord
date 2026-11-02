@@ -34,8 +34,8 @@ use tokio::sync::{Mutex as AsyncMutex, watch};
 
 pub use permissions::{
     CONNECT, CREATE_PRIVATE_THREADS, CREATE_PUBLIC_THREADS, MANAGE_MESSAGES, MANAGE_THREADS,
-    READ_MESSAGE_HISTORY, SEND_MESSAGES, SEND_MESSAGES_IN_THREADS, USE_EXTERNAL_EMOJIS,
-    VIEW_CHANNEL, can_view, channel_permissions,
+    MENTION_EVERYONE, READ_MESSAGE_HISTORY, SEND_MESSAGES, SEND_MESSAGES_IN_THREADS,
+    USE_EXTERNAL_EMOJIS, VIEW_CHANNEL, can_view, channel_permissions,
 };
 pub use presence::{SelfStatus, StatusDuration};
 pub use properties::USER_AGENT;

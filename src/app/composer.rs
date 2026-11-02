@@ -240,7 +240,8 @@ impl DiscordApp {
         if self.exit_video_fullscreen(window, cx) {
             return;
         }
-        if self.dismiss_emoji_suggestions(cx)
+        if self.dismiss_mention_suggestions(cx)
+            || self.dismiss_emoji_suggestions(cx)
             || self.close_emoji_picker(cx)
             || self.close_gif_picker(cx)
         {
@@ -288,7 +289,9 @@ impl DiscordApp {
         if self.move_search(-1, cx) || self.move_quick_switcher(-1, cx) {
             return;
         }
-        if self.composer_focused(window, cx) && self.move_emoji_suggestion(-1, cx) {
+        if self.composer_focused(window, cx)
+            && (self.move_mention_suggestion(-1, cx) || self.move_emoji_suggestion(-1, cx))
+        {
             return;
         }
         let composer = self.composer.read(cx);

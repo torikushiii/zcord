@@ -68,6 +68,13 @@ impl Store {
             .is_some_and(|permissions| permissions & discord::MANAGE_MESSAGES != 0)
     }
 
+    pub fn can_mention_everyone(&self, channel_id: u64) -> bool {
+        self.source_channel_guild(channel_id).is_some()
+            && self
+                .permissions(channel_id)
+                .is_some_and(|permissions| permissions & discord::MENTION_EVERYONE != 0)
+    }
+
     pub(super) fn index_channels(&mut self) {
         self.index_names();
         self.index_forum_posts();

@@ -1,6 +1,7 @@
 use super::message::{author_name, message_author_name};
 use super::*;
 use crate::app::attachments::{MAX_FILES, Refusal, STAGED_PREVIEW, StagedFile, UploadButton};
+use crate::app::mentions;
 use gpui_component::{ActiveTheme, input::Paste};
 
 const PREVIEW_MAX_BYTES: u64 = 20 * 1024 * 1024;
@@ -72,6 +73,7 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 .bg(rgb(theme::elevated()))
                 .border_1()
                 .border_color(rgba(theme::border()))
+                .children(mentions::suggestions(app, cx))
                 .children(emoji_picker::suggestions(app, cx))
                 .child(div().my(rpx(12.)).child({
                     let entity = app.entity.clone();

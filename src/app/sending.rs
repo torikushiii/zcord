@@ -226,6 +226,7 @@ impl DiscordApp {
         if (content.is_empty() && !has_files) || !self.store.can_send(channel_id) {
             return;
         }
+        let content = mentions::encode_mentions(&content, &self.mention_names);
         let (content, used_emoji) = self.encode_emoji_text(&content);
         if content.chars().count() > MESSAGE_LIMIT {
             return;
@@ -233,6 +234,7 @@ impl DiscordApp {
         for choice in &used_emoji {
             self.record_emoji_use(choice, cx);
         }
+        self.reset_mention_draft();
         self.composer
             .update(cx, |input, cx| input.set_value("", window, cx));
         let files = self.staged.remove(&channel_id).unwrap_or_default();
@@ -666,6 +668,15 @@ impl DiscordApp {
         else {
             return;
         };
+        let (content, mentions) = mentions::decode_mentions(&content, |id| {
+            let user = self.store.user(id)?;
+            Some(
+                self.request_guild()
+                    .and_then(|guild| self.store.member_name(guild, id))
+                    .unwrap_or(&user.name)
+                    .to_owned(),
+            )
+        });
         if let Some(previous) = self.editing.take() {
             self.remeasure_message(previous.message_id);
         }
@@ -688,6 +699,7 @@ impl DiscordApp {
         self.editing = Some(Editing {
             message_id,
             input,
+            mentions,
             _subscription: subscription,
         });
         self.remeasure_message(message_id);
@@ -710,7 +722,8 @@ impl DiscordApp {
         // Convert first: EM SPACE (the start of a token) is whitespace to `trim`.
         let raw = editing.input.read(cx).value().to_string();
         let raw = composer_tokens::repair(&raw).unwrap_or(raw);
-        let content = composer_tokens::to_wire(&raw);
+        let content = mentions::encode_mentions(&raw, &editing.mentions);
+        let content = composer_tokens::to_wire(&content);
         let content = content.trim().to_owned();
         if content.chars().count() > MESSAGE_LIMIT {
             self.editing = Some(editing);
