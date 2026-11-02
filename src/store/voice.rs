@@ -96,7 +96,7 @@ impl Store {
 
     pub(super) fn voice_state_update(&mut self, mut state: model::VoiceState) -> Change {
         let Some(guild_id) = state.guild_id else {
-            return Change::None;
+            return self.dm_voice_state_update(state);
         };
         if let Some(member) = &mut state.member {
             if member.id().is_none() {
@@ -146,6 +146,25 @@ impl Store {
     }
 
     pub fn voice_members(&self, guild_id: u64, channel_id: u64) -> Vec<VoiceMember> {
+        if guild_id == 0 {
+            return self
+                .dm_call(channel_id)
+                .map(|call| {
+                    call.voice_states
+                        .iter()
+                        .map(|state| VoiceMember {
+                            user_id: state.user_id,
+                            self_mute: state.self_mute,
+                            self_deaf: state.self_deaf,
+                            mute: state.mute,
+                            deaf: state.deaf,
+                            streaming: state.self_stream,
+                            video: state.self_video,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+        }
         self.voice_members_matching(guild_id, |state| state.channel_id == Some(channel_id))
     }
 
@@ -236,6 +255,11 @@ impl Store {
     }
 
     pub fn can_connect_voice(&self, guild_id: u64, channel_id: u64) -> bool {
+        if guild_id == 0 {
+            return self
+                .private_channel(channel_id)
+                .is_some_and(|channel| !channel.message_request && !channel.spam);
+        }
         let Some(guild) = self
             .source
             .as_ref()

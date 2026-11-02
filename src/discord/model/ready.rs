@@ -31,6 +31,7 @@ pub struct Ready {
     pub guilds: Vec<Guild>,
     pub guild_order: Vec<Option<u64>>,
     pub private_channels: Vec<Channel>,
+    pub calls: Vec<PrivateCall>,
     pub read_state: ReadStates,
     pub session_id: String,
     pub resume_gateway_url: Option<String>,
@@ -56,6 +57,8 @@ impl<'de> Deserialize<'de> for Ready {
             merged_members: Vec<Value>,
             #[serde(default, deserialize_with = "entries")]
             private_channels: Vec<Channel>,
+            #[serde(default, deserialize_with = "entries")]
+            calls: Vec<PrivateCall>,
             #[serde(default)]
             read_state: ReadStates,
             session_id: String,
@@ -117,6 +120,7 @@ impl<'de> Deserialize<'de> for Ready {
             guilds,
             guild_order,
             private_channels: wire.private_channels,
+            calls: wire.calls,
             read_state: wire.read_state,
             session_id: wire.session_id,
             resume_gateway_url: wire.resume_gateway_url,

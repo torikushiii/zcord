@@ -37,7 +37,7 @@ pub(crate) enum FriendAction {
     Friends,
 }
 
-fn failure_text(error: &Error, rejected: &'static str) -> &'static str {
+pub(super) fn failure_text(error: &Error, rejected: &'static str) -> &'static str {
     match error {
         Error::Captcha => "Discord asked for verification. Try this in the official client.",
         Error::RateLimited { .. } => "You're doing that too fast. Try again in a moment.",

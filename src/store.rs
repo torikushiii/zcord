@@ -1,6 +1,7 @@
 mod account;
 mod activity_feed;
 mod authors;
+mod calls;
 mod channels;
 mod emoji;
 mod expressions;
@@ -27,6 +28,7 @@ use crate::media::images::ImageSpec;
 pub use account::Account;
 pub use activity_feed::ActivityCard;
 use base64::{Engine, engine::general_purpose::STANDARD};
+pub use calls::DmCall;
 pub use expressions::{PickerSticker, StickerSection, sticker_matches};
 use home::PrivateLocation;
 use mapping::{
@@ -34,7 +36,6 @@ use mapping::{
     map_message, map_name_style, map_nameplate, map_reactions, map_snapshot, map_stickers,
     map_user, read_state, timestamp_from_nonce,
 };
-pub use notifications::Alert;
 use seed::SEED_START;
 use std::{cell::RefCell, collections::HashMap};
 pub use view::*;
@@ -60,6 +61,7 @@ pub struct Store {
     guild_badges: Vec<GuildBadges>,
     dm_badges: u64,
     private: Vec<PrivateChannel>,
+    dm_calls: HashMap<u64, DmCall>,
     private_locations: HashMap<u64, PrivateLocation>,
     relationships: HashMap<u64, Relationship>,
     notification_settings: HashMap<Option<u64>, model::UserGuildSettings>,
@@ -301,6 +303,7 @@ impl Store {
             guild_badges: Vec::new(),
             dm_badges: 0,
             private: Vec::new(),
+            dm_calls: HashMap::new(),
             private_locations: HashMap::new(),
             relationships: HashMap::new(),
             notification_settings,
@@ -323,6 +326,14 @@ impl Store {
         store.seed_thread_joins();
         store.apply_own_status(settings.status.as_ref(), false);
         store.index_channels();
+        let calls = store
+            .source
+            .as_ref()
+            .map(|source| source.calls.clone())
+            .unwrap_or_default();
+        for call in calls {
+            store.call_upsert(call, true);
+        }
         store
     }
 
@@ -417,6 +428,14 @@ impl Store {
             Event::ChannelPinsUpdate(update) => self.channel_pins_update(update),
             Event::ChannelUpsert(update) => self.channel_upsert(update),
             Event::ChannelDelete { id } => self.channel_delete(id),
+            Event::ChannelRecipientAdd(update) => self.channel_recipient(update, true),
+            Event::ChannelRecipientRemove(update) => self.channel_recipient(update, false),
+            Event::CallCreate(call) => self.call_upsert(call, true),
+            Event::CallUpdate(call) => self.call_upsert(call, false),
+            Event::CallDelete { channel_id } => {
+                self.dm_calls.remove(&channel_id);
+                Change::Structure
+            }
             Event::UserUpdate(update) => self.user_update(update),
             Event::RelationshipAdd(relationship) => {
                 self.apply_relationship_add(&relationship);

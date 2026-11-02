@@ -54,6 +54,13 @@ impl Store {
         text[..end].to_owned()
     }
 
+    pub fn dm_muted(&self, channel_id: u64, now_ms: u64) -> bool {
+        self.notification_settings
+            .get(&None)
+            .and_then(|settings| override_for(settings, channel_id))
+            .is_some_and(|setting| mute_active(setting.muted, setting.mute_config.as_ref(), now_ms))
+    }
+
     pub fn message_alert(&self, message: &model::Message, now_ms: u64) -> Option<Alert> {
         if message.author.id == self.current_user_id {
             return None;

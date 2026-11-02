@@ -2,6 +2,27 @@ use super::serde_helpers::*;
 use super::*;
 use serde::Deserialize;
 
+#[derive(Clone, Deserialize)]
+pub struct PrivateCall {
+    #[serde(deserialize_with = "snowflake")]
+    pub channel_id: u64,
+    #[serde(default, deserialize_with = "optional_id")]
+    pub message_id: Option<u64>,
+    #[serde(default, deserialize_with = "nullable_string")]
+    pub region: Option<Option<String>>,
+    #[serde(default, deserialize_with = "optional_ids")]
+    pub ringing: Option<Vec<u64>>,
+    #[serde(default, deserialize_with = "optional_entries")]
+    pub voice_states: Option<Vec<VoiceState>>,
+}
+
+#[derive(Deserialize)]
+pub struct ChannelRecipient {
+    #[serde(deserialize_with = "snowflake")]
+    pub channel_id: u64,
+    pub user: User,
+}
+
 #[derive(Deserialize)]
 pub struct ChannelInfo {
     #[serde(deserialize_with = "snowflake")]

@@ -1,4 +1,6 @@
 mod activity;
+mod calls;
+mod dms;
 mod expressions;
 mod messages;
 mod pins;

@@ -1188,7 +1188,7 @@ async fn send_auth(
 
 fn identify_payload(config: &Config) -> Value {
     json!({"op": 0, "d": {
-        "server_id": config.guild_id.to_string(),
+        "server_id": if config.guild_id == 0 { config.channel_id } else { config.guild_id }.to_string(),
         "channel_id": config.channel_id.to_string(),
         "user_id": config.user_id.to_string(),
         "session_id": config.session_id.expose(),
@@ -1201,7 +1201,7 @@ fn identify_payload(config: &Config) -> Value {
 
 fn resume_payload(config: &Config, seq: Option<u64>) -> Value {
     json!({"op": 7, "d": {
-        "server_id": config.guild_id.to_string(),
+        "server_id": if config.guild_id == 0 { config.channel_id } else { config.guild_id }.to_string(),
         "channel_id": config.channel_id.to_string(),
         "session_id": config.session_id.expose(),
         "token": config.token.expose(),
@@ -1276,6 +1276,18 @@ mod tests {
             token: Secret("fixture-token".into()),
             server: "fixture.invalid".into(),
             ws_url: "wss://fixture.invalid/?v=9".into(),
+        }
+    }
+
+    #[test]
+    fn private_voice_identify_and_resume_use_channel_as_server_id() {
+        let mut config = config();
+        config.guild_id = 0;
+        let identify = identify_payload(&config);
+        let resume = resume_payload(&config, Some(7));
+        for payload in [identify, resume] {
+            assert_eq!(payload["d"]["server_id"], "20");
+            assert_eq!(payload["d"]["channel_id"], "20");
         }
     }
 

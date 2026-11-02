@@ -222,6 +222,7 @@ impl Store {
     }
 
     pub fn remove_private_locally(&mut self, channel_id: u64) -> Change {
+        self.dm_calls.remove(&channel_id);
         self.clear_message_info(channel_id);
         if let Some(source) = &mut self.source {
             source

@@ -198,6 +198,7 @@ impl Call {
 impl DiscordApp {
     pub(super) fn refresh_voice_start_times(&self) {
         if let Some(call) = &self.voice.call
+            && call.guild_id != 0
             && let Some(session) = self.session.as_ref().filter(|_| self.live)
         {
             session.request_voice_start_times(call.guild_id);
@@ -217,11 +218,16 @@ impl DiscordApp {
         let Some(session) = self.session.as_ref().filter(|_| self.live) else {
             return;
         };
+        self.calls.pending_ring = None;
         session.set_self_mute(self.voice.self_mute);
         session.set_self_deaf(self.voice.self_deaf);
         session.set_noise_suppression(self.voice.noise_suppression);
         crate::app::settings_page::apply_preferences(session, &crate::settings::get(cx));
-        session.join_voice(guild_id, channel_id);
+        if guild_id == 0 {
+            session.join_dm_call(channel_id);
+        } else {
+            session.join_voice(guild_id, channel_id);
+        }
         self.voice.call = Some(Call::new(guild_id, channel_id));
         self.voice.speaking.clear();
         self.sync_channel_rows();
@@ -229,6 +235,7 @@ impl DiscordApp {
     }
 
     pub(crate) fn leave_voice(&mut self, cx: &mut Context<Self>) {
+        self.calls.pending_ring = None;
         if self.voice.call.take().is_none() {
             return;
         }
@@ -393,7 +400,11 @@ impl DiscordApp {
             .iter()
             .any(|member| member.user_id == self.store.current_user_id);
         if still_listed {
-            self.join_voice(saved.guild_id, saved.channel_id, cx);
+            if saved.guild_id == 0 {
+                self.join_dm_call(saved.channel_id, cx);
+            } else {
+                self.join_voice(saved.guild_id, saved.channel_id, cx);
+            }
         } else {
             remember_channel(None, cx);
         }
@@ -453,6 +464,9 @@ impl DiscordApp {
                 }
                 self.start_call_clock(cx);
                 self.refresh_voice_start_times();
+                if guild_id == 0 {
+                    self.ring_pending_dm_call(channel_id, cx);
+                }
                 remember_channel(
                     Some(SavedChannel {
                         guild_id,
@@ -469,6 +483,7 @@ impl DiscordApp {
                 }
             }
             VoiceEvent::Disconnected { reason } => {
+                self.calls.pending_ring = None;
                 if let Some(reason) = reason {
                     log::warn!("Voice disconnected: {reason}");
                 }
@@ -778,6 +793,7 @@ pub(crate) fn panel(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
     let channel = guild.and_then(|guild| guild.channel(call.channel_id));
     let place = match (channel, guild) {
         (Some(channel), Some(guild)) => format!("{} / {}", channel.name, guild.name),
+        _ if call.guild_id == 0 => app.store.private_channel_name(call.channel_id),
         _ => String::new(),
     };
     let (status, color) = if call.connected {

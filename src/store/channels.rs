@@ -405,6 +405,8 @@ impl Store {
     }
 
     pub(super) fn channel_delete(&mut self, id: u64) -> Change {
+        self.dm_calls.remove(&id);
+        self.request_previews.remove(&id);
         self.thread_recent.remove(&id);
         self.thread_joins.remove(&id);
         self.clear_thread_chips(id);

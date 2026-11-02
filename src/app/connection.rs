@@ -45,6 +45,7 @@ impl DiscordApp {
     }
 
     pub(super) fn disconnect(&mut self) {
+        self.calls = calls::Calls::default();
         self.self_status.disconnect();
         self.self_status.error = None;
         self.expression_info.reset();
