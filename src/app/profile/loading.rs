@@ -106,6 +106,18 @@ impl DiscordApp {
         }
     }
 
+    pub(crate) fn open_full_profile_for(&mut self, user_id: u64, cx: &mut Context<Self>) {
+        self.profile = Some(ProfileCard::new(
+            user_id,
+            None,
+            point(px(0.), px(0.)),
+            Anchor::TopRight,
+            ProfileOrigin::Member,
+        ));
+        self.load_profile_scope(cx);
+        self.open_full_profile(cx);
+    }
+
     pub(crate) fn open_full_profile(&mut self, cx: &mut Context<Self>) {
         if self.profile.is_none()
             && let Some(user_id) = self.dm_profile.as_ref().map(|card| card.user_id)
