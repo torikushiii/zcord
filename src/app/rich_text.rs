@@ -189,11 +189,7 @@ impl RichText {
     }
 }
 
-const SPOILER_HIDDEN: u32 = 0x2A2A30;
-const SPOILER_HOVER: u32 = 0x33333A;
-const LINK: u32 = theme::LINK;
 const MENTION: u32 = 0x5865F2;
-const MENTION_TEXT: u32 = 0xC9CDFB;
 
 #[derive(Clone)]
 struct Fonts {
@@ -224,8 +220,8 @@ impl Fonts {
         let color = match style.chip {
             Some(Chip::Mention { color: Some(color) }) if !hovered => rgb(color).into(),
             Some(Chip::Mention { .. }) if hovered => white(),
-            Some(Chip::Mention { .. }) => rgb(MENTION_TEXT).into(),
-            _ if link => style.color.unwrap_or_else(|| rgb(LINK).into()),
+            Some(Chip::Mention { .. }) => rgb(theme::mention_text()).into(),
+            _ if link => style.color.unwrap_or_else(|| rgb(theme::link()).into()),
             _ => style.color.unwrap_or(self.color),
         };
         let underline = style.underline || (link && hovered);
@@ -1218,8 +1214,8 @@ impl Element for RichText {
                     size(last.x + last.width - first.x, chip_height),
                 );
                 let (background, radius): (Hsla, Pixels) = match chip {
-                    Chip::Code => (rgba(theme::CODE_BACKGROUND).into(), px(4.)),
-                    Chip::Timestamp => (hsla(0., 0., 1., 0.06), px(4.)),
+                    Chip::Code => (rgba(theme::code_background()).into(), px(4.)),
+                    Chip::Timestamp => (rgb(theme::timestamp_bg()).opacity(0.06).into(), px(4.)),
                     Chip::Mention { color: Some(color) } if !hovered => {
                         (rgba((color << 8) | 0x1A).into(), px(3.))
                     }
@@ -1227,12 +1223,15 @@ impl Element for RichText {
                         (rgba((color << 8) | 0x4D).into(), px(3.))
                     }
                     Chip::Mention { .. } if hovered => (rgb(MENTION).into(), px(3.)),
-                    Chip::Mention { .. } => (rgba((MENTION << 8) | 0x4D).into(), px(3.)),
+                    Chip::Mention { .. } => (rgba(theme::mention_bg()).into(), px(3.)),
                     Chip::Spoiler { revealed: false } if hovered => {
-                        (rgb(SPOILER_HOVER).into(), px(3.))
+                        (rgb(theme::spoiler_hover()).into(), px(3.))
                     }
-                    Chip::Spoiler { revealed: false } => (rgb(SPOILER_HIDDEN).into(), px(3.)),
-                    Chip::Spoiler { revealed: true } => (hsla(0., 0., 1., 0.1), px(3.)),
+                    Chip::Spoiler { revealed: false } => (rgb(theme::spoiler_bg()).into(), px(3.)),
+                    Chip::Spoiler { revealed: true } => (
+                        rgb(theme::spoiler_revealed_bg()).opacity(0.1).into(),
+                        px(3.),
+                    ),
                 };
                 window.paint_quad(quad(
                     chip_bounds,

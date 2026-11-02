@@ -90,9 +90,13 @@ fn tabs(
             .text_size(rpx(14.))
             .line_height(rpx(16.))
             .font_weight(FontWeight::SEMIBOLD)
-            .text_color(rgb(if active { theme::BLURPLE } else { theme::MUTED }))
+            .text_color(rgb(if active {
+                theme::BLURPLE
+            } else {
+                theme::muted()
+            }))
             .when(!active, |this| {
-                this.hover(|style| style.text_color(rgb(theme::TEXT)))
+                this.hover(|style| style.text_color(rgb(theme::text())))
             })
             .when(!closing, |this| {
                 this.on_click(move |_, _, cx| {
@@ -114,7 +118,7 @@ fn tabs(
         .gap(rpx(24.))
         .px(rpx(16.))
         .border_b_1()
-        .border_color(rgba(theme::BORDER))
+        .border_color(rgba(theme::border()))
         .child(tab(
             "voice-details-connection",
             "Connection",
@@ -158,7 +162,7 @@ fn connection(call: &Call) -> impl IntoElement {
                 .text_size(rpx(14.))
                 .line_height(rpx(18.))
                 .font_weight(FontWeight::BOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child(server)
         }))
         .child(
@@ -183,7 +187,7 @@ fn connection(call: &Call) -> impl IntoElement {
             div()
                 .text_size(rpx(12.))
                 .line_height(rpx(16.))
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child(linked_text(
                     "voice-troubleshooting",
                     "You may notice delayed audio at 250 ms or higher. You may sound robotic if \
@@ -202,12 +206,12 @@ fn stat(label: &'static str, value: String) -> impl IntoElement {
         .gap(rpx(4.))
         .text_size(rpx(12.))
         .line_height(rpx(16.))
-        .text_color(rgb(theme::TEXT))
+        .text_color(rgb(theme::text()))
         .child(format!("{label}:"))
         .child(
             div()
                 .font_weight(FontWeight::BOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child(value),
         )
 }
@@ -241,7 +245,7 @@ fn graph(samples: &[PingSample], now: i64) -> impl IntoElement {
             for &fx in &gridlines {
                 window.paint_quad(fill(
                     Bounds::new(at(fx, 0.), size(px(1.), bounds.size.height)),
-                    rgba(theme::BORDER),
+                    rgba(theme::border()),
                 ));
             }
             let Some(&(first_x, first_y)) = points.first() else {
@@ -273,7 +277,7 @@ fn graph(samples: &[PingSample], now: i64) -> impl IntoElement {
             })
             .text_size(rpx(12.))
             .line_height(rpx(16.))
-            .text_color(rgb(theme::MUTED))
+            .text_color(rgb(theme::muted()))
             .child(value.to_string())
     };
     let x_labels = minutes.iter().map(move |&minute| {
@@ -287,7 +291,7 @@ fn graph(samples: &[PingSample], now: i64) -> impl IntoElement {
             .justify_center()
             .text_size(rpx(12.))
             .line_height(rpx(16.))
-            .text_color(rgb(theme::MUTED))
+            .text_color(rgb(theme::muted()))
             .child(format_timestamp(minute, 't'))
     });
     div()
@@ -299,7 +303,7 @@ fn graph(samples: &[PingSample], now: i64) -> impl IntoElement {
                 .relative()
                 .h(rpx(GRAPH_HEIGHT))
                 .pr(rpx(GRAPH_AXIS))
-                .child(div().size_full().bg(black()).child(plot))
+                .child(div().size_full().bg(rgb(theme::bg())).child(plot))
                 .child(y_label(top, Some(0.)))
                 .child(y_label(top / 2, Some(0.5)))
                 .child(y_label(0, None)),
@@ -329,7 +333,7 @@ fn linked_text(
         StyledText::new(format!("{before}{link}{after}")).with_highlights([(
             range.clone(),
             HighlightStyle {
-                color: Some(rgb(crate::app::chat::LINK).into()),
+                color: Some(rgb(theme::link()).into()),
                 ..Default::default()
             },
         )]),
@@ -365,7 +369,7 @@ fn privacy(app: &DiscordApp, code: &str, closing: bool, cx: &App) -> impl IntoEl
                         .text_size(rpx(16.))
                         .line_height(rpx(20.))
                         .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(theme::STRONG))
+                        .text_color(rgb(theme::strong()))
                         .child("Voice Privacy Code"),
                 )
                 .child(
@@ -374,7 +378,7 @@ fn privacy(app: &DiscordApp, code: &str, closing: bool, cx: &App) -> impl IntoEl
                         .w_full()
                         .text_size(rpx(12.))
                         .line_height(rpx(16.))
-                        .text_color(rgb(theme::MUTED))
+                        .text_color(rgb(theme::muted()))
                         .child(intro),
                 ),
         )
@@ -387,10 +391,10 @@ fn privacy(app: &DiscordApp, code: &str, closing: bool, cx: &App) -> impl IntoEl
                 .w_full()
                 .pt(rpx(12.))
                 .border_t_1()
-                .border_color(rgba(theme::BORDER))
+                .border_color(rgba(theme::border()))
                 .text_size(rpx(12.))
                 .line_height(rpx(16.))
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child(
                     "Only you and your friends on this call can hear you. Nobody else \u{2013} \
                      not even Wumpus \u{2013} can listen in!",
@@ -425,7 +429,7 @@ fn code_grid(groups: &[String], cx: &App) -> Div {
                     .font_family(mono.clone())
                     .text_size(rpx(14.))
                     .line_height(rpx(18.))
-                    .text_color(rgb(theme::TEXT))
+                    .text_color(rgb(theme::text()))
                     .child(group.clone())
             }))
     };
@@ -439,10 +443,10 @@ fn code_grid(groups: &[String], cx: &App) -> Div {
         .px(rpx(16.))
         .py(rpx(24.))
         .rounded(rpx(8.))
-        .bg(black());
+        .bg(rgb(theme::bg()));
     for (index, row) in rows.into_iter().enumerate() {
         if index > 0 {
-            grid = grid.child(div().h(px(1.)).bg(rgba(theme::BORDER)));
+            grid = grid.child(div().h(px(1.)).bg(rgba(theme::border())));
         }
         grid = grid.child(row);
     }
@@ -466,14 +470,14 @@ fn copy_button(app: &DiscordApp, code: String, closing: bool) -> impl IntoElemen
         .h(rpx(32.))
         .rounded(rpx(8.))
         .border_1()
-        .border_color(rgba(theme::BORDER))
-        .bg(rgba(theme::HOVER))
+        .border_color(rgba(theme::border()))
+        .bg(rgba(theme::hover()))
         .cursor_pointer()
-        .hover(|style| style.bg(rgba(theme::SELECTED)))
+        .hover(|style| style.bg(rgba(theme::selected())))
         .text_size(rpx(14.))
         .line_height(rpx(18.))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(theme::STRONG))
+        .text_color(rgb(theme::strong()))
         .when(!closing, |this| {
             this.on_click(move |_, _, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(code.clone()));
@@ -482,16 +486,16 @@ fn copy_button(app: &DiscordApp, code: String, closing: bool) -> impl IntoElemen
                     .ok();
             })
         })
-        .child(theme::icon("copy", 16., theme::STRONG))
+        .child(theme::icon("copy", 16., theme::strong()))
         .child(label)
 }
 
 fn encryption_footer(encryption: &Encryption, connected: bool) -> impl IntoElement {
     let (text, color) = match encryption {
         Encryption::On(_) => ("End-to-end encrypted", theme::GREEN),
-        Encryption::Off => ("Not end-to-end encrypted", theme::MUTED),
-        Encryption::Pending if connected => ("Setting up end-to-end encryption…", theme::MUTED),
-        Encryption::Pending => ("Connecting to voice…", theme::MUTED),
+        Encryption::Off => ("Not end-to-end encrypted", theme::muted()),
+        Encryption::Pending if connected => ("Setting up end-to-end encryption…", theme::muted()),
+        Encryption::Pending => ("Connecting to voice…", theme::muted()),
     };
     div()
         .flex()

@@ -689,3 +689,38 @@ fn malformed_frecency_updates_clear_known_state() {
     assert!(store.frecency().is_none());
     assert!(store.favorite_gifs().is_empty());
 }
+
+#[test]
+fn account_theme_follows_ready_and_full_and_partial_settings_updates() {
+    use crate::discord::settings_proto::AccountTheme;
+
+    let mut payload = ready();
+    payload.user_settings_proto = Some(STANDARD.encode(field(13, &uint(1, 1))));
+    let mut store = Store::from_ready(payload);
+    assert_eq!(store.account_theme(), Some(AccountTheme::Dark));
+
+    assert_eq!(
+        store.apply(settings_update(1, &field(13, &uint(1, 2)), true)),
+        Change::Theme
+    );
+    assert_eq!(store.account_theme(), Some(AccountTheme::Light));
+    assert_eq!(
+        store.apply(settings_update(1, &field(13, &uint(1, 2)), true)),
+        Change::None
+    );
+
+    // A partial update without the appearance field leaves the theme alone.
+    let status = field(11, &field(1, &field(1, b"idle")));
+    assert_eq!(
+        store.apply(settings_update(1, &status, true)),
+        Change::Members { guild_id: None }
+    );
+    assert_eq!(store.account_theme(), Some(AccountTheme::Light));
+
+    // A full update without the appearance field clears it.
+    assert_eq!(
+        store.apply(settings_update(1, &status, false)),
+        Change::Structure
+    );
+    assert_eq!(store.account_theme(), None);
+}

@@ -71,7 +71,7 @@ pub(super) fn render(app: &DiscordApp, cx: &App) -> AnyElement {
             .flex_col()
             .overflow_y_scrollbar()
             .border_l_1()
-            .border_color(rgba(theme::BORDER))
+            .border_color(rgba(theme::border()))
             .child(group_members(app, dm, cx))
             .into_any_element();
     }

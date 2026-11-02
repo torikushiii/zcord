@@ -1,3 +1,4 @@
+mod appearance;
 pub(crate) mod attachments;
 mod call_view;
 mod channel_list;
@@ -190,6 +191,7 @@ pub enum Screen {
 pub struct DiscordApp {
     pub(crate) screen: Screen,
     pub(crate) store: Store,
+    account_theme: Option<crate::discord::settings_proto::AccountTheme>,
     pub(crate) selected_guild_id: u64,
     pub(crate) selected_channel_id: u64,
     pub(crate) show_members: bool,
@@ -366,6 +368,7 @@ impl DiscordApp {
         let mut app = Self {
             screen: Screen::Connecting,
             store: Store::seed(),
+            account_theme: None,
             selected_guild_id: 0,
             selected_channel_id: 0,
             show_members: true,
@@ -867,6 +870,7 @@ impl DiscordApp {
 
     fn apply_change(&mut self, change: Change, window: &mut Window, cx: &mut Context<Self>) {
         self.arm_status_expiry_timer(cx);
+        self.follow_account_theme(cx);
         self.sync_thread_pane(&change, cx);
         // Background channels only change badges, which nobody can see until a
         // repaint; coalesce a burst into one refresh with the member sync timer.
@@ -1143,7 +1147,8 @@ impl Render for DiscordApp {
                         .rounded_tl(rpx(8.))
                         .border_t_1()
                         .border_l_1()
-                        .border_color(rgba(theme::BORDER))
+                        .border_color(rgba(theme::border()))
+                        .bg(rgb(theme::base_lower()))
                         .child(
                             self.views
                                 .channel_list
@@ -1157,6 +1162,7 @@ impl Render for DiscordApp {
                                 .flex_1()
                                 .min_w_0()
                                 .h_full()
+                                .bg(rgb(theme::bg()))
                                 .when(self.stream_chat_open(), |this| {
                                     this.flex_none().ml_auto().w(rpx(stream_view::CHAT_WIDTH))
                                 })
@@ -1270,9 +1276,9 @@ impl Render for DiscordApp {
             .flex_col()
             .size_full()
             .overflow_hidden()
-            .bg(rgb(theme::BG))
+            .bg(rgb(theme::base_lowest()))
             .child(smooth_scroll::interceptor())
-            .text_color(rgb(theme::TEXT))
+            .text_color(rgb(theme::text()))
             .text_size(rpx(16.))
             .child(titlebar::render(self, window, cx))
             .when(self.reconnecting, |this| {
@@ -1284,7 +1290,7 @@ impl Render for DiscordApp {
                         .bg(rgb(theme::YELLOW))
                         .text_size(rpx(13.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(theme::BG))
+                        .text_color(gpui::black())
                         .child("Connection lost. Reconnecting…"),
                 )
             })
@@ -1315,11 +1321,11 @@ fn connecting() -> impl IntoElement {
         .justify_center()
         .gap_3()
         .child(theme::logo(64.))
-        .child(theme::spinner(24., theme::MUTED))
+        .child(theme::spinner(24., theme::muted()))
         .child(
             div()
                 .text_size(rpx(14.))
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child("Connecting to Discord…"),
         )
 }

@@ -76,6 +76,10 @@ pub struct Settings {
     #[serde(default)]
     pub clock_24h: bool,
     #[serde(default)]
+    pub light_theme: bool,
+    #[serde(default)]
+    pub theme_sync_off: bool,
+    #[serde(default)]
     pub reduce_motion: Option<bool>,
     #[serde(default)]
     pub share_game_activity: bool,
@@ -484,6 +488,8 @@ mod tests {
         assert!(!settings.notification_sound_off);
         assert!(settings.chat_font_size.is_none());
         assert!(settings.clock_24h);
+        assert!(!settings.light_theme);
+        assert!(!settings.theme_sync_off);
         assert!(!settings.share_game_activity);
     }
 }

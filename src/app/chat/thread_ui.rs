@@ -11,12 +11,6 @@ use crate::{
 
 const NAME_LIMIT: usize = 100;
 const DEFAULT_NAME_CHARS: usize = 40;
-const THREAD_CARD: u32 = 0x121214;
-const THREAD_RING: u32 = 0x97979F33;
-const THREAD_TEXT: u32 = 0xDCDCDF;
-const THREAD_ELBOW: u32 = 0x97979F80;
-const SUBTLE: u32 = 0x232327;
-const SUBTLE_HOVER: u32 = 0x2C2C31;
 
 pub(in crate::app) struct CreateThread {
     channel_id: u64,
@@ -225,7 +219,7 @@ pub(super) fn thread_menu_button(app: &DiscordApp) -> Option<Stateful<Div>> {
     let thread_id = app.selected_channel_id;
     let entity = app.entity.clone();
     Some(
-        theme::icon_button("thread-more", "ellipsis", 20., theme::MUTED)
+        theme::icon_button("thread-more", "ellipsis", 20., theme::muted())
             .relative()
             .child(theme::hover_tooltip("thread-more-tip", "More"))
             .on_click(move |event, _, cx| {
@@ -255,7 +249,7 @@ pub(in crate::app) fn thread_menu(app: &DiscordApp) -> Option<AnyElement> {
     let archived = row.archived;
     let manage = app.store.can_manage_thread(id);
     let close = app.entity.clone();
-    let text = theme::TEXT;
+    let text = theme::text();
     let body = div()
         .id("thread-menu")
         .flex()
@@ -263,9 +257,9 @@ pub(in crate::app) fn thread_menu(app: &DiscordApp) -> Option<AnyElement> {
         .w(rpx(200.))
         .p(rpx(8.))
         .rounded(rpx(8.))
-        .bg(rgb(theme::ELEVATED))
+        .bg(rgb(theme::elevated()))
         .border_1()
-        .border_color(rgba(theme::BORDER))
+        .border_color(rgba(theme::border()))
         .shadow_lg()
         .occlude()
         .on_mouse_down_out(move |_, _, cx| {
@@ -346,7 +340,7 @@ pub(in crate::app) fn create_thread_dialog(app: &DiscordApp) -> Option<AnyElemen
     let submit = app.entity.clone();
     let private = app.entity.clone();
     let checked = dialog.private;
-    let button = |id: &'static str, text: &'static str, bg: u32, hover: u32| {
+    let button = |id: &'static str, text: &'static str, bg: u32, hover: u32, color: Hsla| {
         div()
             .id(id)
             .flex()
@@ -360,7 +354,7 @@ pub(in crate::app) fn create_thread_dialog(app: &DiscordApp) -> Option<AnyElemen
             .hover(move |style| style.bg(rgb(hover)))
             .text_size(rpx(14.))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(white())
+            .text_color(color)
             .child(text)
     };
     Some(
@@ -389,9 +383,9 @@ pub(in crate::app) fn create_thread_dialog(app: &DiscordApp) -> Option<AnyElemen
                     .max_w_full()
                     .p(rpx(24.))
                     .rounded(rpx(12.))
-                    .bg(rgb(theme::ELEVATED))
+                    .bg(rgb(theme::elevated()))
                     .border_1()
-                    .border_color(rgba(theme::BORDER))
+                    .border_color(rgba(theme::border()))
                     .occlude()
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .child(
@@ -399,7 +393,7 @@ pub(in crate::app) fn create_thread_dialog(app: &DiscordApp) -> Option<AnyElemen
                             .text_size(rpx(20.))
                             .line_height(rpx(24.))
                             .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(theme::STRONG))
+                            .text_color(rgb(theme::strong()))
                             .child("Create Thread"),
                     )
                     .child(
@@ -409,9 +403,9 @@ pub(in crate::app) fn create_thread_dialog(app: &DiscordApp) -> Option<AnyElemen
                             .h(rpx(40.))
                             .px(rpx(12.))
                             .rounded(rpx(8.))
-                            .bg(rgb(theme::BG))
+                            .bg(rgb(theme::bg()))
                             .border_1()
-                            .border_color(rgba(theme::BORDER))
+                            .border_color(rgba(theme::border()))
                             .child(
                                 div().flex_1().min_w_0().child(
                                     Input::new(&dialog.name)
@@ -430,7 +424,7 @@ pub(in crate::app) fn create_thread_dialog(app: &DiscordApp) -> Option<AnyElemen
                                 .gap_2()
                                 .cursor_pointer()
                                 .text_size(rpx(14.))
-                                .text_color(rgb(theme::TEXT))
+                                .text_color(rgb(theme::text()))
                                 .on_click(move |_, _, cx| {
                                     private
                                         .update(cx, |app, cx| {
@@ -449,7 +443,7 @@ pub(in crate::app) fn create_thread_dialog(app: &DiscordApp) -> Option<AnyElemen
                                         .size(rpx(20.))
                                         .rounded(rpx(4.))
                                         .border_1()
-                                        .border_color(rgba(theme::BORDER))
+                                        .border_color(rgba(theme::border()))
                                         .when(checked, |this| {
                                             this.bg(rgb(theme::BLURPLE))
                                                 .child(theme::icon("check", 14., 0xFFFFFF))
@@ -469,12 +463,18 @@ pub(in crate::app) fn create_thread_dialog(app: &DiscordApp) -> Option<AnyElemen
                             .flex()
                             .gap_2()
                             .child(
-                                button("create-thread-cancel", "Cancel", SUBTLE, SUBTLE_HOVER)
-                                    .on_click(move |_, _, cx| {
-                                        cancel
-                                            .update(cx, |app, cx| app.close_create_thread(cx))
-                                            .ok();
-                                    }),
+                                button(
+                                    "create-thread-cancel",
+                                    "Cancel",
+                                    theme::button_subtle(),
+                                    theme::button_subtle_hover(),
+                                    rgb(theme::bright()).into(),
+                                )
+                                .on_click(move |_, _, cx| {
+                                    cancel
+                                        .update(cx, |app, cx| app.close_create_thread(cx))
+                                        .ok();
+                                }),
                             )
                             .child(
                                 button(
@@ -482,6 +482,7 @@ pub(in crate::app) fn create_thread_dialog(app: &DiscordApp) -> Option<AnyElemen
                                     "Create",
                                     theme::BLURPLE,
                                     theme::BLURPLE_ACTIVE,
+                                    white(),
                                 )
                                 .when(dialog.busy, |this| this.opacity(0.5))
                                 .on_click(move |_, window, cx| {
@@ -505,7 +506,7 @@ fn notice_link(
         .id(id)
         .cursor_pointer()
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(THREAD_TEXT))
+        .text_color(rgb(theme::strong()))
         .hover(|style| style.underline())
         .on_click(move |_, window, cx| action(window, cx))
         .child(text)
@@ -605,7 +606,7 @@ pub(super) fn thread_notice_chip(app: &DiscordApp, message: &Message, cx: &App) 
                     .border_l_1()
                     .border_b_1()
                     .rounded_bl(rpx(8.))
-                    .border_color(rgba(THREAD_ELBOW)),
+                    .border_color(rgba(theme::connector())),
             )
             .child(chip),
     )
@@ -635,7 +636,7 @@ pub(super) fn thread_chip(app: &DiscordApp, message: &Message, cx: &App) -> Opti
             .min_w_0()
             .text_size(rpx(14.))
             .line_height(rpx(18.))
-            .text_color(rgb(theme::MUTED))
+            .text_color(rgb(theme::muted()))
             .child(theme::undecorated_member_avatar(
                 &app.store, guild_id, *author, 16., cx,
             ))
@@ -643,7 +644,7 @@ pub(super) fn thread_chip(app: &DiscordApp, message: &Message, cx: &App) -> Opti
                 div()
                     .flex_none()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(THREAD_TEXT))
+                    .text_color(rgb(theme::strong()))
                     .child(name),
             )
             .child(div().min_w_0().truncate().child(text.clone()))
@@ -663,10 +664,10 @@ pub(super) fn thread_chip(app: &DiscordApp, message: &Message, cx: &App) -> Opti
             .py(rpx(8.))
             .rounded(rpx(8.))
             .cursor_pointer()
-            .bg(rgb(THREAD_CARD))
+            .bg(rgb(theme::elevated()))
             .border_1()
-            .border_color(rgba(THREAD_RING))
-            .hover(|style| style.bg(rgba(theme::SELECTED)))
+            .border_color(rgba(theme::outline()))
+            .hover(|style| style.bg(rgba(theme::selected())))
             .on_click(move |_, window, cx| {
                 entity
                     .update(cx, |app, cx| app.open_listed_thread(id, window, cx))
@@ -684,14 +685,14 @@ pub(super) fn thread_chip(app: &DiscordApp, message: &Message, cx: &App) -> Opti
                             .min_w_0()
                             .truncate()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(THREAD_TEXT))
+                            .text_color(rgb(theme::strong()))
                             .child(thread.name.clone()),
                     )
                     .child(
                         div()
                             .flex_none()
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(theme::LINK))
+                            .text_color(rgb(theme::link()))
                             .child(format!("{count} {noun} \u{203a}")),
                     ),
             )

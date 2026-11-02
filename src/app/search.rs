@@ -24,7 +24,6 @@ const USER_SUGGESTIONS: usize = 7;
 const CHANNEL_SUGGESTIONS: usize = 10;
 const MEMBER_LIMIT: u32 = USER_SUGGESTIONS as u32;
 const MEMBER_QUERY_DELAY: Duration = Duration::from_millis(250);
-const PANEL: u32 = 0x0A0A0C;
 const SPINNER_SIZE: f32 = 16.;
 const SORT_MENU_WIDTH: f32 = 170.;
 const CARD_WIDTH: f32 = RESULTS_WIDTH - 1. - 32. - 2.;
@@ -35,14 +34,6 @@ const SORTS: [(SearchSort, &str); 3] = [
     (SearchSort::Oldest, "Oldest"),
     (SearchSort::Relevant, "Most Relevant"),
 ];
-const PANEL_BORDER: u32 = 0x97979F33;
-const BOX_FILL: u32 = 0x0000001F;
-const BOX_BORDER: u32 = 0x97979F3D;
-const CHIP: u32 = 0x17181B;
-const PILL: u32 = 0x97979F3D;
-const BUTTON: u32 = 0x97979F1F;
-const BUTTON_BORDER: u32 = 0x97979F29;
-const ICON: u32 = 0x81828A;
 
 pub(crate) struct MessageSearch {
     scope: SearchScope,
@@ -740,15 +731,15 @@ pub(crate) fn search_box(app: &DiscordApp, cx: &App) -> AnyElement {
         .w_full()
         .h(rpx(32.))
         .rounded(rpx(8.))
-        .bg(rgba(BOX_FILL))
+        .bg(rgba(theme::recessed()))
         .border_1()
-        .border_color(rgba(BOX_BORDER))
+        .border_color(rgba(theme::border_emphasis()))
         .overflow_hidden()
         .cursor_text()
         .text_size(rpx(14.))
         .line_height(rpx(22.))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(theme::FAINT))
+        .text_color(rgb(theme::faint()))
         .on_click(move |_, window, cx| {
             open.update(cx, |app, cx| app.open_search(window, cx)).ok();
         })
@@ -774,7 +765,7 @@ pub(crate) fn search_box(app: &DiscordApp, cx: &App) -> AnyElement {
                             .appearance(false)
                             .px_0()
                             .text_size(rpx(14.))
-                            .text_color(rgb(theme::TEXT))
+                            .text_color(rgb(theme::text()))
                     });
                     this.when(empty, |this| {
                         this.child(
@@ -802,11 +793,11 @@ pub(crate) fn search_box(app: &DiscordApp, cx: &App) -> AnyElement {
                         .items_center()
                         .justify_center()
                         .size(rpx(24.))
-                        .child(theme::icon("search", 16., theme::MUTED)),
+                        .child(theme::icon("search", 16., theme::muted())),
                 )
             } else {
                 this.child(
-                    theme::icon_button("search-clear", "x", 16., theme::MUTED)
+                    theme::icon_button("search-clear", "x", 16., theme::muted())
                         .flex_none()
                         .size(rpx(24.))
                         .on_click(move |_, window, cx| {
@@ -828,8 +819,8 @@ fn box_chip(chip: &Chip) -> [Div; 2] {
             .flex_none()
             .items_center()
             .h(rpx(22.))
-            .bg(rgb(CHIP))
-            .text_color(rgb(theme::STRONG))
+            .bg(rgb(theme::surface_highest()))
+            .text_color(rgb(theme::strong()))
     };
     [
         pill()
@@ -858,8 +849,8 @@ fn row_chip(app: &DiscordApp, chip: &Chip, cx: &App) -> Div {
             .flex_none()
             .items_center()
             .h(rpx(24.))
-            .bg(rgba(PILL))
-            .text_color(rgb(theme::STRONG))
+            .bg(rgba(theme::control_selected()))
+            .text_color(rgb(theme::strong()))
     };
     div()
         .flex()
@@ -906,15 +897,15 @@ fn search_row(
         .rounded(rpx(8.))
         .overflow_hidden()
         .cursor_pointer()
-        .hover(|style| style.bg(rgba(theme::HOVER)))
+        .hover(|style| style.bg(rgba(theme::hover())))
         .text_size(rpx(14.))
         .line_height(rpx(18.))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(theme::STRONG))
+        .text_color(rgb(theme::strong()))
         .on_click(move |_, _, cx| {
             run.update(cx, |app, cx| app.run_search(cx)).ok();
         })
-        .child(theme::icon("search", 20., ICON).mr(rpx(8.)))
+        .child(theme::icon("search", 20., theme::faint()).mr(rpx(8.)))
         .child(div().flex_none().mr(rpx(4.)).child("Search for"))
         .children(search.chips.iter().map(|filter| row_chip(app, filter, cx)))
         .child(
@@ -959,8 +950,8 @@ fn popover_row(
         .py(rpx(4.))
         .rounded(rpx(8.))
         .cursor_pointer()
-        .when(highlighted, |this| this.bg(rgba(theme::SELECTED)))
-        .hover(|style| style.bg(rgba(theme::HOVER)))
+        .when(highlighted, |this| this.bg(rgba(theme::selected())))
+        .hover(|style| style.bg(rgba(theme::hover())))
         .on_click(move |_, window, cx| {
             cx.stop_propagation();
             choose
@@ -976,13 +967,13 @@ fn popover_row(
             .text_size(rpx(14.))
             .line_height(rpx(18.))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(rgb(theme::STRONG))
+            .text_color(rgb(theme::strong()))
             .child(text)
     };
     match row {
         Row::Filter(filter) => base
             .min_h(rpx(ROW_HEIGHT))
-            .child(theme::icon(filter.icon, 20., ICON))
+            .child(theme::icon(filter.icon, 20., theme::faint()))
             .child(
                 div()
                     .flex()
@@ -997,11 +988,11 @@ fn popover_row(
                             .text_size(rpx(14.))
                             .line_height(rpx(18.))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(ICON))
+                            .text_color(rgb(theme::faint()))
                             .child(
                                 div()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(rgb(theme::MUTED))
+                                    .text_color(rgb(theme::muted()))
                                     .child(format!("{}:", filter.key)),
                             )
                             .child(filter.hint),
@@ -1024,14 +1015,14 @@ fn popover_row(
                     .min_w_0()
                     .truncate()
                     .text_size(rpx(12.))
-                    .text_color(rgb(theme::MUTED))
+                    .text_color(rgb(theme::muted()))
                     .child(username),
             ),
         Row::Channel { name, .. } => base
-            .child(theme::icon("hash", 20., theme::MUTED))
+            .child(theme::icon("hash", 20., theme::muted()))
             .child(title(name)),
         Row::Has { name, .. } => base
-            .child(theme::icon(has_icon(name), 20., ICON))
+            .child(theme::icon(has_icon(name), 20., theme::faint()))
             .child(title(name.to_owned())),
     }
     .into_any_element()
@@ -1068,9 +1059,9 @@ pub(crate) fn popover(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
             .px(rpx(8.))
             .py(rpx(12.))
             .rounded(rpx(8.))
-            .bg(rgb(PANEL))
+            .bg(rgb(theme::surface_high()))
             .border_1()
-            .border_color(rgba(PANEL_BORDER))
+            .border_color(rgba(theme::outline()))
             .shadow_lg()
             .occlude()
             .without_text_selection()
@@ -1091,7 +1082,7 @@ pub(crate) fn popover(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                             .h(px(1.))
                             .my(rpx(8.))
                             .mx(rpx(-8.))
-                            .bg(rgba(PANEL_BORDER)),
+                            .bg(rgba(theme::outline())),
                     )
             })
             .child(
@@ -1102,7 +1093,7 @@ pub(crate) fn popover(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                     .text_size(rpx(12.))
                     .line_height(rpx(16.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(theme::MUTED))
+                    .text_color(rgb(theme::muted()))
                     .child(heading),
             )
             .child(
@@ -1120,7 +1111,7 @@ pub(crate) fn popover(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                         .px(rpx(8.))
                         .py(rpx(6.))
                         .text_size(rpx(14.))
-                        .text_color(rgb(theme::MUTED))
+                        .text_color(rgb(theme::muted()))
                         .child("No matches"),
                 )
             })
@@ -1144,7 +1135,7 @@ fn sort_control(app: &DiscordApp, search: &MessageSearch, sort: SearchSort) -> i
             .px(rpx(8.))
             .rounded(rpx(6.))
             .cursor_pointer()
-            .hover(|style| style.bg(rgba(theme::HOVER)))
+            .hover(|style| style.bg(rgba(theme::hover())))
             .on_click(move |_, _, cx| {
                 cx.stop_propagation();
                 entity
@@ -1171,7 +1162,7 @@ fn sort_control(app: &DiscordApp, search: &MessageSearch, sort: SearchSort) -> i
                             this.bg(rgb(theme::BLURPLE))
                                 .child(div().size(rpx(8.)).rounded_full().bg(white()))
                         } else {
-                            this.border_2().border_color(rgb(theme::MUTED))
+                            this.border_2().border_color(rgb(theme::muted()))
                         }
                     }),
             )
@@ -1187,14 +1178,14 @@ fn sort_control(app: &DiscordApp, search: &MessageSearch, sort: SearchSort) -> i
                         .w(rpx(SORT_MENU_WIDTH))
                         .p(rpx(8.))
                         .rounded(rpx(8.))
-                        .bg(rgb(PANEL))
+                        .bg(rgb(theme::surface_high()))
                         .border_1()
-                        .border_color(rgba(PANEL_BORDER))
+                        .border_color(rgba(theme::outline()))
                         .shadow_lg()
                         .occlude()
                         .text_size(rpx(16.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(theme::STRONG))
+                        .text_color(rgb(theme::strong()))
                         .on_mouse_down_out(move |_, _, cx| {
                             close
                                 .update(cx, |app, cx| {
@@ -1221,13 +1212,13 @@ fn sort_control(app: &DiscordApp, search: &MessageSearch, sort: SearchSort) -> i
             .h(rpx(32.))
             .px(rpx(12.))
             .rounded(rpx(8.))
-            .bg(rgba(BUTTON))
+            .bg(rgba(theme::control_bg()))
             .border_1()
-            .border_color(rgba(BUTTON_BORDER))
+            .border_color(rgba(theme::border_soft()))
             .cursor_pointer()
             .text_size(rpx(14.))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(rgb(theme::STRONG))
+            .text_color(rgb(theme::strong()))
             .on_click(move |_, _, cx| {
                 toggle
                     .update(cx, |app, cx| {
@@ -1241,7 +1232,7 @@ fn sort_control(app: &DiscordApp, search: &MessageSearch, sort: SearchSort) -> i
                     })
                     .ok();
             })
-            .child(theme::icon("arrow-up-down", 16., theme::STRONG))
+            .child(theme::icon("arrow-up-down", 16., theme::strong()))
             .child("Sort"),
     )
 }
@@ -1264,7 +1255,7 @@ fn note(text: String) -> Div {
         .px(rpx(16.))
         .text_center()
         .text_size(rpx(14.))
-        .text_color(rgb(theme::MUTED))
+        .text_color(rgb(theme::muted()))
         .child(text)
 }
 
@@ -1280,9 +1271,9 @@ fn result_card(app: &DiscordApp, channel_id: u64, message: &Message, cx: &App) -
         .mb(rpx(8.))
         .py(rpx(6.))
         .rounded(rpx(8.))
-        .bg(rgb(theme::BG))
+        .bg(rgb(theme::bg()))
         .border_1()
-        .border_color(rgba(PANEL_BORDER))
+        .border_color(rgba(theme::outline()))
         .overflow_hidden()
         .cursor_pointer()
         .on_click(move |_, window, cx| {
@@ -1302,13 +1293,13 @@ fn result_card(app: &DiscordApp, channel_id: u64, message: &Message, cx: &App) -
                 .h(rpx(24.))
                 .p(rpx(4.))
                 .rounded(rpx(3.))
-                .bg(rgb(theme::BG))
+                .bg(rgb(theme::bg()))
                 .opacity(0.)
                 .group_hover(group, |style| style.opacity(1.))
                 .text_size(rpx(12.))
                 .line_height(rpx(16.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(theme::TEXT))
+                .text_color(rgb(theme::text()))
                 .child("Jump"),
         )
 }
@@ -1335,7 +1326,7 @@ fn channel_heading(app: &DiscordApp, channel_id: u64, key: u64) -> AnyElement {
         .h(rpx(20.))
         .mb(rpx(8.))
         .min_w_0()
-        .child(theme::icon("hash", 16., theme::STRONG).mr(rpx(4.)))
+        .child(theme::icon("hash", 16., theme::strong()).mr(rpx(4.)))
         .child(
             div()
                 .flex_1()
@@ -1344,7 +1335,7 @@ fn channel_heading(app: &DiscordApp, channel_id: u64, key: u64) -> AnyElement {
                 .text_size(rpx(16.))
                 .line_height(rpx(20.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child(label(("search-channel", key), name)),
         )
         .children(category.map(|category| {
@@ -1358,8 +1349,8 @@ fn channel_heading(app: &DiscordApp, channel_id: u64, key: u64) -> AnyElement {
                 .text_size(rpx(12.))
                 .line_height(rpx(16.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(theme::TEXT))
-                .child(theme::icon("chevron-right", 12., theme::TEXT))
+                .text_color(rgb(theme::text()))
+                .child(theme::icon("chevron-right", 12., theme::text()))
                 .child(div().min_w_0().truncate().child(category))
         }))
         .into_any_element()
@@ -1381,11 +1372,15 @@ fn pager(app: &DiscordApp, page: u64, pages: u64) -> Div {
                 .rounded(rpx(8.))
                 .text_size(rpx(14.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(if enabled { theme::STRONG } else { theme::FAINT }))
-                .when(on, |this| this.bg(rgba(PILL)))
+                .text_color(rgb(if enabled {
+                    theme::strong()
+                } else {
+                    theme::faint()
+                }))
+                .when(on, |this| this.bg(rgba(theme::control_selected())))
                 .when(enabled && !on, |this| {
                     this.cursor_pointer()
-                        .hover(|style| style.bg(rgba(theme::HOVER)))
+                        .hover(|style| style.bg(rgba(theme::hover())))
                         .on_click(move |_, _, cx| {
                             entity
                                 .update(cx, |app, cx| app.set_search_page(target, cx))
@@ -1480,9 +1475,9 @@ pub(crate) fn render_results(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
             .flex()
             .flex_col()
             .size_full()
-            .bg(rgb(theme::BG))
+            .bg(rgb(theme::bg()))
             .border_l_1()
-            .border_color(rgba(theme::BORDER))
+            .border_color(rgba(theme::border()))
             .child(
                 div()
                     .flex()
@@ -1501,15 +1496,15 @@ pub(crate) fn render_results(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                             .text_size(rpx(16.))
                             .line_height(rpx(20.))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(theme::STRONG))
+                            .text_color(rgb(theme::strong()))
                             .child(div().min_w_0().truncate().child(heading))
                             .when(busy, |this| {
-                                this.child(theme::spinner(SPINNER_SIZE, theme::MUTED))
+                                this.child(theme::spinner(SPINNER_SIZE, theme::muted()))
                             }),
                     )
                     .child(sort_control(app, search, sort))
                     .child(
-                        theme::icon_button("search-close", "x", 20., theme::MUTED).on_click(
+                        theme::icon_button("search-close", "x", 20., theme::muted()).on_click(
                             move |_, _, cx| {
                                 close
                                     .update(cx, |app, cx| {

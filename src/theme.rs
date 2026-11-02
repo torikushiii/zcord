@@ -4,7 +4,7 @@ use std::{
     f32::consts::{PI, TAU},
     sync::{
         OnceLock,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -22,31 +22,270 @@ mod profile_avatar;
 pub use midnight::init;
 pub use profile_avatar::status_icon;
 
-pub const BG: u32 = 0x000000;
-pub const SURFACE_HIGH: u32 = 0x0A0A0C;
-pub const ELEVATED: u32 = 0x121214;
-pub const SURFACE_HIGHEST: u32 = 0x17181B;
-// Layer colors are RGBA, not RGB: they must blend with their actual surface.
-pub const BORDER: u32 = 0x96969F3D;
-pub const BORDER_SUBTLE: u32 = 0x9696A033;
-pub const BORDER_MUTED: u32 = 0x9595A229;
-pub const BORDER_STRONG: u32 = 0x96969F70;
-pub const HOVER: u32 = 0x94949C1F;
-pub const ACTIVE: u32 = 0x9696A033;
-pub const SELECTED: u32 = 0x96969F3D;
-pub const CONTROL: u32 = 0x99999914;
-pub const CODE_BACKGROUND: u32 = 0x5966F214;
+macro_rules! palette {
+    ($($name:ident),* $(,)?) => {
+        pub struct Palette {
+            $(pub $name: u32,)*
+        }
+
+        $(
+            pub fn $name() -> u32 {
+                palette().$name
+            }
+        )*
+    };
+}
+
+palette!(
+    bg,
+    base_lower,
+    base_lowest,
+    surface_high,
+    elevated,
+    surface_highest,
+    border,
+    border_subtle,
+    border_muted,
+    border_strong,
+    hover,
+    active,
+    selected,
+    control,
+    code_background,
+    placeholder_strong,
+    text,
+    text_selection,
+    strong,
+    muted,
+    faint,
+    interactive_muted,
+    link,
+    focus,
+    tooltip_bg,
+    tooltip_ring,
+    outline,
+    border_soft,
+    border_emphasis,
+    border_bright,
+    divider,
+    recessed,
+    control_bg,
+    control_selected,
+    dialog_bg,
+    dialog_border,
+    input_bg,
+    input_border,
+    button_bg,
+    button_border,
+    button_subtle,
+    button_subtle_hover,
+    toolbar_bg,
+    toolbar_border,
+    toolbar_hover,
+    connector,
+    embed_border,
+    text_secondary,
+    bright,
+    control_thumb,
+    icon_bg,
+    spoiler_bg,
+    spoiler_hover,
+    spoiler_revealed_bg,
+    timestamp_bg,
+    menu_border,
+    shadow,
+    tooltip_shadow,
+    control_shadow,
+    mention_text,
+    mention_bg,
+    reaction_selected_bg,
+    reply_bg,
+    mention_row_bg,
+    mention_row_hover,
+    jump_highlight,
+    connection_tile_bg,
+    connection_tile_text,
+    upload_sheet,
+    upload_fold,
+    accent_border,
+    account_hover,
+);
+
+const DARK: Palette = Palette {
+    bg: 0x000000,
+    base_lower: 0x000000,
+    base_lowest: 0x000000,
+    surface_high: 0x0A0A0C,
+    elevated: 0x121214,
+    surface_highest: 0x17181B,
+    // Layer colors are RGBA, not RGB: they must blend with their actual surface.
+    border: 0x96969F3D,
+    border_subtle: 0x9696A033,
+    border_muted: 0x9595A229,
+    border_strong: 0x96969F70,
+    hover: 0x94949C1F,
+    active: 0x9696A033,
+    selected: 0x96969F3D,
+    control: 0x99999914,
+    code_background: 0x5966F214,
+    placeholder_strong: 0x2C2D32,
+    text: 0xD4D5D8,
+    text_selection: 0x0438A2,
+    strong: 0xDCDCDF,
+    muted: 0x96979E,
+    faint: 0x81828A,
+    interactive_muted: 0x4F505A,
+    link: 0x2781E7,
+    focus: 0x6AA8F4,
+    tooltip_bg: 0x0A0A0C,
+    tooltip_ring: 0x262629,
+    outline: 0x97979F33,
+    border_soft: 0x97979F29,
+    border_emphasis: 0x97979F3D,
+    border_bright: 0xFFFFFF14,
+    divider: 0x4E5058,
+    recessed: 0x0000001F,
+    control_bg: 0x97979F1F,
+    control_selected: 0x97979F3D,
+    dialog_bg: 0x0C0C0E,
+    dialog_border: 0x26262B,
+    input_bg: 0x0F0F12,
+    input_border: 0x2E2E34,
+    button_bg: 0x1F1F23,
+    button_border: 0x34343B,
+    button_subtle: 0x232327,
+    button_subtle_hover: 0x2C2C31,
+    toolbar_bg: 0x26272B,
+    toolbar_border: 0x3F4046,
+    toolbar_hover: 0x35363B,
+    connector: 0x97979F80,
+    embed_border: 0x2E2E36,
+    text_secondary: 0xB5BAC1,
+    bright: 0xFFFFFF,
+    control_thumb: 0xFFFFFF,
+    icon_bg: 0x1F1F23,
+    spoiler_bg: 0x2A2A30,
+    spoiler_hover: 0x33333A,
+    spoiler_revealed_bg: 0xFFFFFF,
+    timestamp_bg: 0xFFFFFF,
+    menu_border: 0xFFFFFF,
+    shadow: 0x000000,
+    tooltip_shadow: 0x0000003D,
+    control_shadow: 0x00000024,
+    mention_text: 0xC9CDFB,
+    mention_bg: 0x5865F24D,
+    reaction_selected_bg: 0x5865F226,
+    reply_bg: 0x5865F21A,
+    mention_row_bg: 0xF0B2321A,
+    mention_row_hover: 0xF0B23224,
+    jump_highlight: 0x5865F233,
+    connection_tile_bg: 0xFFFFFF,
+    connection_tile_text: 0x2E3035,
+    upload_sheet: 0xD4D8FF,
+    upload_fold: 0xA7AEFF,
+    accent_border: 0xFFFFFF99,
+    account_hover: 0xFFFFFF14,
+};
+
+// Discord's light theme, from its CSS variables. Fields with no Discord counterpart
+// keep the dark value's role: translucent greys gain alpha, opaque ones mirror.
+const LIGHT: Palette = Palette {
+    bg: 0xFFFFFF,
+    base_lower: 0xFBFBFB,
+    base_lowest: 0xF3F3F4,
+    surface_high: 0xFFFFFF,
+    elevated: 0xFFFFFF,
+    surface_highest: 0xFFFFFF,
+    border: 0x97979F66,
+    border_subtle: 0x97979F47,
+    border_muted: 0x97979F33,
+    border_strong: 0x97979F85,
+    hover: 0x97979F1F,
+    active: 0x97979F29,
+    selected: 0x97979F3D,
+    control: 0x97979F14,
+    code_background: 0x5865F20A,
+    placeholder_strong: 0xEBECED,
+    text: 0x2E2E34,
+    text_selection: 0xB4D5FE,
+    strong: 0x28282D,
+    muted: 0x595A63,
+    faint: 0x6C6D76,
+    interactive_muted: 0xC9CACE,
+    link: 0x006DD4,
+    focus: 0x408EEC,
+    tooltip_bg: 0xFFFFFF,
+    tooltip_ring: 0xE2E2E4,
+    outline: 0x97979F47,
+    border_soft: 0x97979F33,
+    border_emphasis: 0x97979F66,
+    border_bright: 0x97979F33,
+    divider: 0xC9CACE,
+    recessed: 0x00000005,
+    control_bg: 0x97979F1F,
+    control_selected: 0x97979F3D,
+    dialog_bg: 0xFFFFFF,
+    dialog_border: 0xE2E2E4,
+    input_bg: 0xFAFAFA,
+    input_border: 0xD5D5D8,
+    button_bg: 0xEBECED,
+    button_border: 0xD5D5D8,
+    button_subtle: 0xEBECED,
+    button_subtle_hover: 0xE2E2E4,
+    toolbar_bg: 0xFFFFFF,
+    toolbar_border: 0xE2E2E4,
+    toolbar_hover: 0xEBECED,
+    connector: 0x97979F85,
+    embed_border: 0xE2E2E4,
+    text_secondary: 0x4E4F57,
+    bright: 0x28282D,
+    control_thumb: 0xFFFFFF,
+    icon_bg: 0xEBECED,
+    spoiler_bg: 0x8F9097,
+    spoiler_hover: 0x70717A,
+    spoiler_revealed_bg: 0x000000,
+    timestamp_bg: 0x000000,
+    menu_border: 0x000000,
+    shadow: 0x000000,
+    tooltip_shadow: 0x00000029,
+    control_shadow: 0x00000014,
+    mention_text: 0x2E3C88,
+    mention_bg: 0x5865F24D,
+    reaction_selected_bg: 0x5865F226,
+    reply_bg: 0x5865F21A,
+    mention_row_bg: 0xF8A30014,
+    mention_row_hover: 0xF8A3001F,
+    jump_highlight: 0x5865F233,
+    connection_tile_bg: 0xEBECED,
+    connection_tile_text: 0x2E3035,
+    upload_sheet: 0xD4D8FF,
+    upload_fold: 0xA7AEFF,
+    accent_border: 0xFFFFFF99,
+    account_hover: 0x97979F1F,
+};
+
+static LIGHT_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+fn palette() -> &'static Palette {
+    if is_light() { &LIGHT } else { &DARK }
+}
+
+pub fn is_light() -> bool {
+    LIGHT_ACTIVE.load(Ordering::Relaxed)
+}
+
+pub fn set_light(light: bool, cx: &mut App) {
+    settings::update(cx, |settings| settings.light_theme = light);
+    if LIGHT_ACTIVE.swap(light, Ordering::Relaxed) == light {
+        return;
+    }
+    midnight::init(cx);
+    Theme::global_mut(cx).font_size = px(BASE_FONT_SIZE * ZOOM_LEVELS[zoom_index(cx)]);
+    cx.refresh_windows();
+}
+
 pub const SCRIM: u32 = 0x000000B8;
 pub const LIGHTBOX_SCRIM: u32 = 0x000000EB;
-pub const PLACEHOLDER_STRONG: u32 = 0x2C2D32;
-pub const TEXT: u32 = 0xD4D5D8;
-pub const TEXT_SELECTION: u32 = 0x0438A2;
-pub const STRONG: u32 = 0xDCDCDF;
-pub const MUTED: u32 = 0x96979E;
-pub const FAINT: u32 = 0x81828A;
-pub const INTERACTIVE_MUTED: u32 = 0x4F505A;
-pub const LINK: u32 = 0x2781E7;
-pub const FOCUS: u32 = 0x6AA8F4;
 pub const BLURPLE: u32 = 0x5865F2;
 pub const BLURPLE_ACTIVE: u32 = 0x3A48A3;
 pub const RED: u32 = 0xEB5F5E;
@@ -280,7 +519,7 @@ pub fn media_loading() -> impl IntoElement {
         .flex()
         .items_center()
         .justify_center()
-        .child(spinner(32., STRONG))
+        .child(spinner(32., strong()))
 }
 
 pub fn spinner(size: f32, color: u32) -> impl IntoElement {
@@ -438,7 +677,7 @@ pub fn avatar(
                 .rounded_full()
                 .when(notch.is_none(), |this| this.bg(color))
                 .children(notch.map(|notch| profile_avatar::background(notch, color)))
-                .text_color(rgb(BG))
+                .text_color(rgb(bg()))
                 .text_size(rpx(size * 0.36))
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(initials.to_owned())
@@ -572,8 +811,6 @@ fn status_cutout(status: Status, dot: f32, ring: u32) -> Option<Div> {
     }
 }
 
-pub const TOOLTIP_BG: u32 = 0x0A0A0C;
-const TOOLTIP_RING: u32 = 0x262629;
 const TOOLTIP_ENTER: Duration = Duration::from_millis(120);
 
 pub fn tooltip_bubble() -> Div {
@@ -582,18 +819,18 @@ pub fn tooltip_bubble() -> Div {
         .px(rpx(11.))
         .py(rpx(7.))
         .rounded(rpx(8.))
-        .bg(rgb(TOOLTIP_BG))
+        .bg(rgb(tooltip_bg()))
         .border_1()
-        .border_color(rgb(TOOLTIP_RING))
+        .border_color(rgb(tooltip_ring()))
         .shadow(vec![BoxShadow {
-            color: rgba(0x0000003D).into(),
+            color: rgba(tooltip_shadow()).into(),
             offset: point(px(0.), px(12.)),
             blur_radius: px(24.),
             spread_radius: px(0.),
             inset: false,
         }])
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(STRONG))
+        .text_color(rgb(strong()))
 }
 
 fn tooltip_arrow(fill: &str, edge: &str, width: f32, height: f32) -> Div {
@@ -602,9 +839,9 @@ fn tooltip_arrow(fill: &str, edge: &str, width: f32, height: f32) -> Div {
         .flex_none()
         .w(rpx(width))
         .h(rpx(height))
-        .child(icon(fill, width, TOOLTIP_BG).h(rpx(height)))
+        .child(icon(fill, width, tooltip_bg()).h(rpx(height)))
         .child(
-            icon(edge, width, TOOLTIP_RING)
+            icon(edge, width, tooltip_ring())
                 .h(rpx(height))
                 .absolute()
                 .top_0()
@@ -806,11 +1043,11 @@ pub fn guild_tag(tag: &GuildTag, cx: &App) -> Div {
         .gap(rpx(3.))
         .px(rpx(4.))
         .rounded(rpx(4.))
-        .bg(rgba(SELECTED))
+        .bg(rgba(selected()))
         .text_size(rpx(12.))
         .line_height(rpx(16.))
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(STRONG))
+        .text_color(rgb(strong()))
         .children(badge.map(|path| img(path).size(rpx(12.)).flex_none()))
         .child(tag.text.clone())
 }
@@ -829,7 +1066,7 @@ pub trait WithoutTextSelection: InteractiveElement + Sized {
 impl<E: InteractiveElement> WithoutTextSelection for E {}
 
 pub fn icon_button(id: impl Into<ElementId>, name: &str, size: f32, color: u32) -> Stateful<Div> {
-    icon_button_with_hover(id, name, size, color, rgba(HOVER).into())
+    icon_button_with_hover(id, name, size, color, rgba(hover()).into())
 }
 
 pub fn icon_button_with_hover(

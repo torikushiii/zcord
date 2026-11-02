@@ -255,7 +255,7 @@ fn destination_row(
         .px(rpx(8.))
         .rounded(rpx(8.))
         .cursor_pointer()
-        .hover(|style| style.bg(rgba(theme::HOVER)))
+        .hover(|style| style.bg(rgba(theme::hover())))
         .on_click(move |_, _, cx| {
             let target = target.clone();
             toggle
@@ -269,7 +269,7 @@ fn destination_row(
                 "user"
             },
             20.,
-            theme::MUTED,
+            theme::muted(),
         ))
         .child(
             div()
@@ -282,7 +282,7 @@ fn destination_row(
                         .truncate()
                         .text_size(rpx(14.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(theme::STRONG))
+                        .text_color(rgb(theme::strong()))
                         .child(label(
                             ("forward-name", destination.channel_id),
                             &destination.name,
@@ -292,7 +292,7 @@ fn destination_row(
                     div()
                         .truncate()
                         .text_size(rpx(12.))
-                        .text_color(rgb(theme::MUTED))
+                        .text_color(rgb(theme::muted()))
                         .child(label(("forward-context", destination.channel_id), context))
                 })),
         )
@@ -305,7 +305,7 @@ fn destination_row(
                 .size(rpx(CHECK_SIZE))
                 .rounded(rpx(6.))
                 .border_1()
-                .border_color(rgba(theme::BORDER_STRONG))
+                .border_color(rgba(theme::border_strong()))
                 .when(checked, |this| {
                     this.bg(rgb(theme::BLURPLE))
                         .border_color(rgb(theme::BLURPLE))
@@ -324,11 +324,15 @@ fn footer_button(id: &'static str, text: String, primary: bool, enabled: bool) -
         .rounded(rpx(8.))
         .text_size(rpx(14.))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(white())
+        .text_color(if primary {
+            white()
+        } else {
+            rgb(theme::bright()).into()
+        })
         .bg(rgb(if primary {
             theme::BLURPLE
         } else {
-            theme::SURFACE_HIGHEST
+            theme::surface_highest()
         }))
         .when(enabled, |this| {
             this.cursor_pointer().hover(|style| style.opacity(0.85))
@@ -380,9 +384,9 @@ pub(super) fn render(app: &DiscordApp) -> Option<AnyElement> {
                     .max_w_full()
                     .p(rpx(24.))
                     .rounded(rpx(12.))
-                    .bg(rgb(theme::ELEVATED))
+                    .bg(rgb(theme::elevated()))
                     .border_1()
-                    .border_color(rgba(theme::BORDER))
+                    .border_color(rgba(theme::border()))
                     .occlude()
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .child(
@@ -390,13 +394,13 @@ pub(super) fn render(app: &DiscordApp) -> Option<AnyElement> {
                             .text_size(rpx(20.))
                             .line_height(rpx(24.))
                             .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(theme::STRONG))
+                            .text_color(rgb(theme::strong()))
                             .child("Forward To"),
                     )
                     .child(
                         div()
                             .text_size(rpx(14.))
-                            .text_color(rgb(theme::MUTED))
+                            .text_color(rgb(theme::muted()))
                             .child(format!(
                                 "Select up to {MAX_TARGETS} places to share this message."
                             )),

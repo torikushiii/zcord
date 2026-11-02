@@ -21,7 +21,7 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> impl IntoElement +
         .items_center()
         .h(rpx(HEIGHT))
         .w_full()
-        .bg(rgb(theme::BG))
+        .bg(rgb(theme::base_lowest()))
         .window_control_area(WindowControlArea::Drag)
         .when(!cfg!(target_os = "windows"), |this| {
             this.on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
@@ -45,7 +45,7 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> impl IntoElement +
                 .gap_2()
                 .text_size(rpx(13.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .children(guild.map(|guild| guild_icon(guild, cx)))
                 .child(label(
                     ("titlebar-guild", guild.map_or(0, |guild| guild.id)),
@@ -92,7 +92,7 @@ fn guild_icon(guild: &Guild, cx: &App) -> AnyElement {
 }
 
 fn nav_button(id: &'static str, icon: &str) -> impl IntoElement {
-    theme::icon_button(id, icon, 16., theme::MUTED)
+    theme::icon_button(id, icon, 16., theme::muted())
         .size(rpx(24.))
         .occlude()
 }
@@ -139,7 +139,7 @@ fn caption_button(
     let hover_bg: Hsla = if close {
         rgb(0xE81123).into()
     } else {
-        rgba(theme::SELECTED).into()
+        rgba(theme::selected()).into()
     };
     div()
         .id(id)
@@ -159,7 +159,13 @@ fn caption_button(
             svg()
                 .path(icon_path)
                 .size(rpx(14.))
-                .text_color(rgb(theme::MUTED))
-                .group_hover(id, |style| style.text_color(white())),
+                .text_color(rgb(theme::muted()))
+                .group_hover(id, move |style| {
+                    style.text_color(if close {
+                        white()
+                    } else {
+                        rgb(theme::bright()).into()
+                    })
+                }),
         )
 }

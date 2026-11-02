@@ -28,7 +28,7 @@ pub(super) fn popout(
     let palette = card.palette();
     let layout = Layout::popout(theme.is_some());
     let corner = if theme.is_some() { 6. } else { 8. };
-    let surface = theme.map_or(theme::ELEVATED, ProfileTheme::surface);
+    let surface = theme.map_or(theme::elevated(), ProfileTheme::surface);
     let outer_width = POPOUT_WIDTH + theme.map_or(0., |_| THEME_BORDER * 2.);
     let overflow = frame_overflow(card, outer_width).unwrap_or_default();
     let position = card.popout_position(window, &overflow);
@@ -86,9 +86,9 @@ pub(super) fn popout(
         .map(|this| match theme {
             Some(theme) => this.p(rpx(THEME_BORDER)).bg(theme.outer()),
             None => this
-                .bg(rgb(theme::ELEVATED))
+                .bg(rgb(theme::elevated()))
                 .border_1()
-                .border_color(rgba(theme::BORDER)),
+                .border_color(rgba(theme::border())),
         })
         .child(inner)
         .into_any_element();
@@ -248,7 +248,7 @@ fn banner(card: &ProfileCard, layout: &Layout, cx: &App) -> AnyElement {
         .and_then(|p| p.user.banner_color.or(p.user.accent_color))
         .or_else(|| profile?.user_profile.as_ref()?.accent_color)
         .or_else(|| card.theme().map(|theme| theme.primary))
-        .unwrap_or(theme::SURFACE_HIGHEST);
+        .unwrap_or(theme::surface_highest());
     let banner = div()
         .flex_none()
         .w_full()
@@ -650,7 +650,7 @@ pub(super) fn skeleton(user_id: u64) -> impl IntoElement {
             .w(width)
             .h(rpx(height))
             .rounded(rpx(height / 2.))
-            .bg(rgba(theme::SELECTED))
+            .bg(rgba(theme::selected()))
     };
     let pill = |width: f32| bar(rpx(width).into(), 20.);
     let content = div()

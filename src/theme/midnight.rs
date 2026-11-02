@@ -4,29 +4,34 @@ use gpui_component::{Theme, ThemeMode};
 use super::*;
 
 pub fn init(cx: &mut App) {
-    Theme::change(ThemeMode::Dark, None, cx);
+    let mode = if is_light() {
+        ThemeMode::Light
+    } else {
+        ThemeMode::Dark
+    };
+    Theme::change(mode, None, cx);
     let theme = Theme::global_mut(cx);
     let colors = &mut theme.colors;
-    colors.background = rgb(BG).into();
-    colors.foreground = rgb(TEXT).into();
-    colors.border = rgba(BORDER).into();
-    colors.input = rgba(BORDER).into();
-    colors.caret = rgb(STRONG).into();
-    colors.ring = rgb(FOCUS).into();
-    colors.selection = rgb(TEXT_SELECTION).into();
-    colors.link = rgb(LINK).into();
-    colors.link_hover = rgb(LINK).into();
-    colors.link_active = rgb(LINK).into();
-    colors.accent = rgba(HOVER).into();
-    colors.accent_foreground = rgb(STRONG).into();
+    colors.background = rgb(bg()).into();
+    colors.foreground = rgb(text()).into();
+    colors.border = rgba(border()).into();
+    colors.input = rgba(border()).into();
+    colors.caret = rgb(strong()).into();
+    colors.ring = rgb(focus()).into();
+    colors.selection = rgb(text_selection()).into();
+    colors.link = rgb(link()).into();
+    colors.link_hover = rgb(link()).into();
+    colors.link_active = rgb(link()).into();
+    colors.accent = rgba(hover()).into();
+    colors.accent_foreground = rgb(strong()).into();
     colors.primary = rgb(BLURPLE).into();
     colors.primary_hover = rgb(BLURPLE).into();
     colors.primary_active = rgb(BLURPLE_ACTIVE).into();
     colors.primary_foreground = gpui::white();
-    colors.secondary = rgba(CONTROL).into();
-    colors.secondary_hover = rgba(HOVER).into();
-    colors.secondary_active = rgba(ACTIVE).into();
-    colors.secondary_foreground = rgb(STRONG).into();
+    colors.secondary = rgba(control()).into();
+    colors.secondary_hover = rgba(hover()).into();
+    colors.secondary_active = rgba(active()).into();
+    colors.secondary_foreground = rgb(strong()).into();
     colors.button = colors.secondary;
     colors.button_hover = colors.secondary_hover;
     colors.button_active = colors.secondary_active;
@@ -39,40 +44,40 @@ pub fn init(cx: &mut App) {
     colors.button_secondary_hover = colors.secondary_hover;
     colors.button_secondary_active = colors.secondary_active;
     colors.button_secondary_foreground = colors.secondary_foreground;
-    colors.muted = rgba(CONTROL).into();
-    colors.muted_foreground = rgb(FAINT).into();
-    colors.popover = rgb(ELEVATED).into();
-    colors.popover_foreground = rgb(TEXT).into();
-    colors.list = rgb(BG).into();
-    colors.list_hover = rgba(HOVER).into();
-    colors.list_active = rgba(SELECTED).into();
-    colors.list_active_border = rgba(BORDER).into();
-    colors.list_even = rgb(BG).into();
-    colors.list_head = rgb(SURFACE_HIGH).into();
-    colors.sidebar = rgb(BG).into();
-    colors.sidebar_foreground = rgb(MUTED).into();
-    colors.sidebar_border = rgba(BORDER_SUBTLE).into();
-    colors.sidebar_accent = rgba(SELECTED).into();
-    colors.sidebar_accent_foreground = rgb(STRONG).into();
+    colors.muted = rgba(control()).into();
+    colors.muted_foreground = rgb(faint()).into();
+    colors.popover = rgb(elevated()).into();
+    colors.popover_foreground = rgb(text()).into();
+    colors.list = rgb(bg()).into();
+    colors.list_hover = rgba(hover()).into();
+    colors.list_active = rgba(selected()).into();
+    colors.list_active_border = rgba(border()).into();
+    colors.list_even = rgb(bg()).into();
+    colors.list_head = rgb(surface_high()).into();
+    colors.sidebar = rgb(bg()).into();
+    colors.sidebar_foreground = rgb(muted()).into();
+    colors.sidebar_border = rgba(border_subtle()).into();
+    colors.sidebar_accent = rgba(selected()).into();
+    colors.sidebar_accent_foreground = rgb(strong()).into();
     colors.sidebar_primary = rgb(BLURPLE).into();
     colors.sidebar_primary_foreground = gpui::white();
-    colors.tab = rgb(BG).into();
-    colors.tab_bar = rgb(BG).into();
-    colors.tab_bar_segmented = rgb(SURFACE_HIGH).into();
-    colors.tab_foreground = rgb(MUTED).into();
-    colors.tab_active = rgba(SELECTED).into();
-    colors.tab_active_foreground = rgb(STRONG).into();
-    colors.title_bar = rgb(BG).into();
-    colors.title_bar_border = rgba(BORDER_SUBTLE).into();
-    colors.status_bar = rgb(BG).into();
-    colors.status_bar_border = rgba(BORDER_SUBTLE).into();
-    colors.drag_border = rgb(FOCUS).into();
+    colors.tab = rgb(bg()).into();
+    colors.tab_bar = rgb(bg()).into();
+    colors.tab_bar_segmented = rgb(surface_high()).into();
+    colors.tab_foreground = rgb(muted()).into();
+    colors.tab_active = rgba(selected()).into();
+    colors.tab_active_foreground = rgb(strong()).into();
+    colors.title_bar = rgb(bg()).into();
+    colors.title_bar_border = rgba(border_subtle()).into();
+    colors.status_bar = rgb(bg()).into();
+    colors.status_bar_border = rgba(border_subtle()).into();
+    colors.drag_border = rgb(focus()).into();
     colors.overlay = rgba(SCRIM).into();
     colors.scrollbar = gpui::transparent_black();
-    colors.scrollbar_thumb = rgba(BORDER_STRONG).into();
-    colors.scrollbar_thumb_hover = rgb(INTERACTIVE_MUTED).into();
-    colors.window_border = rgba(BORDER).into();
-    colors.skeleton = rgb(SURFACE_HIGHEST).into();
+    colors.scrollbar_thumb = rgba(border_strong()).into();
+    colors.scrollbar_thumb_hover = rgb(interactive_muted()).into();
+    colors.window_border = rgba(border()).into();
+    colors.skeleton = rgb(surface_highest()).into();
     theme.tokens = theme.colors.into();
 
     // Input/selection behavior and Base scrollbars keep their own theme projection.
@@ -135,11 +140,11 @@ mod tests {
 
     #[test]
     fn alpha_layers_follow_the_surface_but_status_colors_remain_opaque() {
-        assert_eq!(theme::composite(theme::HOVER, theme::BG), 0x121213);
-        assert_eq!(theme::composite(theme::SELECTED, theme::BG), 0x242426);
+        assert_eq!(theme::composite(theme::hover(), theme::bg()), 0x121213);
+        assert_eq!(theme::composite(theme::selected(), theme::bg()), 0x242426);
         assert_ne!(
-            theme::composite(theme::SELECTED, theme::BG),
-            theme::composite(theme::SELECTED, theme::ELEVATED)
+            theme::composite(theme::selected(), theme::bg()),
+            theme::composite(theme::selected(), theme::elevated())
         );
         assert_eq!(theme::status_color(Status::Online), 0x3D9E60);
         assert_eq!(theme::status_color(Status::Idle), 0xFFCB6E);

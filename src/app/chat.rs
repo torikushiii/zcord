@@ -58,7 +58,6 @@ const GUTTER: f32 = 72.;
 const MESSAGE_RIGHT_PADDING: f32 = 16.;
 const BOTTOM_SPACER: f32 = 24.;
 const STICKER_SIZE: f32 = 160.;
-pub(crate) const LINK: u32 = theme::LINK;
 const DIALOG_ENTER: Duration = Duration::from_millis(200);
 
 #[cfg(test)]
@@ -79,8 +78,8 @@ pub fn header(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         .flex_none()
         .pl_4()
         .border_b_1()
-        .border_color(rgba(theme::BORDER))
-        .child(theme::icon(header_icon(app), 20., theme::FAINT))
+        .border_color(rgba(theme::border()))
+        .child(theme::icon(header_icon(app), 20., theme::faint()))
         .children(forum_crumb(app))
         .child(
             div()
@@ -88,7 +87,7 @@ pub fn header(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 .truncate()
                 .text_size(rpx(16.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child(label(
                     ("header-channel", app.selected_channel_id),
                     &channel_name,
@@ -100,7 +99,7 @@ pub fn header(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
             "notifications",
             "bell",
             20.,
-            theme::MUTED,
+            theme::muted(),
         ))
         .child(pins_button(app))
         .children(thread_ui::thread_menu_button(app))
@@ -110,9 +109,9 @@ pub fn header(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 "users",
                 20.,
                 if app.show_members {
-                    theme::STRONG
+                    theme::strong()
                 } else {
-                    theme::MUTED
+                    theme::muted()
                 },
             )
             .on_click(move |_, _, cx| {
@@ -150,9 +149,9 @@ fn forum_crumb(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
                     .id("forum-crumb")
                     .text_size(rpx(16.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(theme::MUTED))
+                    .text_color(rgb(theme::muted()))
                     .cursor_pointer()
-                    .hover(|style| style.text_color(rgb(theme::TEXT)).underline())
+                    .hover(|style| style.text_color(rgb(theme::text())).underline())
                     .child(label(("forum-crumb", forum_id), &name))
                     .on_click(move |_, window, cx| {
                         entity
@@ -163,7 +162,7 @@ fn forum_crumb(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
             .child(
                 div()
                     .text_size(rpx(18.))
-                    .text_color(rgb(theme::FAINT))
+                    .text_color(rgb(theme::faint()))
                     .child("›"),
             ),
     )
@@ -194,7 +193,7 @@ pub fn messages(app: &DiscordApp, cx: &App) -> AnyElement {
                             .flex_1()
                             .items_center()
                             .justify_center()
-                            .text_color(rgb(theme::MUTED))
+                            .text_color(rgb(theme::muted()))
                             .child("Couldn't load messages."),
                     )
                 }

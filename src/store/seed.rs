@@ -297,6 +297,7 @@ impl Store {
             ]),
             frecency: None,
             favorite_gifs: Vec::new(),
+            account_theme: None,
             rail_order: vec![1, 2, 3, 4, 5, 6],
             social: social::Social::default(),
             voice_start_times: HashMap::new(),

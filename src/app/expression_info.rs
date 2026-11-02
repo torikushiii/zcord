@@ -475,7 +475,7 @@ fn preview(expression: &Expression, extent: f32, cx: &App) -> AnyElement {
                 "smile"
             },
             extent.min(24.),
-            theme::MUTED,
+            theme::muted(),
         ))
         .into_any_element()
 }
@@ -516,7 +516,7 @@ fn hover_card(app: &DiscordApp, hover: &Hover, cx: &App) -> AnyElement {
     let caption = || {
         div()
             .font_weight(FontWeight::NORMAL)
-            .text_color(rgb(theme::MUTED))
+            .text_color(rgb(theme::muted()))
             .child("Click to learn more")
     };
     let expression = resolved_expression(app, &hover.expression);
@@ -535,7 +535,7 @@ fn hover_card(app: &DiscordApp, hover: &Hover, cx: &App) -> AnyElement {
                     .flex()
                     .items_center()
                     .gap(rpx(8.))
-                    .child(theme::icon("sticker", 16., theme::STRONG))
+                    .child(theme::icon("sticker", 16., theme::strong()))
                     .child(div().min_w_0().line_clamp(2).child(label)),
             )
             .child(caption()),
@@ -661,7 +661,7 @@ fn info_card(app: &DiscordApp, popout: &Popout, window: &Window, cx: &App) -> An
         .items_start()
         .gap(rpx(12.))
         .p(rpx(16.))
-        .bg(rgb(theme::ELEVATED))
+        .bg(rgb(theme::elevated()))
         .child(preview(expression, 56., cx))
         .child(
             div()
@@ -676,14 +676,14 @@ fn info_card(app: &DiscordApp, popout: &Popout, window: &Window, cx: &App) -> An
                         .line_height(rpx(20.))
                         .font_weight(FontWeight::BOLD)
                         .line_clamp(2)
-                        .text_color(rgb(theme::TEXT))
+                        .text_color(rgb(theme::text()))
                         .child(expression.label()),
                 )
                 .child(
                     div()
                         .text_size(rpx(14.))
                         .line_height(rpx(20.))
-                        .text_color(rgb(theme::TEXT))
+                        .text_color(rgb(theme::text()))
                         .child(explanation(app, expression, source.as_ref())),
                 ),
         );
@@ -692,7 +692,7 @@ fn info_card(app: &DiscordApp, popout: &Popout, window: &Window, cx: &App) -> An
     } else {
         fallback_information(&app.expression_info, expression).map(|text| {
             div()
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child(text)
                 .into_any_element()
         })
@@ -709,12 +709,12 @@ fn info_card(app: &DiscordApp, popout: &Popout, window: &Window, cx: &App) -> An
         .overflow_hidden()
         .overflow_y_scrollbar()
         .border_1()
-        .border_color(rgba(theme::BORDER))
+        .border_color(rgba(theme::border()))
         .shadow_lg()
-        .bg(rgb(theme::BG))
+        .bg(rgb(theme::bg()))
         .text_size(rpx(14.))
         .line_height(rpx(20.))
-        .text_color(rgb(theme::TEXT))
+        .text_color(rgb(theme::text()))
         .child(header)
         .children(body.map(|body| div().p(rpx(16.)).child(body)))
         .into_any_element()

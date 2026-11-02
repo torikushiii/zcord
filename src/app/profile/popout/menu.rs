@@ -27,9 +27,9 @@ fn menu_entry(
         .text_size(rpx(14.))
         .line_height(rpx(20.))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(theme::STRONG))
-        .hover(|style| style.bg(rgba(theme::SELECTED)))
-        .focus_visible(|style| style.bg(rgba(theme::SELECTED)))
+        .text_color(rgb(theme::strong()))
+        .hover(|style| style.bg(rgba(theme::selected())))
+        .focus_visible(|style| style.bg(rgba(theme::selected())))
         .without_text_selection()
         .on_click(move |_, _, cx| {
             cx.stop_propagation();
@@ -43,7 +43,7 @@ fn menu_entry(
                 .text_size(rpx(12.))
                 .line_height(rpx(16.))
                 .font_weight(FontWeight::NORMAL)
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child(label("profile-menu-subtitle", &subtitle))
         }))
 }
@@ -120,7 +120,7 @@ pub(in crate::app::profile) fn profile_actions(
                 .max_w(max_width)
                 .p(rpx(6.))
                 .rounded(rpx(8.))
-                .bg(rgb(theme::ELEVATED))
+                .bg(rgb(theme::elevated()))
                 .shadow_lg()
                 .occlude()
                 .on_mouse_down_out(move |event, _, cx| {
@@ -156,7 +156,7 @@ pub(in crate::app::profile) fn profile_actions(
                             .h(rpx(1.))
                             .my(rpx(4.))
                             .mx(rpx(6.))
-                            .bg(rgba(theme::BORDER)),
+                            .bg(rgba(theme::border())),
                     )
                 })
                 .children(friend_action.and_then(|action| {
@@ -346,7 +346,7 @@ fn friend_button(app: &DiscordApp, card: &ProfileCard, action: FriendAction) -> 
         _ => ("Request Sent", false),
     };
     let busy = app.friend_busy(user_id);
-    let color = if primary { 0xFFFFFF } else { theme::MUTED };
+    let color = if primary { 0xFFFFFF } else { theme::muted() };
     div()
         .id("profile-friend")
         .role(Role::Button)
@@ -361,7 +361,7 @@ fn friend_button(app: &DiscordApp, card: &ProfileCard, action: FriendAction) -> 
         .font_weight(FontWeight::MEDIUM)
         .without_text_selection()
         .text_color(rgb(color))
-        .when(!primary, |this| this.bg(rgba(theme::SELECTED)))
+        .when(!primary, |this| this.bg(rgba(theme::selected())))
         .when(primary, |this| this.bg(rgb(theme::BLURPLE)))
         .when(primary && busy, |this| this.opacity(0.5))
         .when(primary && !busy, |this| {

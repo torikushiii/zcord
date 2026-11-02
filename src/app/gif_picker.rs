@@ -753,8 +753,8 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
         .h(panel_height(picker.position, window))
         .rounded(rpx(8.))
         .border_1()
-        .border_color(rgba(theme::BORDER))
-        .bg(rgb(theme::ELEVATED))
+        .border_color(rgba(theme::border()))
+        .bg(rgb(theme::elevated()))
         .shadow_lg()
         .overflow_hidden()
         .when(!closing, |this| {
@@ -823,11 +823,11 @@ fn header(
             .h(rpx(FIELD))
             .px(rpx(8.))
             .rounded(rpx(8.))
-            .bg(rgb(theme::BG))
+            .bg(rgb(theme::bg()))
             .border_1()
-            .border_color(rgba(theme::BORDER))
+            .border_color(rgba(theme::border()))
             .child(
-                theme::icon_button("gif-back", "arrow-left", 20., theme::MUTED).on_click({
+                theme::icon_button("gif-back", "arrow-left", 20., theme::muted()).on_click({
                     let entity = entity.clone();
                     move |_, window, cx| {
                         entity
@@ -840,7 +840,7 @@ fn header(
                 div()
                     .text_size(rpx(16.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(theme::STRONG))
+                    .text_color(rgb(theme::strong()))
                     .child(title),
             )
             .into_any_element(),
@@ -853,14 +853,14 @@ fn header(
             .h(rpx(FIELD))
             .px(rpx(12.))
             .rounded(rpx(8.))
-            .bg(rgb(theme::BG))
+            .bg(rgb(theme::bg()))
             .border_1()
             .border_color(if focused {
-                rgb(theme::FOCUS)
+                rgb(theme::focus())
             } else {
-                rgba(theme::BORDER)
+                rgba(theme::border())
             })
-            .child(theme::icon("search", 18., theme::TEXT))
+            .child(theme::icon("search", 18., theme::text()))
             .child(
                 div().flex_1().min_w_0().child(
                     Input::new(&picker.search)
@@ -883,10 +883,10 @@ fn header(
         .px(rpx(12.))
         .rounded(rpx(8.))
         .border_1()
-        .border_color(rgba(theme::BORDER))
-        .bg(rgb(theme::BG))
+        .border_color(rgba(theme::border()))
+        .bg(rgb(theme::bg()))
         .cursor_pointer()
-        .hover(|style| style.bg(rgba(theme::HOVER)))
+        .hover(|style| style.bg(rgba(theme::hover())))
         .on_click({
             let entity = entity.clone();
             move |_, _, cx| {
@@ -899,13 +899,13 @@ fn header(
             div()
                 .text_size(rpx(16.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child(provider.label()),
         )
         .child(theme::icon(
             if open { "chevron-up" } else { "chevron-down" },
             18.,
-            theme::TEXT,
+            theme::text(),
         ));
     div()
         .flex_none()
@@ -914,7 +914,7 @@ fn header(
         .gap(rpx(HEADER_GAP))
         .p(rpx(HEADER_PADDING))
         .border_b_1()
-        .border_color(rgba(theme::BORDER))
+        .border_color(rgba(theme::border()))
         .child(tabs(app, Tab::Media))
         .child(
             div()
@@ -945,11 +945,11 @@ pub(super) fn tabs(app: &DiscordApp, selected: Tab) -> impl IntoElement {
             .rounded(rpx(8.))
             .text_size(rpx(15.))
             .font_weight(FontWeight::SEMIBOLD)
-            .text_color(rgb(if active { theme::STRONG } else { theme::TEXT }))
-            .when(active, |this| this.bg(rgba(theme::SELECTED)))
+            .text_color(rgb(if active { theme::strong() } else { theme::text() }))
+            .when(active, |this| this.bg(rgba(theme::selected())))
             .when(!active, |this| {
                 this.cursor_pointer()
-                    .hover(|style| style.bg(rgba(theme::HOVER)).text_color(rgb(theme::STRONG)))
+                    .hover(|style| style.bg(rgba(theme::hover())).text_color(rgb(theme::strong())))
                     .on_click(move |_, window, cx| {
                         entity
                             .update(cx, |app, cx| app.switch_picker_tab(tab, window, cx))
@@ -1010,8 +1010,8 @@ fn provider_menu(app: &DiscordApp, selected: GifProvider) -> impl IntoElement {
         .gap(rpx(2.))
         .rounded(rpx(8.))
         .border_1()
-        .border_color(rgba(theme::BORDER))
-        .bg(rgb(theme::ELEVATED))
+        .border_color(rgba(theme::border()))
+        .bg(rgb(theme::elevated()))
         .shadow_lg()
         .occlude()
         .on_mouse_down_out(move |_, _, cx| {
@@ -1037,10 +1037,10 @@ fn provider_menu(app: &DiscordApp, selected: GifProvider) -> impl IntoElement {
                 .px(rpx(10.))
                 .rounded(rpx(6.))
                 .cursor_pointer()
-                .hover(|style| style.bg(rgba(theme::SELECTED)))
-                .when(active, |this| this.bg(rgba(theme::SELECTED)))
+                .hover(|style| style.bg(rgba(theme::selected())))
+                .when(active, |this| this.bg(rgba(theme::selected())))
                 .text_size(rpx(16.))
-                .text_color(rgb(if active { theme::STRONG } else { theme::MUTED }))
+                .text_color(rgb(if active { theme::strong() } else { theme::muted() }))
                 .on_click(move |_, window, cx| {
                     entity
                         .update(cx, |app, cx| app.select_gif_provider(provider, window, cx))
@@ -1080,7 +1080,7 @@ fn grid(
                 .justify_center()
                 .px(rpx(24.))
                 .text_size(rpx(14.))
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child(message)
                 .into_any_element();
         }
@@ -1151,7 +1151,7 @@ fn tile(app: &DiscordApp, index: usize, placed: Placed, animate: bool, cx: &App)
         .h(rpx(placed.height))
         .rounded(rpx(RADIUS))
         .overflow_hidden()
-        .bg(rgba(theme::BORDER));
+        .bg(rgba(theme::border()));
     match placed.tile {
         Tile::Placeholder => frame.into_any_element(),
         Tile::Favorites(favorite) => frame

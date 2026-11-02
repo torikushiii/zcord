@@ -27,14 +27,7 @@ const PREVIEW_HEIGHT: f32 = 293.;
 const MOSAIC_GAP: f32 = 4.;
 /// Cards show this many tags, then a "+N" chip for the rest.
 const VISIBLE_TAGS: usize = 3;
-const CARD_BG: u32 = 0x000000;
-const CARD_HOVER: u32 = 0x0A0A0C;
-const CARD_BORDER: u32 = 0x97979F29;
-const PILL_BG: u32 = 0x97979F1F;
-const PILL_BORDER: u32 = 0x97979F33;
-const TAG_BG: u32 = 0x0A0A0C;
 const MENU_WIDTH: f32 = 180.;
-const BLURPLE_TINT: u32 = 0x5865F226;
 
 pub fn render(app: &DiscordApp, forum_id: u64, cx: &App) -> impl IntoElement + use<> {
     let tags = app.store.forum_tags(forum_id);
@@ -128,12 +121,12 @@ pub fn render(app: &DiscordApp, forum_id: u64, cx: &App) -> impl IntoElement + u
                     .rounded(rpx(8.))
                     .text_size(rpx(14.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(theme::TEXT))
-                    .bg(rgb(theme::ELEVATED))
+                    .text_color(rgb(theme::text()))
+                    .bg(rgb(theme::elevated()))
                     .border_1()
-                    .border_color(rgba(theme::BORDER))
+                    .border_color(rgba(theme::border()))
                     .cursor_pointer()
-                    .hover(|style| style.bg(rgba(theme::HOVER)))
+                    .hover(|style| style.bg(rgba(theme::hover())))
                     .child("Load more posts")
                     .on_click(move |_, _, cx| {
                         entity.update(cx, |app, cx| app.load_more_forum(cx)).ok();
@@ -162,7 +155,7 @@ fn header_card(
             .rounded(rpx(8.))
             .bg(rgb(theme::BLURPLE))
             .border_1()
-            .border_color(rgba(0xFFFFFF14))
+            .border_color(rgba(theme::border_bright()))
             .cursor_pointer()
             .hover(|style| style.opacity(0.9))
             .text_size(rpx(14.))
@@ -186,7 +179,7 @@ fn header_card(
                 .child(theme::icon(
                     if creating { "message-circle" } else { "search" },
                     20.,
-                    theme::MUTED,
+                    theme::muted(),
                 )),
         )
         .child(
@@ -196,7 +189,7 @@ fn header_card(
                     .px_0()
                     .text_size(rpx(20.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(theme::STRONG)),
+                    .text_color(rgb(theme::strong())),
             ),
         )
         .when(!creating, |this| {
@@ -225,9 +218,9 @@ fn header_card(
         .flex_none()
         .flex_col()
         .rounded(rpx(12.))
-        .bg(rgba(0x0000001F))
+        .bg(rgba(theme::recessed()))
         .border_1()
-        .border_color(rgba(PILL_BORDER))
+        .border_color(rgba(theme::outline()))
         .child(title_row)
         .when(creating, |this| {
             let cancel = app.entity.clone();
@@ -245,7 +238,7 @@ fn header_card(
                             div()
                                 .text_size(rpx(12.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(theme::MUTED))
+                                .text_color(rgb(theme::muted()))
                                 .child(if required {
                                     "Tags (at least one required)"
                                 } else {
@@ -281,16 +274,16 @@ fn header_card(
                         div()
                             .px(rpx(12.))
                             .rounded(rpx(8.))
-                            .bg(rgb(theme::ELEVATED))
+                            .bg(rgb(theme::elevated()))
                             .border_1()
-                            .border_color(rgba(theme::BORDER))
+                            .border_color(rgba(theme::border()))
                             .child(
                                 Textarea::new(&header.body)
                                     .appearance(false)
                                     .py(rpx(11.))
                                     .text_size(rpx(16.))
                                     .line_height(rpx(22.))
-                                    .text_color(rgb(theme::TEXT)),
+                                    .text_color(rgb(theme::text())),
                             ),
                     )
                     .child(
@@ -339,7 +332,7 @@ fn note(text: &'static str) -> Div {
         .justify_center()
         .py(rpx(16.))
         .text_size(rpx(14.))
-        .text_color(rgb(theme::MUTED))
+        .text_color(rgb(theme::muted()))
         .child(text)
 }
 
@@ -365,7 +358,7 @@ fn toolbar(
                     .h(rpx(24.))
                     .mx(rpx(8.))
                     .rounded(rpx(4.))
-                    .bg(rgba(PILL_BORDER)),
+                    .bg(rgba(theme::outline())),
             )
             .children(tags.iter().map(|tag| {
                 let entity = app.entity.clone();
@@ -393,9 +386,9 @@ fn toolbar(
                     .px(rpx(8.))
                     .text_size(rpx(14.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(theme::MUTED))
+                    .text_color(rgb(theme::muted()))
                     .cursor_pointer()
-                    .hover(|style| style.text_color(rgb(theme::STRONG)).underline())
+                    .hover(|style| style.text_color(rgb(theme::strong())).underline())
                     .on_click(move |_, _, cx| {
                         entity.update(cx, |app, cx| app.clear_forum_tags(cx)).ok();
                     })
@@ -418,16 +411,16 @@ fn toolbar_button(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
         .text_size(rpx(14.))
         .line_height(rpx(18.))
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(theme::STRONG))
+        .text_color(rgb(theme::strong()))
         .cursor_pointer()
         .map(|this| {
             if selected {
-                this.bg(rgba(BLURPLE_TINT))
+                this.bg(rgba(theme::reaction_selected_bg()))
                     .border_color(rgb(theme::BLURPLE))
             } else {
-                this.bg(rgba(PILL_BG))
-                    .border_color(rgba(PILL_BORDER))
-                    .hover(|style| style.bg(rgba(theme::HOVER)))
+                this.bg(rgba(theme::control_bg()))
+                    .border_color(rgba(theme::outline()))
+                    .hover(|style| style.bg(rgba(theme::hover())))
             }
         })
 }
@@ -453,7 +446,7 @@ fn sort_view(app: &DiscordApp, forum_id: u64) -> impl IntoElement {
             .px(rpx(8.))
             .rounded(rpx(4.))
             .cursor_pointer()
-            .hover(|style| style.bg(rgba(theme::HOVER)))
+            .hover(|style| style.bg(rgba(theme::hover())))
             .on_click(move |_, _, cx| {
                 cx.stop_propagation();
                 entity
@@ -473,10 +466,10 @@ fn sort_view(app: &DiscordApp, forum_id: u64) -> impl IntoElement {
             .h(rpx(36.))
             .px(rpx(8.))
             .line_height(rpx(20.))
-            .text_color(rgb(theme::FAINT))
+            .text_color(rgb(theme::faint()))
             .child(text)
     };
-    let separator = || div().h(rpx(1.)).my(rpx(8.)).bg(rgba(PILL_BORDER));
+    let separator = || div().h(rpx(1.)).my(rpx(8.)).bg(rgba(theme::outline()));
     let menu = app.forum_menu_open().then(|| {
         div().absolute().top(rpx(36.)).left_0().size_0().child(
             deferred(
@@ -488,11 +481,11 @@ fn sort_view(app: &DiscordApp, forum_id: u64) -> impl IntoElement {
                         .w(rpx(MENU_WIDTH))
                         .p(rpx(8.))
                         .rounded(rpx(8.))
-                        .bg(rgb(theme::ELEVATED))
+                        .bg(rgb(theme::elevated()))
                         .border_1()
-                        .border_color(rgba(PILL_BORDER))
+                        .border_color(rgba(theme::outline()))
                         .shadow(vec![BoxShadow {
-                            color: hsla(0., 0., 0., 0.24),
+                            color: rgb(theme::shadow()).opacity(0.24).into(),
                             offset: point(px(0.), px(12.)),
                             blur_radius: px(24.),
                             spread_radius: px(0.),
@@ -502,7 +495,7 @@ fn sort_view(app: &DiscordApp, forum_id: u64) -> impl IntoElement {
                         .text_size(rpx(14.))
                         .line_height(rpx(18.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(theme::STRONG))
+                        .text_color(rgb(theme::strong()))
                         .on_mouse_down_out(move |_, _, cx| {
                             close.update(cx, |app, cx| app.close_forum_menu(cx)).ok();
                         })
@@ -564,13 +557,13 @@ fn sort_view(app: &DiscordApp, forum_id: u64) -> impl IntoElement {
             .rounded(rpx(8.))
             .gap(rpx(4.))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(rgb(theme::MUTED))
+            .text_color(rgb(theme::muted()))
             .on_click(move |_, _, cx| {
                 toggle.update(cx, |app, cx| app.toggle_forum_menu(cx)).ok();
             })
-            .child(theme::icon("arrow-up-down", 16., theme::MUTED).mr(rpx(4.)))
+            .child(theme::icon("arrow-up-down", 16., theme::muted()).mr(rpx(4.)))
             .child("Sort & View")
-            .child(theme::icon("chevron-down", 16., theme::MUTED)),
+            .child(theme::icon("chevron-down", 16., theme::muted())),
     )
 }
 
@@ -587,7 +580,7 @@ fn radio(checked: bool) -> Div {
                 this.bg(rgb(theme::BLURPLE))
                     .child(div().size(rpx(8.)).rounded_full().bg(white()))
             } else {
-                this.border_2().border_color(rgb(theme::MUTED))
+                this.border_2().border_color(rgb(theme::muted()))
             }
         })
 }
@@ -653,14 +646,14 @@ fn card_shell(app: &DiscordApp, post: &ForumPost) -> Stateful<Div> {
         .w_full()
         .rounded(rpx(12.))
         .bg(rgb(if open {
-            theme::SURFACE_HIGHEST
+            theme::surface_highest()
         } else {
-            CARD_BG
+            theme::bg()
         }))
         .border_1()
-        .border_color(rgba(CARD_BORDER))
+        .border_color(rgba(theme::border_soft()))
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(CARD_HOVER)))
+        .hover(|style| style.bg(rgb(theme::surface_high())))
         .without_text_selection()
         .on_click(move |_, window, cx| {
             entity
@@ -681,7 +674,7 @@ fn author(app: &DiscordApp, post: &ForumPost, cx: &App) -> impl IntoElement {
     let color = app
         .store
         .member_color(guild_id, user_id)
-        .unwrap_or(theme::STRONG);
+        .unwrap_or(theme::strong());
     div()
         .flex_none()
         .font_weight(FontWeight::SEMIBOLD)
@@ -743,7 +736,7 @@ fn gallery_card(
                         .min_w_0()
                         .truncate()
                         .text_size(rpx(12.))
-                        .text_color(rgb(theme::TEXT))
+                        .text_color(rgb(theme::text()))
                         .child(posted_label(post.created_at)),
                 )
                 .when(new, |this| this.child(new_badge())),
@@ -758,7 +751,7 @@ fn gallery_card(
                 .text_size(rpx(16.))
                 .line_height(rpx(20.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child(label(("forum-post-title", post.id), &post.name)),
         )
         .child(div().mx(rpx(12.)).mt(rpx(10.)).child(preview))
@@ -842,10 +835,10 @@ fn card_tag() -> Div {
         .px(rpx(8.))
         .rounded(rpx(20.))
         .border_1()
-        .border_color(rgba(PILL_BORDER))
-        .bg(rgb(TAG_BG))
+        .border_color(rgba(theme::outline()))
+        .bg(rgb(theme::surface_high()))
         .shadow(vec![BoxShadow {
-            color: hsla(0., 0., 0., 0.2),
+            color: rgb(theme::shadow()).opacity(0.2).into(),
             offset: point(px(0.), px(1.)),
             blur_radius: px(0.),
             spread_radius: px(0.),
@@ -854,7 +847,7 @@ fn card_tag() -> Div {
         .text_size(rpx(12.))
         .line_height(rpx(16.))
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(theme::STRONG))
+        .text_color(rgb(theme::strong()))
 }
 
 fn text_preview(
@@ -880,13 +873,13 @@ fn text_preview(
         .p(rpx(12.))
         .rounded(rpx(8.))
         .border_1()
-        .border_color(rgba(CARD_BORDER))
+        .border_color(rgba(theme::border_soft()))
         .text_size(rpx(16.))
         .line_height(rpx(22.))
-        .text_color(rgb(theme::TEXT))
+        .text_color(rgb(theme::text()))
         .child(body.unwrap_or_else(|| {
             div()
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child("No message")
                 .into_any_element()
         }))
@@ -901,8 +894,8 @@ fn text_preview(
                 .pb(rpx(6.))
                 .bg(linear_gradient(
                     180.,
-                    linear_color_stop(rgba(CARD_BG << 8), 0.),
-                    linear_color_stop(rgb(CARD_BG), 0.5),
+                    linear_color_stop(rgba(theme::bg() << 8), 0.),
+                    linear_color_stop(rgb(theme::bg()), 0.5),
                 ))
                 .child(tags)
         }))
@@ -918,7 +911,7 @@ fn mosaic(media: &[ImageSpec], tags: Option<Div>, cx: &App) -> impl IntoElement 
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
-            .bg(rgb(theme::ELEVATED))
+            .bg(rgb(theme::elevated()))
             .children(image.map(|path| img(path).size_full().object_fit(ObjectFit::Cover)))
     };
     let body = match media {
@@ -975,13 +968,13 @@ fn footer(post: &ForumPost, trailing: Option<String>, cx: &App) -> impl IntoElem
         .text_size(rpx(14.))
         .line_height(rpx(14.))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(theme::MUTED))
+        .text_color(rgb(theme::muted()))
         .child(
             div()
                 .flex()
                 .items_center()
                 .gap(rpx(4.))
-                .child(theme::icon("message-circle", 16., theme::FAINT))
+                .child(theme::icon("message-circle", 16., theme::faint()))
                 .child(post.message_count.to_string()),
         )
         .children(trailing)
@@ -1004,17 +997,22 @@ fn reaction_pill(reaction: &Reaction, cx: &App) -> impl IntoElement {
         .border_1()
         .map(|this| {
             if reaction.me {
-                this.bg(rgba(BLURPLE_TINT))
+                this.bg(rgba(theme::reaction_selected_bg()))
                     .border_color(rgb(theme::BLURPLE))
             } else {
-                this.bg(rgba(PILL_BG)).border_color(transparent_black())
+                this.bg(rgba(theme::control_bg()))
+                    .border_color(transparent_black())
             }
         })
         .child(emoji_element(&reaction.emoji, 20., cx))
         .child(
             div()
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(if reaction.me { 0xC9CDFB } else { theme::MUTED }))
+                .text_color(rgb(if reaction.me {
+                    theme::mention_text()
+                } else {
+                    theme::muted()
+                }))
                 .child(reaction.count.to_string()),
         )
 }
@@ -1094,9 +1092,9 @@ fn list_card(
                                     FontWeight::SEMIBOLD
                                 })
                                 .text_color(rgb(if post.unread {
-                                    theme::STRONG
+                                    theme::strong()
                                 } else {
-                                    theme::TEXT
+                                    theme::text()
                                 }))
                                 .child(label(("forum-post-title", id), &post.name)),
                         )
@@ -1110,12 +1108,12 @@ fn list_card(
                         .text_size(rpx(14.))
                         .line_height(rpx(18.))
                         .child(author(app, post, cx))
-                        .child(div().flex_none().text_color(rgb(theme::MUTED)).child(":"))
+                        .child(div().flex_none().text_color(rgb(theme::muted())).child(":"))
                         .child(
                             div()
                                 .min_w_0()
                                 .truncate()
-                                .text_color(rgb(theme::MUTED))
+                                .text_color(rgb(theme::muted()))
                                 .child(preview.unwrap_or_else(|| "No message".into_any_element())),
                         ),
                 )

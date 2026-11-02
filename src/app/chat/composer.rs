@@ -69,16 +69,16 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                         this.rounded(rpx(8.))
                     }
                 })
-                .bg(rgb(theme::ELEVATED))
+                .bg(rgb(theme::elevated()))
                 .border_1()
-                .border_color(rgba(theme::BORDER))
+                .border_color(rgba(theme::border()))
                 .children(emoji_picker::suggestions(app, cx))
                 .child(div().my(rpx(12.)).child({
                     let entity = app.entity.clone();
                     app.upload_tip(
                         UploadButton::Attach,
                         "Upload a File",
-                        theme::icon_button("attach", "circle-plus", 24., theme::MUTED),
+                        theme::icon_button("attach", "circle-plus", 24., theme::muted()),
                     )
                     .when(!can_send || staged.len() >= MAX_FILES, |this| {
                         this.opacity(0.5)
@@ -101,7 +101,7 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                                 .py(rpx(17.))
                                 .text_size(rpx(16.))
                                 .line_height(rpx(22.))
-                                .text_color(rgb(theme::TEXT)),
+                                .text_color(rgb(theme::text())),
                         )
                         .child(emoji_token_overlay(&app.composer)),
                 )
@@ -113,7 +113,7 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                         .child({
                             let entity = app.entity.clone();
                             let picker_anchor = picker_anchor.clone();
-                            theme::icon_button("gif", "image-play", 24., theme::MUTED)
+                            theme::icon_button("gif", "image-play", 24., theme::muted())
                                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                     let Some(position) = picker_anchor.get() else {
                                         return;
@@ -125,10 +125,10 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                                         .ok();
                                 })
                         })
-                        // .child(theme::icon_button("stickers", "sticker", 24., theme::MUTED))
+                        // .child(theme::icon_button("stickers", "sticker", 24., theme::muted()))
                         .child({
                             let entity = app.entity.clone();
-                            theme::icon_button("emoji", "smile", 24., theme::MUTED).on_mouse_down(
+                            theme::icon_button("emoji", "smile", 24., theme::muted()).on_mouse_down(
                                 MouseButton::Left,
                                 move |_, window, cx| {
                                     let Some(position) = picker_anchor.get() else {
@@ -158,7 +158,7 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                             .text_color(rgb(if remaining < 0 {
                                 theme::RED
                             } else {
-                                theme::FAINT
+                                theme::faint()
                             }))
                             .child(remaining.to_string()),
                     )
@@ -208,7 +208,7 @@ pub(super) fn emoji_token_overlay(input: &Entity<TextareaState>) -> impl IntoEle
                     }
                     // The token's variation selectors have no glyph in the UI font and draw as
                     // small boxes, so cover the whole token with the input background first.
-                    window.paint_quad(fill(bounds, rgb(theme::ELEVATED)));
+                    window.paint_quad(fill(bounds, rgb(theme::elevated())));
                     if range.start >= selected.start && range.end <= selected.end {
                         window.paint_quad(fill(bounds, cx.theme().selection));
                     }
@@ -300,7 +300,7 @@ fn refusal_banner(app: &DiscordApp, refusal: Refusal) -> impl IntoElement + use<
         .py_2()
         .rounded(rpx(8.))
         .bg(rgb(theme::RED))
-        .text_color(rgb(theme::STRONG))
+        .text_color(rgb(theme::strong()))
         .text_size(rpx(14.))
         .child(
             div()
@@ -309,7 +309,7 @@ fn refusal_banner(app: &DiscordApp, refusal: Refusal) -> impl IntoElement + use<
                 .child(help),
         )
         .child(
-            theme::icon_button("dismiss-refusal", "x", 16., theme::STRONG).on_click(
+            theme::icon_button("dismiss-refusal", "x", 16., theme::strong()).on_click(
                 move |_, _, cx| {
                     entity
                         .update(cx, |app, cx| app.dismiss_upload_refusal(cx))
@@ -335,10 +335,10 @@ pub(super) fn staged_row(
         .pr(rpx(34.))
         .overflow_x_scroll()
         .when(app.reply.is_none(), |this| this.rounded_t(rpx(8.)))
-        .bg(rgb(theme::ELEVATED))
+        .bg(rgb(theme::elevated()))
         .border_1()
         .border_b_0()
-        .border_color(rgba(theme::BORDER))
+        .border_color(rgba(theme::border()))
         .children(files.iter().map(|file| staged_tile(app, file, cx)))
 }
 
@@ -383,13 +383,9 @@ fn staged_preview(file: &StagedFile, cx: &App) -> Option<AnyElement> {
     })
 }
 
-const STAGED_BAR: u32 = 0x26272B;
-const STAGED_BAR_BORDER: u32 = 0x3F4046;
-const STAGED_BAR_HOVER: u32 = 0x35363B;
-
 fn tile_shadow() -> BoxShadow {
     BoxShadow {
-        color: rgba(0x00000024).into(),
+        color: rgba(theme::control_shadow()).into(),
         offset: point(px(0.), px(1.)),
         blur_radius: px(4.),
         spread_radius: px(0.),
@@ -411,9 +407,9 @@ fn staged_tile(app: &DiscordApp, file: &StagedFile, cx: &App) -> impl IntoElemen
             .size_full()
             .p(rpx(8.))
             .rounded(rpx(8.))
-            .bg(rgb(theme::SURFACE_HIGH))
+            .bg(rgb(theme::surface_high()))
             .border_1()
-            .border_color(rgba(theme::BORDER))
+            .border_color(rgba(theme::border()))
             .shadow(vec![tile_shadow()])
             .child(
                 div()
@@ -431,10 +427,10 @@ fn staged_tile(app: &DiscordApp, file: &StagedFile, cx: &App) -> impl IntoElemen
                         })
                     })
                     .rounded(rpx(8.))
-                    .bg(rgba(theme::HOVER))
+                    .bg(rgba(theme::hover()))
                     .overflow_hidden()
                     .child(preview.unwrap_or_else(|| {
-                        theme::icon("file", 48., theme::MUTED).into_any_element()
+                        theme::icon("file", 48., theme::muted()).into_any_element()
                     }))
                     .when(file.spoiler, |this| {
                         this.child(
@@ -444,10 +440,10 @@ fn staged_tile(app: &DiscordApp, file: &StagedFile, cx: &App) -> impl IntoElemen
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .bg(rgb(theme::ELEVATED))
+                                .bg(rgb(theme::elevated()))
                                 .text_size(rpx(12.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(theme::STRONG))
+                                .text_color(rgb(theme::strong()))
                                 .child("SPOILER"),
                         )
                     }),
@@ -458,7 +454,7 @@ fn staged_tile(app: &DiscordApp, file: &StagedFile, cx: &App) -> impl IntoElemen
                     .truncate()
                     .text_size(rpx(14.))
                     .line_height(rpx(18.))
-                    .text_color(rgb(theme::TEXT))
+                    .text_color(rgb(theme::text()))
                     .child(file.name.clone()),
             );
     // gpui paints a border over its children, so the bar can't sit inside the tile.
@@ -474,9 +470,9 @@ fn staged_tile(app: &DiscordApp, file: &StagedFile, cx: &App) -> impl IntoElemen
                 .right(rpx(-24.))
                 .flex()
                 .rounded(rpx(4.))
-                .bg(rgb(STAGED_BAR))
+                .bg(rgb(theme::toolbar_bg()))
                 .border_1()
-                .border_color(rgb(STAGED_BAR_BORDER))
+                .border_color(rgb(theme::toolbar_border()))
                 .shadow(vec![tile_shadow()])
                 .occlude()
                 .child(
@@ -491,8 +487,8 @@ fn staged_tile(app: &DiscordApp, file: &StagedFile, cx: &App) -> impl IntoElemen
                             ("staged-spoiler", id),
                             if file.spoiler { "eye-off" } else { "eye" },
                             20.,
-                            theme::MUTED,
-                            rgb(STAGED_BAR_HOVER).into(),
+                            theme::muted(),
+                            rgb(theme::toolbar_hover()).into(),
                         ),
                     )
                     .size(rpx(32.))
@@ -511,7 +507,7 @@ fn staged_tile(app: &DiscordApp, file: &StagedFile, cx: &App) -> impl IntoElemen
                             "trash-2",
                             20.,
                             theme::RED,
-                            rgb(STAGED_BAR_HOVER).into(),
+                            rgb(theme::toolbar_hover()).into(),
                         ),
                     )
                     .size(rpx(32.))
@@ -546,12 +542,12 @@ fn reply_banner(app: &DiscordApp, reply: &ReplyTarget, cx: &App) -> impl IntoEle
         .pl(rpx(16.))
         .pr(rpx(8.))
         .rounded_t(rpx(8.))
-        .bg(rgba(theme::HOVER))
+        .bg(rgba(theme::hover()))
         .border_1()
         .border_b_0()
-        .border_color(rgba(theme::BORDER))
+        .border_color(rgba(theme::border()))
         .text_size(rpx(14.))
-        .text_color(rgb(theme::MUTED))
+        .text_color(rgb(theme::muted()))
         .child(
             div()
                 .flex()
@@ -564,7 +560,7 @@ fn reply_banner(app: &DiscordApp, reply: &ReplyTarget, cx: &App) -> impl IntoEle
                         .min_w_0()
                         .truncate()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(theme::TEXT))
+                        .text_color(rgb(theme::text()))
                         .child(crate::app::display_name::render(
                             ("reply-target", reply.message_id),
                             &name,
@@ -592,7 +588,11 @@ fn reply_banner(app: &DiscordApp, reply: &ReplyTarget, cx: &App) -> impl IntoEle
                     .px_2()
                     .cursor_pointer()
                     .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(if reply.mention { LINK } else { theme::MUTED }))
+                    .text_color(rgb(if reply.mention {
+                        theme::link()
+                    } else {
+                        theme::muted()
+                    }))
                     .relative()
                     .child(theme::hover_tooltip(
                         "reply-mention-tip",
@@ -606,12 +606,20 @@ fn reply_banner(app: &DiscordApp, reply: &ReplyTarget, cx: &App) -> impl IntoEle
                     .child("@")
                     .child(if reply.mention { "ON" } else { "OFF" }),
             )
-            .child(div().w(rpx(1.)).h(rpx(16.)).mx_1().bg(rgba(theme::BORDER)))
+            .child(
+                div()
+                    .w(rpx(1.))
+                    .h(rpx(16.))
+                    .mx_1()
+                    .bg(rgba(theme::border())),
+            )
         })
         .child(
-            theme::icon_button("reply-cancel", "x", 16., theme::MUTED).on_click(move |_, _, cx| {
-                entity.update(cx, |app, cx| app.cancel_reply(cx)).ok();
-            }),
+            theme::icon_button("reply-cancel", "x", 16., theme::muted()).on_click(
+                move |_, _, cx| {
+                    entity.update(cx, |app, cx| app.cancel_reply(cx)).ok();
+                },
+            ),
         )
 }
 
@@ -624,7 +632,7 @@ fn typing_indicator(app: &DiscordApp) -> Option<impl IntoElement> {
     let bold = |name: &String| {
         div()
             .font_weight(FontWeight::BOLD)
-            .text_color(rgb(theme::TEXT))
+            .text_color(rgb(theme::text()))
             .child(name.clone())
     };
     let text = div().flex().min_w_0().overflow_hidden().whitespace_nowrap();
@@ -659,15 +667,15 @@ fn typing_indicator(app: &DiscordApp) -> Option<impl IntoElement> {
             .gap(rpx(6.))
             .h(rpx(24.))
             .pl(rpx(8.))
-            .bg(rgb(theme::BG))
+            .bg(rgb(theme::bg()))
             .text_size(rpx(12.))
-            .text_color(rgb(theme::MUTED))
+            .text_color(rgb(theme::muted()))
             .child(
                 div()
                     .flex()
                     .gap(rpx(2.))
                     .children(
-                        (0..3).map(|_| div().size(rpx(4.)).rounded_full().bg(rgb(theme::TEXT))),
+                        (0..3).map(|_| div().size(rpx(4.)).rounded_full().bg(rgb(theme::text()))),
                     )
                     .with_animation(
                         "typing-dots",

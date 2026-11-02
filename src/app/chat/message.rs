@@ -88,7 +88,7 @@ fn author_avatar(
 fn author_color(app: &DiscordApp, user_id: u64) -> Hsla {
     app.store
         .member_color(app.selected_guild_id, user_id)
-        .map_or(rgb(theme::STRONG).into(), |color| rgb(color).into())
+        .map_or(rgb(theme::strong()).into(), |color| rgb(color).into())
 }
 
 const JOIN_MESSAGES: [&str; 13] = [
@@ -117,7 +117,7 @@ fn system_text(message: &Message) -> Option<(&'static str, u32, String)> {
                 JOIN_MESSAGES[(created % JOIN_MESSAGES.len() as u64) as usize].into(),
             ));
         }
-        6 => ("pin", theme::MUTED, "{}".into()),
+        6 => ("pin", theme::muted(), "{}".into()),
         8 => ("gem", 0xFF73FA, "{} just boosted the server!".into()),
         9..=11 => (
             "gem",
@@ -127,7 +127,7 @@ fn system_text(message: &Message) -> Option<(&'static str, u32, String)> {
                 message.kind - 8
             ),
         ),
-        18 => ("thread", theme::MUTED, "{}".into()),
+        18 => ("thread", theme::muted(), "{}".into()),
         _ => return None,
     };
     Some(template)
@@ -145,7 +145,7 @@ fn render_system(app: &DiscordApp, message: &Message, cx: &App) -> Option<AnyEle
             .pr_4()
             .py(rpx(2.))
             .mt(rpx(4.))
-            .hover(|style| style.bg(rgba(theme::HOVER)))
+            .hover(|style| style.bg(rgba(theme::hover())))
             .child(
                 div()
                     .flex()
@@ -168,7 +168,7 @@ fn render_system(app: &DiscordApp, message: &Message, cx: &App) -> Option<AnyEle
                             .min_w_0()
                             .text_size(rpx(16.))
                             .line_height(rpx(22.))
-                            .text_color(rgb(theme::MUTED))
+                            .text_color(rgb(theme::muted()))
                             .child(
                                 div()
                                     .flex()
@@ -194,7 +194,7 @@ fn render_system(app: &DiscordApp, message: &Message, cx: &App) -> Option<AnyEle
                             .child(
                                 div()
                                     .text_size(rpx(12.))
-                                    .text_color(rgb(theme::FAINT))
+                                    .text_color(rgb(theme::faint()))
                                     .child(message.timestamp.short()),
                             ),
                     ),
@@ -222,7 +222,7 @@ pub(super) fn attachment_reply_preview() -> Div {
             div()
                 .flex_none()
                 .debug_selector(|| "reply-attachment-icon".into())
-                .child(theme::icon("image", 18., theme::MUTED)),
+                .child(theme::icon("image", 18., theme::muted())),
         )
 }
 
@@ -249,14 +249,14 @@ fn sticker_reply_preview(name: &str) -> Div {
             div()
                 .flex_none()
                 .debug_selector(|| "reply-sticker-icon".into())
-                .child(theme::icon("sticker", 18., theme::MUTED)),
+                .child(theme::icon("sticker", 18., theme::muted())),
         )
 }
 
 pub(super) fn passive_reply_pieces(mut pieces: Vec<Piece>) -> Vec<Piece> {
     for piece in &mut pieces {
         if matches!(&piece.style.action, Some(Action::OpenUrl(_))) {
-            piece.style.color.get_or_insert(rgb(LINK).into());
+            piece.style.color.get_or_insert(rgb(theme::link()).into());
         }
         // The whole preview jumps to the message; its contents aren't separate controls.
         piece.style.action = None;
@@ -274,7 +274,7 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
         .border_l_2()
         .border_t_2()
         .rounded_tl(rpx(6.))
-        .border_color(rgb(0x4E5058));
+        .border_color(rgb(theme::divider()));
     let content = div()
         .flex()
         .items_center()
@@ -284,7 +284,7 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
         .overflow_hidden()
         .text_size(rpx(14.))
         .line_height(rpx(18.))
-        .text_color(rgb(theme::MUTED));
+        .text_color(rgb(theme::muted()));
     let content = match reply {
         ReplyState::Loaded(reply) => {
             let parsed = app.parsed(reply.message_id, &reply.content);
@@ -328,7 +328,7 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
                     div()
                         .flex_none()
                         .text_size(rpx(11.))
-                        .text_color(rgb(theme::FAINT))
+                        .text_color(rgb(theme::faint()))
                         .child(reply.timestamp.time()),
                 )
                 .child(author_avatar(
@@ -347,7 +347,7 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
                         .truncate()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(if reply.webhook.is_some() {
-                            rgb(theme::STRONG).into()
+                            rgb(theme::strong()).into()
                         } else {
                             author_color(app, reply.author_id)
                         })
@@ -419,7 +419,7 @@ fn render_forward(app: &DiscordApp, message_id: u64, forward: &Forward, cx: &App
             .mt(rpx(2.))
             .text_size(rpx(12.))
             .line_height(rpx(16.))
-            .text_color(rgb(theme::FAINT))
+            .text_color(rgb(theme::faint()))
             .child(text)
     });
     div()
@@ -431,19 +431,19 @@ fn render_forward(app: &DiscordApp, message_id: u64, forward: &Forward, cx: &App
         .pl(rpx(12.))
         .rounded_l(rpx(4.))
         .border_l_4()
-        .border_color(rgba(theme::BORDER))
+        .border_color(rgba(theme::border()))
         .child(
             div()
                 .flex()
                 .items_center()
                 .gap(rpx(4.))
-                .child(theme::icon("forward", 16., theme::MUTED))
+                .child(theme::icon("forward", 16., theme::muted()))
                 .child(
                     div()
                         .italic()
                         .text_size(rpx(14.))
                         .line_height(rpx(18.))
-                        .text_color(rgb(theme::MUTED))
+                        .text_color(rgb(theme::muted()))
                         .child("Forwarded"),
                 ),
         )
@@ -559,7 +559,7 @@ pub(super) fn render_message(
         })
         .map(|this| {
             if replying {
-                this.bg(rgba(0x5865F21A)).child(
+                this.bg(rgba(theme::reply_bg())).child(
                     div()
                         .absolute()
                         .left_0()
@@ -569,8 +569,8 @@ pub(super) fn render_message(
                         .bg(rgb(theme::BLURPLE)),
                 )
             } else if message.mentions_me {
-                this.bg(rgba(0xF0B2321A))
-                    .hover(|style| style.bg(rgba(0xF0B23224)))
+                this.bg(rgba(theme::mention_row_bg()))
+                    .hover(|style| style.bg(rgba(theme::mention_row_hover())))
                     .child(
                         div()
                             .absolute()
@@ -582,7 +582,7 @@ pub(super) fn render_message(
                     )
             } else {
                 this.when(!preview, |this| {
-                    this.hover(|style| style.bg(rgba(theme::HOVER)))
+                    this.hover(|style| style.bg(rgba(theme::hover())))
                 })
             }
         })
@@ -593,7 +593,7 @@ pub(super) fn render_message(
                     div()
                         .absolute()
                         .inset_0()
-                        .bg(rgba(0x5865F233))
+                        .bg(rgba(theme::jump_highlight()))
                         .with_animation(
                             ("jump-highlight", nonce),
                             Animation::new(JUMP_HIGHLIGHT),
@@ -624,7 +624,7 @@ pub(super) fn render_message(
                                         .text_size(rpx(11.))
                                         .text_color(transparent_black())
                                         .group_hover("message", |style| {
-                                            style.text_color(rgb(theme::FAINT))
+                                            style.text_color(rgb(theme::faint()))
                                         })
                                         .child(message.timestamp.time()),
                                 )
@@ -673,7 +673,7 @@ pub(super) fn render_message(
                                             .text_size(rpx(16.))
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(if message.webhook.is_some() {
-                                                rgb(theme::STRONG).into()
+                                                rgb(theme::strong()).into()
                                             } else {
                                                 author_color(app, message.author_id)
                                             })
@@ -701,7 +701,7 @@ pub(super) fn render_message(
                                     .child(
                                         div()
                                             .text_size(rpx(12.))
-                                            .text_color(rgb(theme::FAINT))
+                                            .text_color(rgb(theme::faint()))
                                             .child(message.timestamp.full()),
                                     ),
                             )
@@ -779,7 +779,7 @@ pub(super) fn render_message(
                                 div()
                                     .mt(rpx(2.))
                                     .text_size(rpx(10.))
-                                    .text_color(rgb(theme::FAINT))
+                                    .text_color(rgb(theme::faint()))
                                     .child("(edited)"),
                             )
                         })
@@ -807,7 +807,7 @@ fn message_editor(app: &DiscordApp, editing: &Editing) -> impl IntoElement {
         div()
             .id(id)
             .cursor_pointer()
-            .text_color(rgb(LINK))
+            .text_color(rgb(theme::link()))
             .hover(|style| style.underline())
             .child(text)
     };
@@ -820,16 +820,16 @@ fn message_editor(app: &DiscordApp, editing: &Editing) -> impl IntoElement {
                 .mt_1()
                 .px(rpx(16.))
                 .rounded(rpx(8.))
-                .bg(rgb(theme::ELEVATED))
+                .bg(rgb(theme::elevated()))
                 .border_1()
-                .border_color(rgba(theme::BORDER))
+                .border_color(rgba(theme::border()))
                 .relative()
                 .child(
                     flush_textarea(Textarea::new(&editing.input))
                         .py(rpx(11.))
                         .text_size(rpx(16.))
                         .line_height(rpx(22.))
-                        .text_color(rgb(theme::TEXT)),
+                        .text_color(rgb(theme::text())),
                 )
                 .child(emoji_token_overlay(&editing.input)),
         )
@@ -838,7 +838,7 @@ fn message_editor(app: &DiscordApp, editing: &Editing) -> impl IntoElement {
                 .flex()
                 .py(rpx(4.))
                 .text_size(rpx(12.))
-                .text_color(rgb(theme::TEXT))
+                .text_color(rgb(theme::text()))
                 .child("escape to\u{a0}")
                 .child(
                     link("edit-cancel", "cancel").on_click(move |_, window, cx| {
@@ -866,7 +866,7 @@ fn send_failure(app: &DiscordApp, message_id: u64) -> impl IntoElement {
         div()
             .id(id)
             .cursor_pointer()
-            .text_color(rgb(LINK))
+            .text_color(rgb(theme::link()))
             .hover(|style| style.underline())
             .child(text)
     };

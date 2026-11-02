@@ -62,7 +62,7 @@ fn reply_links_keep_their_colors_and_formatting_without_hover_actions() {
             assert!(matches!(&preview.content, Content::Text(text) if &**text == "example"));
             assert_eq!(
                 preview.style.color,
-                Some(color.unwrap_or_else(|| gpui::rgb(theme::LINK).into()))
+                Some(color.unwrap_or_else(|| gpui::rgb(theme::link()).into()))
             );
             assert_eq!(preview.style.underline, underline);
             assert!(preview.style.italic);

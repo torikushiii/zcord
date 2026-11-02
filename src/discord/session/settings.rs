@@ -144,6 +144,39 @@ impl Session {
         Ok(())
     }
 
+    /// Not retried after a reconnect; the next READY reflects whatever was saved.
+    pub async fn set_theme(&self, theme: settings_proto::AccountTheme) -> Result<(), Error> {
+        let generation = self.status_generation()?;
+        let proto = self
+            .rest(async |rest| rest.fetch_preloaded_settings().await)
+            .await?;
+        let version = settings_proto::data_version(&proto)
+            .map_err(|_| Error::Decode)?
+            .ok_or(Error::Decode)?;
+        let patch = settings_proto::theme_patch(&proto, theme).map_err(|_| Error::Decode)?;
+        if self.status_generation()? != generation {
+            return Err(Error::Closed);
+        }
+        let proto = self
+            .rest(async |rest| rest.update_preloaded_settings(&patch, version).await)
+            .await?;
+        if self.status_generation()? != generation {
+            return Err(Error::Closed);
+        }
+        let installed_theme = settings_proto::decode(&proto)
+            .map_err(|_| Error::Decode)?
+            .theme;
+        self.inner
+            .presence
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .install(proto)?;
+        if installed_theme != Some(theme) {
+            return Err(Error::SettingsOutdated);
+        }
+        Ok(())
+    }
+
     pub async fn gif_search(&self, provider: GifProvider, query: &str) -> Result<Vec<Gif>, Error> {
         match provider {
             GifProvider::Klipy => {
@@ -353,6 +386,10 @@ mod tests {
                 .await,
             Err(Error::Closed)
         ));
+        assert!(matches!(
+            session.set_theme(settings_proto::AccountTheme::Light).await,
+            Err(Error::Closed)
+        ));
         session.inner.generation.store(1, Ordering::Release);
         assert!(session.status_connected());
         assert!(matches!(
@@ -365,10 +402,18 @@ mod tests {
                 .await,
             Err(Error::Network)
         ));
+        assert!(matches!(
+            session.set_theme(settings_proto::AccountTheme::Dark).await,
+            Err(Error::Network)
+        ));
         session.shutdown();
         assert!(!session.status_connected());
         assert!(matches!(
             session.set_status(SelfStatus::Online).await,
+            Err(Error::Closed)
+        ));
+        assert!(matches!(
+            session.set_theme(settings_proto::AccountTheme::Dark).await,
             Err(Error::Closed)
         ));
         assert!(receiver.try_recv().is_err());

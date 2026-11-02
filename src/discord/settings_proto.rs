@@ -11,10 +11,41 @@ pub struct GuildFolder {
     pub color: Option<u32>,
 }
 
+/// PreloadedUserSettings AppearanceSettings.theme, an enum on the wire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccountTheme {
+    Dark,
+    Light,
+    Darker,
+    Midnight,
+}
+
+impl AccountTheme {
+    pub fn wire(self) -> u64 {
+        match self {
+            Self::Dark => 1,
+            Self::Light => 2,
+            Self::Darker => 3,
+            Self::Midnight => 4,
+        }
+    }
+
+    pub fn from_wire(value: u64) -> Option<Self> {
+        match value {
+            1 => Some(Self::Dark),
+            2 => Some(Self::Light),
+            3 => Some(Self::Darker),
+            4 => Some(Self::Midnight),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Default, Debug, PartialEq, Eq)]
 pub struct Settings {
     pub folders: Option<Vec<GuildFolder>>,
     pub status: Option<StatusSettings>,
+    pub theme: Option<AccountTheme>,
 }
 
 #[derive(Default, Debug, PartialEq, Eq)]
@@ -270,6 +301,19 @@ fn status_settings(bytes: &[u8]) -> Result<StatusSettings> {
     Ok(status)
 }
 
+fn appearance_theme(bytes: &[u8]) -> Result<Option<AccountTheme>> {
+    let mut reader = Reader::new(bytes);
+    let mut theme = None;
+    while let Some((field, wire)) = reader.tag()? {
+        if field == 1 && wire == 0 {
+            theme = AccountTheme::from_wire(reader.varint()?);
+        } else {
+            reader.skip(field, wire, 0)?;
+        }
+    }
+    Ok(theme)
+}
+
 pub fn decode(bytes: &[u8]) -> Result<Settings> {
     let mut reader = Reader::new(bytes);
     let mut settings = Settings::default();
@@ -287,6 +331,8 @@ pub fn decode(bytes: &[u8]) -> Result<Settings> {
             }
         } else if field == 11 {
             settings.status = Some(status_settings(reader.bytes(wire)?)?);
+        } else if field == 13 {
+            settings.theme = appearance_theme(reader.bytes(wire)?)?;
         } else {
             reader.skip(field, wire, 0)?;
         }
@@ -357,6 +403,26 @@ pub fn status_patch_at(
     }
     let mut patch = Vec::new();
     push_bytes(&mut patch, 11, &content);
+    Ok(patch)
+}
+
+/// PATCH replaces the entire top-level appearance message. Preserve its opaque siblings
+/// (developer mode, client theme settings and future fields), but send no other settings.
+pub fn theme_patch(preloaded: &[u8], theme: AccountTheme) -> Result<Vec<u8>> {
+    let mut content = Vec::new();
+    for field in fields(preloaded)? {
+        if field.number != 13 {
+            continue;
+        }
+        for sub in fields(field.value.ok_or(DecodeError)?)? {
+            if sub.number != 1 {
+                content.extend_from_slice(sub.raw);
+            }
+        }
+    }
+    push_uint(&mut content, 1, theme.wire());
+    let mut patch = Vec::new();
+    push_bytes(&mut patch, 13, &content);
     Ok(patch)
 }
 
@@ -1073,5 +1139,74 @@ pub(crate) mod tests {
             let _ = merge_partial(&valid[..length], &valid);
         }
         assert!(merge_partial(&valid, &[18, 9]).is_err());
+    }
+
+    #[test]
+    fn theme_decodes_every_choice_and_maps_absent_or_unset_to_none() {
+        for (wire, expected) in [
+            (1, AccountTheme::Dark),
+            (2, AccountTheme::Light),
+            (3, AccountTheme::Darker),
+            (4, AccountTheme::Midnight),
+        ] {
+            assert_eq!(expected.wire(), wire);
+            assert_eq!(AccountTheme::from_wire(wire), Some(expected));
+            let decoded = decode(&field(13, &uint(1, wire))).unwrap();
+            assert_eq!(decoded.theme, Some(expected));
+        }
+        assert_eq!(AccountTheme::from_wire(0), None);
+        assert_eq!(AccountTheme::from_wire(5), None);
+        assert_eq!(decode(&[]).unwrap().theme, None);
+        assert_eq!(decode(&field(13, &uint(1, 0))).unwrap().theme, None);
+        assert_eq!(decode(&field(13, &[])).unwrap().theme, None);
+    }
+
+    #[test]
+    fn theme_patch_replaces_the_theme_and_preserves_opaque_siblings() {
+        let mut appearance = uint(1, 2);
+        appearance.extend(uint(2, 1));
+        appearance.extend(field(9, b"future-appearance-field"));
+        let mut base = field(1, &uint(3, 42));
+        base.extend(field(13, &appearance));
+        base.extend(field(90, b"untouched"));
+
+        let patch = theme_patch(&base, AccountTheme::Midnight).unwrap();
+        let top = fields(&patch).unwrap();
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].number, 13);
+        let content = fields(top[0].value.unwrap()).unwrap();
+        assert!(content.iter().any(|entry| entry.raw == uint(2, 1)));
+        assert!(
+            content
+                .iter()
+                .any(|entry| entry.raw == field(9, b"future-appearance-field"))
+        );
+        assert!(!content.iter().any(|entry| entry.raw == uint(1, 2)));
+        let merged = merge_partial(&base, &patch).unwrap();
+        assert_eq!(decode(&merged).unwrap().theme, Some(AccountTheme::Midnight));
+        assert_eq!(data_version(&merged).unwrap(), Some(42));
+        assert!(
+            fields(&merged)
+                .unwrap()
+                .iter()
+                .any(|entry| entry.raw == field(90, b"untouched"))
+        );
+    }
+
+    #[test]
+    fn theme_patch_creates_the_appearance_message_when_missing() {
+        let base = field(1, &uint(3, 42));
+        for theme in [
+            AccountTheme::Dark,
+            AccountTheme::Light,
+            AccountTheme::Darker,
+            AccountTheme::Midnight,
+        ] {
+            let patch = theme_patch(&base, theme).unwrap();
+            assert_eq!(patch, field(13, &uint(1, theme.wire())));
+            assert_eq!(decode(&patch).unwrap().theme, Some(theme));
+        }
+        assert!(theme_patch(&[106], AccountTheme::Dark).is_err());
+        assert!(theme_patch(&field(13, &[8]), AccountTheme::Dark).is_err());
     }
 }

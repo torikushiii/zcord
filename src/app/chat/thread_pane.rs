@@ -491,7 +491,7 @@ fn post_header(app: &DiscordApp, pane: &ThreadPane, name: &str) -> impl IntoElem
         .pl_4()
         .pr_2()
         .border_b_1()
-        .border_color(rgba(theme::BORDER))
+        .border_color(rgba(theme::border()))
         .child(
             div()
                 .flex_1()
@@ -499,7 +499,7 @@ fn post_header(app: &DiscordApp, pane: &ThreadPane, name: &str) -> impl IntoElem
                 .truncate()
                 .text_size(rpx(16.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child(label(("thread-pane-name", id), name)),
         )
         .child(
@@ -508,7 +508,7 @@ fn post_header(app: &DiscordApp, pane: &ThreadPane, name: &str) -> impl IntoElem
                 .flex_none()
                 .children(pane.menu.then(|| post_menu(app, id, pane.notify_open)))
                 .child(
-                    theme::icon_button("thread-pane-more", "ellipsis", 20., theme::MUTED)
+                    theme::icon_button("thread-pane-more", "ellipsis", 20., theme::muted())
                         .relative()
                         .child(theme::hover_tooltip("thread-pane-more-tip", "More"))
                         .on_click(move |_, _, cx| {
@@ -517,7 +517,7 @@ fn post_header(app: &DiscordApp, pane: &ThreadPane, name: &str) -> impl IntoElem
                 ),
         )
         .child(
-            theme::icon_button("thread-pane-close", "x", 20., theme::MUTED)
+            theme::icon_button("thread-pane-close", "x", 20., theme::muted())
                 .relative()
                 .child(theme::hover_tooltip("post-pane-close-tip", "Close"))
                 .on_click(move |_, _, cx| {
@@ -545,7 +545,11 @@ fn post_menu(app: &DiscordApp, id: u64, notify_open: bool) -> impl IntoElement +
                 run: Option<MenuAction>| {
         let entity = app.entity.clone();
         let enabled = run.is_some();
-        let color = if enabled { theme::STRONG } else { theme::FAINT };
+        let color = if enabled {
+            theme::strong()
+        } else {
+            theme::faint()
+        };
         div()
             .id(key)
             .flex()
@@ -558,7 +562,7 @@ fn post_menu(app: &DiscordApp, id: u64, notify_open: bool) -> impl IntoElement +
             .text_color(rgb(color))
             .when(enabled, |this| {
                 this.cursor_pointer()
-                    .hover(|style| style.bg(rgba(theme::HOVER)))
+                    .hover(|style| style.bg(rgba(theme::hover())))
             })
             .when_some(run, |this, run| {
                 this.on_click(move |_, window, cx| {
@@ -579,7 +583,7 @@ fn post_menu(app: &DiscordApp, id: u64, notify_open: bool) -> impl IntoElement +
             .h(rpx(1.))
             .my(rpx(8.))
             .mx(rpx(8.))
-            .bg(rgba(theme::BORDER_SUBTLE))
+            .bg(rgba(theme::border_subtle()))
     };
     let close = app.entity.clone();
     div().absolute().top(rpx(32.)).right_0().size_0().child(
@@ -592,11 +596,11 @@ fn post_menu(app: &DiscordApp, id: u64, notify_open: bool) -> impl IntoElement +
                     .w(rpx(MENU_WIDTH))
                     .p(rpx(8.))
                     .rounded(rpx(8.))
-                    .bg(rgb(theme::ELEVATED))
+                    .bg(rgb(theme::elevated()))
                     .border_1()
-                    .border_color(rgba(theme::BORDER_SUBTLE))
+                    .border_color(rgba(theme::border_subtle()))
                     .shadow(vec![BoxShadow {
-                        color: hsla(0., 0., 0., 0.24),
+                        color: rgb(theme::shadow()).opacity(0.24).into(),
                         offset: point(px(0.), px(12.)),
                         blur_radius: px(24.),
                         spread_radius: px(0.),
@@ -655,9 +659,9 @@ fn post_menu(app: &DiscordApp, id: u64, notify_open: bool) -> impl IntoElement +
                             }),
                             None,
                         )
-                        .text_color(rgb(theme::STRONG))
+                        .text_color(rgb(theme::strong()))
                         .cursor_pointer()
-                        .hover(|style| style.bg(rgba(theme::HOVER)))
+                        .hover(|style| style.bg(rgba(theme::hover())))
                         .on_click(move |_, _, cx| {
                             cx.stop_propagation();
                             entity.update(cx, |app, cx| app.toggle_pane_notify(cx)).ok();
@@ -677,9 +681,9 @@ fn post_menu(app: &DiscordApp, id: u64, notify_open: bool) -> impl IntoElement +
                                         .pl(rpx(20.))
                                         .pr(rpx(8.))
                                         .rounded(rpx(4.))
-                                        .text_color(rgb(theme::STRONG))
+                                        .text_color(rgb(theme::strong()))
                                         .cursor_pointer()
-                                        .hover(|style| style.bg(rgba(theme::HOVER)))
+                                        .hover(|style| style.bg(rgba(theme::hover())))
                                         .on_click(move |_, _, cx| {
                                             cx.stop_propagation();
                                             entity
@@ -754,7 +758,7 @@ fn radio_dot(checked: bool) -> Div {
                 this.bg(rgb(theme::BLURPLE))
                     .child(div().size(rpx(8.)).rounded_full().bg(white()))
             } else {
-                this.border_2().border_color(rgb(theme::MUTED))
+                this.border_2().border_color(rgb(theme::muted()))
             }
         })
 }
@@ -773,8 +777,8 @@ fn header(app: &DiscordApp, id: u64, name: &str) -> impl IntoElement + use<> {
         .pl_4()
         .pr_2()
         .border_b_1()
-        .border_color(rgba(theme::BORDER))
-        .child(theme::icon("thread", 20., theme::FAINT))
+        .border_color(rgba(theme::border()))
+        .child(theme::icon("thread", 20., theme::faint()))
         .child(
             div()
                 .flex_1()
@@ -782,7 +786,7 @@ fn header(app: &DiscordApp, id: u64, name: &str) -> impl IntoElement + use<> {
                 .truncate()
                 .text_size(rpx(16.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child(label(("thread-pane-name", id), name)),
         )
         .when(!joined, |this| {
@@ -796,8 +800,8 @@ fn header(app: &DiscordApp, id: u64, name: &str) -> impl IntoElement + use<> {
                     .cursor_pointer()
                     .text_size(rpx(14.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(theme::STRONG))
-                    .hover(|style| style.bg(rgba(theme::HOVER)))
+                    .text_color(rgb(theme::strong()))
+                    .hover(|style| style.bg(rgba(theme::hover())))
                     .on_click(move |_, _, cx| {
                         join.update(cx, |app, cx| app.join_or_leave_thread(id, false, cx))
                             .ok();
@@ -806,7 +810,7 @@ fn header(app: &DiscordApp, id: u64, name: &str) -> impl IntoElement + use<> {
             )
         })
         .child(
-            theme::icon_button("thread-pane-expand", "maximize-2", 20., theme::MUTED)
+            theme::icon_button("thread-pane-expand", "maximize-2", 20., theme::muted())
                 .relative()
                 .child(theme::hover_tooltip(
                     "thread-pane-expand-tip",
@@ -819,7 +823,7 @@ fn header(app: &DiscordApp, id: u64, name: &str) -> impl IntoElement + use<> {
                 }),
         )
         .child(
-            theme::icon_button("thread-pane-close", "x", 20., theme::MUTED)
+            theme::icon_button("thread-pane-close", "x", 20., theme::muted())
                 .relative()
                 .child(theme::hover_tooltip("thread-pane-close-tip", "Close"))
                 .on_click(move |_, _, cx| {
@@ -843,7 +847,7 @@ fn body(app: &DiscordApp, pane: &ThreadPane, thread: &Channel) -> AnyElement {
             .flex_1()
             .items_center()
             .justify_center()
-            .text_color(rgb(theme::MUTED))
+            .text_color(rgb(theme::muted()))
             .child("Couldn't load messages.")
             .into_any_element();
     }
@@ -912,12 +916,12 @@ fn composer_box(app: &DiscordApp, pane: &ThreadPane, cx: &App) -> impl IntoEleme
                         this.rounded_b(rpx(8.))
                     }
                 })
-                .bg(rgb(theme::ELEVATED))
+                .bg(rgb(theme::elevated()))
                 .border_1()
-                .border_color(rgba(theme::BORDER))
+                .border_color(rgba(theme::border()))
                 .child(
                     div().my(rpx(10.)).child(
-                        theme::icon_button("pane-attach", "circle-plus", 24., theme::MUTED)
+                        theme::icon_button("pane-attach", "circle-plus", 24., theme::muted())
                             .when(!can_send, |this| this.opacity(0.5))
                             .when(can_send, |this| {
                                 this.on_click(move |_, window, cx| {
@@ -940,7 +944,7 @@ fn composer_box(app: &DiscordApp, pane: &ThreadPane, cx: &App) -> impl IntoEleme
                                 .py(rpx(11.))
                                 .text_size(rpx(16.))
                                 .line_height(rpx(22.))
-                                .text_color(rgb(theme::TEXT)),
+                                .text_color(rgb(theme::text())),
                         )
                         .child(emoji_token_overlay(&pane.composer)),
                 )
@@ -950,7 +954,7 @@ fn composer_box(app: &DiscordApp, pane: &ThreadPane, cx: &App) -> impl IntoEleme
                         .gap_1()
                         .my(rpx(10.))
                         .child(
-                            theme::icon_button("pane-gif", "image-play", 24., theme::MUTED)
+                            theme::icon_button("pane-gif", "image-play", 24., theme::muted())
                                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                     let Some(position) = gif_anchor.get() else {
                                         return;
@@ -962,7 +966,7 @@ fn composer_box(app: &DiscordApp, pane: &ThreadPane, cx: &App) -> impl IntoEleme
                                 }),
                         )
                         .child(
-                            theme::icon_button("pane-emoji", "smile", 24., theme::MUTED)
+                            theme::icon_button("pane-emoji", "smile", 24., theme::muted())
                                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                     let Some(position) = emoji_anchor.get() else {
                                         return;
@@ -997,7 +1001,7 @@ pub(crate) fn render_thread_pane(app: &DiscordApp, cx: &App) -> AnyElement {
         .size_full()
         .min_h_0()
         .border_l_1()
-        .border_color(rgba(theme::BORDER))
+        .border_color(rgba(theme::border()))
         .child(if app.store.forum_post(pane.id).is_some() {
             post_header(app, pane, &thread.name).into_any_element()
         } else {

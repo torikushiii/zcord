@@ -47,9 +47,9 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
     let card_inset = if windowed { MODAL_MARGIN * 0.91 } else { 0. };
     let card_width = (viewport * 0.455 - card_inset).clamp(300., 400.);
     let layout = Layout::modal(card_width);
-    let surface = theme.map_or(theme::ELEVATED, ProfileTheme::surface);
+    let surface = theme.map_or(theme::elevated(), ProfileTheme::surface);
     let background: Background =
-        theme.map_or(rgb(theme::BG).into(), ProfileTheme::modal_background);
+        theme.map_or(rgb(theme::bg()).into(), ProfileTheme::modal_background);
     let profile_card = div()
         .relative()
         .w(rpx(card_width))
@@ -68,7 +68,7 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
         .overflow_hidden()
         .map(|this| match theme {
             Some(theme) => this.bg(theme.outer()),
-            None => this.bg(rgb(theme::ELEVATED)),
+            None => this.bg(rgb(theme::elevated())),
         })
         .child(
             div()
@@ -458,7 +458,7 @@ fn servers_panel(
                             .rounded(rpx(12.))
                             .bg(rgb(guild.icon_color))
                             .text_size(rpx(14.))
-                            .text_color(rgb(theme::BG))
+                            .text_color(gpui::black())
                             .child(guild.initials.clone())
                             .into_any_element(),
                     })

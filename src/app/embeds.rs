@@ -27,8 +27,6 @@ const EMBED_MEDIA: (f32, f32) = (400., 300.);
 const PLAIN_MEDIA: (f32, f32) = (550., 350.);
 const THUMBNAIL: f32 = 80.;
 const SECTION_THUMBNAIL: f32 = 85.;
-const LINK: u32 = theme::LINK;
-const EMBED_BORDER: u32 = 0x2E2E36;
 
 const DESCRIPTION_SLOT: u64 = 0;
 const FIELD_SLOT: u64 = 1;
@@ -107,7 +105,7 @@ fn markdown(
         revealed: &app.revealed_spoilers,
         entity: app.entity.clone(),
         colors: BodyColors {
-            quote: Some(theme::MUTED),
+            quote: Some(theme::muted()),
             ..Default::default()
         },
     };
@@ -174,7 +172,7 @@ fn embed_card(color: Option<u32>, content_width: Option<f32>) -> Div {
             None => this.max_w(rpx(EMBED_WIDTH.min(super::chat::media_limit()))),
         })
         .font_weight(FontWeight::NORMAL)
-        .text_color(rgb(theme::TEXT))
+        .text_color(rgb(theme::text()))
         .pt(rpx(8.))
         .pr(rpx(EMBED_PADDING_RIGHT))
         .pb(rpx(16.))
@@ -182,8 +180,8 @@ fn embed_card(color: Option<u32>, content_width: Option<f32>) -> Div {
         .pl(rpx(EMBED_PADDING_LEFT))
         .rounded(rpx(4.))
         .border_1()
-        .border_color(rgba(theme::BORDER))
-        .bg(rgb(theme::ELEVATED))
+        .border_color(rgba(theme::border()))
+        .bg(rgb(theme::elevated()))
         .child(
             div()
                 .absolute()
@@ -192,7 +190,7 @@ fn embed_card(color: Option<u32>, content_width: Option<f32>) -> Div {
                 .bottom(px(-1.))
                 .w(rpx(4.))
                 .rounded_l(rpx(4.))
-                .bg(rgb(color.unwrap_or(EMBED_BORDER))),
+                .bg(rgb(color.unwrap_or(theme::embed_border()))),
         )
 }
 
@@ -316,7 +314,7 @@ fn image_box(media: &Media, width: f32, height: f32, radius: f32, cx: &App) -> D
         .rounded(rpx(radius))
         .overflow_hidden()
         .when(child.is_none(), |this| {
-            this.bg(rgba(theme::BORDER))
+            this.bg(rgba(theme::border()))
                 .when(!images::failed(&spec, pixels, cx), |this| {
                     this.child(theme::media_loading())
                 })
@@ -451,7 +449,7 @@ pub(super) fn blurred_box(
         .rounded(rpx(radius))
         .overflow_hidden()
         // The placeholder would show as a pale rim around the image's rounded edge.
-        .when(image.is_none(), |this| this.bg(rgba(theme::BORDER)))
+        .when(image.is_none(), |this| this.bg(rgba(theme::border())))
         // GPUI clips children to the parent's rectangle, not its rounded corners,
         // so the image must carry the radius itself and stay inside the box.
         .children(image.map(|image| {
@@ -490,7 +488,7 @@ pub(super) fn spoiler_overlay(app: &DiscordApp, key: u64, radius: f32) -> Statef
                 .text_size(rpx(15.))
                 .line_height(rpx(16.))
                 .font_weight(FontWeight::BOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child("SPOILER"),
         )
 }
@@ -509,13 +507,13 @@ fn play_badge(element: Div, pill: bool) -> Div {
             .h(rpx(48.))
             .px(rpx(14.))
             .rounded(rpx(24.))
-            .child(theme::icon("play", 22., theme::STRONG))
-            .child(theme::icon("external-link", 22., theme::STRONG))
+            .child(theme::icon("play", 22., theme::strong()))
+            .child(theme::icon("external-link", 22., theme::strong()))
     } else {
         badge
             .size(rpx(48.))
             .rounded_full()
-            .child(theme::icon("play", 20., theme::STRONG))
+            .child(theme::icon("play", 20., theme::strong()))
     };
     element.child(
         div()
@@ -537,7 +535,7 @@ fn icon_image(media: Option<&Media>, size: f32, cx: &App) -> Option<AnyElement> 
             .flex_none()
             .rounded_full()
             .overflow_hidden()
-            .bg(rgba(theme::BORDER))
+            .bg(rgba(theme::border()))
             .children(image.map(|path| img(path).size_full().rounded_full()))
             .into_any_element(),
     )
@@ -580,7 +578,7 @@ pub fn render_embed(
                         .mt(rpx(4.))
                         .text_size(rpx(12.))
                         .line_height(rpx(16.))
-                        .text_color(rgb(theme::MUTED))
+                        .text_color(rgb(theme::muted()))
                         .child("GIF"),
                 )
                 .into_any_element();
@@ -652,7 +650,7 @@ pub fn render_embed(
                     .id(("embed-provider", key(60)))
                     .text_size(rpx(12.))
                     .line_height(rpx(16.))
-                    .text_color(rgb(theme::MUTED)),
+                    .text_color(rgb(theme::muted())),
                 provider.url.as_ref(),
             )
             .child(wrapped_label(
@@ -677,7 +675,7 @@ pub fn render_embed(
                             .text_size(rpx(14.))
                             .line_height(rpx(18.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(theme::STRONG)),
+                            .text_color(rgb(theme::strong())),
                         author.url.as_ref(),
                     )
                     .child(wrapped_label(("embed-author-text", key(61)), &author.text)),
@@ -693,7 +691,11 @@ pub fn render_embed(
                     .text_size(rpx(16.))
                     .line_height(rpx(22.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(if url.is_some() { LINK } else { theme::STRONG })),
+                    .text_color(rgb(if url.is_some() {
+                        theme::link()
+                    } else {
+                        theme::strong()
+                    })),
                 url,
             )
             .child(wrapped_label(("embed-title-text", key(62)), &title.text)),
@@ -858,7 +860,7 @@ pub fn render_embed(
                         .text_size(rpx(12.))
                         .line_height(rpx(16.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(theme::MUTED))
+                        .text_color(rgb(theme::muted()))
                         .child(wrapped_label(("embed-footer-text", key(59)), &text)),
                 )
         }))
@@ -876,7 +878,7 @@ fn fields(app: &DiscordApp, fields: &[EmbedField], key: impl Fn(usize) -> u64, c
                     .text_size(rpx(14.))
                     .line_height(rpx(18.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(theme::STRONG))
+                    .text_color(rgb(theme::strong()))
                     .child(wrapped_label(
                         ("embed-field-name", key(index) ^ 1),
                         &field.name,
@@ -1085,21 +1087,21 @@ fn render_component(
             .px(rpx(12.))
             .rounded(rpx(8.))
             .border_1()
-            .border_color(rgba(theme::BORDER))
-            .bg(rgb(theme::BG))
+            .border_color(rgba(theme::border()))
+            .bg(rgb(theme::bg()))
             .when(*disabled, |this| this.opacity(0.5))
             .child(
                 div()
                     .truncate()
                     .text_size(rpx(14.))
-                    .text_color(rgb(theme::MUTED))
+                    .text_color(rgb(theme::muted()))
                     .child(
                         placeholder
                             .clone()
                             .unwrap_or_else(|| "Make a selection".into()),
                     ),
             )
-            .child(theme::icon("chevron-down", 18., theme::MUTED))
+            .child(theme::icon("chevron-down", 18., theme::muted()))
             .into_any_element(),
         Component::Section {
             components,
@@ -1172,21 +1174,26 @@ fn render_component(
             .max_w(rpx(432.))
             .p_3()
             .rounded(rpx(8.))
-            .bg(rgb(theme::BG))
+            .bg(rgb(theme::bg()))
             .border_1()
-            .border_color(rgba(theme::BORDER))
+            .border_color(rgba(theme::border()))
             .when(*spoiler, |this| this.opacity(0.6))
-            .child(theme::icon("file", 32., theme::MUTED))
+            .child(theme::icon("file", 32., theme::muted()))
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .min_w_0()
-                    .child(div().truncate().text_color(rgb(LINK)).child(name.clone()))
+                    .child(
+                        div()
+                            .truncate()
+                            .text_color(rgb(theme::link()))
+                            .child(name.clone()),
+                    )
                     .child(
                         div()
                             .text_size(rpx(12.))
-                            .text_color(rgb(theme::FAINT))
+                            .text_color(rgb(theme::faint()))
                             .child(file_size(*size)),
                     ),
             )
@@ -1197,7 +1204,7 @@ fn render_component(
                 .w_full()
                 .py(rpx(space / 2.))
                 .when(*divider, |this| {
-                    this.child(div().w_full().h(px(1.)).bg(rgba(theme::BORDER)))
+                    this.child(div().w_full().h(px(1.)).bg(rgba(theme::border())))
                 })
                 .into_any_element()
         }
@@ -1234,8 +1241,8 @@ fn component_container(accent: Option<u32>, children: impl IntoIterator<Item = A
         .rounded(rpx(8.))
         .overflow_hidden()
         .border_1()
-        .border_color(rgba(theme::BORDER))
-        .bg(rgb(theme::ELEVATED))
+        .border_color(rgba(theme::border()))
+        .bg(rgb(theme::elevated()))
         .children(accent.map(|color| {
             div()
                 .absolute()
@@ -1296,7 +1303,7 @@ fn button(
         1 | 6 => (theme::BLURPLE, theme::BLURPLE),
         3 => (0x00863A, 0x00863A),
         4 => (0xD22D39, 0xD22D39),
-        _ => (0x1F1F23, 0x34343B),
+        _ => (theme::button_bg(), theme::button_border()),
     };
     let url = url.filter(|_| style == 5 && !disabled).cloned();
     div()
@@ -1312,12 +1319,16 @@ fn button(
         .bg(rgb(background))
         .text_size(rpx(14.))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(0xFFFFFF))
+        .text_color(if matches!(style, 1 | 3 | 4 | 6) {
+            white()
+        } else {
+            rgb(theme::bright()).into()
+        })
         .when(disabled, |this| this.opacity(0.5))
         .children(emoji.map(|emoji| emoji_element(emoji, 20., cx)))
         .children(label.map(|label| wrapped_label(("component-label", key), label)))
         .when(style == 5, |this| {
-            this.child(theme::icon("external-link", 16., 0xFFFFFF))
+            this.child(theme::icon("external-link", 16., theme::bright()))
         })
         .when_some(url, |this, url| {
             this.cursor_pointer()
@@ -1424,10 +1435,11 @@ pub fn render_reactions(
                     })
                     .map(|this| {
                         if reaction.me {
-                            this.bg(rgba(0x5865F226)).border_color(rgb(theme::BLURPLE))
+                            this.bg(rgba(theme::reaction_selected_bg()))
+                                .border_color(rgb(theme::BLURPLE))
                         } else {
-                            this.bg(rgb(theme::ELEVATED))
-                                .border_color(rgb(theme::ELEVATED))
+                            this.bg(rgb(theme::elevated()))
+                                .border_color(rgb(theme::elevated()))
                         }
                     })
                     .child(emoji_element(&reaction.emoji, 20., cx))
@@ -1435,18 +1447,22 @@ pub fn render_reactions(
                         div()
                             .text_size(rpx(15.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(if reaction.me { 0xC9CDFB } else { theme::MUTED }))
+                            .text_color(rgb(if reaction.me {
+                                theme::mention_text()
+                            } else {
+                                theme::muted()
+                            }))
                             .child(reaction.count.to_string()),
                     )
             }))
             .child(
                 pill()
                     .id(("add-reaction", message_id))
-                    .bg(rgb(theme::ELEVATED))
-                    .border_color(rgb(theme::ELEVATED))
+                    .bg(rgb(theme::elevated()))
+                    .border_color(rgb(theme::elevated()))
                     .opacity(if picking { 1. } else { 0. })
                     .group_hover("message", |style| style.opacity(1.))
-                    .hover(|style| style.bg(rgba(theme::SELECTED)))
+                    .hover(|style| style.bg(rgba(theme::selected())))
                     .cursor_pointer()
                     .relative()
                     .on_mouse_down(MouseButton::Left, move |event, window, cx| {
@@ -1468,7 +1484,7 @@ pub fn render_reactions(
                             })
                             .ok();
                     })
-                    .child(theme::icon("smile-plus", 20., theme::MUTED))
+                    .child(theme::icon("smile-plus", 20., theme::muted()))
                     .when(tip_shown && !picking, |this| {
                         this.child(theme::tooltip_above("Add Reaction"))
                     }),

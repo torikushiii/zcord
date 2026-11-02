@@ -265,14 +265,14 @@ pub(crate) fn add_friend_page(app: &DiscordApp) -> impl IntoElement + use<> {
                 .text_size(rpx(20.))
                 .line_height(rpx(24.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child("Add Friend"),
         )
         .child(
             div()
                 .mt(rpx(8.))
                 .text_size(rpx(14.))
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child("You can add friends with their Discord username."),
         )
         .child(
@@ -285,7 +285,7 @@ pub(crate) fn add_friend_page(app: &DiscordApp) -> impl IntoElement + use<> {
                 .pl(rpx(12.))
                 .pr(rpx(10.))
                 .rounded(rpx(8.))
-                .bg(rgb(theme::ELEVATED))
+                .bg(rgb(theme::elevated()))
                 .border_1()
                 .border_color(rgb(border))
                 .children(friends.username.as_ref().map(|input| {
@@ -350,7 +350,7 @@ pub(crate) fn remove_dialog(app: &DiscordApp) -> Option<AnyElement> {
             .hover(move |style| style.bg(rgb(hover)))
             .text_size(rpx(16.))
             .font_weight(FontWeight::SEMIBOLD)
-            .text_color(rgb(theme::STRONG))
+            .text_color(rgb(theme::strong()))
             .child(text)
     };
     Some(
@@ -377,9 +377,9 @@ pub(crate) fn remove_dialog(app: &DiscordApp) -> Option<AnyElement> {
                     .max_w_full()
                     .p(rpx(24.))
                     .rounded(rpx(12.))
-                    .bg(rgb(theme::ELEVATED))
+                    .bg(rgb(theme::elevated()))
                     .border_1()
-                    .border_color(rgba(theme::BORDER))
+                    .border_color(rgba(theme::border()))
                     .occlude()
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .child(
@@ -387,14 +387,14 @@ pub(crate) fn remove_dialog(app: &DiscordApp) -> Option<AnyElement> {
                             .text_size(rpx(20.))
                             .line_height(rpx(24.))
                             .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(theme::STRONG))
+                            .text_color(rgb(theme::strong()))
                             .child(format!("Remove '{name}'")),
                     )
                     .child(
                         div()
                             .mt_2()
                             .text_size(rpx(16.))
-                            .text_color(rgb(theme::MUTED))
+                            .text_color(rgb(theme::muted()))
                             .child(format!(
                                 "Are you sure you want to remove {name} from your friends?"
                             )),
@@ -405,14 +405,19 @@ pub(crate) fn remove_dialog(app: &DiscordApp) -> Option<AnyElement> {
                             .gap_2()
                             .mt_6()
                             .child(
-                                button("friend-remove-cancel", "Cancel", 0x232327, 0x2C2C31)
-                                    .border_1()
-                                    .border_color(rgba(theme::BORDER))
-                                    .on_click(move |_, _, cx| {
-                                        cancel
-                                            .update(cx, |app, cx| app.cancel_remove_friend(cx))
-                                            .ok();
-                                    }),
+                                button(
+                                    "friend-remove-cancel",
+                                    "Cancel",
+                                    theme::button_subtle(),
+                                    theme::button_subtle_hover(),
+                                )
+                                .border_1()
+                                .border_color(rgba(theme::border()))
+                                .on_click(move |_, _, cx| {
+                                    cancel
+                                        .update(cx, |app, cx| app.cancel_remove_friend(cx))
+                                        .ok();
+                                }),
                             )
                             .child(
                                 button(

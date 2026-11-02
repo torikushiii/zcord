@@ -164,7 +164,7 @@ fn guild_icon(guild: &crate::store::Guild, size: f32, cx: &App) -> AnyElement {
             .rounded_full()
             .bg(rgb(guild.icon_color))
             .text_size(rpx(size * 0.4))
-            .text_color(rgb(theme::BG))
+            .text_color(gpui::black())
             .child(guild.initials.clone())
             .into_any_element(),
     }

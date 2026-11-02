@@ -171,7 +171,7 @@ fn member_tile(
         .get(&user_id)
         .copied()
         .flatten()
-        .unwrap_or(theme::SURFACE_HIGHEST);
+        .unwrap_or(theme::surface_highest());
     let avatar = AVATAR_SIZE.min(width / TILE_RATIO * AVATAR_TILE_SHARE);
     tile(width)
         .bg(rgb(color))
@@ -280,7 +280,7 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
     let connecting = tiles.is_empty().then(|| {
         div()
             .text_size(rpx(15.))
-            .text_color(rgb(theme::MUTED))
+            .text_color(rgb(theme::muted()))
             .child("Connecting\u{2026}")
     });
     let grid = div()
