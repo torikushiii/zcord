@@ -756,6 +756,9 @@ impl DiscordApp {
         } else {
             self.confirm_delete = Some(message_id);
             self.delete_closing = None;
+            // The composer usually has focus; move it to the dialog so Enter confirms
+            // the delete instead of sending the composed text.
+            self.delete_focus.focus(window, cx);
             cx.notify();
         }
     }
