@@ -275,6 +275,7 @@ pub struct DiscordApp {
     /// Hover over the active player's mute button and its volume popup.
     video_volume_hover: [bool; 2],
     pub(crate) rail_morphs: guild_rail::Morphs,
+    pub(crate) folder_folds: guild_rail::FolderFolds,
     pub(crate) entity: WeakEntity<Self>,
     pub(crate) views: views::PanelViews,
     focus_handle: FocusHandle,
@@ -438,6 +439,7 @@ impl DiscordApp {
             video_volume_bounds: Rc::new(RefCell::new(None)),
             video_volume_hover: [false; 2],
             rail_morphs: guild_rail::Morphs::default(),
+            folder_folds: guild_rail::FolderFolds::default(),
             entity: app_entity.downgrade(),
             views,
             focus_handle: cx.focus_handle(),

@@ -1,3 +1,4 @@
+use gpui_component::scroll::ScrollableElement as _;
 use std::{collections::HashMap, sync::Arc};
 
 use gpui::{prelude::*, *};
@@ -318,7 +319,7 @@ pub(crate) fn render(app: &DiscordApp) -> Option<AnyElement> {
                             .content_start()
                             .flex_1()
                             .min_h_0()
-                            .overflow_y_scroll()
+                            .overflow_y_scrollbar()
                             .children(tiles),
                     )
                     .child(

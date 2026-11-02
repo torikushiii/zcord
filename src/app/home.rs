@@ -1,5 +1,6 @@
 use gpui::{prelude::*, *};
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::scroll::ScrollableElement as _;
 use gpui_tokio::Tokio;
 use std::{
     collections::{HashMap, HashSet},
@@ -482,7 +483,7 @@ pub(crate) fn sidebar(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 .flex_col()
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
+                .overflow_y_scrollbar()
                 .px_2()
                 .py_2()
                 .child(friends)
@@ -953,7 +954,7 @@ pub(crate) fn friends_page(app: &DiscordApp, cx: &App) -> AnyElement {
                         .flex_col()
                         .flex_1()
                         .min_h_0()
-                        .overflow_y_scroll()
+                        .overflow_y_scrollbar()
                         .px(rpx(14.))
                         .pb_4()
                         .children(rows)
@@ -1559,7 +1560,7 @@ fn active_now(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         .h_full()
         .gap(rpx(16.))
         .p(rpx(16.))
-        .overflow_y_scroll()
+        .overflow_y_scrollbar()
         .border_l_1()
         .border_color(rgba(theme::BORDER))
         .child(
@@ -1845,7 +1846,7 @@ pub(crate) fn requests_page(app: &DiscordApp, cx: &App) -> AnyElement {
                 .flex_col()
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
+                .overflow_y_scrollbar()
                 .px(rpx(14.))
                 .pb_4()
                 .children(rows)

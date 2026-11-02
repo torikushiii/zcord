@@ -4,6 +4,7 @@ use super::popout::{
     banner_spec, bio, display_names, header, member_since, playing, profile_actions, roles, section,
 };
 use super::*;
+use gpui_component::scroll::ScrollableElement as _;
 
 /// The Wishlist tab is hidden for now; its panel and loading stay in place.
 const WISHLIST_TAB: bool = false;
@@ -91,7 +92,7 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
                         .gap(rpx(24.))
                         .px(rpx(layout.padding))
                         .pb(rpx(layout.padding))
-                        .overflow_y_scroll()
+                        .overflow_y_scrollbar()
                         .child(display_names(app, card, true, None, cx))
                         .children(profile_actions(app, card, window))
                         .children(

@@ -255,8 +255,19 @@ impl DiscordApp {
     }
 
     pub(crate) fn toggle_folder(&mut self, id: u64, cx: &mut Context<Self>) {
-        if !self.open_folders.remove(&id) {
+        let opening = !self.open_folders.remove(&id);
+        if opening {
             self.open_folders.insert(id);
+        }
+        if !cx.reduce_motion() {
+            self.folder_folds.start(id, opening);
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(guild_rail::FOLDER_FOLD)
+                    .await;
+                this.update(cx, |_, cx| cx.notify()).ok();
+            })
+            .detach();
         }
         cx.notify();
     }
