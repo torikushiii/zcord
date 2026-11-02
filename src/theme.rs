@@ -16,10 +16,14 @@ use crate::{
     store::{Decoration, GuildTag, Status, Store, User, WebhookAuthor},
 };
 
-mod midnight;
+mod components;
+mod dark;
+mod light;
 mod profile_avatar;
 
-pub use midnight::init;
+pub use components::init;
+use dark::DARK;
+use light::LIGHT;
 pub use profile_avatar::status_icon;
 
 macro_rules! palette {
@@ -111,159 +115,6 @@ palette!(
     account_hover,
 );
 
-const DARK: Palette = Palette {
-    bg: 0x000000,
-    base_lower: 0x000000,
-    base_lowest: 0x000000,
-    surface_high: 0x0A0A0C,
-    elevated: 0x121214,
-    surface_highest: 0x17181B,
-    // Layer colors are RGBA, not RGB: they must blend with their actual surface.
-    border: 0x96969F3D,
-    border_subtle: 0x9696A033,
-    border_muted: 0x9595A229,
-    border_strong: 0x96969F70,
-    hover: 0x94949C1F,
-    active: 0x9696A033,
-    selected: 0x96969F3D,
-    control: 0x99999914,
-    code_background: 0x5966F214,
-    placeholder_strong: 0x2C2D32,
-    text: 0xD4D5D8,
-    text_selection: 0x0438A2,
-    strong: 0xDCDCDF,
-    muted: 0x96979E,
-    faint: 0x81828A,
-    interactive_muted: 0x4F505A,
-    link: 0x2781E7,
-    focus: 0x6AA8F4,
-    tooltip_bg: 0x0A0A0C,
-    tooltip_ring: 0x262629,
-    outline: 0x97979F33,
-    border_soft: 0x97979F29,
-    border_emphasis: 0x97979F3D,
-    border_bright: 0xFFFFFF14,
-    divider: 0x4E5058,
-    recessed: 0x0000001F,
-    control_bg: 0x97979F1F,
-    control_selected: 0x97979F3D,
-    dialog_bg: 0x0C0C0E,
-    dialog_border: 0x26262B,
-    input_bg: 0x0F0F12,
-    input_border: 0x2E2E34,
-    button_bg: 0x1F1F23,
-    button_border: 0x34343B,
-    button_subtle: 0x232327,
-    button_subtle_hover: 0x2C2C31,
-    toolbar_bg: 0x26272B,
-    toolbar_border: 0x3F4046,
-    toolbar_hover: 0x35363B,
-    connector: 0x97979F80,
-    embed_border: 0x2E2E36,
-    text_secondary: 0xB5BAC1,
-    bright: 0xFFFFFF,
-    control_thumb: 0xFFFFFF,
-    icon_bg: 0x1F1F23,
-    spoiler_bg: 0x2A2A30,
-    spoiler_hover: 0x33333A,
-    spoiler_revealed_bg: 0xFFFFFF,
-    timestamp_bg: 0xFFFFFF,
-    menu_border: 0xFFFFFF,
-    shadow: 0x000000,
-    tooltip_shadow: 0x0000003D,
-    control_shadow: 0x00000024,
-    mention_text: 0xC9CDFB,
-    mention_bg: 0x5865F24D,
-    reaction_selected_bg: 0x5865F226,
-    reply_bg: 0x5865F21A,
-    mention_row_bg: 0xF0B2321A,
-    mention_row_hover: 0xF0B23224,
-    jump_highlight: 0x5865F233,
-    connection_tile_bg: 0xFFFFFF,
-    connection_tile_text: 0x2E3035,
-    upload_sheet: 0xD4D8FF,
-    upload_fold: 0xA7AEFF,
-    accent_border: 0xFFFFFF99,
-    account_hover: 0xFFFFFF14,
-};
-
-// Discord's light theme, from its CSS variables. Fields with no Discord counterpart
-// keep the dark value's role: translucent greys gain alpha, opaque ones mirror.
-const LIGHT: Palette = Palette {
-    bg: 0xFFFFFF,
-    base_lower: 0xFBFBFB,
-    base_lowest: 0xF3F3F4,
-    surface_high: 0xFFFFFF,
-    elevated: 0xFFFFFF,
-    surface_highest: 0xFFFFFF,
-    border: 0x97979F66,
-    border_subtle: 0x97979F47,
-    border_muted: 0x97979F33,
-    border_strong: 0x97979F85,
-    hover: 0x97979F1F,
-    active: 0x97979F29,
-    selected: 0x97979F3D,
-    control: 0x97979F14,
-    code_background: 0x5865F20A,
-    placeholder_strong: 0xEBECED,
-    text: 0x2E2E34,
-    text_selection: 0xB4D5FE,
-    strong: 0x28282D,
-    muted: 0x595A63,
-    faint: 0x6C6D76,
-    interactive_muted: 0xC9CACE,
-    link: 0x006DD4,
-    focus: 0x408EEC,
-    tooltip_bg: 0xFFFFFF,
-    tooltip_ring: 0xE2E2E4,
-    outline: 0x97979F47,
-    border_soft: 0x97979F33,
-    border_emphasis: 0x97979F66,
-    border_bright: 0x97979F33,
-    divider: 0xC9CACE,
-    recessed: 0x00000005,
-    control_bg: 0x97979F1F,
-    control_selected: 0x97979F3D,
-    dialog_bg: 0xFFFFFF,
-    dialog_border: 0xE2E2E4,
-    input_bg: 0xFAFAFA,
-    input_border: 0xD5D5D8,
-    button_bg: 0xEBECED,
-    button_border: 0xD5D5D8,
-    button_subtle: 0xEBECED,
-    button_subtle_hover: 0xE2E2E4,
-    toolbar_bg: 0xFFFFFF,
-    toolbar_border: 0xE2E2E4,
-    toolbar_hover: 0xEBECED,
-    connector: 0x97979F85,
-    embed_border: 0xE2E2E4,
-    text_secondary: 0x4E4F57,
-    bright: 0x28282D,
-    control_thumb: 0xFFFFFF,
-    icon_bg: 0xEBECED,
-    spoiler_bg: 0x8F9097,
-    spoiler_hover: 0x70717A,
-    spoiler_revealed_bg: 0x000000,
-    timestamp_bg: 0x000000,
-    menu_border: 0x000000,
-    shadow: 0x000000,
-    tooltip_shadow: 0x00000029,
-    control_shadow: 0x00000014,
-    mention_text: 0x2E3C88,
-    mention_bg: 0x5865F24D,
-    reaction_selected_bg: 0x5865F226,
-    reply_bg: 0x5865F21A,
-    mention_row_bg: 0xF8A30014,
-    mention_row_hover: 0xF8A3001F,
-    jump_highlight: 0x5865F233,
-    connection_tile_bg: 0xEBECED,
-    connection_tile_text: 0x2E3035,
-    upload_sheet: 0xD4D8FF,
-    upload_fold: 0xA7AEFF,
-    accent_border: 0xFFFFFF99,
-    account_hover: 0x97979F1F,
-};
-
 static LIGHT_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 fn palette() -> &'static Palette {
@@ -279,7 +130,7 @@ pub fn set_light(light: bool, cx: &mut App) {
     if LIGHT_ACTIVE.swap(light, Ordering::Relaxed) == light {
         return;
     }
-    midnight::init(cx);
+    components::init(cx);
     Theme::global_mut(cx).font_size = px(BASE_FONT_SIZE * ZOOM_LEVELS[zoom_index(cx)]);
     cx.refresh_windows();
 }

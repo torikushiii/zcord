@@ -114,7 +114,7 @@ mod tests {
     use gpui_component::Theme;
 
     #[gpui::test]
-    fn midnight_updates_components_and_base_without_changing_selection(cx: &mut TestAppContext) {
+    fn dark_theme_updates_components_and_base_without_changing_selection(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
             theme::init(cx);
