@@ -471,7 +471,7 @@ fn initials(name: &str) -> String {
         .collect()
 }
 
-fn choice_name(choice: &EmojiChoice) -> &str {
+pub(in crate::app) fn choice_name(choice: &EmojiChoice) -> &str {
     match choice {
         EmojiChoice::Custom(custom) => &custom.name,
         EmojiChoice::Unicode { shortcode, .. } => shortcode,

@@ -878,6 +878,20 @@ pub fn hover_tooltip(
     HoverTooltip {
         key: key.into(),
         label: label.into(),
+        detail: None,
+    }
+}
+
+/// A hover tooltip with a second, regular-weight line under a bold label.
+pub fn hover_tooltip_detail(
+    key: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    detail: impl Into<SharedString>,
+) -> impl IntoElement {
+    HoverTooltip {
+        key: key.into(),
+        label: label.into(),
+        detail: Some(detail.into()),
     }
 }
 
@@ -885,6 +899,7 @@ pub fn hover_tooltip(
 struct HoverTooltip {
     key: ElementId,
     label: SharedString,
+    detail: Option<SharedString>,
 }
 
 impl RenderOnce for HoverTooltip {
@@ -901,7 +916,12 @@ impl RenderOnce for HoverTooltip {
                     cx.notify();
                 });
             })
-            .when(shown, |this| this.child(tooltip_above(self.label)))
+            .when(shown, |this| {
+                this.child(TooltipAbove {
+                    label: self.label,
+                    detail: self.detail,
+                })
+            })
     }
 }
 
@@ -910,6 +930,7 @@ impl RenderOnce for HoverTooltip {
 pub fn tooltip_above(label: impl Into<SharedString>) -> impl IntoElement {
     TooltipAbove {
         label: label.into(),
+        detail: None,
     }
 }
 
@@ -929,6 +950,7 @@ pub fn tooltip_entrance(body: Div, cx: &App) -> AnyElement {
 #[derive(IntoElement)]
 struct TooltipAbove {
     label: SharedString,
+    detail: Option<SharedString>,
 }
 
 impl RenderOnce for TooltipAbove {
@@ -939,9 +961,22 @@ impl RenderOnce for TooltipAbove {
             .items_center()
             .child(
                 tooltip_bubble()
+                    .flex()
+                    .flex_col()
+                    .items_center()
                     .text_size(rpx(14.))
                     .line_height(rpx(18.))
-                    .child(self.label),
+                    .map(|this| match self.detail {
+                        Some(detail) => this
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgb(strong()))
+                                    .child(self.label),
+                            )
+                            .child(div().child(detail)),
+                        None => this.child(self.label),
+                    }),
             )
             .child(tooltip_arrow_down());
         div()

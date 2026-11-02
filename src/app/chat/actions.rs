@@ -1,16 +1,18 @@
 use super::rows::is_system;
 use super::*;
-use crate::app::emoji_picker::{PickerTarget, emoji_image};
+use crate::app::emoji_picker::{PickerTarget, choice_name, emoji_image};
 use crate::store::EmojiChoice;
 
 const BAR_REACTIONS: usize = 3;
 const MENU_REACTIONS: usize = 4;
 const MENU_WIDTH: f32 = 220.;
+const SUBMENU_HEIGHT: f32 = 360.;
 
 #[derive(Clone, Copy)]
 pub(in crate::app) struct MessageMenu {
     message_id: u64,
     position: Point<Pixels>,
+    reactions_open: bool,
 }
 
 impl DiscordApp {
@@ -26,8 +28,18 @@ impl DiscordApp {
         self.message_menu = (!open).then_some(MessageMenu {
             message_id,
             position,
+            reactions_open: false,
         });
         cx.notify();
+    }
+
+    fn show_reaction_submenu(&mut self, open: bool, cx: &mut Context<Self>) {
+        if let Some(menu) = &mut self.message_menu
+            && menu.reactions_open != open
+        {
+            menu.reactions_open = open;
+            cx.notify();
+        }
     }
 
     pub(in crate::app) fn close_message_menu(&mut self, cx: &mut Context<Self>) -> bool {
@@ -91,8 +103,11 @@ fn quick_reaction(
 ) -> Stateful<Div> {
     let entity = app.entity.clone();
     let image = emoji_image(&choice, size, false, cx);
+    let id = id.into();
+    let label = format!(":{}:", choice_name(&choice));
     div()
-        .id(id)
+        .id(id.clone())
+        .relative()
         .flex()
         .flex_none()
         .items_center()
@@ -109,6 +124,97 @@ fn quick_reaction(
                 .ok();
         })
         .child(image)
+        .child(theme::hover_tooltip_detail(
+            ElementId::NamedChild(std::sync::Arc::new(id), "tip".into()),
+            label,
+            "Click to react",
+        ))
+}
+
+/// Discord's "Add Reaction" submenu: recent emoji by name, then the full picker.
+fn reaction_submenu(app: &DiscordApp, message_id: u64, cx: &App) -> Div {
+    let rows = app
+        .recent_emojis(cx)
+        .into_iter()
+        .enumerate()
+        .map(|(index, choice)| {
+            let entity = app.entity.clone();
+            let image = emoji_image(&choice, 20., false, cx);
+            let label = format!(":{}:", choice_name(&choice));
+            div()
+                .id(("submenu-reaction", index))
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(rpx(10.))
+                .h(rpx(36.))
+                .px(rpx(8.))
+                .rounded(rpx(4.))
+                .cursor_pointer()
+                .hover(|style| style.bg(rgba(theme::selected())))
+                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                    entity
+                        .update(cx, |app, cx| {
+                            app.close_message_menu(cx);
+                            app.react(message_id, &choice, cx);
+                        })
+                        .ok();
+                })
+                .child(image)
+                .child(div().flex_1().min_w_0().truncate().child(label))
+        });
+    let entity = app.entity.clone();
+    let more = div()
+        .id("submenu-reaction-more")
+        .flex()
+        .flex_none()
+        .items_center()
+        .h(rpx(36.))
+        .px(rpx(8.))
+        .rounded(rpx(4.))
+        .cursor_pointer()
+        .hover(|style| style.bg(rgba(theme::selected())))
+        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+            let position = event.position;
+            entity
+                .update(cx, |app, cx| {
+                    app.close_message_menu(cx);
+                    app.toggle_emoji_picker(
+                        PickerTarget::Reaction(message_id),
+                        position,
+                        window,
+                        cx,
+                    );
+                })
+                .ok();
+        })
+        .child("View More");
+    div()
+        .absolute()
+        .top(rpx(-8.))
+        .left(relative(1.))
+        .pl(rpx(16.))
+        .child(
+            div()
+                .id("reaction-submenu")
+                .flex()
+                .flex_col()
+                .w(rpx(MENU_WIDTH))
+                .max_h(rpx(SUBMENU_HEIGHT))
+                .overflow_y_scroll()
+                .p(rpx(8.))
+                .rounded(rpx(8.))
+                .bg(rgb(theme::elevated()))
+                .border_1()
+                .border_color(rgba(theme::border()))
+                .shadow_lg()
+                .occlude()
+                .text_size(rpx(14.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(theme::text()))
+                .children(rows)
+                .child(more),
+        )
 }
 
 pub(super) fn message_actions(app: &DiscordApp, message: &Message, cx: &App) -> Option<AnyElement> {
@@ -215,9 +321,11 @@ pub(super) fn message_actions(app: &DiscordApp, message: &Message, cx: &App) -> 
         );
         if allowed.unread {
             buttons.push(
-                button("unread", "mail", theme::muted(), "Mark Unread").on_click(move |_, _, cx| {
-                    unread.update(cx, |app, cx| app.mark_unread(id, cx)).ok();
-                }),
+                button("unread", "mail", theme::muted(), "Mark Unread").on_click(
+                    move |_, _, cx| {
+                        unread.update(cx, |app, cx| app.mark_unread(id, cx)).ok();
+                    },
+                ),
             );
         }
         if allowed.thread {
@@ -295,6 +403,24 @@ pub(super) fn message_actions(app: &DiscordApp, message: &Message, cx: &App) -> 
 }
 
 pub(super) fn menu_entry(
+    app: &DiscordApp,
+    key: &'static str,
+    icon: &str,
+    title: &'static str,
+    color: u32,
+    run: impl Fn(&mut DiscordApp, Point<Pixels>, &mut Window, &mut Context<DiscordApp>) + 'static,
+) -> Stateful<Div> {
+    let entity = app.entity.clone();
+    menu_row(app, key, icon, title, color, run).on_hover(move |hovered, _, cx| {
+        if *hovered {
+            entity
+                .update(cx, |app, cx| app.show_reaction_submenu(false, cx))
+                .ok();
+        }
+    })
+}
+
+fn menu_row(
     app: &DiscordApp,
     key: &'static str,
     icon: &str,
@@ -391,8 +517,9 @@ pub(in crate::app) fn message_menu(app: &DiscordApp, cx: &App) -> Option<AnyElem
             )
         })
         .when(app.live, |this| {
+            let hover = app.entity.clone();
             this.child(
-                menu_entry(
+                menu_row(
                     app,
                     "menu-react",
                     "smile",
@@ -402,7 +529,19 @@ pub(in crate::app) fn message_menu(app: &DiscordApp, cx: &App) -> Option<AnyElem
                         app.toggle_emoji_picker(PickerTarget::Reaction(id), position, window, cx);
                     },
                 )
-                .child(theme::icon("chevron-right", 16., theme::muted())),
+                .relative()
+                .when(menu.reactions_open, |this| this.bg(rgba(theme::selected())))
+                .on_hover(move |hovered, _, cx| {
+                    if *hovered {
+                        hover
+                            .update(cx, |app, cx| app.show_reaction_submenu(true, cx))
+                            .ok();
+                    }
+                })
+                .child(theme::icon("chevron-right", 16., theme::muted()))
+                .when(menu.reactions_open, |this| {
+                    this.child(reaction_submenu(app, id, cx))
+                }),
             )
             .child(menu_divider())
         })
