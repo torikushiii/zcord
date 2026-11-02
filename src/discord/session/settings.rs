@@ -55,10 +55,6 @@ impl Session {
 
     /// Persist the account setting with CAS, then queue this socket's presence write.
     /// Not retried after a reconnect; the next READY reflects whatever was saved.
-    pub async fn set_status(&self, status: SelfStatus) -> Result<(), Error> {
-        self.set_status_for(status, StatusDuration::Forever).await
-    }
-
     /// A finite manual choice persists its absolute deadline and creation time. Online
     /// and Forever clear old manual timing without changing the custom-status deadline.
     pub async fn set_status_for(
@@ -362,7 +358,9 @@ mod tests {
         let (session, mut receiver) = offline_session(0);
         assert!(!session.status_connected());
         assert!(matches!(
-            session.set_status(SelfStatus::Invisible).await,
+            session
+                .set_status_for(SelfStatus::Invisible, StatusDuration::Forever)
+                .await,
             Err(Error::Closed)
         ));
         assert!(matches!(
@@ -378,7 +376,9 @@ mod tests {
         session.inner.generation.store(1, Ordering::Release);
         assert!(session.status_connected());
         assert!(matches!(
-            session.set_status(SelfStatus::Idle).await,
+            session
+                .set_status_for(SelfStatus::Idle, StatusDuration::Forever)
+                .await,
             Err(Error::Network)
         ));
         assert!(matches!(
@@ -394,7 +394,9 @@ mod tests {
         session.shutdown();
         assert!(!session.status_connected());
         assert!(matches!(
-            session.set_status(SelfStatus::Online).await,
+            session
+                .set_status_for(SelfStatus::Online, StatusDuration::Forever)
+                .await,
             Err(Error::Closed)
         ));
         assert!(matches!(
