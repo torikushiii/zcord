@@ -269,6 +269,7 @@ impl DiscordApp {
         if ids.is_empty() {
             return;
         }
+        let requested = ids.clone();
         let request = Tokio::spawn(cx, async move { session.public_applications(&ids).await });
         cx.spawn(async move |this, cx| {
             let result = request.await;
@@ -278,14 +279,27 @@ impl DiscordApp {
                         app.home.applications.insert(application.id, application);
                     }
                     app.views.channel_list.update(cx, |_, cx| cx.notify());
+                    app.views.members.update(cx, |_, cx| cx.notify());
                     cx.notify();
                 }
-                Ok(Err(error)) => log::warn!("Could not load game applications: {error}"),
-                Err(error) => log::warn!("Game applications task failed: {error}"),
+                Ok(Err(error)) => {
+                    log::warn!("Could not load game applications: {error}");
+                    app.forget_requested_apps(&requested);
+                }
+                Err(error) => {
+                    log::warn!("Game applications task failed: {error}");
+                    app.forget_requested_apps(&requested);
+                }
             })
             .ok();
         })
         .detach();
+    }
+
+    fn forget_requested_apps(&mut self, ids: &[u64]) {
+        for id in ids {
+            self.home.applications_requested.remove(id);
+        }
     }
 
     pub(crate) fn game_icon_spec(&self, application_id: u64) -> Option<ImageSpec> {

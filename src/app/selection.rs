@@ -71,6 +71,7 @@ impl DiscordApp {
         self.selected_guild_id = id;
         self.sync_channel_rows();
         self.sync_member_rows();
+        self.load_activity_assets(cx);
         if !self.live {
             self.store.mark_guild_read(id);
         }

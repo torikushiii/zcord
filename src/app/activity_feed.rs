@@ -123,16 +123,25 @@ impl DiscordApp {
 
     fn load_activity_feed(&mut self, cx: &mut Context<Self>) {
         self.request_activity_members();
+        self.load_activity_assets(cx);
+        self.sync_member_rows();
+        self.arm_activity_ticker(cx);
+        self.views.members.update(cx, |_, cx| cx.notify());
+    }
+
+    /// Cheap to repeat: ids already requested are skipped, so call it whenever the visible
+    /// cards may change.
+    pub(crate) fn load_activity_assets(&mut self, cx: &mut Context<Self>) {
         let ids: Vec<u64> = self
             .activity_cards()
             .iter()
             .filter_map(|card| card.application_id)
             .collect();
+        if ids.is_empty() {
+            return;
+        }
         self.load_game_apps(ids.clone(), cx);
         self.load_games(ids, cx);
-        self.sync_member_rows();
-        self.arm_activity_ticker(cx);
-        self.views.members.update(cx, |_, cx| cx.notify());
     }
 
     /// Ticks once a second while the feed is loaded, repainting the member list only when
@@ -199,6 +208,7 @@ impl DiscordApp {
         if ids.is_empty() {
             return;
         }
+        let requested = ids.clone();
         let request = Tokio::spawn(cx, async move { session.games(&ids).await });
         cx.spawn(async move |this, cx| {
             let result = request.await;
@@ -211,12 +221,24 @@ impl DiscordApp {
                     }
                     app.views.members.update(cx, |_, cx| cx.notify());
                 }
-                Ok(Err(error)) => log::warn!("Could not load games: {error}"),
-                Err(error) => log::warn!("Games task failed: {error}"),
+                Ok(Err(error)) => {
+                    log::warn!("Could not load games: {error}");
+                    app.forget_requested_games(&requested);
+                }
+                Err(error) => {
+                    log::warn!("Games task failed: {error}");
+                    app.forget_requested_games(&requested);
+                }
             })
             .ok();
         })
         .detach();
+    }
+
+    fn forget_requested_games(&mut self, ids: &[u64]) {
+        for id in ids {
+            self.activity_feed.games_requested.remove(id);
+        }
     }
 
     pub(crate) fn game_cover(&self, application_id: u64) -> Option<String> {
