@@ -273,6 +273,16 @@ const SPINNER_DASH_SECS: f32 = 0.8;
 const SPINNER_STEPS: usize = 48;
 const SPINNER_CAP_STEPS: usize = 8;
 
+pub fn media_loading() -> impl IntoElement {
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(spinner(32., STRONG))
+}
+
 pub fn spinner(size: f32, color: u32) -> impl IntoElement {
     static START: OnceLock<Instant> = OnceLock::new();
     let start = *START.get_or_init(Instant::now);

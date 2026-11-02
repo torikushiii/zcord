@@ -209,6 +209,7 @@ pub(super) fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &
         .flatten();
     let entity = app.entity.clone();
     let url = attachment.url.clone();
+    let loading = !images::failed(&spec, preview, cx);
     let child = match frames {
         Some(image) => Some(
             animated::image(image)
@@ -265,6 +266,9 @@ pub(super) fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &
                     )
                 })
                 .ok();
+        })
+        .when(child.is_none() && loading, |this| {
+            this.child(theme::media_loading())
         })
         .children(child)
         .into_any_element()

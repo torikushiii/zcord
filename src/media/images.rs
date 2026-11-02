@@ -793,6 +793,20 @@ pub fn clear_cache(cx: &mut App) -> Task<Result<u64, String>> {
     })
 }
 
+/// True once a load of `spec` at `size` has given up, so callers stop showing a spinner.
+pub fn failed(spec: &ImageSpec, size: u32, cx: &App) -> bool {
+    let Some(cache) = cx.try_global::<ImageCache>() else {
+        return true;
+    };
+    let state = cache.0.borrow();
+    state.service.is_none()
+        || state
+            .entries
+            .get(spec)
+            .and_then(|sizes| sizes.get(&rounded_size(size)))
+            .is_some_and(|entry| matches!(entry, Entry::Failed))
+}
+
 pub fn resolve(spec: &ImageSpec, size: u32, cx: &App) -> Option<Arc<Path>> {
     let cache = cx.try_global::<ImageCache>()?.0.clone();
     let size = rounded_size(size);
