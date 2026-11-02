@@ -527,6 +527,18 @@ fn tooltip_arrow_down() -> Div {
     tooltip_arrow("tooltip-arrow-down", "tooltip-arrow-down-edge", 16., 9.).mt(rpx(-1.))
 }
 
+fn tooltip_arrow_up() -> Div {
+    tooltip_arrow("tooltip-arrow-up", "tooltip-arrow-up-edge", 16., 9.).mb(rpx(-1.))
+}
+
+/// Tooltip shown centred below an element, arrow pointing up, for elements with no room above.
+/// Add it as a child of a `relative()` element while that element is hovered.
+pub fn tooltip_below(label: impl Into<SharedString>) -> impl IntoElement {
+    TooltipBelow {
+        label: label.into(),
+    }
+}
+
 /// Tooltip shown centred above an element, arrow pointing down. Add it as a
 /// child of a `relative()` element while that element is hovered.
 pub fn tooltip_above(label: impl Into<SharedString>) -> impl IntoElement {
@@ -598,6 +610,40 @@ impl RenderOnce for TooltipAbove {
                         .child(tooltip_entrance(body, cx)),
                 )
                 // Tooltips also appear inside deferred popouts, so they must outrank them.
+                .with_priority(2),
+            )
+    }
+}
+
+#[derive(IntoElement)]
+struct TooltipBelow {
+    label: SharedString,
+}
+
+impl RenderOnce for TooltipBelow {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let body = div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .child(tooltip_arrow_up())
+            .child(
+                tooltip_bubble()
+                    .text_size(rpx(14.))
+                    .line_height(rpx(18.))
+                    .child(self.label),
+            );
+        div()
+            .absolute()
+            .bottom(rpx(-4.))
+            .left(relative(0.5))
+            .size_0()
+            .child(
+                deferred(
+                    anchored()
+                        .anchor(Anchor::TopCenter)
+                        .child(tooltip_entrance(body, cx)),
+                )
                 .with_priority(2),
             )
     }
