@@ -95,6 +95,7 @@ pub fn is_jumbo(blocks: &[Block]) -> bool {
     count > 0
 }
 
+#[cfg(test)]
 pub fn plain_text(blocks: &[Block]) -> String {
     plain_text_with(blocks, |_| None)
 }
