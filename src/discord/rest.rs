@@ -86,6 +86,38 @@ impl Rest {
         }
         Ok(response)
     }
+
+    pub(super) async fn external_assets(
+        &self,
+        application_id: u64,
+        urls: &[String],
+    ) -> Result<Value, Error> {
+        let body = serde_json::json!({"urls": urls});
+        let response = self
+            .send(|| {
+                self.client
+                    .post(format!(
+                        "https://discord.com/api/v9/applications/{application_id}/external-assets"
+                    ))
+                    .header(REFERER, "https://discord.com/channels/@me")
+                    .json(&body)
+            })
+            .await?;
+        response.json::<Value>().await.map_err(|_| Error::Decode)
+    }
+
+    pub(super) async fn application_assets(&self, application_id: u64) -> Result<Value, Error> {
+        let response = self
+            .send(|| {
+                self.client
+                    .get(format!(
+                        "https://discord.com/api/v9/oauth2/applications/{application_id}/assets"
+                    ))
+                    .header(REFERER, "https://discord.com/channels/@me")
+            })
+            .await?;
+        response.json::<Value>().await.map_err(|_| Error::Decode)
+    }
 }
 
 pub(super) fn client_headers() -> Result<HeaderMap, Error> {

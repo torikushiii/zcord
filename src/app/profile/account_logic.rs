@@ -73,7 +73,7 @@ impl DiscordApp {
             .and_then(|session| session.self_status())
     }
 
-    pub(super) fn set_self_status(
+    pub(crate) fn set_self_status(
         &mut self,
         status: SelfStatus,
         duration: StatusDuration,

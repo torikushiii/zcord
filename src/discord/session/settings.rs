@@ -95,7 +95,7 @@ impl Session {
         if self.status_generation()? != generation {
             return Err(Error::Closed);
         }
-        let (mut command, revision) = {
+        let (mut command, settings_revision) = {
             let mut presence = self
                 .inner
                 .presence
@@ -115,7 +115,7 @@ impl Session {
                     presence.payload(now).ok_or(Error::Decode)?,
                     presence.revision,
                 ),
-                presence.revision,
+                presence.settings_revision,
             )
         };
         let (done, result) = tokio::sync::oneshot::channel();
@@ -136,8 +136,8 @@ impl Session {
             .presence
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .revision
-            != revision
+            .settings_revision
+            != settings_revision
         {
             return Err(Error::SettingsOutdated);
         }

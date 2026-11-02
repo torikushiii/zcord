@@ -11,6 +11,7 @@ use gpui_component::ElementExt;
 
 use crate::{
     app::{DiscordApp, home, member_list, message_body::label, profile, voice},
+    discord::{SelfStatus, StatusDuration},
     media::animated,
     media::images::{self, ImageSpec},
     store::{Channel, ChannelKind, Guild, Status, StatusEmoji, ThreadRow, User},
@@ -25,6 +26,10 @@ const BANNER_HEIGHT: f32 = 135.;
 const BANNER_HOVER_FADE: Duration = Duration::from_millis(150);
 const BANNER_BLUR_SOURCE: u32 = 128;
 const BANNER_BLUR_RADIUS: f32 = 30.;
+const CURRENT_GAME_ICON: f32 = 32.;
+const SHARING_CARD_WIDTH: f32 = 240.;
+const SHARING_CARD_BG: u32 = 0x0A0A0C;
+const SHARING_CARD_ANCHOR: f32 = 12.;
 const CHANNEL_HEIGHT: f32 = 32.;
 const CHANNEL_GAP: f32 = 2.;
 pub(crate) const FOLD: Duration = Duration::from_millis(200);
@@ -1177,6 +1182,179 @@ fn account_tooltip(
         )
 }
 
+pub(crate) fn self_invisible(app: &DiscordApp) -> bool {
+    app.store
+        .user(app.store.current_user_id)
+        .is_some_and(|user| user.status == Status::Offline)
+}
+
+pub(crate) fn sharing_paused_card(app: &DiscordApp, window: &Window) -> Option<AnyElement> {
+    let position = app.sharing_paused?;
+    app.current_game.as_ref()?;
+    if !self_invisible(app) {
+        return None;
+    }
+    let close = app.entity.clone();
+    let go_online = app.entity.clone();
+    Some(
+        div()
+            .id("sharing-paused")
+            .absolute()
+            .left(position.x - px(SHARING_CARD_ANCHOR))
+            .bottom(window.viewport_size().height - position.y + px(SHARING_CARD_ANCHOR))
+            .flex()
+            .flex_col()
+            .w(rpx(SHARING_CARD_WIDTH))
+            .p_4()
+            .rounded(rpx(12.))
+            .bg(rgb(SHARING_CARD_BG))
+            .border_1()
+            .border_color(rgba(theme::BORDER))
+            .shadow_lg()
+            .occlude()
+            .on_mouse_down_out(move |_, _, cx| {
+                close
+                    .update(cx, |app, cx| {
+                        app.sharing_paused = None;
+                        cx.notify();
+                    })
+                    .ok();
+            })
+            .child(
+                div()
+                    .text_size(rpx(14.))
+                    .line_height(rpx(18.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(theme::STRONG))
+                    .child("Activity sharing is paused"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(rpx(6.))
+                    .mt(rpx(2.))
+                    .text_size(rpx(12.))
+                    .line_height(rpx(16.))
+                    .text_color(rgb(theme::MUTED))
+                    .child(div().size(rpx(8.)).rounded_full().bg(rgb(theme::GREEN)))
+                    .child("Go Online to share"),
+            )
+            .child(
+                div()
+                    .mt_2()
+                    .text_size(rpx(14.))
+                    .line_height(rpx(18.))
+                    .text_color(rgb(theme::TEXT))
+                    .child(
+                        "Being Invisible hides my activity information about games and \
+                         connected apps I use.",
+                    ),
+            )
+            .child(
+                div()
+                    .id("sharing-go-online")
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .h(rpx(36.))
+                    .mt_3()
+                    .rounded(rpx(8.))
+                    .cursor_pointer()
+                    .bg(rgb(theme::BLURPLE))
+                    .hover(|style| style.opacity(0.9))
+                    .text_size(rpx(14.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(white())
+                    .on_click(move |_, _, cx| {
+                        go_online
+                            .update(cx, |app, cx| {
+                                app.sharing_paused = None;
+                                app.set_self_status(
+                                    SelfStatus::Online,
+                                    StatusDuration::Forever,
+                                    cx,
+                                );
+                            })
+                            .ok();
+                    })
+                    .child("Go Online"),
+            )
+            .into_any_element(),
+    )
+}
+
+fn current_game_row(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
+    let name = app.current_game.as_deref()?;
+    let invisible = self_invisible(app);
+    let entity = app.entity.clone();
+    let icon = app
+        .current_game_application()
+        .and_then(|id| app.game_icon_spec(id))
+        .and_then(|spec| images::resolve(&spec, theme::image_px(CURRENT_GAME_ICON), cx))
+        .map(|path| img(path).size_full().rounded(rpx(8.)).into_any_element())
+        .unwrap_or_else(|| theme::icon("gamepad-2", 20., theme::MUTED).into_any_element());
+    Some(
+        div()
+            .debug_selector(|| "account-game".into())
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(rpx(8.))
+            .p(rpx(8.))
+            .border_b_1()
+            .border_color(rgba(theme::BORDER))
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .size(rpx(CURRENT_GAME_ICON))
+                    .child(icon),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(rpx(14.))
+                            .line_height(rpx(18.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(theme::STRONG))
+                            .child(label("account-game-name", name)),
+                    )
+                    .child(
+                        div()
+                            .id("account-game-sharing")
+                            .self_start()
+                            .text_size(rpx(12.))
+                            .line_height(rpx(16.))
+                            .text_color(rgb(theme::MUTED))
+                            .when(invisible, |this| {
+                                this.cursor_pointer()
+                                    .hover(|style| style.underline())
+                                    .on_click(move |event, _, cx| {
+                                        let position = event.position();
+                                        entity
+                                            .update(cx, |app, cx| {
+                                                app.sharing_paused = Some(position);
+                                                cx.notify();
+                                            })
+                                            .ok();
+                                    })
+                            })
+                            .child("Not Sharing"),
+                    ),
+            )
+            .into_any_element(),
+    )
+}
+
 fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
     let account_bounds = app.channel_rows.account_bounds.clone();
     let user = app.store.user(app.store.current_user_id);
@@ -1281,5 +1459,6 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         .border_1()
         .border_color(rgba(theme::BORDER))
         .children(voice::panel(app))
+        .children(current_game_row(app, cx))
         .child(account)
 }

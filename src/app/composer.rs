@@ -220,6 +220,10 @@ impl DiscordApp {
     }
 
     pub(super) fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sharing_paused.take().is_some() {
+            cx.notify();
+            return;
+        }
         if self.close_message_menu(cx)
             || self.close_thread_menu(cx)
             || self.close_create_thread(cx)

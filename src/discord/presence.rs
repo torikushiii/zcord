@@ -95,15 +95,37 @@ impl StatusDuration {
     }
 }
 
-/// Only account settings are published here. Aggregated sessions/presences contain other
-/// clients' RPC activities and must never be copied into this client's outgoing presence.
+/// Aggregated sessions/presences contain other clients' RPC activities and must never be
+/// copied into this client's outgoing presence.
 #[derive(Default)]
 pub(super) struct Presence {
     proto: Option<Vec<u8>>,
+    local_activity: Option<Value>,
     pub revision: u64,
+    pub settings_revision: u64,
 }
 
 impl Presence {
+    pub fn set_local_activity(&mut self, activity: Option<Value>) -> bool {
+        if self.local_activity == activity {
+            return false;
+        }
+        self.local_activity = activity;
+        self.revision = self.revision.wrapping_add(1);
+        true
+    }
+
+    pub fn shows_current_game(&self) -> bool {
+        !matches!(
+            self.proto
+                .as_deref()
+                .and_then(|proto| settings_proto::decode(proto).ok())
+                .and_then(|settings| settings.status)
+                .and_then(|status| status.show_current_game),
+            Some(false)
+        )
+    }
+
     pub fn replace(&mut self, encoded: Option<&str>) {
         self.proto = encoded
             .and_then(|encoded| STANDARD.decode(encoded).ok())
@@ -112,6 +134,7 @@ impl Presence {
                     && settings_proto::status_timing(proto).is_ok()
             });
         self.revision = self.revision.wrapping_add(1);
+        self.settings_revision = self.settings_revision.wrapping_add(1);
     }
 
     pub fn update(&mut self, encoded: &str, partial: bool) -> Result<bool, Error> {
@@ -144,6 +167,7 @@ impl Presence {
             self.proto = Some(proto);
             if self.payload(0) != previous || self.timing() != timing {
                 self.revision = self.revision.wrapping_add(1);
+                self.settings_revision = self.settings_revision.wrapping_add(1);
             }
         }
         Ok(())
@@ -204,6 +228,11 @@ impl Presence {
                 activity["emoji"] = json!({"name":custom.emoji_name});
             }
             activities.push(activity);
+        }
+        if settings.show_current_game != Some(false) {
+            if let Some(activity) = &self.local_activity {
+                activities.push(activity.clone());
+            }
         }
         Some(json!({"op":3,"d":{
             "status":status.wire(),"since":if status == SelfStatus::Idle { now_ms } else { 0 },
@@ -433,6 +462,75 @@ mod tests {
         // A fresh READY is authoritative even when this is a different account/version.
         presence.replace(Some(&STANDARD.encode(snapshot("idle", 1))));
         assert_eq!(presence.status(), Some(SelfStatus::Idle));
+    }
+
+    fn snapshot_with_game(show: Option<bool>) -> Vec<u8> {
+        let mut custom = field(1, b"working");
+        custom.push(17);
+        custom.extend(42u64.to_le_bytes());
+        custom.extend(field(3, b"party"));
+        custom.push(33);
+        custom.extend(0u64.to_le_bytes());
+        let mut status = field(1, &field(1, b"online"));
+        status.extend(field(2, &custom));
+        if let Some(show) = show {
+            let value = if show { uint(1, 1) } else { Vec::new() };
+            status.extend(field(3, &value));
+        }
+        field(11, &status)
+    }
+
+    #[test]
+    fn local_activity_follows_custom_status_and_respects_account_privacy() {
+        let mut presence = Presence::default();
+        presence.install(snapshot_with_game(None)).unwrap();
+        assert!(presence.shows_current_game());
+        assert!(presence.set_local_activity(Some(json!({"type":0,"name":"Game"}))));
+        let activities = presence.payload(0).unwrap()["d"]["activities"].clone();
+        assert_eq!(activities[0]["name"], "Custom Status");
+        assert_eq!(activities[1]["name"], "Game");
+
+        let mut hidden = Presence::default();
+        hidden.install(snapshot_with_game(Some(false))).unwrap();
+        assert!(!hidden.shows_current_game());
+        assert!(hidden.set_local_activity(Some(json!({"type":0,"name":"Game"}))));
+        assert_eq!(
+            hidden.payload(0).unwrap()["d"]["activities"],
+            json!([{
+                "name":"Custom Status","type":4,"state":"working",
+                "emoji":{"id":"42","name":"party"}
+            }])
+        );
+
+        let mut shown = Presence::default();
+        shown.install(snapshot_with_game(Some(true))).unwrap();
+        assert!(shown.shows_current_game());
+    }
+
+    #[test]
+    fn local_activity_revision_bumps_only_on_change() {
+        let mut presence = Presence::default();
+        presence.install(snapshot_with_game(None)).unwrap();
+        let revision = presence.revision;
+        let activity = json!({"type":0,"name":"Game"});
+        assert!(presence.set_local_activity(Some(activity.clone())));
+        assert_eq!(presence.revision, revision.wrapping_add(1));
+        assert!(!presence.set_local_activity(Some(activity.clone())));
+        assert_eq!(presence.revision, revision.wrapping_add(1));
+        assert!(presence.set_local_activity(None));
+        assert_eq!(presence.revision, revision.wrapping_add(2));
+        assert!(!presence.set_local_activity(None));
+        assert_eq!(presence.revision, revision.wrapping_add(2));
+    }
+
+    #[test]
+    fn activity_change_during_a_status_write_does_not_look_outdated() {
+        let mut presence = Presence::default();
+        presence.install(snapshot_with_game(None)).unwrap();
+        let settings_revision = presence.settings_revision;
+        assert!(presence.set_local_activity(Some(json!({"type":0,"name":"Game"}))));
+        assert_eq!(presence.settings_revision, settings_revision);
+        assert_ne!(presence.revision, settings_revision);
     }
 
     #[test]

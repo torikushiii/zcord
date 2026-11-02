@@ -11,6 +11,7 @@ use crate::{
 pub(super) fn page(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> Vec<AnyElement> {
     match settings.page {
         Page::Account => account(app, settings),
+        Page::GameActivity => vec![game_activity(app, settings)],
         Page::VoiceVideo => super::voice_audio::page(app, settings, cx),
         Page::Appearance => vec![appearance(app, cx), chat_text()],
         Page::Accessibility => vec![accessibility(app, settings, cx)],
@@ -239,7 +240,7 @@ fn toggle_row(
     label: &'static str,
     description: &'static str,
     on: bool,
-    set: fn(&mut App, bool),
+    set: impl Fn(&mut App, bool) + 'static,
 ) -> AnyElement {
     let entity = app.entity.clone();
     let toggle = div()
@@ -251,6 +252,44 @@ fn toggle_row(
         })
         .child(switch(id, on, moved(settings, id)));
     row(label, Some(description), toggle.into_any_element())
+}
+
+fn game_activity(app: &DiscordApp, settings: &SettingsPage) -> AnyElement {
+    let on = crate::settings::game_activity();
+    let entity = app.entity.clone();
+    let mut rows = vec![toggle_row(
+        app,
+        settings,
+        "settings-share-game-activity",
+        "Share your detected games",
+        "Scans your running programs and tells Discord which game you play. Programs using \
+         Rich Presence can also set your status.",
+        on,
+        move |cx, on| {
+            crate::settings::set_game_activity(cx, on);
+            entity
+                .update(cx, |app, cx| {
+                    app.update_game_activity();
+                    cx.notify();
+                })
+                .ok();
+        },
+    )];
+    if on {
+        let status = if app
+            .session
+            .as_ref()
+            .is_some_and(|session| !session.shows_current_game())
+        {
+            "Display current activity is turned off in your Discord account".to_owned()
+        } else if let Some(game) = &app.current_game {
+            format!("Sharing: {game}")
+        } else {
+            "No game detected".to_owned()
+        };
+        rows.push(note(status));
+    }
+    section("Activity Privacy", rows)
 }
 
 fn chat_media(app: &DiscordApp, settings: &SettingsPage) -> AnyElement {
@@ -503,13 +542,13 @@ pub(super) fn row(
         .into_any_element()
 }
 
-pub(super) fn note(text: &'static str) -> AnyElement {
+pub(super) fn note(text: impl Into<SharedString>) -> AnyElement {
     div()
         .mt(rpx(8.))
         .text_size(rpx(14.))
         .line_height(rpx(18.))
         .text_color(rgb(theme::MUTED))
-        .child(text)
+        .child(text.into())
         .into_any_element()
 }
 

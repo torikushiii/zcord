@@ -18,6 +18,7 @@ static GIF_AUTOPLAY: AtomicBool = AtomicBool::new(true);
 static SMOOTH_SCROLL: AtomicBool = AtomicBool::new(true);
 static EMOJI_ANIMATION: AtomicBool = AtomicBool::new(true);
 static LINK_PREVIEWS: AtomicBool = AtomicBool::new(true);
+static GAME_ACTIVITY: AtomicBool = AtomicBool::new(false);
 static CHAT_FONT_SIZE: AtomicU32 = AtomicU32::new(16.0f32.to_bits());
 
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -70,6 +71,8 @@ pub struct Settings {
     pub clock_24h: bool,
     #[serde(default)]
     pub reduce_motion: Option<bool>,
+    #[serde(default)]
+    pub share_game_activity: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -188,6 +191,16 @@ pub fn set_link_previews(cx: &mut App, on: bool) {
 
 pub fn link_previews() -> bool {
     LINK_PREVIEWS.load(Ordering::Relaxed)
+}
+
+pub fn set_game_activity(cx: &mut App, on: bool) {
+    GAME_ACTIVITY.store(on, Ordering::Relaxed);
+    update(cx, |settings| settings.share_game_activity = on);
+    cx.refresh_windows();
+}
+
+pub fn game_activity() -> bool {
+    GAME_ACTIVITY.load(Ordering::Relaxed)
 }
 
 fn clamp_chat_font_size(size: f32) -> f32 {
@@ -393,6 +406,11 @@ mod tests {
         LINK_PREVIEWS.store(true, Ordering::Relaxed);
         assert!(link_previews());
 
+        GAME_ACTIVITY.store(true, Ordering::Relaxed);
+        assert!(game_activity());
+        GAME_ACTIVITY.store(false, Ordering::Relaxed);
+        assert!(!game_activity());
+
         CHAT_FONT_SIZE.store(20.0f32.to_bits(), Ordering::Relaxed);
         assert_eq!(chat_font_size(), 20.0);
         CHAT_FONT_SIZE.store(16.0f32.to_bits(), Ordering::Relaxed);
@@ -428,5 +446,6 @@ mod tests {
         assert!(!settings.link_previews_off);
         assert!(settings.chat_font_size.is_none());
         assert!(settings.clock_24h);
+        assert!(!settings.share_game_activity);
     }
 }

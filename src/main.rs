@@ -5,6 +5,7 @@ mod assets;
 mod credentials;
 mod discord;
 mod fonts;
+mod games;
 mod media;
 mod quick_switcher;
 mod settings;
@@ -49,6 +50,7 @@ fn main() {
             settings::set_smooth_scroll(cx, !saved.smooth_scroll_off);
             settings::set_emoji_animation(cx, !saved.emoji_animation_off);
             settings::set_link_previews(cx, !saved.link_previews_off);
+            settings::set_game_activity(cx, saved.share_game_activity);
             settings::set_chat_font_size(cx, saved.chat_font_size.unwrap_or(16.0));
             theme::set_zoom(saved.zoom.unwrap_or(theme::DEFAULT_ZOOM), cx);
             cx.bind_keys([

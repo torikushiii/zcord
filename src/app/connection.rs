@@ -71,13 +71,17 @@ impl DiscordApp {
         self.voice.call_view = None;
         self.affinity_refresh = None;
         self.voice.speaking.clear();
+        self.current_activity = None;
+        self.current_game = None;
         self.thread_previews.clear();
+        self.update_game_activity();
     }
 
     pub(super) fn connect(&mut self, token: String, window: &mut Window, cx: &mut Context<Self>) {
         self.disconnect_keeping_pending();
         let (session, mut events) = Session::connect(token, &Tokio::handle(cx));
         self.session = Some(session);
+        self.update_game_activity();
         if !matches!(self.screen, Screen::Login(_)) {
             self.screen = Screen::Connecting;
         }

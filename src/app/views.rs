@@ -409,6 +409,7 @@ impl Render for OverlaysView {
             .children(chat::create_thread_dialog(app))
             .children(forward_dialog::render(app))
             .children(chat::thread_menu(app))
+            .children(channel_list::sharing_paused_card(app, window))
             .children(chat::delete_dialog(app, cx))
             .children(profile::render(app, window, cx))
             .children(super::friends::remove_dialog(app))
