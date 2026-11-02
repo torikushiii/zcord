@@ -96,6 +96,12 @@ pub fn is_jumbo(blocks: &[Block]) -> bool {
 }
 
 pub fn plain_text(blocks: &[Block]) -> String {
+    plain_text_with(blocks, |_| None)
+}
+
+/// `resolve` names a user, channel or role mention or renders a timestamp; `None` keeps
+/// the raw form.
+pub fn plain_text_with(blocks: &[Block], resolve: impl Fn(&SpanKind) -> Option<String>) -> String {
     let mut text = String::new();
     let mut pending: Vec<&Block> = blocks.iter().rev().collect();
     while let Some(block) = pending.pop() {
@@ -105,15 +111,25 @@ pub fn plain_text(blocks: &[Block]) -> String {
                 for span in spans {
                     match &span.kind {
                         SpanKind::Text(value) | SpanKind::Code(value) => text.push_str(value),
-                        SpanKind::UserMention(id) => text.push_str(&format!("@{id}")),
-                        SpanKind::ChannelMention(id) => text.push_str(&format!("#{id}")),
-                        SpanKind::RoleMention(id) => text.push_str(&format!("@&{id}")),
+                        SpanKind::UserMention(id) => match resolve(&span.kind) {
+                            Some(name) => text.push_str(&format!("@{name}")),
+                            None => text.push_str(&format!("@{id}")),
+                        },
+                        SpanKind::ChannelMention(id) => match resolve(&span.kind) {
+                            Some(name) => text.push_str(&format!("#{name}")),
+                            None => text.push_str(&format!("#{id}")),
+                        },
+                        SpanKind::RoleMention(id) => match resolve(&span.kind) {
+                            Some(name) => text.push_str(&format!("@{name}")),
+                            None => text.push_str(&format!("@&{id}")),
+                        },
                         SpanKind::Everyone => text.push_str("@everyone"),
                         SpanKind::Here => text.push_str("@here"),
                         SpanKind::Emoji { name, .. } => text.push_str(&format!(":{name}:")),
-                        SpanKind::Timestamp { unix, style } => {
-                            text.push_str(&format!("<t:{unix}:{style}>"));
-                        }
+                        SpanKind::Timestamp { unix, style } => match resolve(&span.kind) {
+                            Some(time) => text.push_str(&time),
+                            None => text.push_str(&format!("<t:{unix}:{style}>")),
+                        },
                         SpanKind::Command { name, .. } => text.push_str(&format!("/{name}")),
                     }
                 }

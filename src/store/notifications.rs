@@ -1,5 +1,5 @@
 use super::*;
-use crate::text::markdown;
+use crate::text::{markdown, timestamp::format_timestamp};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Alert {
@@ -21,6 +21,39 @@ struct Context<'a> {
 }
 
 impl Store {
+    /// A message's text for a toast or preview line, with mentions shown by name.
+    pub(super) fn preview_text(
+        &self,
+        content: &str,
+        guild_id: Option<u64>,
+        mentions: &[model::User],
+    ) -> String {
+        let text = markdown::plain_text_with(&markdown::parse(content), |span| match *span {
+            markdown::SpanKind::UserMention(id) => guild_id
+                .and_then(|guild_id| self.member_name(guild_id, id))
+                .map(str::to_owned)
+                .or_else(|| self.user(id).map(|user| user.name.clone()))
+                .or_else(|| {
+                    let user = mentions.iter().find(|user| user.id == id)?;
+                    Some(
+                        user.global_name
+                            .clone()
+                            .unwrap_or_else(|| user.username.clone()),
+                    )
+                }),
+            markdown::SpanKind::RoleMention(id) => Some(self.role(guild_id?, id)?.name.clone()),
+            markdown::SpanKind::ChannelMention(id) => self.channel_name(id).map(str::to_owned),
+            markdown::SpanKind::Timestamp { unix, style } => Some(format_timestamp(unix, style)),
+            _ => None,
+        });
+        let text = text.trim();
+        let mut end = text.len().min(200);
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text[..end].to_owned()
+    }
+
     pub fn message_alert(&self, message: &model::Message, now_ms: u64) -> Option<Alert> {
         if message.author.id == self.current_user_id {
             return None;
@@ -225,7 +258,11 @@ impl Store {
         message: &model::Message,
         author: String,
     ) -> Option<Alert> {
-        let body = recent_text(&message.content);
+        let body = self.preview_text(
+            &message.content,
+            context.guild.map(|guild| guild.id),
+            &message.mentions,
+        );
         let body = if body.is_empty() {
             if !message.attachments.is_empty() {
                 "Sent an attachment".to_owned()
@@ -295,14 +332,4 @@ fn alerts(level: model::NotificationLevel, mentioned: bool) -> bool {
         model::NotificationLevel::Nothing => false,
         model::NotificationLevel::Inherit => true,
     }
-}
-
-fn recent_text(content: &str) -> String {
-    let text = markdown::plain_text(&markdown::parse(content));
-    let text = text.trim();
-    let mut end = text.len().min(200);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_owned()
 }

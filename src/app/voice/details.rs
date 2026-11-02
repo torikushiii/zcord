@@ -3,7 +3,8 @@ use gpui_component::ActiveTheme;
 
 use super::{Call, DetailsTab, Encryption, PingSample, menu_frame};
 use crate::{
-    app::{DiscordApp, message_body::format_timestamp},
+    app::DiscordApp,
+    text::timestamp::format_timestamp,
     theme::{self, rpx},
 };
 
