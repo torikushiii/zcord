@@ -101,6 +101,50 @@ fn standalone_thread_request<'a>(
 }
 
 #[derive(Serialize)]
+struct ForumPost<'a> {
+    name: &'a str,
+    auto_archive_duration: u16,
+    applied_tags: Vec<String>,
+    message: ForumPostMessage<'a>,
+}
+
+#[derive(Serialize)]
+struct ForumPostMessage<'a> {
+    content: &'a str,
+}
+
+fn create_forum_post_request<'a>(
+    client: &Client,
+    forum_id: u64,
+    name: &'a str,
+    content: &'a str,
+    applied_tags: &'a [u64],
+) -> RequestBuilder {
+    client
+        .post(format!(
+            "https://discord.com/api/v9/channels/{forum_id}/threads?use_nested_fields=true"
+        ))
+        .json(&ForumPost {
+            name,
+            auto_archive_duration: 4320,
+            applied_tags: applied_tags.iter().map(u64::to_string).collect(),
+            message: ForumPostMessage { content },
+        })
+}
+
+fn thread_settings_request(
+    client: &Client,
+    thread_id: u64,
+    settings: model::ThreadSettings,
+) -> RequestBuilder {
+    client
+        .patch(format!(
+            "https://discord.com/api/v9/channels/{thread_id}/thread-members/@me/settings"
+        ))
+        .json(&settings)
+}
+
+#[derive(Serialize)]
 struct ArchivedThread {
     archived: bool,
 }
@@ -197,6 +241,29 @@ impl Rest {
             .send(|| standalone_thread_request(&self.client, channel_id, name, private))
             .await?;
         response.json().await.map_err(|_| Error::Decode)
+    }
+
+    pub async fn create_forum_post(
+        &self,
+        forum_id: u64,
+        name: &str,
+        content: &str,
+        applied_tags: &[u64],
+    ) -> Result<model::Channel, Error> {
+        let response = self
+            .send(|| create_forum_post_request(&self.client, forum_id, name, content, applied_tags))
+            .await?;
+        response.json().await.map_err(|_| Error::Decode)
+    }
+
+    pub async fn update_thread_settings(
+        &self,
+        thread_id: u64,
+        settings: model::ThreadSettings,
+    ) -> Result<(), Error> {
+        self.send(|| thread_settings_request(&self.client, thread_id, settings))
+            .await?;
+        Ok(())
     }
 
     pub async fn archive_thread(&self, thread_id: u64, archived: bool) -> Result<(), Error> {
@@ -331,6 +398,49 @@ mod tests {
             "https://discord.com/api/v9/channels/9"
         );
         assert!(request.body().is_none());
+    }
+
+    #[test]
+    fn forum_post_and_thread_settings_requests_match() {
+        let client = Client::new();
+        let request = create_forum_post_request(&client, 20, "Plans", "hello", &[1, 2])
+            .build()
+            .unwrap();
+        assert_eq!(request.method(), reqwest::Method::POST);
+        assert_eq!(
+            request.url().as_str(),
+            "https://discord.com/api/v9/channels/20/threads?use_nested_fields=true"
+        );
+        let body: Value =
+            serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "name": "Plans",
+                "auto_archive_duration": 4320,
+                "applied_tags": ["1", "2"],
+                "message": {"content": "hello"}
+            })
+        );
+
+        let request = thread_settings_request(
+            &client,
+            9,
+            model::ThreadSettings {
+                muted: Some(true),
+                flags: None,
+            },
+        )
+        .build()
+        .unwrap();
+        assert_eq!(request.method(), reqwest::Method::PATCH);
+        assert_eq!(
+            request.url().as_str(),
+            "https://discord.com/api/v9/channels/9/thread-members/@me/settings"
+        );
+        let body: Value =
+            serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
+        assert_eq!(body, serde_json::json!({"muted": true}));
     }
 
     #[test]

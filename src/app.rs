@@ -168,6 +168,17 @@ struct ForumPage {
     has_more: bool,
     loading: bool,
     loaded: bool,
+    /// Bumped whenever the query changes so a reply to an older query is dropped.
+    generation: u64,
+    /// The viewer's Sort & View choices; `None` follows the forum's defaults.
+    sort: Option<crate::discord::ForumSort>,
+    gallery: Option<bool>,
+    tags: Vec<u64>,
+    match_all: bool,
+    menu: bool,
+    menu_closed: Option<Instant>,
+    /// Posts whose starter message or owner was already requested, so each is asked for once.
+    requested: HashSet<u64>,
 }
 
 pub enum Screen {
@@ -262,6 +273,9 @@ pub struct DiscordApp {
     pending_sends: sending::PendingSends,
     history_complete: HashSet<u64>,
     forum_pages: HashMap<u64, ForumPage>,
+    /// Gallery columns that fit the forum's last laid-out width.
+    forum_columns: Rc<Cell<usize>>,
+    forum_header: Option<forum_actions::ForumHeader>,
     pub(crate) invites: HashMap<String, InviteState>,
     member_top: usize,
     open_folders: HashSet<u64>,
@@ -424,6 +438,8 @@ impl DiscordApp {
             pending_sends: sending::PendingSends::default(),
             history_complete: HashSet::new(),
             forum_pages: HashMap::new(),
+            forum_columns: Rc::new(Cell::new(3)),
+            forum_header: None,
             invites: HashMap::new(),
             member_top: 0,
             open_folders: HashSet::new(),
@@ -1199,12 +1215,11 @@ impl Render for DiscordApp {
                                         .when(
                                             self.thread_pane_open() && !self.search_results_open(),
                                             |this| {
-                                                this.child(
-                                                    self.views
-                                                        .thread_pane
-                                                        .clone()
-                                                        .cached(views::thread_pane_style()),
-                                                )
+                                                this.child(self.views.thread_pane.clone().cached(
+                                                    views::thread_pane_style(
+                                                        self.selected_forum().is_some(),
+                                                    ),
+                                                ))
                                             },
                                         ),
                                 ),

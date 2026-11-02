@@ -319,7 +319,11 @@ fn refusal_banner(app: &DiscordApp, refusal: Refusal) -> impl IntoElement + use<
         )
 }
 
-fn staged_row(app: &DiscordApp, files: &[StagedFile], cx: &App) -> impl IntoElement + use<> {
+pub(super) fn staged_row(
+    app: &DiscordApp,
+    files: &[StagedFile],
+    cx: &App,
+) -> impl IntoElement + use<> {
     div()
         .id("staged-files")
         .flex()

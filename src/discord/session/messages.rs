@@ -247,9 +247,9 @@ impl Session {
         &self,
         guild_id: Option<u64>,
         forum_id: u64,
-        offset: usize,
+        query: ForumQuery,
     ) -> Result<model::ForumSearch, Error> {
-        self.rest(async |rest| rest.fetch_forum_posts(guild_id, forum_id, offset).await)
+        self.rest(async |rest| rest.fetch_forum_posts(guild_id, forum_id, &query).await)
             .await
     }
 

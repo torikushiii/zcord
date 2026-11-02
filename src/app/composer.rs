@@ -38,7 +38,7 @@ impl DiscordApp {
             .collect()
     }
 
-    fn emoji_insert_text(&self, choice: &EmojiChoice) -> Option<String> {
+    pub(crate) fn emoji_insert_text(&self, choice: &EmojiChoice) -> Option<String> {
         match choice {
             EmojiChoice::Unicode { emoji, .. } => Some(emoji.clone()),
             EmojiChoice::Custom(custom) => {

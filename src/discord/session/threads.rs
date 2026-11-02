@@ -38,6 +38,29 @@ impl Session {
         .await
     }
 
+    pub async fn create_forum_post(
+        &self,
+        forum_id: u64,
+        name: &str,
+        content: &str,
+        applied_tags: &[u64],
+    ) -> Result<model::Channel, Error> {
+        self.rest(async |rest| {
+            rest.create_forum_post(forum_id, name, content, applied_tags)
+                .await
+        })
+        .await
+    }
+
+    pub async fn update_thread_settings(
+        &self,
+        thread_id: u64,
+        settings: model::ThreadSettings,
+    ) -> Result<(), Error> {
+        self.rest(async |rest| rest.update_thread_settings(thread_id, settings).await)
+            .await
+    }
+
     pub async fn archive_thread(&self, thread_id: u64, archived: bool) -> Result<(), Error> {
         self.rest(async |rest| rest.archive_thread(thread_id, archived).await)
             .await

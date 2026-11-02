@@ -1,5 +1,5 @@
 use super::*;
-use crate::discord::{SearchOutcome, SearchQuery, SearchScope};
+use crate::discord::{ForumQuery, ForumSort, SearchOutcome, SearchQuery, SearchScope};
 use futures::Stream;
 use reqwest::{
     Body,
@@ -29,14 +29,25 @@ pub(super) fn history_query(anchor: Anchor, limit: usize) -> Vec<(&'static str, 
 
 // `archived` is omitted on purpose: `true` restricts the search to archived posts only, and
 // leaving it out searches active and archived posts together.
-pub(super) fn forum_search_query(offset: usize) -> Vec<(&'static str, String)> {
-    vec![
-        ("sort_by", "last_message_time".to_owned()),
+pub(super) fn forum_search_query(query: &ForumQuery) -> Vec<(&'static str, String)> {
+    let sort_by = match query.sort {
+        ForumSort::Activity => "last_message_time",
+        ForumSort::Created => "creation_time",
+    };
+    let mut params = vec![
+        ("sort_by", sort_by.to_owned()),
         ("sort_order", "desc".to_owned()),
         ("limit", "25".to_owned()),
-        ("tag_setting", "match_some".to_owned()),
-        ("offset", offset.to_string()),
-    ]
+    ];
+    params.extend(query.tags.iter().map(|tag| ("tag", tag.to_string())));
+    let tag_setting = if query.match_all {
+        "match_all"
+    } else {
+        "match_some"
+    };
+    params.push(("tag_setting", tag_setting.to_owned()));
+    params.push(("offset", query.offset.to_string()));
+    params
 }
 
 #[derive(Serialize)]
@@ -372,11 +383,11 @@ impl Rest {
         &self,
         guild_id: Option<u64>,
         forum_id: u64,
-        offset: usize,
+        query: &ForumQuery,
     ) -> Result<model::ForumSearch, Error> {
         let referer = referer(guild_id, forum_id);
         let url = format!("https://discord.com/api/v9/channels/{forum_id}/threads/search");
-        let query = forum_search_query(offset);
+        let query = forum_search_query(query);
         let response = self
             .send(|| {
                 self.client

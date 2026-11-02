@@ -194,6 +194,7 @@ impl DiscordApp {
         });
         self.focus_composer(window, cx);
         if forum {
+            self.ensure_forum_header(id, window, cx);
             self.load_forum(id, cx);
             cx.notify();
             return;

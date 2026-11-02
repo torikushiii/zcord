@@ -84,11 +84,14 @@ pub(crate) fn member_list_style(width: f32) -> StyleRefinement {
         .flex_none()
 }
 
-pub(crate) fn thread_pane_style() -> StyleRefinement {
-    StyleRefinement::default()
-        .w(rpx(chat::THREAD_PANE_WIDTH))
-        .h_full()
-        .flex_none()
+/// A forum post's pane splits the width with the forum; a channel thread's pane is a sidebar.
+pub(crate) fn thread_pane_style(forum: bool) -> StyleRefinement {
+    let style = StyleRefinement::default().h_full();
+    if forum {
+        style.flex_1().min_w_0()
+    } else {
+        style.w(rpx(chat::THREAD_PANE_WIDTH)).flex_none()
+    }
 }
 
 pub(crate) fn overlays_style() -> StyleRefinement {
@@ -342,7 +345,7 @@ impl Render for ThreadPaneView {
         let Some(app) = self.app.upgrade() else {
             return div().into_any_element();
         };
-        chat::render_thread_pane(app.read(cx))
+        chat::render_thread_pane(app.read(cx), cx)
     }
 }
 

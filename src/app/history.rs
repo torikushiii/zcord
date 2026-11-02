@@ -421,7 +421,7 @@ impl DiscordApp {
                         });
                         let inserted = app.store.prepend_messages(channel_id, messages);
                         if inserted > 0 {
-                            app.prepend_thread_pane(channel_id, inserted);
+                            app.prepend_thread_pane(channel_id, inserted, cx);
                         }
                         if complete && inserted == 0 && app.selected_channel_id == channel_id {
                             app.messages.remeasure_items(0..1);
