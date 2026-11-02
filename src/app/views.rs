@@ -16,8 +16,8 @@ use gpui::{prelude::*, *};
 use crate::{
     app::{
         DiscordApp, channel_list, chat, dm_panel, emoji_picker, expression_info, forward_dialog,
-        gif_picker, guild_rail, home, lightbox, member_list, profile, settings_page, switcher,
-        voice,
+        gif_picker, guild_rail, home, lightbox, member_list, profile, search, settings_page,
+        switcher, voice,
     },
     theme::rpx,
 };
@@ -190,7 +190,7 @@ impl Render for ChatHeaderView {
         } else if app.is_home() {
             home::dm_header(app, cx).into_any_element()
         } else {
-            chat::header(app).into_any_element()
+            chat::header(app, cx).into_any_element()
         }
     }
 }
@@ -367,6 +367,9 @@ impl Render for MemberListView {
             return div().into_any_element();
         };
         let app = app.read(cx);
+        if let Some(results) = search::render_results(app, cx) {
+            return results;
+        }
         if app.is_home() {
             return dm_panel::render(app, cx);
         }
@@ -406,6 +409,7 @@ impl Render for OverlaysView {
             .children(super::stream_view::render(app, cx))
             .children(settings_page::render(app, window, cx))
             .children(chat::channel_popout(app, window, cx))
+            .children(search::popover(app, cx))
             .children(chat::create_thread_dialog(app))
             .children(forward_dialog::render(app))
             .children(chat::thread_menu(app))

@@ -12,10 +12,11 @@ use crate::{
         DIALOG_EXIT, DISCORD_EPOCH_MS, DiscordApp, Editing, JUMP_HIGHLIGHT, MESSAGE_LIMIT,
         ReplyTarget, embeds,
         emoji_picker::{self, PickerTarget},
-        forum, home, member_list,
+        forum, home,
         message_body::{BodyContext, label, preview_pieces, render_body, wrapped_label},
         profile,
         rich_text::rich_text,
+        search::search_box,
     },
     media::animated,
     media::images::{self, ImageSpec},
@@ -40,8 +41,9 @@ pub(super) use actions::{MessageMenu, message_menu};
 use bars::{is_detached, jump_missing_notice, new_messages_bar, older_messages_bar};
 pub(crate) use composer::composer;
 pub(super) use dialog::delete_dialog;
-pub(super) use media::file_size;
-pub(super) use message::{author_name, body_context};
+pub(in crate::app) use media::media_limit;
+pub(super) use media::{file_size, with_media_limit};
+pub(super) use message::{author_name, body_context, render_search_message};
 pub(in crate::app) use popouts::{
     ChannelPopout, PopoutKind, channel_popout, pins_button, threads_button,
 };
@@ -53,6 +55,7 @@ pub(in crate::app) use thread_ui::{CreateThread, ThreadMenu, create_thread_dialo
 
 const GROUP_MINUTES: u32 = 7;
 const GUTTER: f32 = 72.;
+const MESSAGE_RIGHT_PADDING: f32 = 16.;
 const BOTTOM_SPACER: f32 = 24.;
 const STICKER_SIZE: f32 = 160.;
 pub(crate) const LINK: u32 = theme::LINK;
@@ -63,31 +66,10 @@ mod reply_tests;
 
 pub(crate) const HEADER_HEIGHT: f32 = 48.;
 
-pub fn header(app: &DiscordApp) -> impl IntoElement + use<> {
+pub fn header(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
     let channel_name = app.channel().map_or("", |channel| &channel.name).to_owned();
-    let guild_name = app.guild().map_or("", |guild| &guild.name).to_owned();
     let entity = app.entity.clone();
-    let search = div()
-        .flex()
-        .items_center()
-        .gap_2()
-        .w_full()
-        .h(rpx(32.))
-        .px_2()
-        .rounded(rpx(8.))
-        .bg(rgb(theme::ELEVATED))
-        .border_1()
-        .border_color(rgba(theme::BORDER))
-        .text_size(rpx(14.))
-        .text_color(rgb(theme::FAINT))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .child(format!("Search {guild_name}")),
-        )
-        .child(theme::icon("search", 16., theme::MUTED));
+    let search = search_box(app, cx);
     div()
         .flex()
         .items_center()
@@ -137,19 +119,7 @@ pub fn header(app: &DiscordApp) -> impl IntoElement + use<> {
                 entity.update(cx, |this, cx| this.toggle_members(cx)).ok();
             }),
         )
-        .map(|this| {
-            if app.show_members {
-                this.child(
-                    div()
-                        .flex_none()
-                        .w(rpx(member_list::WIDTH))
-                        .px(rpx(8.))
-                        .child(search),
-                )
-            } else {
-                this.child(div().flex_none().w(rpx(244.)).ml_2().mr_2().child(search))
-            }
-        })
+        .child(div().flex_none().w(rpx(244.)).ml_2().mr_2().child(search))
 }
 
 fn header_icon(app: &DiscordApp) -> &'static str {

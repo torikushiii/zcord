@@ -1,4 +1,5 @@
 use super::*;
+use crate::discord::{SearchOutcome, SearchQuery, SearchScope};
 use futures::Stream;
 use reqwest::{
     Body,
@@ -387,6 +388,33 @@ impl Rest {
         response.json().await.map_err(|_| Error::Decode)
     }
 
+    pub async fn search_messages(
+        &self,
+        scope: SearchScope,
+        query: &SearchQuery,
+    ) -> Result<SearchOutcome, Error> {
+        let (url, referer) = match scope {
+            SearchScope::Guild(guild_id) => (
+                format!("https://discord.com/api/v9/guilds/{guild_id}/messages/search"),
+                format!("https://discord.com/channels/{guild_id}"),
+            ),
+            SearchScope::Channel(channel_id) => (
+                format!("https://discord.com/api/v9/channels/{channel_id}/messages/search"),
+                "https://discord.com/channels/@me".to_owned(),
+            ),
+        };
+        let params = crate::discord::search::search_params(scope, query);
+        let response = self
+            .send(|| {
+                self.client
+                    .get(&url)
+                    .query(&params)
+                    .header(REFERER, &referer)
+            })
+            .await;
+        parse_search_response(response).await
+    }
+
     pub(in crate::discord) async fn fetch_messages_anchor(
         &self,
         guild_id: Option<u64>,
@@ -682,9 +710,56 @@ impl Rest {
     }
 }
 
+async fn parse_search_response(response: Result<Response, Error>) -> Result<SearchOutcome, Error> {
+    let response = match response {
+        Ok(response) => response,
+        Err(Error::Rejected { code, .. }) if is_search_indexing_code(code) => {
+            return Ok(SearchOutcome::Indexing {
+                retry_after: Duration::from_secs(2),
+            });
+        }
+        Err(error) => return Err(error),
+    };
+    let status = response.status().as_u16();
+    let value = match response.json::<Value>().await {
+        Ok(value) => value,
+        Err(_) if status == 202 => Value::Null,
+        Err(_) => return Err(Error::Decode),
+    };
+    parse_search_reply(status, value)
+}
+
+fn parse_search_reply(status: u16, value: Value) -> Result<SearchOutcome, Error> {
+    if status == 202
+        || value
+            .get("code")
+            .and_then(Value::as_u64)
+            .is_some_and(is_search_indexing_code)
+    {
+        let retry_after = value
+            .get("retry_after")
+            .and_then(Value::as_f64)
+            .filter(|seconds| seconds.is_finite())
+            .unwrap_or(2.0)
+            .clamp(1.0, 30.0);
+        return Ok(SearchOutcome::Indexing {
+            retry_after: Duration::from_secs_f64(retry_after),
+        });
+    }
+    serde_json::from_value(value)
+        .map(SearchOutcome::Page)
+        .map_err(|_| Error::Decode)
+}
+
+fn is_search_indexing_code(code: u64) -> bool {
+    (110_000..=119_999).contains(&code)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AckManual, forward_body};
+    use super::{AckManual, forward_body, parse_search_reply, parse_search_response};
+    use crate::discord::{Error, SearchOutcome};
+    use std::time::Duration;
 
     #[test]
     fn forward_body_matches_discord() {
@@ -705,5 +780,190 @@ mod tests {
             serde_json::to_string(&body).unwrap(),
             r#"{"manual":true,"mention_count":3}"#
         );
+    }
+
+    #[test]
+    fn search_202_reply_returns_clamped_indexing_delay() {
+        let outcome =
+            parse_search_reply(202, serde_json::json!({"code": 110000, "retry_after": 1.5}))
+                .unwrap();
+        assert!(matches!(
+            outcome,
+            SearchOutcome::Indexing { retry_after } if retry_after == Duration::from_millis(1500)
+        ));
+
+        for (requested, expected) in [
+            (-1.0, 1),
+            (0.2, 1),
+            (1.0, 1),
+            (30.0, 30),
+            (31.0, 30),
+            (1e100, 30),
+        ] {
+            let outcome =
+                parse_search_reply(202, serde_json::json!({"retry_after": requested})).unwrap();
+            let SearchOutcome::Indexing { retry_after } = outcome else {
+                panic!("202 response must be treated as indexing");
+            };
+            assert_eq!(retry_after, Duration::from_secs(expected));
+        }
+    }
+
+    #[test]
+    fn search_indexing_code_and_missing_retry_delay_are_tolerated() {
+        for code in [110000, 115000, 119999] {
+            let outcome = parse_search_reply(200, serde_json::json!({"code": code})).unwrap();
+            assert!(matches!(
+                outcome,
+                SearchOutcome::Indexing { retry_after } if retry_after == Duration::from_secs(2)
+            ));
+            let outcome =
+                parse_search_reply(200, serde_json::json!({"code": code, "retry_after": 4.5}))
+                    .unwrap();
+            assert!(matches!(
+                outcome,
+                SearchOutcome::Indexing { retry_after } if retry_after == Duration::from_millis(4500)
+            ));
+        }
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!({}),
+            serde_json::json!({"code": 50035, "retry_after": null}),
+            serde_json::json!({"retry_after": "invalid"}),
+        ] {
+            let outcome = parse_search_reply(202, value).unwrap();
+            assert!(matches!(
+                outcome,
+                SearchOutcome::Indexing { retry_after } if retry_after == Duration::from_secs(2)
+            ));
+        }
+        for code in [109999, 120000] {
+            assert!(matches!(
+                parse_search_reply(200, serde_json::json!({"code": code})),
+                Ok(SearchOutcome::Page(_))
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn search_rejected_indexing_codes_use_the_default_delay() {
+        for code in [110000, 115000, 119999] {
+            let outcome = parse_search_response(Err(Error::Rejected {
+                status: 400,
+                code,
+                message: "Indexing".to_owned(),
+            }))
+            .await
+            .unwrap();
+            assert!(matches!(
+                outcome,
+                SearchOutcome::Indexing { retry_after } if retry_after == Duration::from_secs(2)
+            ));
+        }
+        for code in [109999, 120000] {
+            let outcome = parse_search_response(Err(Error::Rejected {
+                status: 403,
+                code,
+                message: "Rejected".to_owned(),
+            }))
+            .await;
+            assert!(matches!(
+                outcome,
+                Err(Error::Rejected { status: 403, code: actual, message })
+                    if actual == code && message == "Rejected"
+            ));
+        }
+        assert!(matches!(
+            parse_search_response(Err(Error::Http(401))).await,
+            Err(Error::Http(401))
+        ));
+        assert!(matches!(
+            parse_search_response(Err(Error::Network)).await,
+            Err(Error::Network)
+        ));
+        assert!(matches!(
+            parse_search_response(Err(Error::RateLimited {
+                retry_after: Duration::from_secs(7),
+            }))
+            .await,
+            Err(Error::RateLimited { retry_after }) if retry_after == Duration::from_secs(7)
+        ));
+    }
+
+    #[tokio::test]
+    async fn search_response_decodes_wire_bodies_and_tolerates_any_202() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+        use tokio::time::timeout;
+
+        enum Expected {
+            Indexing(Duration),
+            Page,
+            Decode,
+        }
+
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        for (status, body, expected) in [
+            (
+                202,
+                r#"{"code":110000,"retry_after":1.5}"#,
+                Expected::Indexing(Duration::from_millis(1500)),
+            ),
+            (202, "", Expected::Indexing(Duration::from_secs(2))),
+            (202, "not json", Expected::Indexing(Duration::from_secs(2))),
+            (
+                200,
+                r#"{"code":119999,"retry_after":1.5}"#,
+                Expected::Indexing(Duration::from_millis(1500)),
+            ),
+            (
+                200,
+                r#"{"total_results":42,"messages":[[]]}"#,
+                Expected::Page,
+            ),
+            (200, "not json", Expected::Decode),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/search", listener.local_addr().unwrap());
+            let server = async {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut bytes = [0; 1024];
+                while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                    let count = stream.read(&mut bytes).await.unwrap();
+                    assert!(count > 0 && request.len() < 8192);
+                    request.extend_from_slice(&bytes[..count]);
+                }
+                stream.write_all(format!(
+                    "HTTP/1.1 {status} OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len(),
+                ).as_bytes()).await.unwrap();
+                stream.shutdown().await.unwrap();
+            };
+            let ((), response) = timeout(Duration::from_secs(3), async {
+                tokio::join!(server, client.get(&url).send())
+            })
+            .await
+            .unwrap();
+            let outcome = parse_search_response(Ok(response.unwrap())).await;
+            match expected {
+                Expected::Indexing(delay) => assert!(matches!(
+                    outcome,
+                    Ok(SearchOutcome::Indexing { retry_after }) if retry_after == delay
+                )),
+                Expected::Decode => assert!(matches!(outcome, Err(Error::Decode))),
+                Expected::Page => {
+                    let Ok(SearchOutcome::Page(page)) = outcome else {
+                        panic!("successful search must return a page");
+                    };
+                    assert_eq!(page.total, 42);
+                    assert!(page.messages.is_empty());
+                }
+            }
+        }
     }
 }

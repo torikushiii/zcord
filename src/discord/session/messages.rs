@@ -253,6 +253,15 @@ impl Session {
             .await
     }
 
+    pub async fn search_messages(
+        &self,
+        scope: SearchScope,
+        query: &SearchQuery,
+    ) -> Result<SearchOutcome, Error> {
+        self.rest(async |rest| rest.search_messages(scope, query).await)
+            .await
+    }
+
     pub async fn fetch_messages_after(
         &self,
         guild_id: Option<u64>,

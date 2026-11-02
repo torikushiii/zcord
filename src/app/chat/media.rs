@@ -4,6 +4,22 @@ use crate::app::expression_info::{Expression, HoverOwner};
 
 const MEDIA_MAX: (f32, f32) = (550., 350.);
 
+thread_local! {
+    static MEDIA_LIMIT: std::cell::Cell<f32> = const { std::cell::Cell::new(f32::INFINITY) };
+}
+
+/// The widest message media may be, for columns narrower than the chat.
+pub(in crate::app) fn media_limit() -> f32 {
+    MEDIA_LIMIT.get()
+}
+
+pub(in crate::app) fn with_media_limit<T>(width: f32, build: impl FnOnce() -> T) -> T {
+    let outer = MEDIA_LIMIT.replace(width);
+    let built = build();
+    MEDIA_LIMIT.set(outer);
+    built
+}
+
 fn sticker_placeholder(sticker: &Sticker) -> AnyElement {
     let name = if sticker.name.is_empty() {
         "Sticker".to_owned()
@@ -127,7 +143,9 @@ pub(super) fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &
             attachment.width.unwrap_or(1).max(1) as f32,
             attachment.height.unwrap_or(1).max(1) as f32,
         );
-        let scale = (MEDIA_MAX.0 / width).min(MEDIA_MAX.1 / height).min(1.);
+        let scale = (MEDIA_MAX.0.min(media_limit()) / width)
+            .min(MEDIA_MAX.1 / height)
+            .min(1.);
         let (width, height) = ((width * scale).round(), (height * scale).round());
         let poster = attachment.video_poster_spec();
         if attachment.spoiler() && !app.revealed_spoilers.contains(&(attachment.id, 0)) {
@@ -174,7 +192,9 @@ pub(super) fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &
         attachment.height.unwrap_or(1).max(1),
     );
     let (width, height) = (original_width as f32, original_height as f32);
-    let scale = (MEDIA_MAX.0 / width).min(MEDIA_MAX.1 / height).min(1.);
+    let scale = (MEDIA_MAX.0.min(media_limit()) / width)
+        .min(MEDIA_MAX.1 / height)
+        .min(1.);
     let (width, height) = ((width * scale).round(), (height * scale).round());
     if attachment.spoiler() && !app.revealed_spoilers.contains(&(attachment.id, 0)) {
         return embeds::blurred_box(&spec, width, height, 8., cx)

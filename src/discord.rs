@@ -10,6 +10,7 @@ mod presence;
 mod properties;
 pub mod remote_auth;
 mod rest;
+mod search;
 mod session;
 #[cfg(test)]
 pub mod settings_fixtures;
@@ -47,6 +48,7 @@ use cache::{Cache, CacheRequest, insert_bounded, insert_missing, missing_ids};
 pub use error::*;
 pub use event::*;
 pub use model::{PinPage, ThreadPage};
+pub use search::{SearchOutcome, SearchQuery, SearchScope, SearchSort};
 
 pub fn valid_friend_username(username: &str) -> bool {
     (2..=32).contains(&username.len())
@@ -270,6 +272,10 @@ impl Session {
         for command in commands::members(guild_id, &user_ids) {
             self.command(command);
         }
+    }
+
+    pub fn query_members(&self, guild_id: u64, query: &str, limit: u32) {
+        self.command(commands::query_members(guild_id, query, limit));
     }
 
     pub fn request_voice_start_times(&self, guild_id: u64) {

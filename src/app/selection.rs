@@ -157,6 +157,7 @@ impl DiscordApp {
         }
         self.selected_channel_id = id;
         self.load_dm_profile(cx);
+        self.sync_search();
         self.pending_jump = None;
         self.jump_missing = false;
         self.jump_missing_nonce += 1;

@@ -488,6 +488,17 @@ fn render_forward(app: &DiscordApp, message_id: u64, forward: &Forward, cx: &App
         .into_any_element()
 }
 
+pub(in crate::app) fn render_search_message(
+    app: &DiscordApp,
+    message: &Message,
+    width: f32,
+    cx: &App,
+) -> AnyElement {
+    with_media_limit(width - GUTTER - MESSAGE_RIGHT_PADDING, || {
+        render_message(app, message, false, true, cx)
+    })
+}
+
 pub(super) fn render_message(
     app: &DiscordApp,
     message: &Message,

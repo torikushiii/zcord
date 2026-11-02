@@ -156,7 +156,7 @@ fn embed_card(color: Option<u32>, content_width: Option<f32>) -> Div {
         .map(|this| match content_width {
             // Resolve the card width before its percent-width text row is measured.
             Some(width) => this.w(rpx(width + EMBED_HORIZONTAL_INSET)).max_w_full(),
-            None => this.max_w(rpx(EMBED_WIDTH)),
+            None => this.max_w(rpx(EMBED_WIDTH.min(super::chat::media_limit()))),
         })
         .font_weight(FontWeight::NORMAL)
         .text_color(rgb(theme::TEXT))
@@ -182,6 +182,13 @@ fn embed_card(color: Option<u32>, content_width: Option<f32>) -> Div {
 }
 
 fn fit(media: &Media, max: (f32, f32)) -> (f32, f32) {
+    let room = super::chat::media_limit()
+        - if max == PLAIN_MEDIA {
+            0.
+        } else {
+            EMBED_HORIZONTAL_INSET
+        };
+    let max = (max.0.min(room), max.1);
     if media.width == 0 || media.height == 0 {
         return max;
     }
@@ -611,7 +618,12 @@ pub fn render_embed(
         video_dimensions.or_else(|| match big_media.as_slice() {
             [] => None,
             [single] => Some(fit(single, EMBED_MEDIA)),
-            _ => Some(EMBED_MEDIA),
+            _ => Some((
+                EMBED_MEDIA
+                    .0
+                    .min(super::chat::media_limit() - EMBED_HORIZONTAL_INSET),
+                EMBED_MEDIA.1,
+            )),
         }),
     );
 

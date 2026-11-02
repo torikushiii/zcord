@@ -29,6 +29,7 @@ mod notifications;
 mod profile;
 mod read_state;
 mod rich_text;
+mod search;
 mod selection;
 mod sending;
 mod settings_page;
@@ -136,7 +137,8 @@ actions!(
         ComposerUp,
         ComposerDown,
         ComposerTab,
-        QuickSwitch
+        QuickSwitch,
+        FocusSearch
     ]
 );
 
@@ -434,6 +436,7 @@ impl DiscordApp {
             stage_chat: None,
             affinity_refresh: None,
             dm_profile: None,
+            message_search: None,
             forward_dialog: None,
             stream_nonce: 0,
             stream_members_shown: true,
@@ -1174,30 +1177,36 @@ impl Render for DiscordApp {
                                                 )),
                                         )
                                         .when(
-                                            self.show_members
-                                                && (!self.is_home()
-                                                    || self.dm_panel_width().is_some())
-                                                && !self.stream_chat_open()
-                                                && !self.thread_pane_open(),
+                                            self.search_results_open()
+                                                || (self.show_members
+                                                    && (!self.is_home()
+                                                        || self.dm_panel_width().is_some())
+                                                    && !self.stream_chat_open()
+                                                    && !self.thread_pane_open()),
                                             |this| {
-                                                this.child(
-                                                    self.views.members.clone().cached(
-                                                        views::member_list_style(
+                                                this.child(self.views.members.clone().cached(
+                                                    views::member_list_style(
+                                                        if self.search_results_open() {
+                                                            search::RESULTS_WIDTH
+                                                        } else {
                                                             self.dm_panel_width()
-                                                                .unwrap_or(member_list::WIDTH),
-                                                        ),
+                                                                .unwrap_or(member_list::WIDTH)
+                                                        },
                                                     ),
-                                                )
+                                                ))
                                             },
                                         )
-                                        .when(self.thread_pane_open(), |this| {
-                                            this.child(
-                                                self.views
-                                                    .thread_pane
-                                                    .clone()
-                                                    .cached(views::thread_pane_style()),
-                                            )
-                                        }),
+                                        .when(
+                                            self.thread_pane_open() && !self.search_results_open(),
+                                            |this| {
+                                                this.child(
+                                                    self.views
+                                                        .thread_pane
+                                                        .clone()
+                                                        .cached(views::thread_pane_style()),
+                                                )
+                                            },
+                                        ),
                                 ),
                         ),
                 )
@@ -1223,15 +1232,20 @@ impl Render for DiscordApp {
                 app.toggle_quick_switcher(window, cx);
             }))
             .on_action(cx.listener(|app, _: &ComposerDown, window, cx| {
-                if !(app.move_quick_switcher(1, cx)
+                if !(app.move_search(1, cx)
+                    || app.move_quick_switcher(1, cx)
                     || app.composer_focused(window, cx) && app.move_emoji_suggestion(1, cx))
                 {
                     cx.propagate();
                 }
             }))
+            .on_action(cx.listener(|app, _: &FocusSearch, window, cx| {
+                app.open_search(window, cx);
+            }))
             .on_action(cx.listener(|app, _: &ComposerTab, window, cx| {
-                if !(app.composer_focused(window, cx)
-                    && app.accept_emoji_suggestion(None, window, cx))
+                if !(app.accept_search(window, cx)
+                    || app.composer_focused(window, cx)
+                        && app.accept_emoji_suggestion(None, window, cx))
                 {
                     cx.propagate();
                 }
