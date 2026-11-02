@@ -264,10 +264,6 @@ fn avatar_image(
     })
 }
 
-const DECORATION_SCALE: f32 = 1.2;
-
-fn decoration(
-    user_id: u64,
 const SPINNER_RADIUS: f32 = 7.;
 const SPINNER_STROKE: f32 = 2.;
 const SPINNER_CIRCUMFERENCE: f32 = 44.;
@@ -343,6 +339,10 @@ pub fn spinner(size: f32, color: u32) -> impl IntoElement {
     .size(rpx(size))
 }
 
+const DECORATION_SCALE: f32 = 1.2;
+
+fn decoration(
+    user_id: u64,
     decoration: &Decoration,
     size: f32,
     animate: bool,
@@ -619,6 +619,42 @@ fn tooltip_arrow_up() -> Div {
 pub fn tooltip_below(label: impl Into<SharedString>) -> impl IntoElement {
     TooltipBelow {
         label: label.into(),
+    }
+}
+
+/// Shows a `tooltip_above` while the pointer is over its `relative()` parent, holding its own
+/// hover so that the parent's view needs no state for it.
+pub fn hover_tooltip(
+    key: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+) -> impl IntoElement {
+    HoverTooltip {
+        key: key.into(),
+        label: label.into(),
+    }
+}
+
+#[derive(IntoElement)]
+struct HoverTooltip {
+    key: ElementId,
+    label: SharedString,
+}
+
+impl RenderOnce for HoverTooltip {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let hovered = window.use_keyed_state(self.key.clone(), cx, |_, _| false);
+        let shown = *hovered.read(cx);
+        div()
+            .id(self.key)
+            .absolute()
+            .inset_0()
+            .on_hover(move |over, _, cx| {
+                hovered.update(cx, |hovered, cx| {
+                    *hovered = *over;
+                    cx.notify();
+                });
+            })
+            .when(shown, |this| this.child(tooltip_above(self.label)))
     }
 }
 

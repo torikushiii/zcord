@@ -124,7 +124,8 @@ pub(super) fn message_actions(app: &DiscordApp, message: &Message, cx: &App) -> 
     let extended = app.shift_held;
     let button = |key: &'static str, icon: &str, color: u32, tip: &'static str| {
         theme::icon_button((key, id), icon, 20., color)
-            .tooltip(move |_, cx| theme::text_tooltip(tip, cx))
+            .relative()
+            .child(theme::hover_tooltip((tip, id), tip))
     };
     let hover = app.entity.clone();
     let edit = app.entity.clone();
@@ -136,6 +137,8 @@ pub(super) fn message_actions(app: &DiscordApp, message: &Message, cx: &App) -> 
     let copy_id = app.entity.clone();
     let copy_link = app.entity.clone();
     let thread = app.entity.clone();
+    let forward = app.entity.clone();
+    let channel_id = app.selected_channel_id;
     let reactions: Vec<_> = (app.live && !extended)
         .then(|| app.recent_emojis(cx))
         .into_iter()
@@ -181,6 +184,15 @@ pub(super) fn message_actions(app: &DiscordApp, message: &Message, cx: &App) -> 
             },
         )
     });
+    let forward_button = allowed.forward.then(|| {
+        button("forward", "forward", theme::MUTED, "Forward").on_click(move |_, window, cx| {
+            forward
+                .update(cx, |app, cx| {
+                    app.open_forward_dialog(id, channel_id, window, cx)
+                })
+                .ok();
+        })
+    });
     let mut buttons = Vec::new();
     if extended {
         buttons.push(
@@ -222,6 +234,7 @@ pub(super) fn message_actions(app: &DiscordApp, message: &Message, cx: &App) -> 
         buttons.extend(reply_button);
         buttons.extend(react_button);
         buttons.extend(edit_button);
+        buttons.extend(forward_button);
         if allowed.delete {
             buttons.push(button("delete", "trash-2", theme::RED, "Delete").on_click(
                 move |event, window, cx| {
@@ -235,6 +248,7 @@ pub(super) fn message_actions(app: &DiscordApp, message: &Message, cx: &App) -> 
     } else {
         buttons.extend(react_button);
         buttons.extend(edit_button.or(reply_button));
+        buttons.extend(forward_button);
     }
     Some(
         div()
