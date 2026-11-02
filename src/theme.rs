@@ -1,8 +1,12 @@
 use gpui::{prelude::*, *};
 use gpui_component::Theme;
 use std::{
-    sync::atomic::{AtomicU32, Ordering},
-    time::Duration,
+    f32::consts::{PI, TAU},
+    sync::{
+        OnceLock,
+        atomic::{AtomicU32, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -260,6 +264,81 @@ const DECORATION_SCALE: f32 = 1.2;
 
 fn decoration(
     user_id: u64,
+const SPINNER_RADIUS: f32 = 7.;
+const SPINNER_STROKE: f32 = 2.;
+const SPINNER_CIRCUMFERENCE: f32 = 44.;
+const SPINNER_LONGEST_GAP: f32 = 11.;
+const SPINNER_TURN_SECS: f32 = 0.5;
+const SPINNER_DASH_SECS: f32 = 0.8;
+const SPINNER_STEPS: usize = 48;
+const SPINNER_CAP_STEPS: usize = 8;
+
+pub fn spinner(size: f32, color: u32) -> impl IntoElement {
+    static START: OnceLock<Instant> = OnceLock::new();
+    let start = *START.get_or_init(Instant::now);
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            window.request_animation_frame();
+            let unit = bounds.size.width / px(16.);
+            let elapsed = start.elapsed().as_secs_f32();
+            let cycle = (elapsed / SPINNER_DASH_SECS).rem_euclid(2.);
+            let growth = if cycle <= 1. { cycle } else { 2. - cycle };
+            let gap = SPINNER_LONGEST_GAP + (SPINNER_CIRCUMFERENCE - SPINNER_LONGEST_GAP) * growth;
+            let sweep = (SPINNER_CIRCUMFERENCE - gap) / SPINNER_RADIUS;
+            let from = (elapsed / SPINNER_TURN_SECS).fract() * TAU;
+            let center = bounds.center();
+            let at = |radial: f32, tangent: f32, angle: f32| {
+                let (sin, cos) = angle.sin_cos();
+                center
+                    + point(
+                        px((radial * cos - tangent * sin) * unit),
+                        px((radial * sin + tangent * cos) * unit),
+                    )
+            };
+            let half = SPINNER_STROKE / 2.;
+            let step = |index: usize, steps: usize| index as f32 / steps as f32;
+            let outline = (0..=SPINNER_STEPS)
+                .map(|index| {
+                    at(
+                        SPINNER_RADIUS + half,
+                        0.,
+                        from + sweep * step(index, SPINNER_STEPS),
+                    )
+                })
+                .chain((1..SPINNER_CAP_STEPS).map(|index| {
+                    let (sin, cos) = (step(index, SPINNER_CAP_STEPS) * PI).sin_cos();
+                    at(SPINNER_RADIUS + half * cos, half * sin, from + sweep)
+                }))
+                .chain((0..=SPINNER_STEPS).rev().map(|index| {
+                    at(
+                        SPINNER_RADIUS - half,
+                        0.,
+                        from + sweep * step(index, SPINNER_STEPS),
+                    )
+                }))
+                .chain((1..SPINNER_CAP_STEPS).map(|index| {
+                    let (sin, cos) = (step(index, SPINNER_CAP_STEPS) * PI).sin_cos();
+                    at(SPINNER_RADIUS - half * cos, -half * sin, from)
+                }));
+            let mut path = PathBuilder::fill();
+            for (index, position) in outline.enumerate() {
+                if index == 0 {
+                    path.move_to(position);
+                } else {
+                    path.line_to(position);
+                }
+            }
+            path.close();
+            if let Ok(path) = path.build() {
+                window.paint_path(path, rgb(color));
+            }
+        },
+    )
+    .flex_none()
+    .size(rpx(size))
+}
+
     decoration: &Decoration,
     size: f32,
     animate: bool,

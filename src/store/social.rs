@@ -463,6 +463,76 @@ impl Store {
         roles
     }
 
+    fn search_candidates(&self, guild_id: Option<u64>, channel_id: u64) -> Vec<u64> {
+        match guild_id {
+            Some(guild_id) => self
+                .social
+                .guilds
+                .get(&guild_id)
+                .map(|guild| guild.members.keys().copied().collect())
+                .unwrap_or_default(),
+            None => self
+                .private_channel(channel_id)
+                .map(|dm| dm.recipient_ids.clone())
+                .unwrap_or_default()
+                .into_iter()
+                .chain([self.current_user_id])
+                .collect(),
+        }
+    }
+
+    fn user_names(&self, guild_id: Option<u64>, user_id: u64) -> Option<[String; 3]> {
+        let user = self.user(user_id)?;
+        let nick = guild_id
+            .and_then(|guild_id| self.member_name(guild_id, user_id))
+            .unwrap_or(&user.name);
+        Some([&user.username, &user.name, &nick.to_owned()].map(|name| name.to_lowercase()))
+    }
+
+    /// Who a search filter could name, best match first: names starting with `query`, then
+    /// names containing it. An empty `query` matches everyone.
+    pub fn search_users(
+        &self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        query: &str,
+        limit: usize,
+    ) -> Vec<u64> {
+        let mut matches: Vec<_> = self
+            .search_candidates(guild_id, channel_id)
+            .into_iter()
+            .filter_map(|id| {
+                let names = self.user_names(guild_id, id)?;
+                let rank = if names.iter().any(|name| name.starts_with(query)) {
+                    0
+                } else if names.iter().any(|name| name.contains(query)) {
+                    1
+                } else {
+                    return None;
+                };
+                Some((rank, names[1].clone(), id))
+            })
+            .collect();
+        matches.sort();
+        matches.truncate(limit);
+        matches.into_iter().map(|(_, _, id)| id).collect()
+    }
+
+    pub fn find_search_user(
+        &self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        name: &str,
+    ) -> Option<u64> {
+        let name = name.to_lowercase();
+        self.search_candidates(guild_id, channel_id)
+            .into_iter()
+            .find(|id| {
+                self.user_names(guild_id, *id)
+                    .is_some_and(|names| names.contains(&name))
+            })
+    }
+
     pub fn nameplate(&self, guild_id: Option<u64>, user_id: u64) -> Option<&Nameplate> {
         guild_id
             .and_then(|guild_id| self.social.guilds.get(&guild_id)?.members.get(&user_id))

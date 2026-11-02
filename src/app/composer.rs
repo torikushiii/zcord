@@ -228,6 +228,7 @@ impl DiscordApp {
             || self.close_thread_menu(cx)
             || self.close_create_thread(cx)
             || self.close_channel_popout(cx)
+            || self.close_search(window, cx)
             || self.close_expression_info(cx)
             || self.close_share_picker(cx)
         {
@@ -284,7 +285,7 @@ impl DiscordApp {
     }
 
     pub(super) fn composer_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.move_quick_switcher(-1, cx) {
+        if self.move_search(-1, cx) || self.move_quick_switcher(-1, cx) {
             return;
         }
         if self.composer_focused(window, cx) && self.move_emoji_suggestion(-1, cx) {

@@ -10,8 +10,12 @@ use std::{
 
 use crate::{
     app::{
-        DiscordApp, chat, friends, member_list, message_body::label, profile::presence_art,
-        set_text, voice,
+        DiscordApp, chat,
+        display_name::{self, Surface},
+        friends, member_list,
+        message_body::label,
+        profile::presence_art,
+        search, set_text, voice,
     },
     discord::{Event, model::PublicApplication},
     media::images::{self, ImageSpec},
@@ -645,10 +649,6 @@ fn dm_row(
     let tag = user
         .and_then(|user| user.tag.as_ref())
         .map(|tag| theme::guild_tag(tag, cx));
-    let entity = app.entity.clone();
-    let row = div()
-        .id(("dm", id))
-        .relative()
     let dm_name_line = div()
         .flex()
         .items_center()
@@ -701,24 +701,24 @@ fn dm_row(
         } << 8
             | member_list::NAMEPLATE_DIM,
     );
+    let entity = app.entity.clone();
+    let row = div()
+        .id(("dm", id))
+        .relative()
         .flex()
         .items_center()
         .gap(rpx(12.))
+        .w_full()
         .h(rpx(DM_HEIGHT))
         .px_2()
         .rounded(rpx(8.))
-        .w_full()
+        .overflow_hidden()
         .cursor_pointer()
         .text_color(rgb(text))
         .when(selected, |this| this.bg(rgba(theme::SELECTED)))
         .when(!selected, |this| {
-        .overflow_hidden()
             this.hover(|style| style.bg(rgba(theme::HOVER)).text_color(rgb(theme::TEXT)))
         })
-        .without_text_selection()
-        .on_click(move |_, window, cx| {
-            entity
-                .update(cx, |app, cx| app.select_dm(id, window, cx))
         .when_some(recipient, |this, user_id| {
             let entity = app.entity.clone();
             this.on_hover(move |hovered, _, cx| {
@@ -732,6 +732,10 @@ fn dm_row(
                     .ok();
             })
         })
+        .without_text_selection()
+        .on_click(move |_, window, cx| {
+            entity
+                .update(cx, |app, cx| app.select_dm(id, window, cx))
                 .ok();
         })
         .children(nameplate)
@@ -753,14 +757,14 @@ fn dm_row(
                 .flex_col()
                 .flex_1()
                 .min_w_0()
+                .items_start()
                 .child(
                     div()
-                        .flex()
-                        .items_center()
-                .items_start()
-                        .gap_1()
-                        .min_w_0()
                         .relative()
+                        .flex()
+                        .flex_col()
+                        .max_w_full()
+                        .min_w_0()
                         .when(plated, |this| {
                             this.children(member_list::nameplate_mask(dim))
                         })
@@ -770,10 +774,6 @@ fn dm_row(
         )
         .when(dm.channel.mentions > 0, |this| {
             this.child(count_pill(dm.channel.mentions))
-        })
-}
-
-pub(crate) fn friends_header(app: &DiscordApp) -> impl IntoElement + use<> {
         });
     div()
         .relative()
@@ -790,8 +790,12 @@ pub(crate) fn friends_header(app: &DiscordApp) -> impl IntoElement + use<> {
                     .rounded_r(rpx(4.))
                     .bg(rgb(theme::STRONG)),
             )
-    let tab = |tab: FriendsTab, badge: u32| {
+        })
         .child(row)
+}
+
+pub(crate) fn friends_header(app: &DiscordApp) -> impl IntoElement + use<> {
+    let tab = |tab: FriendsTab, badge: u32| {
         let selected = app.home.tab == tab;
         let entity = app.entity.clone();
         div()
@@ -1117,8 +1121,8 @@ fn friend_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement + us
                 .child(
                     div()
                         .flex()
-                        .flex_col()
-                        .max_w_full()
+                        .items_center()
+                        .gap_1()
                         .min_w_0()
                         .child(
                             div()
@@ -1734,6 +1738,14 @@ pub(crate) fn dm_header(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> 
             .on_click(move |_, _, cx| {
                 toggle.update(cx, |app, cx| app.toggle_members(cx)).ok();
             }),
+        )
+        .child(
+            div()
+                .flex_none()
+                .w(rpx(244.))
+                .ml_2()
+                .mr_2()
+                .child(search::search_box(app, cx)),
         )
 }
 

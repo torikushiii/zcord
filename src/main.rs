@@ -66,6 +66,7 @@ fn main() {
                 KeyBinding::new("shift-escape", app::MarkGuildRead, None),
                 KeyBinding::new("secondary-k", app::QuickSwitch, None),
                 KeyBinding::new("secondary-t", app::QuickSwitch, None),
+                KeyBinding::new("secondary-f", app::FocusSearch, None),
                 KeyBinding::new("up", app::ComposerUp, Some("Input")),
                 KeyBinding::new("down", app::ComposerDown, Some("Input")),
                 KeyBinding::new("tab", app::ComposerTab, Some("Input")),

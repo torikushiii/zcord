@@ -77,6 +77,17 @@ pub(super) fn members(guild_id: u64, user_ids: &[u64]) -> Vec<Command> {
         .collect()
 }
 
+pub(super) fn query_members(guild_id: u64, query: &str, limit: u32) -> Command {
+    Command {
+        members: true,
+        presence_revision: None,
+        completion: None,
+        payload: json!({"op":8,"d":{
+            "guild_id":[guild_id.to_string()],"query":query,"limit":limit,"presences":false
+        }}),
+    }
+}
+
 pub(super) struct Commands {
     queue: VecDeque<Command>,
     tokens: f64,
@@ -181,6 +192,30 @@ impl Commands {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_member_queries_use_op_8_and_the_member_rate_limit() {
+        let command = query_members(123, "Carol M", 10);
+        assert_eq!(
+            command.payload,
+            json!({"op":8,"d":{
+                "guild_id":["123"],"query":"Carol M","limit":10,"presences":false
+            }})
+        );
+        assert!(command.members);
+        assert!(command.presence_revision.is_none());
+        assert!(command.completion.is_none());
+        let mut queue = Commands::new();
+        queue.push(false, query_members(123, "", 0));
+        assert!(queue.next_send().is_none());
+        queue.push(true, command);
+        queue.push(true, members(123, &[456]).remove(0));
+        assert_eq!(queue.pop().unwrap().payload["d"]["query"], "Carol M");
+        assert_eq!(
+            queue.next_members.duration_since(queue.refilled_at),
+            Duration::from_millis(300)
+        );
+    }
 
     #[test]
     fn delayed_presence_does_not_block_voice_members_or_subscriptions() {
