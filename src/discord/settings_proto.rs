@@ -22,6 +22,7 @@ pub struct StatusSettings {
     pub status: Option<String>,
     pub custom_status: Option<CustomStatus>,
     pub custom_status_present: bool,
+    pub show_current_game: Option<bool>,
 }
 
 /// Manual presence timing, separate from CustomStatus.expires_at_ms.
@@ -247,6 +248,21 @@ fn status_settings(bytes: &[u8]) -> Result<StatusSettings> {
                 {
                     status.custom_status = Some(custom);
                 }
+            }
+            3 => {
+                let mut bool_reader = Reader::new(reader.bytes(wire)?);
+                let mut value = false;
+                while let Some((field, wire)) = bool_reader.tag()? {
+                    if field == 1 {
+                        if wire != 0 {
+                            return Err(DecodeError);
+                        }
+                        value = bool_reader.varint()? != 0;
+                    } else {
+                        bool_reader.skip(field, wire, 0)?;
+                    }
+                }
+                status.show_current_game = Some(value);
             }
             _ => reader.skip(field, wire, 0)?,
         }
@@ -696,6 +712,25 @@ pub(crate) mod tests {
     }
 
     use crate::discord::settings_fixtures::{field, uint};
+
+    #[test]
+    fn status_activity_sharing_decodes_absent_false_and_true() {
+        let absent = decode(&field(11, &field(1, &field(1, b"online"))))
+            .unwrap()
+            .status
+            .unwrap();
+        assert_eq!(absent.show_current_game, None);
+
+        let mut status = field(1, &field(1, b"online"));
+        status.extend(field(3, &[]));
+        let disabled = decode(&field(11, &status)).unwrap().status.unwrap();
+        assert_eq!(disabled.show_current_game, Some(false));
+
+        let mut status = field(1, &field(1, b"online"));
+        status.extend(field(3, &uint(1, 1)));
+        let enabled = decode(&field(11, &status)).unwrap().status.unwrap();
+        assert_eq!(enabled.show_current_game, Some(true));
+    }
 
     fn fixed64_field(number: u32, value: u64) -> Vec<u8> {
         let mut bytes = Vec::new();

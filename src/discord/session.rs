@@ -1,3 +1,4 @@
+mod activity;
 mod expressions;
 mod messages;
 mod pins;

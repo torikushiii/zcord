@@ -58,6 +58,8 @@ use gpui::{prelude::*, *};
 use gpui_component::input::{InputEvent, RopeExt, TextareaState};
 use gpui_component::slider::SliderState;
 use gpui_tokio::Tokio;
+use serde_json::Value;
+use tokio::sync::watch;
 
 use crate::{
     credentials,
@@ -198,6 +200,7 @@ pub struct DiscordApp {
     pub(crate) thread_menu: Option<chat::ThreadMenu>,
     pub(crate) thread_pane: Option<chat::ThreadPane>,
     pub(crate) thread_previews: HashSet<u64>,
+    pub(crate) sharing_paused: Option<Point<Pixels>>,
     pub(crate) hovered_member: Option<u64>,
     pub(crate) hovered_account: bool,
     pub(crate) profile: Option<profile::ProfileCard>,
@@ -239,6 +242,10 @@ pub struct DiscordApp {
     pub(crate) voice: voice::Voice,
     pub(crate) reconnecting: bool,
     session: Option<Session>,
+    game_enabled: watch::Sender<bool>,
+    game_generation: u64,
+    current_activity: Option<Value>,
+    pub(crate) current_game: Option<String>,
     pending_token: Option<String>,
     loading: HashSet<u64>,
     loading_older: HashSet<u64>,
@@ -335,6 +342,7 @@ impl DiscordApp {
                     _ => {}
                 },
             );
+        let (game_enabled, game_enabled_rx) = watch::channel(false);
         let app_entity = cx.entity();
         let views = views::PanelViews::new(&app_entity, cx);
         let mut app = Self {
@@ -364,6 +372,7 @@ impl DiscordApp {
             thread_menu: None,
             thread_pane: None,
             thread_previews: HashSet::new(),
+            sharing_paused: None,
             hovered_member: None,
             hovered_account: false,
             profile: None,
@@ -395,6 +404,10 @@ impl DiscordApp {
             voice: voice::Voice::from_settings(cx),
             reconnecting: false,
             session: None,
+            game_enabled,
+            game_generation: 0,
+            current_activity: None,
+            current_game: None,
             self_status: profile::StatusChange::default(),
             pending_token: None,
             loading: HashSet::new(),
@@ -456,6 +469,48 @@ impl DiscordApp {
             _composer_subscription: subscription,
             _composer_cursor_subscription: cursor_subscription,
         };
+        let games = Tokio::spawn(cx, async move { crate::games::start(game_enabled_rx) });
+        let runtime = Tokio::handle(cx);
+        cx.spawn(async move |this, cx| {
+            let Ok(mut output) = games.await else {
+                return;
+            };
+            while output.changed().await.is_ok() {
+                let value = output.borrow().clone();
+                let (generation, session) =
+                    match this.update(cx, |app, _| (app.game_generation, app.session.clone())) {
+                        Ok(state) => state,
+                        Err(_) => break,
+                    };
+                let resolved = match (value, session) {
+                    (Some(activity), Some(session)) => {
+                        let fallback = activity.clone();
+                        Some(
+                            runtime
+                                .spawn(
+                                    async move { session.resolve_activity_images(activity).await },
+                                )
+                                .await
+                                .unwrap_or(fallback),
+                        )
+                    }
+                    (value, _) => value,
+                };
+                let applied = this.update(cx, |app, cx| {
+                    if app.game_generation != generation {
+                        return;
+                    }
+                    if resolved.is_some() && !*app.game_enabled.borrow() {
+                        return;
+                    }
+                    app.apply_game_activity(resolved, cx);
+                });
+                if applied.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         cx.on_focus(&app.focus_handle, window, |app, window, cx| {
             if matches!(app.screen, Screen::Chat) {
                 app.focus_composer(window, cx);
@@ -532,6 +587,66 @@ impl DiscordApp {
             None => app.screen = Screen::Login(LoginForm::new(window, cx)),
         }
         app
+    }
+
+    fn apply_game_activity(&mut self, activity: Option<Value>, cx: &mut Context<Self>) {
+        self.current_game = activity
+            .as_ref()
+            .and_then(|activity| activity.get("name"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        self.current_activity = activity.clone();
+        if let Some(session) = &self.session {
+            session.set_local_activity(activity);
+        }
+        if let Some(application_id) = self.current_game_application() {
+            self.load_game_apps(vec![application_id], cx);
+        }
+        self.clear_stale_sharing_card();
+        self.views.channel_list.update(cx, |_, cx| cx.notify());
+        cx.notify();
+    }
+
+    pub(crate) fn current_game_application(&self) -> Option<u64> {
+        self.current_activity
+            .as_ref()?
+            .get("application_id")?
+            .as_str()?
+            .parse()
+            .ok()
+    }
+
+    pub(crate) fn update_game_activity(&mut self) {
+        let enabled = crate::settings::game_activity()
+            && self.live
+            && self
+                .session
+                .as_ref()
+                .is_some_and(|session| session.shows_current_game());
+        let was_enabled = *self.game_enabled.borrow();
+        let _ = self.game_enabled.send_if_modified(|current| {
+            if *current == enabled {
+                false
+            } else {
+                *current = enabled;
+                true
+            }
+        });
+        if was_enabled && !enabled {
+            self.game_generation = self.game_generation.wrapping_add(1);
+            self.current_activity = None;
+            self.current_game = None;
+            if let Some(session) = &self.session {
+                session.set_local_activity(None);
+            }
+        }
+        self.clear_stale_sharing_card();
+    }
+
+    fn clear_stale_sharing_card(&mut self) {
+        if self.current_game.is_none() || !channel_list::self_invisible(self) {
+            self.sharing_paused = None;
+        }
     }
 
     pub(crate) fn guild(&self) -> Option<&Guild> {
@@ -663,6 +778,7 @@ impl DiscordApp {
                 if let Some(status) = self.selected_self_status() {
                     self.store.set_self_status(status);
                 }
+                self.update_game_activity();
                 self.refresh_voice_start_times();
                 self.arm_status_expiry_timer(cx);
                 self.load_user_affinities(cx);
@@ -703,6 +819,9 @@ impl DiscordApp {
                 let change = self.store.apply(event);
                 if status_update && let Some(status) = self.selected_self_status() {
                     self.store.set_self_status(status);
+                }
+                if status_update {
+                    self.update_game_activity();
                 }
                 self.apply_change(change, window, cx);
                 if supplemental {

@@ -28,6 +28,7 @@ env_logger = "0.11"
 anyhow = "1"
 rand = "0.8"
 dirs = "6"
+sysinfo = { version = "0.31", default-features = false, features = ["system"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }
 palette = { version = "0.7", default-features = false, features = ["std"] }
 color-thief = "0.2.2"

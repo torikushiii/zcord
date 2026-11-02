@@ -26,6 +26,7 @@ far less memory. Text chat is the focus; voice is newer and still rough.
   favorites synced from Discord.
 - **People:** live member list with roles, presence and activities; profile popouts and full
   profiles, including avatar decorations, nameplates, profile effects and themes.
+- **Game activity:** optional detected game and Rich Presence sharing, off by default.
 - **Home:** friends, direct messages, group DMs, and message requests.
 - **Navigation:** quick switcher (`Ctrl K` / `Ctrl T`), smooth scrolling, `Esc` to jump to the
   latest message.

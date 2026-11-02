@@ -388,6 +388,7 @@ fn expired_configured_custom_status_is_not_restored_by_sessions_or_echoes() {
     let expired = crate::discord::settings_proto::StatusSettings {
         status: Some("online".into()),
         custom_status_present: true,
+        show_current_game: None,
         custom_status: Some(crate::discord::settings_proto::CustomStatus {
             text: "old".into(),
             emoji_id: 0,
@@ -467,6 +468,7 @@ fn identical_live_custom_status_keeps_configured_expiry_and_emoji_animation() {
     let configured = crate::discord::settings_proto::StatusSettings {
         status: Some("online".into()),
         custom_status_present: true,
+        show_current_game: None,
         custom_status: Some(crate::discord::settings_proto::CustomStatus {
             text: "working".into(),
             emoji_id: 42,
@@ -532,6 +534,7 @@ fn different_live_custom_status_supersedes_the_configured_fallback() {
     let configured = crate::discord::settings_proto::StatusSettings {
         status: Some("online".into()),
         custom_status_present: true,
+        show_current_game: None,
         custom_status: Some(crate::discord::settings_proto::CustomStatus {
             text: "old".into(),
             emoji_id: 0,

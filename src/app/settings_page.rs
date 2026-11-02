@@ -32,6 +32,7 @@ const VOICE_CONTENT_WIDTH: f32 = 728.;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Page {
     Account,
+    GameActivity,
     VoiceVideo,
     Appearance,
     Accessibility,
@@ -59,6 +60,21 @@ const PAGES: &[PageInfo] = &[
         icon: "user",
         sections: &["Account Info", "Password & Security"],
         keywords: &["username", "email", "phone", "two-factor", "mfa", "2fa"],
+    },
+    PageInfo {
+        page: Page::GameActivity,
+        group: "User Settings",
+        label: "Activity Privacy",
+        icon: "gamepad-2",
+        sections: &[],
+        keywords: &[
+            "game",
+            "activity",
+            "rich presence",
+            "playing",
+            "status",
+            "detected",
+        ],
     },
     PageInfo {
         page: Page::VoiceVideo,
