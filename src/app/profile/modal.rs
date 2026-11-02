@@ -499,18 +499,27 @@ fn friends_panel(
         .flex_col()
         .gap(rpx(4.))
         .children(friends.iter().map(|friend| {
+            let user_id = friend.id;
+            let entity = app.entity.clone();
             let name = friend
                 .global_name
                 .as_deref()
                 .filter(|name| !name.is_empty())
                 .unwrap_or(&friend.username);
             div()
+                .id(("mutual-friend-row", user_id))
                 .flex()
                 .items_center()
                 .gap(rpx(12.))
                 .p(rpx(8.))
                 .rounded(rpx(8.))
+                .cursor_pointer()
                 .hover(move |style| style.bg(palette.hover))
+                .on_click(move |_, _, cx| {
+                    entity
+                        .update(cx, |app, cx| app.open_full_profile_for(user_id, cx))
+                        .ok();
+                })
                 .child(theme::user_avatar(
                     app.store.user(friend.id),
                     friend.id,
