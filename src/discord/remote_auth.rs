@@ -382,7 +382,7 @@ fn close_outcome(code: Option<u16>, healthy: bool) -> Outcome {
 fn gateway_request(url: &str) -> Option<Request> {
     let mut request = url.into_client_request().ok()?;
     for (name, value) in [
-        ("user-agent", properties::USER_AGENT),
+        ("user-agent", properties::user_agent()),
         ("origin", "https://discord.com"),
         ("accept-language", properties::ACCEPT_LANGUAGE),
         ("cache-control", "no-cache"),
@@ -464,6 +464,7 @@ async fn exchange_ticket(url: &str, ticket: &str, key: &RsaPrivateKey) -> Result
         .map_err(|_| "Could not prepare the QR login request.".to_owned())?;
     let response = client
         .post(url)
+        .header("x-super-properties", properties::super_properties())
         .header(reqwest::header::REFERER, "https://discord.com/login")
         .header(reqwest::header::ORIGIN, "https://discord.com")
         .json(&json!({ "ticket": ticket }))

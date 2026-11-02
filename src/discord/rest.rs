@@ -62,6 +62,11 @@ impl Rest {
                     .insert("x-installation-id", installation.clone());
             }
             let permit = self.limits.acquire(Route::of(&request)).await?;
+            request.headers_mut().insert(
+                "x-super-properties",
+                HeaderValue::from_str(&properties::super_properties())
+                    .map_err(|_| Error::Decode)?,
+            );
             match self.execute(request, permit).await {
                 Err(Error::RateLimited { .. }) if attempt < 2 => continue,
                 result => return result,
@@ -149,14 +154,17 @@ impl Rest {
 
 pub(super) fn client_headers() -> Result<HeaderMap, Error> {
     let mut headers = HeaderMap::new();
-    headers.insert(USER_AGENT, HeaderValue::from_static(properties::USER_AGENT));
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static(properties::user_agent()),
+    );
     for (name, value) in [
         ("accept", "*/*"),
         ("accept-language", properties::ACCEPT_LANGUAGE),
         ("priority", "u=1, i"),
         ("sec-ch-ua", properties::SEC_CH_UA),
         ("sec-ch-ua-mobile", "?0"),
-        ("sec-ch-ua-platform", "\"Windows\""),
+        ("sec-ch-ua-platform", properties::sec_ch_ua_platform()),
         ("sec-fetch-dest", "empty"),
         ("sec-fetch-mode", "cors"),
         ("sec-fetch-site", "same-origin"),
@@ -164,10 +172,6 @@ pub(super) fn client_headers() -> Result<HeaderMap, Error> {
     ] {
         headers.insert(name, HeaderValue::from_static(value));
     }
-    headers.insert(
-        "x-super-properties",
-        HeaderValue::from_str(&properties::super_properties()).map_err(|_| Error::Decode)?,
-    );
     headers.insert(
         "x-discord-locale",
         HeaderValue::from_static(properties::LOCALE),
@@ -332,6 +336,47 @@ mod tests {
             body.len(),
         ).as_bytes()).await.unwrap();
         stream.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn super_properties_are_added_per_send_without_default_headers() {
+        assert!(!client_headers().unwrap().contains_key("x-super-properties"));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/api/v9/users/1/profile",
+            listener.local_addr().unwrap()
+        );
+        let rest = local_rest();
+        let server = async {
+            for _ in 0..2 {
+                let (stream, headers) = accept_upload(&listener).await;
+                let encoded = headers
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find_map(|(name, value)| {
+                        name.eq_ignore_ascii_case("x-super-properties")
+                            .then_some(value.trim())
+                    })
+                    .unwrap();
+                let decoded: Value =
+                    serde_json::from_slice(&STANDARD.decode(encoded).unwrap()).unwrap();
+                assert_eq!(decoded["browser_user_agent"], properties::user_agent());
+                assert!(
+                    decoded["client_heartbeat_session_id"]
+                        .as_str()
+                        .is_some_and(|id| id.len() == 36)
+                );
+                respond(stream, "200 OK", "", "{}").await;
+            }
+        };
+        let client = async {
+            for _ in 0..2 {
+                rest.send(|| rest.client.get(&url).header("x-super-properties", "stale"))
+                    .await
+                    .unwrap();
+            }
+        };
+        tokio::join!(server, client);
     }
 
     #[tokio::test]

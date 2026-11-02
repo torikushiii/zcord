@@ -679,7 +679,7 @@ pub fn init(cx: &mut App) {
         )
     });
     let client = reqwest::Client::builder()
-        .user_agent(crate::discord::USER_AGENT)
+        .user_agent(crate::discord::user_agent())
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(45))
         .build()

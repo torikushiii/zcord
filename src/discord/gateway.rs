@@ -318,7 +318,7 @@ fn resume_url(url: &str) -> Option<String> {
 fn gateway_request(url: &str) -> Option<Request> {
     let mut request = url.into_client_request().ok()?;
     for (name, value) in [
-        ("user-agent", properties::USER_AGENT),
+        ("user-agent", properties::user_agent()),
         ("origin", "https://discord.com"),
         ("accept-language", properties::ACCEPT_LANGUAGE),
         ("cache-control", "no-cache"),
