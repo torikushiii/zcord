@@ -1,5 +1,6 @@
 use chrono::{Local, NaiveDate, TimeZone};
 use gpui::{prelude::*, *};
+use gpui_component::scroll::ScrollableElement as _;
 
 use crate::{
     app::{
@@ -32,7 +33,7 @@ pub fn render(app: &DiscordApp, forum_id: u64, cx: &App) -> impl IntoElement + u
         .w_full()
         .px(rpx(16.))
         .py(rpx(16.))
-        .overflow_y_scroll()
+        .overflow_y_scrollbar()
         .when(!tags.is_empty(), |this| {
             this.child(
                 div()

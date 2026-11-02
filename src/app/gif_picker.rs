@@ -1,3 +1,4 @@
+use gpui_component::scroll::ScrollableElement as _;
 use std::{
     cell::Cell,
     collections::HashMap,
@@ -1077,7 +1078,7 @@ fn grid(
     let band = Rc::new(Cell::new((top / OVERSCAN) as i64));
     let scroll = picker.scroll.clone();
     let entity = app.entity.clone();
-    div()
+    let grid = div()
         .id(("gif-grid", picker.searches))
         .flex_1()
         .min_h_0()
@@ -1105,7 +1106,15 @@ fn grid(
                         })
                         .map(|(index, placed)| tile(app, index, placed, animate, cx)),
                 ),
-        )
+        );
+    div()
+        .relative()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .child(grid)
+        .vertical_scrollbar(&picker.scroll)
         .into_any_element()
 }
 

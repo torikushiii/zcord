@@ -1,3 +1,4 @@
+use gpui_component::scroll::ScrollableElement as _;
 use std::collections::HashMap;
 
 use gpui::{prelude::*, *};
@@ -706,7 +707,7 @@ fn info_card(app: &DiscordApp, popout: &Popout, window: &Window, cx: &App) -> An
         .max_h(max_height)
         .rounded(rpx(8.))
         .overflow_hidden()
-        .overflow_y_scroll()
+        .overflow_y_scrollbar()
         .border_1()
         .border_color(rgba(theme::BORDER))
         .shadow_lg()

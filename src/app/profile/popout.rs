@@ -1,3 +1,4 @@
+use gpui_component::scroll::ScrollableElement as _;
 use std::time::SystemTime;
 
 use crate::app::{
@@ -71,7 +72,7 @@ pub(super) fn popout(
                 .max_h((height - inset).max(px(0.)))
                 .rounded(rpx(corner))
                 .overflow_hidden()
-                .overflow_y_scroll()
+                .overflow_y_scrollbar()
                 .child(inner.flex_none())
                 .into_any_element()
         }

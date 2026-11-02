@@ -1,3 +1,4 @@
+use gpui_component::scroll::ScrollableElement as _;
 use std::{cell::Cell, rc::Rc, time::Duration};
 
 use gpui::{prelude::*, *};
@@ -545,7 +546,7 @@ fn device_picker(
                 .border_1()
                 .border_color(rgba(theme::BORDER))
                 .max_h(rpx(DEVICE_LIST_MAX_HEIGHT))
-                .overflow_y_scroll()
+                .overflow_y_scrollbar()
                 .occlude()
                 .on_mouse_down_out(move |event, _, cx| {
                     // The trigger closes on click; closing on mouse-down would reopen it.

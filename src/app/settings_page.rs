@@ -1,3 +1,4 @@
+use gpui_component::scroll::ScrollableElement as _;
 use std::time::Duration;
 
 use gpui::{prelude::*, *};
@@ -556,7 +557,7 @@ fn sidebar(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> impl IntoElem
                 .pb(rpx(16.))
                 .pl(rpx(4.))
                 .pr(rpx(16.))
-                .overflow_y_scroll()
+                .overflow_y_scrollbar()
                 .child(
                     div()
                         .flex()
@@ -722,32 +723,41 @@ fn content(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> impl IntoElem
         .child(header)
         .child(
             div()
-                .id("settings-content")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .track_scroll(&settings.scroll)
+                .relative()
                 .flex()
                 .flex_col()
-                .px(rpx(if voice_page { 0. } else { 40. }))
-                .pt(rpx(if voice_page { 64. } else { 48. }))
-                // Voice & Video is the tallest page. At 80 its content overflows the pane by
-                // the bottom padding alone, leaving a few pixels of empty scroll range.
-                .pb(rpx(if voice_page { 24. } else { 80. }))
-                // Each section is a direct child so the sidebar can scroll to it by index.
-                .children(
-                    sections::page(app, settings, cx)
-                        .into_iter()
-                        .map(|section| {
-                            div()
-                                .flex_none()
-                                .mx_auto()
-                                .w_full()
-                                .max_w(rpx(content_width))
-                                .px(rpx(if voice_page { 16. } else { 0. }))
-                                .child(section)
-                        }),
-                ),
+                .flex_1()
+                .min_h_0()
+                .child(
+                    div()
+                        .id("settings-content")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .track_scroll(&settings.scroll)
+                        .flex()
+                        .flex_col()
+                        .px(rpx(if voice_page { 0. } else { 40. }))
+                        .pt(rpx(if voice_page { 64. } else { 48. }))
+                        // Voice & Video is the tallest page. At 80 its content overflows the pane by
+                        // the bottom padding alone, leaving a few pixels of empty scroll range.
+                        .pb(rpx(if voice_page { 24. } else { 80. }))
+                        // Each section is a direct child so the sidebar can scroll to it by index.
+                        .children(
+                            sections::page(app, settings, cx)
+                                .into_iter()
+                                .map(|section| {
+                                    div()
+                                        .flex_none()
+                                        .mx_auto()
+                                        .w_full()
+                                        .max_w(rpx(content_width))
+                                        .px(rpx(if voice_page { 16. } else { 0. }))
+                                        .child(section)
+                                }),
+                        ),
+                )
+                .vertical_scrollbar(&settings.scroll),
         )
 }
 

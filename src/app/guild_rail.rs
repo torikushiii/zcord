@@ -35,6 +35,8 @@ const ACTIVITY_TOOLTIP_MAX_WIDTH: f32 = 264.;
 /// Circle to square on hover-in is slower than the snap back on hover-out.
 const MORPH_IN: Duration = Duration::from_millis(300);
 const MORPH_OUT: Duration = Duration::from_millis(180);
+pub(crate) const FOLDER_FOLD: Duration = Duration::from_millis(200);
+const RAIL_GAP: f32 = 8.;
 
 struct Morph {
     id: u64,
@@ -95,6 +97,55 @@ impl Morphs {
             .values()
             .any(|morph| morph.running(now))
             .then_some(now)
+    }
+}
+
+struct FolderFold {
+    id: u64,
+    started: Instant,
+    from: f32,
+    to: f32,
+}
+
+impl FolderFold {
+    fn openness(&self, now: Instant) -> Option<f32> {
+        let progress = now.duration_since(self.started).as_secs_f32() / FOLDER_FOLD.as_secs_f32();
+        (progress < 1.).then(|| self.from + (self.to - self.from) * ease_out_quint()(progress))
+    }
+}
+
+#[derive(Default)]
+pub struct FolderFolds {
+    active: HashMap<u64, FolderFold>,
+    next_id: u64,
+}
+
+impl FolderFolds {
+    pub fn start(&mut self, key: u64, opening: bool) {
+        let now = Instant::now();
+        let to = if opening { 1. } else { 0. };
+        let from = self
+            .active
+            .get(&key)
+            .and_then(|fold| fold.openness(now))
+            .unwrap_or(1. - to);
+        self.active.retain(|_, fold| fold.openness(now).is_some());
+        self.next_id += 1;
+        self.active.insert(
+            key,
+            FolderFold {
+                id: self.next_id,
+                started: now,
+                from,
+                to,
+            },
+        );
+    }
+
+    fn running(&self, key: u64, now: Instant) -> Option<&FolderFold> {
+        self.active
+            .get(&key)
+            .filter(|fold| fold.openness(now).is_some())
     }
 }
 
@@ -308,6 +359,8 @@ fn guild_icon(
 fn folder_item(app: &DiscordApp, folder: &Folder, cx: &App, morphs: Option<Instant>) -> AnyElement {
     let id = folder.id;
     let open = app.is_folder_open(id);
+    let fold = app.folder_folds.running(id, Instant::now());
+    let expanded = open || fold.is_some();
     let color = folder.color.unwrap_or(DEFAULT_FOLDER_COLOR);
     let guilds: Vec<&Guild> = folder
         .guild_ids
@@ -352,9 +405,9 @@ fn folder_item(app: &DiscordApp, folder: &Folder, cx: &App, morphs: Option<Insta
             .justify_center()
             .size(rpx(ICON))
             .rounded(rpx(16.))
-            .when(!open, |this| this.bg(tint))
+            .when(!expanded, |this| this.bg(tint))
             .map(|this| {
-                if open {
+                if expanded {
                     this.child(theme::icon("folder", 24., color))
                 } else {
                     this.child(div().flex().flex_wrap().gap(rpx(4.)).w(rpx(36.)).children(
@@ -365,12 +418,13 @@ fn folder_item(app: &DiscordApp, folder: &Folder, cx: &App, morphs: Option<Insta
                 }
             }),
     )
-    .when(!open, |this| this.children(corner_badge(mentions)));
+    .when(!expanded, |this| this.children(corner_badge(mentions)));
 
-    if !open {
+    if !expanded {
         return header.into_any_element();
     }
-    div()
+    let list_height = guilds.len() as f32 * (ICON + RAIL_GAP) + RAIL_GAP;
+    let body = div()
         .relative()
         .flex()
         .flex_col()
@@ -393,8 +447,22 @@ fn folder_item(app: &DiscordApp, folder: &Folder, cx: &App, morphs: Option<Insta
             guilds
                 .iter()
                 .map(|guild| guild_item(app, guild, cx, morphs)),
-        )
-        .into_any_element()
+        );
+    match fold {
+        Some(fold) => {
+            let (from, to) = (fold.from, fold.to);
+            body.overflow_hidden()
+                .with_animation(
+                    ("folder-fold", fold.id),
+                    Animation::new(FOLDER_FOLD).with_easing(ease_out_quint()),
+                    move |this, delta| {
+                        this.h(rpx(ICON + list_height * (from + (to - from) * delta)))
+                    },
+                )
+                .into_any_element()
+        }
+        None => body.into_any_element(),
+    }
 }
 
 fn rail_item(

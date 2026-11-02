@@ -1,3 +1,4 @@
+use gpui_component::scroll::ScrollableElement as _;
 use std::time::Duration;
 
 use gpui::{prelude::*, *};
@@ -272,12 +273,17 @@ pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
         .when(!results.is_empty(), |this| {
             this.child(
                 div()
-                    .id("quick-switcher-results")
+                    .relative()
                     .mt(rpx(18.))
-                    .max_h(rpx(RESULTS_HEIGHT))
-                    .overflow_y_scroll()
-                    .track_scroll(&switcher.scroll)
-                    .children(results),
+                    .child(
+                        div()
+                            .id("quick-switcher-results")
+                            .max_h(rpx(RESULTS_HEIGHT))
+                            .overflow_y_scroll()
+                            .track_scroll(&switcher.scroll)
+                            .children(results),
+                    )
+                    .vertical_scrollbar(&switcher.scroll),
             )
         })
         .when(empty, |this| {
