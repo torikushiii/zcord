@@ -19,7 +19,7 @@ const ROW_PADDING: f32 = 8.;
 const AVATAR: f32 = 32.;
 const AVATAR_GAP: f32 = 12.;
 const NAMEPLATE_OPACITY: f32 = 0.6;
-const NAMEPLATE_DIM: u32 = 0xB3;
+pub(crate) const NAMEPLATE_DIM: u32 = 0xB3;
 const NAMEPLATE_FADE: f32 = 50.;
 const NAMEPLATE_TEXT_MARGIN: f32 = 10.;
 
@@ -443,7 +443,8 @@ fn palette_wash(color: u32, hovered: bool) -> impl IntoElement {
         )))
 }
 
-fn nameplate_mask(dim: Rgba) -> [AnyElement; 2] {
+/// Dims the art behind a name. Its row has to clip, since this reaches a row's height past it.
+pub(crate) fn nameplate_mask(dim: Rgba) -> [AnyElement; 2] {
     let full_row = rpx(ROW_HEIGHT);
     [
         div()

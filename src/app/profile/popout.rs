@@ -541,8 +541,6 @@ fn popout_body(
     window: &Window,
     cx: &App,
 ) -> impl IntoElement {
-    let user = app.store.user(card.user_id);
-    let palette = card.palette();
     let entity = app.entity.clone();
     div()
         .flex()
@@ -565,17 +563,29 @@ fn popout_body(
                 return this.child(skeleton(card.user_id));
             }
             this.children(bio(app, card, true, cx))
-                .children(board::popout_widget(app, card, cx))
-                .children(
-                    board::popout_playing(app, card, cx)
-                        .or_else(|| user.and_then(|user| playing(user, palette))),
-                )
-                .children(board::listening(app, card, false, cx))
+                .children(board_sections(app, card, cx))
                 .when(!card.is_account(), |this| this.children(roles(app, card)))
         })
         .when(card.is_account(), |this| {
             this.child(account_menu(app, card, window, cx))
         })
+}
+
+pub(super) fn board_sections(
+    app: &DiscordApp,
+    card: &ProfileCard,
+    cx: &App,
+) -> impl Iterator<Item = AnyElement> {
+    let user = app.store.user(card.user_id);
+    let playing = board::popout_playing(app, card, cx)
+        .or_else(|| user.and_then(|user| playing(user, card.palette())));
+    [
+        board::popout_widget(app, card, cx),
+        playing,
+        board::listening(app, card, false, cx),
+    ]
+    .into_iter()
+    .flatten()
 }
 
 fn account_menu(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &App) -> AnyElement {
@@ -634,7 +644,7 @@ fn account_menu(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &App)
 }
 
 /// Stands in for the bio and roles while a profile nobody has opened before is fetched.
-fn skeleton(user_id: u64) -> impl IntoElement {
+pub(super) fn skeleton(user_id: u64) -> impl IntoElement {
     let bar = |width: DefiniteLength, height: f32| {
         div()
             .w(width)

@@ -568,12 +568,18 @@ fn nav_row(
         .when(badge > 0, |this| this.child(count_pill(badge)))
 }
 
-fn dm_avatar(app: &DiscordApp, dm: &PrivateChannel, ring: u32, cx: &App) -> AnyElement {
+fn dm_avatar(
+    app: &DiscordApp,
+    dm: &PrivateChannel,
+    ring: u32,
+    animate: bool,
+    cx: &App,
+) -> AnyElement {
     if !dm.group {
         let user_id = dm.recipient_ids.first().copied().unwrap_or(0);
         let user = app.store.user(user_id);
         let status = user.map_or(Status::Offline, |user| user.status);
-        return theme::user_avatar(user, user_id, DM_AVATAR, Some((status, ring)), false, cx)
+        return theme::user_avatar(user, user_id, DM_AVATAR, Some((status, ring)), animate, cx)
             .into_any_element();
     }
     let image = dm
@@ -633,36 +639,146 @@ fn dm_row(
     } else {
         theme::BG
     };
-    let tag = (!dm.group)
-        .then(|| dm.recipient_ids.first())
-        .flatten()
-        .and_then(|user_id| app.store.user(*user_id))
+    let recipient = dm.recipient_ids.first().copied().filter(|_| !dm.group);
+    let user = recipient.and_then(|user_id| app.store.user(user_id));
+    let hovered = recipient.is_some() && app.hovered_member == recipient;
+    let tag = user
         .and_then(|user| user.tag.as_ref())
         .map(|tag| theme::guild_tag(tag, cx));
     let entity = app.entity.clone();
-    div()
+    let row = div()
         .id(("dm", id))
         .relative()
+    let dm_name_line = div()
         .flex()
-        .flex_none()
+        .items_center()
+        .gap_1()
+        .min_w_0()
+        .text_size(rpx(16.))
+        .line_height(rpx(20.))
+        .font_weight(if unread {
+            FontWeight::SEMIBOLD
+        } else {
+            FontWeight::MEDIUM
+        })
+        .child(div().min_w_0().truncate().child(display_name::render(
+            ("dm-name", id),
+            &name,
+            user.and_then(|user| user.name_style.as_ref()),
+            Surface::Account { hovered },
+            cx,
+        )))
+        .children(tag);
+    let dm_subtitle = subtitle.map(|(text, icon)| {
+        div()
+            .flex()
+            .items_center()
+            .gap(rpx(4.))
+            .min_w_0()
+            .text_size(rpx(12.))
+            .line_height(rpx(16.))
+            .text_color(rgb(theme::MUTED))
+            .children(icon.map(|icon| theme::icon(icon, 14., theme::GREEN)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(label(("dm-subtitle", id), &text)),
+            )
+    });
+    let nameplate = user.zip(recipient).and_then(|(user, user_id)| {
+        member_list::nameplate_layer(user.nameplate.as_ref()?, user_id, DM_HEIGHT, hovered, cx)
+    });
+    let plated = nameplate.is_some();
+    let dim = rgba(
+        if selected {
+            ring
+        } else if hovered {
+            theme::composite(theme::HOVER, theme::BG)
+        } else {
+            theme::BG
+        } << 8
+            | member_list::NAMEPLATE_DIM,
+    );
+        .flex()
         .items_center()
         .gap(rpx(12.))
         .h(rpx(DM_HEIGHT))
-        .mt(rpx(2.))
         .px_2()
         .rounded(rpx(8.))
+        .w_full()
         .cursor_pointer()
         .text_color(rgb(text))
         .when(selected, |this| this.bg(rgba(theme::SELECTED)))
         .when(!selected, |this| {
+        .overflow_hidden()
             this.hover(|style| style.bg(rgba(theme::HOVER)).text_color(rgb(theme::TEXT)))
         })
         .without_text_selection()
         .on_click(move |_, window, cx| {
             entity
                 .update(cx, |app, cx| app.select_dm(id, window, cx))
+        .when_some(recipient, |this, user_id| {
+            let entity = app.entity.clone();
+            this.on_hover(move |hovered, _, cx| {
+                entity
+                    .update(cx, |app, cx| {
+                        if *hovered || app.hovered_member == Some(user_id) {
+                            app.hovered_member = hovered.then_some(user_id);
+                            cx.notify();
+                        }
+                    })
+                    .ok();
+            })
+        })
                 .ok();
         })
+        .children(nameplate)
+        .when(plated, |this| {
+            this.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(rpx(8. + DM_AVATAR + 12.))
+                    .bg(dim),
+            )
+        })
+        .child(dm_avatar(app, dm, ring, hovered, cx))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                .items_start()
+                        .gap_1()
+                        .min_w_0()
+                        .relative()
+                        .when(plated, |this| {
+                            this.children(member_list::nameplate_mask(dim))
+                        })
+                        .child(dm_name_line)
+                        .children(dm_subtitle),
+                ),
+        )
+        .when(dm.channel.mentions > 0, |this| {
+            this.child(count_pill(dm.channel.mentions))
+        })
+}
+
+pub(crate) fn friends_header(app: &DiscordApp) -> impl IntoElement + use<> {
+        });
+    div()
+        .relative()
+        .flex_none()
+        .mt(rpx(2.))
         .when(unread, |this| {
             this.child(
                 div()
@@ -674,61 +790,8 @@ fn dm_row(
                     .rounded_r(rpx(4.))
                     .bg(rgb(theme::STRONG)),
             )
-        })
-        .child(dm_avatar(app, dm, ring, cx))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_w_0()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .min_w_0()
-                        .text_size(rpx(16.))
-                        .line_height(rpx(20.))
-                        .font_weight(if unread {
-                            FontWeight::SEMIBOLD
-                        } else {
-                            FontWeight::MEDIUM
-                        })
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .child(label(("dm-name", id), &name)),
-                        )
-                        .children(tag),
-                )
-                .children(subtitle.map(|(text, icon)| {
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(rpx(4.))
-                        .min_w_0()
-                        .text_size(rpx(12.))
-                        .line_height(rpx(16.))
-                        .text_color(rgb(theme::MUTED))
-                        .children(icon.map(|icon| theme::icon(icon, 14., theme::GREEN)))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .child(label(("dm-subtitle", id), &text)),
-                        )
-                })),
-        )
-        .when(dm.channel.mentions > 0, |this| {
-            this.child(count_pill(dm.channel.mentions))
-        })
-}
-
-pub(crate) fn friends_header(app: &DiscordApp) -> impl IntoElement + use<> {
     let tab = |tab: FriendsTab, badge: u32| {
+        .child(row)
         let selected = app.home.tab == tab;
         let entity = app.entity.clone();
         div()
@@ -1054,8 +1117,8 @@ fn friend_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement + us
                 .child(
                     div()
                         .flex()
-                        .items_center()
-                        .gap_1()
+                        .flex_col()
+                        .max_w_full()
                         .min_w_0()
                         .child(
                             div()
@@ -1916,7 +1979,7 @@ fn request_row(app: &DiscordApp, dm: &PrivateChannel, cx: &App) -> impl IntoElem
                 .update(cx, |app, cx| app.select_dm(id, window, cx))
                 .ok();
         })
-        .child(dm_avatar(app, dm, theme::BG, cx))
+        .child(dm_avatar(app, dm, theme::BG, false, cx))
         .child(
             div()
                 .flex()

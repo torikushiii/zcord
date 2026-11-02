@@ -1,6 +1,18 @@
 use super::*;
 
 impl DiscordApp {
+    pub(super) fn profile_slot(&mut self, panel: bool) -> Option<&mut ProfileCard> {
+        if panel {
+            self.dm_profile.as_mut()
+        } else {
+            self.profile.as_mut()
+        }
+    }
+
+    pub(super) fn active_card(&mut self) -> Option<&mut ProfileCard> {
+        self.profile.as_mut().or(self.dm_profile.as_mut())
+    }
+
     pub(crate) fn open_profile(
         &mut self,
         user_id: u64,
@@ -83,7 +95,7 @@ impl DiscordApp {
             self.profile_loaded(user_id, guild_id, ProfileKind::Popout, profile, cx);
         }
         self.load_profile(ProfileKind::Modal, cx);
-        self.prefetch_profile_details(cx);
+        self.prefetch_profile_details(false, cx);
         self.start_profile_game_timer(cx);
         if let Some(card) = &mut self.profile {
             // Redraw when the wait runs out so the skeleton gives way to whatever has arrived.
@@ -95,6 +107,19 @@ impl DiscordApp {
     }
 
     pub(crate) fn open_full_profile(&mut self, cx: &mut Context<Self>) {
+        if self.profile.is_none()
+            && let Some(user_id) = self.dm_profile.as_ref().map(|card| card.user_id)
+        {
+            // The DM panel has no popout behind it, so the dialog gets a card of its own.
+            self.profile = Some(ProfileCard::new(
+                user_id,
+                None,
+                point(px(0.), px(0.)),
+                Anchor::TopRight,
+                ProfileOrigin::Member,
+            ));
+            self.load_profile_scope(cx);
+        }
         let Some(card) = &mut self.profile else {
             return;
         };
@@ -109,7 +134,7 @@ impl DiscordApp {
     }
 
     pub(super) fn toggle_profile_widget(&mut self, widget_id: u64, cx: &mut Context<Self>) {
-        if let Some(card) = &mut self.profile {
+        if let Some(card) = self.active_card() {
             if !card.expanded_widgets.remove(&widget_id) {
                 card.expanded_widgets.insert(widget_id);
             }
@@ -140,13 +165,14 @@ impl DiscordApp {
         hovered: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(card) = &mut self.profile else {
+        let Some(card) = self.active_card() else {
             return;
         };
         let state = &mut card.hovered_art[slot as usize];
         if *state != hovered {
             *state = hovered;
             self.views.overlays.update(cx, |_, cx| cx.notify());
+            self.views.members.update(cx, |_, cx| cx.notify());
         }
     }
 
@@ -156,7 +182,7 @@ impl DiscordApp {
         hovered: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(card) = &mut self.profile else {
+        let Some(card) = self.active_card() else {
             return;
         };
         let next = if hovered {
@@ -167,6 +193,7 @@ impl DiscordApp {
         if card.hovered_cover != next {
             card.hovered_cover = next;
             self.views.overlays.update(cx, |_, cx| cx.notify());
+            self.views.members.update(cx, |_, cx| cx.notify());
         }
     }
 
@@ -176,7 +203,7 @@ impl DiscordApp {
         hovered: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(card) = &mut self.profile else {
+        let Some(card) = self.active_card() else {
             return;
         };
         let next = if hovered {
@@ -187,6 +214,7 @@ impl DiscordApp {
         if card.hovered_badge != next {
             card.hovered_badge = next;
             self.views.overlays.update(cx, |_, cx| cx.notify());
+            self.views.members.update(cx, |_, cx| cx.notify());
         }
     }
 
@@ -262,12 +290,16 @@ impl DiscordApp {
         }));
     }
 
-    fn prefetch_profile_details(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn prefetch_profile_details(&mut self, panel: bool, cx: &mut Context<Self>) {
         let channel_id = self.selected_channel_id;
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;
         };
-        let Some(card) = &mut self.profile else {
+        let Some(card) = (if panel {
+            &mut self.dm_profile
+        } else {
+            &mut self.profile
+        }) else {
             return;
         };
         if card.details_requested {
@@ -322,8 +354,7 @@ impl DiscordApp {
                 };
                 this.update(cx, |app, cx| {
                     let Some(card) = app
-                        .profile
-                        .as_mut()
+                        .profile_slot(panel)
                         .filter(|card| card.user_id == user_id && card.guild_id == guild_id)
                     else {
                         return;
@@ -358,8 +389,7 @@ impl DiscordApp {
                 };
                 this.update(cx, |app, cx| {
                     let Some(card) = app
-                        .profile
-                        .as_mut()
+                        .profile_slot(panel)
                         .filter(|card| card.user_id == user_id && card.guild_id == guild_id)
                     else {
                         return;
@@ -389,8 +419,7 @@ impl DiscordApp {
                 let application_ids = outbox_application_ids(&outbox);
                 this.update(cx, |app, cx| {
                     let Some(card) = app
-                        .profile
-                        .as_mut()
+                        .profile_slot(panel)
                         .filter(|card| card.user_id == user_id && card.guild_id == guild_id)
                     else {
                         return;
@@ -424,8 +453,7 @@ impl DiscordApp {
                 };
                 this.update(cx, |app, cx| {
                     let Some(card) = app
-                        .profile
-                        .as_mut()
+                        .profile_slot(panel)
                         .filter(|card| card.user_id == user_id && card.guild_id == guild_id)
                     else {
                         return;
@@ -493,19 +521,7 @@ impl DiscordApp {
         if kind == ProfileKind::Modal {
             card.modal_request_pending = false;
         }
-        let effect = guild_profile(&profile)
-            .and_then(|p| p.profile_effect.as_ref())
-            .or_else(|| profile.user_profile.as_ref()?.profile_effect.as_ref())
-            .map(|effect| effect.sku_id);
-        let frame_of = |p: &model::UserProfile| {
-            p.collectibles
-                .iter()
-                .find(|c| c.kind == 3)
-                .map(|c| c.sku_id)
-        };
-        let frame = guild_profile(&profile)
-            .and_then(frame_of)
-            .or_else(|| profile.user_profile.as_ref().and_then(frame_of));
+        let (effect, frame) = cosmetic_skus(&profile);
         let load_board = kind == ProfileKind::Modal && !card.board_requested;
         let popout = kind == ProfileKind::Popout;
         let mut game_ids = if load_board || popout {
@@ -586,50 +602,6 @@ impl DiscordApp {
                 .ok();
             }));
         }
-        for (sku_id, is_effect) in effect
-            .map(|sku| (sku, true))
-            .into_iter()
-            .chain(frame.map(|sku| (sku, false)))
-        {
-            if !card.cosmetics_pending.insert(sku_id) {
-                continue;
-            }
-            let session = session.clone();
-            let request =
-                Tokio::spawn(cx, async move { session.collectible_product(sku_id).await });
-            card._tasks.push(cx.spawn(async move |this, cx| {
-                let product = match request.await {
-                    Ok(Ok(product)) => Some(product),
-                    Ok(Err(error)) => {
-                        log::warn!(
-                            "Could not load profile cosmetic {sku_id} for user {user_id}: {error}"
-                        );
-                        None
-                    }
-                    Err(error) => {
-                        log::warn!("Profile cosmetic task failed for user {user_id}: {error}");
-                        None
-                    }
-                };
-                this.update(cx, |app, cx| {
-                    let Some(card) = app
-                        .profile
-                        .as_mut()
-                        .filter(|c| c.user_id == user_id && c.guild_id == guild_id)
-                    else {
-                        return;
-                    };
-                    card.cosmetics_pending.remove(&sku_id);
-                    match product {
-                        Some(product) if is_effect => card.effect = Some(product),
-                        Some(product) => card.frame = Some(product),
-                        None => {}
-                    }
-                    cx.notify();
-                })
-                .ok();
-            }));
-        }
         if effect.is_some() && !card.effect_timer_started {
             card.effect_timer_started = true;
             card._tasks.push(cx.spawn(async move |this, cx| {
@@ -664,8 +636,68 @@ impl DiscordApp {
         card.load_linked_metadata(session, cx);
         self.prefetch_profile_images(cx);
         self.start_profile_game_timer(cx);
-        self.load_avatar_theme(cx);
+        self.load_profile_cosmetics(false, effect, frame, cx);
+        self.load_avatar_theme(false, cx);
         cx.notify();
+    }
+
+    pub(super) fn load_profile_cosmetics(
+        &mut self,
+        panel: bool,
+        effect_sku: Option<u64>,
+        frame_sku: Option<u64>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let Some(card) = self.profile_slot(panel) else {
+            return;
+        };
+        let (user_id, guild_id) = (card.user_id, card.guild_id);
+        for (sku_id, is_effect) in effect_sku
+            .map(|sku| (sku, true))
+            .into_iter()
+            .chain(frame_sku.map(|sku| (sku, false)))
+        {
+            if !card.cosmetics_pending.insert(sku_id) {
+                continue;
+            }
+            let session = session.clone();
+            let request =
+                Tokio::spawn(cx, async move { session.collectible_product(sku_id).await });
+            card._tasks.push(cx.spawn(async move |this, cx| {
+                let product = match request.await {
+                    Ok(Ok(product)) => Some(product),
+                    Ok(Err(error)) => {
+                        log::warn!(
+                            "Could not load profile cosmetic {sku_id} for user {user_id}: {error}"
+                        );
+                        None
+                    }
+                    Err(error) => {
+                        log::warn!("Profile cosmetic task failed for user {user_id}: {error}");
+                        None
+                    }
+                };
+                this.update(cx, |app, cx| {
+                    let Some(card) = app
+                        .profile_slot(panel)
+                        .filter(|c| c.user_id == user_id && c.guild_id == guild_id)
+                    else {
+                        return;
+                    };
+                    card.cosmetics_pending.remove(&sku_id);
+                    match product {
+                        Some(product) if is_effect => card.effect = Some(product),
+                        Some(product) => card.frame = Some(product),
+                        None => {}
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }));
+        }
     }
 
     fn start_profile_game_timer(&mut self, cx: &mut Context<Self>) {
@@ -705,8 +737,12 @@ impl DiscordApp {
         }));
     }
 
-    fn load_avatar_theme(&mut self, cx: &mut Context<Self>) {
-        let Some(card) = &mut self.profile else {
+    pub(super) fn load_avatar_theme(&mut self, panel: bool, cx: &mut Context<Self>) {
+        let Some(card) = (if panel {
+            &mut self.dm_profile
+        } else {
+            &mut self.profile
+        }) else {
             return;
         };
         if !ProfileTheme::needs_avatar(card.profile.as_deref()) {
@@ -741,7 +777,7 @@ impl DiscordApp {
         card._tasks.push(cx.spawn(async move |this, cx| {
             let colors = request.await.ok().flatten();
             this.update(cx, |app, cx| {
-                let Some(card) = app.profile.as_mut().filter(|card| {
+                let Some(card) = app.profile_slot(panel).filter(|card| {
                     card.user_id == user_id
                         && card.guild_id == guild_id
                         && card.avatar_theme_source.as_ref() == Some(&spec)
@@ -770,6 +806,7 @@ impl ProfileCard {
     ) -> Self {
         Self {
             user_id,
+            panel: false,
             guild_id,
             source_guild_id: guild_id,
             more_menu_open: false,
@@ -853,6 +890,23 @@ impl ProfileCard {
         *self = next;
         true
     }
+}
+
+pub(super) fn cosmetic_skus(profile: &model::Profile) -> (Option<u64>, Option<u64>) {
+    let effect = guild_profile(profile)
+        .and_then(|p| p.profile_effect.as_ref())
+        .or_else(|| profile.user_profile.as_ref()?.profile_effect.as_ref())
+        .map(|effect| effect.sku_id);
+    let frame_of = |p: &model::UserProfile| {
+        p.collectibles
+            .iter()
+            .find(|c| c.kind == 3)
+            .map(|c| c.sku_id)
+    };
+    let frame = guild_profile(profile)
+        .and_then(frame_of)
+        .or_else(|| profile.user_profile.as_ref().and_then(frame_of));
+    (effect, frame)
 }
 
 fn scoped_profile(mut profile: Arc<model::Profile>, guild_id: Option<u64>) -> Arc<model::Profile> {
