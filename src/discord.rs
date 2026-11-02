@@ -155,7 +155,6 @@ impl UploadProgress {
 
 #[derive(Clone)]
 pub struct UploadTarget {
-    pub id: u64,
     pub upload_url: String,
     pub upload_filename: String,
 }

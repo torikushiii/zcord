@@ -673,7 +673,6 @@ mod tests {
         let response = r#"{"attachments":[{"id":0,"upload_url":"https://cdn.discordapp.com/attachments/1/2/uuid/image.png","upload_filename":"uuid/image.png"}]}"#;
         let targets = parse_uploads(response).unwrap();
         assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].id, 0);
         assert_eq!(
             targets[0].upload_url,
             "https://cdn.discordapp.com/attachments/1/2/uuid/image.png"

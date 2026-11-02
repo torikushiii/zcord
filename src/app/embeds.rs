@@ -926,7 +926,8 @@ fn media_grid(
     key: impl Fn(usize) -> u64,
     cx: &App,
 ) -> Div {
-    mosaic(media.len(), width, media[0], |slot, w, h| {
+    let lead = (media[0].width, media[0].height);
+    mosaic(media.len(), width, lead, |slot, w, h| {
         lightbox_box(app, key(slot), media[slot], w, h, 4., cx).into_any_element()
     })
 }
@@ -934,10 +935,10 @@ fn media_grid(
 /// Discord's media mosaic (MediaMosaic CSS): two side by side, three as a large tile beside a
 /// stacked pair, four as a 2x2 grid, and more as rows of square thirds led by a full-width
 /// tile or a pair when the count isn't a multiple of three.
-fn mosaic(
+pub(super) fn mosaic(
     count: usize,
     width: f32,
-    lead: &Media,
+    (lead_width, lead_height): (u32, u32),
     mut tile: impl FnMut(usize, f32, f32) -> AnyElement,
 ) -> Div {
     const GAP: f32 = 4.;
@@ -984,8 +985,8 @@ fn mosaic(
     let mut rows = Vec::new();
     match leading {
         1 => {
-            let natural = if lead.width > 0 && lead.height > 0 {
-                width * lead.height as f32 / lead.width as f32
+            let natural = if lead_width > 0 && lead_height > 0 {
+                width * lead_height as f32 / lead_width as f32
             } else {
                 width * 9. / 16.
             };
@@ -1286,7 +1287,8 @@ fn gallery(
     let Some((_, lead)) = keyed.first() else {
         return div().into_any_element();
     };
-    mosaic(keyed.len(), PLAIN_MEDIA.0, &lead.media, |slot, w, h| {
+    let lead = (lead.media.width, lead.media.height);
+    mosaic(keyed.len(), PLAIN_MEDIA.0, lead, |slot, w, h| {
         let (key, item) = keyed[slot];
         spoiler_media(app, key, item.spoiler, &item.media, w, h, 4., cx).into_any_element()
     })
