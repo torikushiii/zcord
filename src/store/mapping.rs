@@ -287,8 +287,34 @@ fn map_component(component: &model::Component) -> Option<Component> {
             spoiler: component.spoiler,
             components: map_components(&component.components),
         },
+        16 => {
+            let view = component
+                .content_inventory_entry
+                .as_ref()
+                .and_then(|value| serde_json::from_value::<model::OutboxEntry>(value.clone()).ok())
+                .and_then(|entry| {
+                    super::activity_feed::entry_view(&entry, chrono::Utc::now().timestamp_millis())
+                })?;
+            Component::ActivityEntry(view)
+        }
         _ => return None,
     })
+}
+
+/// A type-16 activity card supersedes its legacy flagged embed (flags bit 5).
+fn embeds_without_activity_card(
+    embeds: &[model::Embed],
+    components: &[model::Component],
+) -> Vec<model::Embed> {
+    if components.iter().any(|component| component.kind == 16) {
+        embeds
+            .iter()
+            .filter(|embed| embed.flags & (1 << 5) == 0)
+            .cloned()
+            .collect()
+    } else {
+        embeds.to_vec()
+    }
 }
 
 pub(super) fn map_stickers(stickers: &[model::Sticker]) -> Vec<Sticker> {
@@ -346,7 +372,10 @@ pub(super) fn map_message(message: &model::Message) -> Option<Message> {
         timestamp: local_timestamp(&message.timestamp)?,
         delivery: Delivery::Sent,
         content: message.content.clone(),
-        embeds: map_embeds(&message.embeds, message.flags),
+        embeds: map_embeds(
+            &embeds_without_activity_card(&message.embeds, &message.components),
+            message.flags,
+        ),
         components: map_components(&message.components),
         reactions: map_reactions(&message.reactions),
         attachments: message.attachments.clone(),
@@ -390,7 +419,10 @@ pub(super) fn map_snapshot(
 ) -> Forward {
     Forward {
         content: snapshot.content.clone(),
-        embeds: map_embeds(&snapshot.embeds, snapshot.flags),
+        embeds: map_embeds(
+            &embeds_without_activity_card(&snapshot.embeds, &snapshot.components),
+            snapshot.flags,
+        ),
         components: map_components(&snapshot.components),
         attachments: snapshot.attachments.clone(),
         stickers: map_stickers(&snapshot.sticker_items),

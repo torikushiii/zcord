@@ -110,6 +110,9 @@ pub struct OutgoingMessage {
     pub reply: Option<OutgoingReply>,
     pub attachments: Vec<OutgoingAttachment>,
     pub sticker_ids: Vec<u64>,
+    /// Attaches an activity reply/reaction to its inventory entry; the value is echoed
+    /// byte-for-byte inside `unverified_content`.
+    pub content_inventory_entry: Option<Arc<serde_json::Value>>,
 }
 
 pub struct OutgoingReply {

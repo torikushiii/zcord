@@ -9,6 +9,7 @@ use chrono::{Datelike, Timelike};
 use serde_json::json;
 
 mod account;
+mod activity_feed;
 mod channels;
 mod embeds;
 mod expressions;

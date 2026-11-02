@@ -14,6 +14,9 @@ macro_rules! icons {
 }
 
 const ICONS: &[(&str, &[u8])] = icons![
+    "activity-game",
+    "activity-streak",
+    "activity-trophy",
     "paperclip",
     "chart-column",
     "monitor-share",

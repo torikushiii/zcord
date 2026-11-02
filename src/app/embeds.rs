@@ -1222,6 +1222,9 @@ fn render_component(
             );
             spoiler_cover(app, key, *spoiler, element)
         }
+        Component::ActivityEntry(entry) => {
+            crate::app::member_list::activity::dm_card(app, entry, cx)
+        }
     }
 }
 

@@ -429,7 +429,7 @@ impl DiscordApp {
             pane.list.set_follow_mode(FollowMode::Tail);
         }
         let files = self.staged.remove(&channel_id).unwrap_or_default();
-        self.submit_send(channel_id, content, None, files, window, cx);
+        self.submit_send(channel_id, content, None, files, None, window, cx);
         true
     }
 

@@ -282,6 +282,8 @@ fn liked_game_covers_wrap_without_collapsing_the_collection(cx: &mut TestAppCont
 fn game_entry(id: u64, name: &str, application_id: Option<u64>) -> OutboxEntry {
     OutboxEntry {
         id,
+        author_id: None,
+        content_type: 1,
         started_at: None,
         ended_at: None,
         expires_at: None,
@@ -290,6 +292,8 @@ fn game_entry(id: u64, name: &str, application_id: Option<u64>) -> OutboxEntry {
             application_id,
         },
         traits: Vec::new(),
+        participants: Vec::new(),
+        raw: std::sync::Arc::new(serde_json::json!({"id": id.to_string()})),
     }
 }
 

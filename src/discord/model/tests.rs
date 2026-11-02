@@ -1174,6 +1174,13 @@ fn outbox_decodes_launched_activities() {
     }))
     .unwrap();
     assert_eq!(outbox.entries.len(), 1);
+    assert_eq!(outbox.entries[0].author_id, Some(1191169170079744061));
+    assert_eq!(outbox.entries[0].content_type, 8);
+    assert_eq!(outbox.entries[0].participants, [1191169170079744061]);
+    assert_eq!(
+        outbox.entries[0].raw["extra"]["activity_name"], "Example Puzzle",
+        "the raw entry is kept verbatim for replies"
+    );
     let OutboxKind::LaunchedActivity {
         name,
         application_id,
@@ -1189,6 +1196,88 @@ fn outbox_decodes_launched_activities() {
         outbox.entries[0].traits,
         [OutboxTrait::Duration { seconds: 243 }]
     );
+}
+
+#[test]
+fn content_inbox_sorts_ranked_entries_and_keeps_scheduling_fields() {
+    let inbox: ContentInbox = serde_json::from_value(json!({
+        "request_id": "synthetic",
+        "entries": [
+            {"rank": 3, "content": {
+                "id": "1191169321074688099", "author_id": "1191169170079744063",
+                "content_type": 1,
+                "traits": [{"type": 4, "range": 1}, {"type": 2, "duration_seconds": 52105}],
+                "extra": {"type": "played_game_extra", "game_name": "Rank Three",
+                          "application_id": "303"}
+            }},
+            {"rank": 1, "content": {
+                "id": "1191169321074688097", "author_id": "1191169170079744061",
+                "content_type": 1,
+                "traits": [{"type": 6, "marathon": true}, {"type": 7}],
+                "extra": {"type": "played_game_extra", "game_name": "Rank One"}
+            }},
+            {"rank": 2, "content": {
+                "id": "1191169321074688098", "author_id": "1191169170079744062",
+                "content_type": 2,
+                "traits": [{"type": 10, "count": 5}, {"type": 11, "count": 2},
+                           {"type": 12, "count": 7}],
+                "extra": {"type": "future_extra"}
+            }},
+            {"rank": 4, "content": {"id": "bad"}}
+        ],
+        "unranked_game_entries": [{"id": "1191169321074688100", "content_type": 1}],
+        "expired_at": "2026-01-01T00:00:00Z",
+        "entries_hash": "synthetic",
+        "refresh_stale_inbox_after_ms": 60000,
+        "refresh_token": "synthetic",
+        "wait_ms_until_next_fetch": 120000
+    }))
+    .unwrap();
+    assert_eq!(
+        inbox.entries.len(),
+        3,
+        "unranked and malformed entries are dropped"
+    );
+    assert_eq!(inbox.entries[0].id, 1191169321074688097);
+    assert_eq!(inbox.entries[0].author_id, Some(1191169170079744061));
+    assert_eq!(inbox.entries[0].content_type, 1);
+    assert_eq!(
+        inbox.entries[0].traits,
+        [OutboxTrait::Marathon, OutboxTrait::NewRelease]
+    );
+    assert_eq!(inbox.entries[1].id, 1191169321074688098);
+    assert_eq!(
+        inbox.entries[1].traits,
+        [
+            OutboxTrait::TopItemCount { count: 5 },
+            OutboxTrait::TopParentCount { count: 2 },
+            OutboxTrait::AggregateCount { count: 7 }
+        ]
+    );
+    assert_eq!(inbox.entries[2].id, 1191169321074688099);
+    assert_eq!(
+        inbox.entries[2].traits,
+        [
+            OutboxTrait::AggregateRange { range: 1 },
+            OutboxTrait::Duration { seconds: 52105 }
+        ]
+    );
+    assert_eq!(inbox.wait_ms_until_next_fetch, Some(120_000));
+}
+
+#[test]
+fn content_inbox_defaults_when_fields_are_missing_or_null() {
+    for payload in [
+        json!({}),
+        json!({
+            "entries": null, "expired_at": null,
+            "refresh_stale_inbox_after_ms": null, "wait_ms_until_next_fetch": null
+        }),
+    ] {
+        let inbox: ContentInbox = serde_json::from_value(payload).unwrap();
+        assert!(inbox.entries.is_empty());
+        assert!(inbox.wait_ms_until_next_fetch.is_none());
+    }
 }
 
 #[test]

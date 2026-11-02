@@ -23,19 +23,30 @@ pub(crate) const NAMEPLATE_DIM: u32 = 0xB3;
 const NAMEPLATE_FADE: f32 = 50.;
 const NAMEPLATE_TEXT_MARGIN: f32 = 10.;
 
+pub(in crate::app) mod activity;
 #[cfg(test)]
 mod tests;
 
 #[derive(Default)]
 pub(crate) struct Layout {
     groups: Vec<usize>,
+    lead: usize,
 }
 
 impl Layout {
-    pub fn sync(&mut self, state: &ListState, list: Option<&MemberList>) {
-        let count = list.map_or(0, |list| list.rows.len());
+    pub fn lead(&self) -> usize {
+        self.lead
+    }
+
+    /// `lead` rows (the Activity section) sit above the member rows.
+    pub fn sync(&mut self, state: &ListState, list: Option<&MemberList>, lead: usize) {
+        let count = lead + list.map_or(0, |list| list.rows.len());
         let old = state.item_count();
-        if old == 0 && count > 0 {
+        if lead != self.lead {
+            self.lead = lead;
+            self.groups.clear();
+            state.reset(count);
+        } else if old == 0 && count > 0 {
             state.reset(count);
         } else if count > old {
             state.splice(old..old, count - old);
@@ -55,7 +66,9 @@ impl Layout {
             let mut same = true;
             let mut positions = self.groups.iter().copied();
             for (index, row) in list.into_iter().flat_map(|list| &list.rows).enumerate() {
-                if matches!(row, Some(MemberRow::Group { .. })) && positions.next() != Some(index) {
+                if matches!(row, Some(MemberRow::Group { .. }))
+                    && positions.next() != Some(lead + index)
+                {
                     same = false;
                     break;
                 }
@@ -70,7 +83,7 @@ impl Layout {
             .flat_map(|list| &list.rows)
             .enumerate()
             .filter_map(|(index, row)| {
-                matches!(row, Some(MemberRow::Group { .. })).then_some(index)
+                matches!(row, Some(MemberRow::Group { .. })).then_some(lead + index)
             })
             .collect();
         for &index in &self.groups {
@@ -110,6 +123,15 @@ pub fn render(app: &DiscordApp) -> impl IntoElement + use<> {
 }
 
 fn render_row(app: &DiscordApp, index: usize, cx: &App) -> AnyElement {
+    let lead = app.member_layout.lead();
+    if index < lead {
+        return div()
+            .w_full()
+            .px_2()
+            .child(activity::section(app, &app.activity_cards(), cx))
+            .into_any_element();
+    }
+    let index = index - lead;
     let last = app
         .store
         .member_list(app.selected_guild_id)

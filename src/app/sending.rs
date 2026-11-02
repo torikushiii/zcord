@@ -2,6 +2,7 @@ use super::attachments::{StagedFile, remove_pasted};
 use super::*;
 use crate::discord::UploadFile;
 use crate::store::{PendingUpload, Sticker};
+use std::sync::Arc;
 
 #[cfg(test)]
 mod tests;
@@ -12,6 +13,7 @@ type PendingEntry = (
     Option<ReplyTarget>,
     Vec<StagedFile>,
     Option<Sticker>,
+    Option<Arc<serde_json::Value>>,
 );
 
 #[derive(Default)]
@@ -34,13 +36,21 @@ impl PendingSends {
         content: String,
         reply: Option<ReplyTarget>,
         files: Vec<StagedFile>,
+        entry: Option<Arc<serde_json::Value>>,
     ) {
-        self.entries.push((channel_id, content, reply, files, None));
+        self.entries
+            .push((channel_id, content, reply, files, None, entry));
     }
 
     fn push_sticker(&mut self, channel_id: u64, reply: Option<ReplyTarget>, sticker: Sticker) {
-        self.entries
-            .push((channel_id, String::new(), reply, Vec::new(), Some(sticker)));
+        self.entries.push((
+            channel_id,
+            String::new(),
+            reply,
+            Vec::new(),
+            Some(sticker),
+            None,
+        ));
     }
 
     fn take_channel(&mut self, channel_id: u64) -> Vec<PendingEntry> {
@@ -197,11 +207,12 @@ impl DiscordApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        for (channel, content, reply, files, sticker) in self.pending_sends.take_channel(channel_id)
+        for (channel, content, reply, files, sticker, entry) in
+            self.pending_sends.take_channel(channel_id)
         {
             match sticker {
                 Some(sticker) => self.submit_sticker(channel, sticker, reply, window, cx),
-                None => self.dispatch_send(channel, content, reply, files, window, cx),
+                None => self.dispatch_send(channel, content, reply, files, entry, window, cx),
             }
         }
     }
@@ -258,7 +269,7 @@ impl DiscordApp {
             return;
         }
         self.messages.set_follow_mode(FollowMode::Tail);
-        self.submit_send(channel_id, content, reply, files, window, cx);
+        self.submit_send(channel_id, content, reply, files, None, window, cx);
     }
 
     pub(crate) fn send_sticker(
@@ -306,6 +317,7 @@ impl DiscordApp {
         content: String,
         reply: Option<ReplyTarget>,
         files: Vec<StagedFile>,
+        entry: Option<Arc<serde_json::Value>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -314,14 +326,15 @@ impl DiscordApp {
             self.store.at_present(channel_id),
             self.loading.contains(&channel_id),
         ) {
-            self.pending_sends.push(channel_id, content, reply, files);
+            self.pending_sends
+                .push(channel_id, content, reply, files, entry);
             self.pending_present.insert(channel_id);
             smooth_scroll::cancel(cx);
             // Refresh even if another response already marked the channel present. A later
             // submission retries a failed refresh.
             self.fetch_history(channel_id, None, window, cx);
         } else {
-            self.dispatch_send(channel_id, content, reply, files, window, cx);
+            self.dispatch_send(channel_id, content, reply, files, entry, window, cx);
         }
     }
 
@@ -331,6 +344,7 @@ impl DiscordApp {
         content: String,
         reply: Option<ReplyTarget>,
         files: Vec<StagedFile>,
+        entry: Option<Arc<serde_json::Value>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -360,6 +374,7 @@ impl DiscordApp {
             uploads,
         );
         self.apply_change(change, window, cx);
+        let retry_entry = entry.clone();
         let outgoing = OutgoingMessage {
             content,
             nonce,
@@ -369,6 +384,7 @@ impl DiscordApp {
             }),
             attachments: Vec::new(),
             sticker_ids: Vec::new(),
+            content_inventory_entry: entry,
         };
         let request = if files.is_empty() {
             Tokio::spawn(cx, session.send_message(guild_id, channel_id, outgoing))
@@ -419,6 +435,7 @@ impl DiscordApp {
                     FailedSend {
                         reply,
                         files,
+                        entry: retry_entry,
                         error: send_error_text(&error),
                     },
                 );
@@ -488,6 +505,7 @@ impl DiscordApp {
             }),
             attachments: Vec::new(),
             sticker_ids: vec![sticker_id],
+            content_inventory_entry: None,
         };
         let request = Tokio::spawn(cx, session.send_message(guild_id, channel_id, outgoing));
         cx.spawn_in(window, async move |this, cx| {
@@ -514,6 +532,7 @@ impl DiscordApp {
                     FailedSend {
                         reply,
                         files: Vec::new(),
+                        entry: None,
                         error: send_error_text(&error),
                     },
                 );
@@ -570,6 +589,7 @@ impl DiscordApp {
         };
         let failed = self.failed_sends.remove(&nonce);
         let reply = failed.as_ref().and_then(|failed| failed.reply.clone());
+        let entry = failed.as_ref().and_then(|failed| failed.entry.clone());
         let files = failed.map_or_else(Vec::new, |failed| failed.files);
         let change = self.store.discard_message(channel_id, nonce);
         self.apply_change(change, window, cx);
@@ -577,7 +597,7 @@ impl DiscordApp {
         if let Some(sticker) = sticker {
             self.submit_sticker(channel_id, sticker, reply, window, cx);
         } else {
-            self.submit_send(channel_id, content, reply, files, window, cx);
+            self.submit_send(channel_id, content, reply, files, entry, window, cx);
         }
     }
 

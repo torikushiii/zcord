@@ -411,6 +411,22 @@ pub enum Component {
         spoiler: bool,
         components: Vec<Component>,
     },
+    ActivityEntry(ActivityEntryView),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActivityEntryView {
+    pub entry_id: u64,
+    pub user_id: u64,
+    pub game_name: String,
+    pub application_id: Option<u64>,
+    pub created_ms: i64,
+    pub live_since_ms: Option<i64>,
+    pub ended_ms: Option<i64>,
+    pub streak_days: Option<u32>,
+    pub most_played_hours: Option<u32>,
+    pub first_time: bool,
+    pub trending: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

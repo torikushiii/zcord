@@ -65,6 +65,13 @@ pub(super) struct CreateMessage<'a> {
     attachments: Vec<AttachmentBody<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     sticker_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content_inventory_entry: Option<ContentInventoryEntryBody<'a>>,
+}
+
+#[derive(Serialize)]
+struct ContentInventoryEntryBody<'a> {
+    unverified_content: &'a serde_json::Value,
 }
 
 #[derive(Serialize)]
@@ -144,6 +151,11 @@ pub(super) fn message_body<'a>(
             .iter()
             .map(|id| id.to_string())
             .collect(),
+        content_inventory_entry: message.content_inventory_entry.as_deref().map(|entry| {
+            ContentInventoryEntryBody {
+                unverified_content: entry,
+            }
+        }),
     }
 }
 
@@ -616,6 +628,7 @@ impl Rest {
             reply: None,
             attachments: Vec::new(),
             sticker_ids: Vec::new(),
+            content_inventory_entry: None,
         };
         let body = message_body(target_guild, target_channel, &message);
         let response = self
@@ -788,6 +801,7 @@ mod tests {
             reply: None,
             attachments: Vec::new(),
             sticker_ids: Vec::new(),
+            content_inventory_entry: None,
         };
         let body = serde_json::to_string(&message_body(None, 20, &message)).unwrap();
         assert_eq!(
@@ -800,11 +814,37 @@ mod tests {
             reply: None,
             attachments: Vec::new(),
             sticker_ids: vec![9001, 9002],
+            content_inventory_entry: None,
         };
         let body = serde_json::to_string(&message_body(None, 20, &message)).unwrap();
         assert_eq!(
             body,
             r#"{"mobile_network_type":"unknown","content":"","nonce":"7","tts":false,"flags":0,"sticker_ids":["9001","9002"]}"#
+        );
+    }
+
+    #[test]
+    fn message_body_wraps_the_content_inventory_entry_verbatim() {
+        let entry = serde_json::json!({
+            "id": "1191169321074688097", "author_id": "1191169170079744061",
+            "author_type": 0, "content_type": 1,
+            "traits": [{"type": 3, "is_live": true}],
+            "extra": {"type": "played_game_extra", "game_name": "Synthetic"},
+            "participants": ["1191169170079744061"],
+            "signature": "synthetic-signature"
+        });
+        let message = OutgoingMessage {
+            content: "wave".to_owned(),
+            nonce: 7,
+            reply: None,
+            attachments: Vec::new(),
+            sticker_ids: Vec::new(),
+            content_inventory_entry: Some(std::sync::Arc::new(entry)),
+        };
+        let body = serde_json::to_string(&message_body(None, 20, &message)).unwrap();
+        assert_eq!(
+            body,
+            r#"{"mobile_network_type":"unknown","content":"wave","nonce":"7","tts":false,"flags":0,"content_inventory_entry":{"unverified_content":{"id":"1191169321074688097","author_id":"1191169170079744061","author_type":0,"content_type":1,"traits":[{"type":3,"is_live":true}],"extra":{"type":"played_game_extra","game_name":"Synthetic"},"participants":["1191169170079744061"],"signature":"synthetic-signature"}}}"#
         );
     }
 

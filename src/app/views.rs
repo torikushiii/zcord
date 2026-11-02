@@ -428,6 +428,7 @@ impl Render for OverlaysView {
             .children(super::sticker_picker::render(app, window, cx))
             .children(voice::menu(app, cx))
             .children(chat::message_menu(app, cx))
+            .children(member_list::activity::popout(app, window, cx))
             .children(voice::stream_card::render(app, cx))
             .children(voice::share_picker::render(app))
             .children(switcher::render(app, cx))

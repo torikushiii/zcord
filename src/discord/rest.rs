@@ -509,6 +509,7 @@ mod tests {
             reply,
             attachments: Vec::new(),
             sticker_ids: Vec::new(),
+            content_inventory_entry: None,
         }
     }
 
