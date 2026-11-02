@@ -51,6 +51,7 @@ pub(in crate::app) fn delete_dialog(app: &DiscordApp, cx: &App) -> Option<AnyEle
     let close = app.entity.clone();
     let cancel = app.entity.clone();
     let confirm = app.entity.clone();
+    let confirm_key = app.entity.clone();
     Some(
         div()
             .id("delete-backdrop")
@@ -80,6 +81,17 @@ pub(in crate::app) fn delete_dialog(app: &DiscordApp, cx: &App) -> Option<AnyEle
                     .border_1()
                     .border_color(rgba(theme::border()))
                     .occlude()
+                    .track_focus(&app.delete_focus)
+                    .on_key_down(move |event, window, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter") && !closing {
+                            confirm_key
+                                .update(cx, |app, cx| {
+                                    app.request_delete(message_id, true, window, cx)
+                                })
+                                .ok();
+                            cx.stop_propagation();
+                        }
+                    })
                     .child(
                         theme::icon_button("delete-close", "x", 24., theme::muted())
                             .absolute()

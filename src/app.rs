@@ -308,6 +308,7 @@ pub struct DiscordApp {
     pub(crate) entity: WeakEntity<Self>,
     pub(crate) views: views::PanelViews,
     focus_handle: FocusHandle,
+    delete_focus: FocusHandle,
     window_active: bool,
     pub(crate) unread_since: Option<u64>,
     /// Whether the top "new messages" bar is still shown; `unread_since` keeps the divider.
@@ -483,6 +484,7 @@ impl DiscordApp {
             entity: app_entity.downgrade(),
             views,
             focus_handle: cx.focus_handle(),
+            delete_focus: cx.focus_handle(),
             window_active: window.is_window_active(),
             unread_since: None,
             unread_bar: false,
@@ -552,6 +554,14 @@ impl DiscordApp {
         .detach();
         cx.on_focus(&app.focus_handle, window, |app, window, cx| {
             if matches!(app.screen, Screen::Chat) {
+                app.focus_composer(window, cx);
+            }
+        })
+        .detach();
+        // The dialog unmounting (cancel, confirm or external deletion) drops its focus;
+        // hand it back to the composer once the dialog is really gone.
+        cx.on_blur(&app.delete_focus, window, |app, window, cx| {
+            if app.confirm_delete.is_none() {
                 app.focus_composer(window, cx);
             }
         })
