@@ -57,6 +57,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "connections/youtube",
     "discord",
     "ellipsis",
+    "download",
     "external-link",
     "eye",
     "eye-off",
@@ -120,6 +121,8 @@ const ICONS: &[(&str, &[u8])] = icons![
     "tooltip-arrow-down",
     "tooltip-arrow-down-edge",
     "tooltip-arrow-edge",
+    "tooltip-arrow-up",
+    "tooltip-arrow-up-edge",
     "trash-2",
     "upload-fold",
     "upload-glyph-code",
@@ -145,6 +148,8 @@ const ICONS: &[(&str, &[u8])] = icons![
     "thread",
     "x",
     "zap",
+    "zoom-in",
+    "zoom-out",
 ];
 
 impl AssetSource for AppAssets {

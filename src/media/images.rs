@@ -972,6 +972,20 @@ impl Service {
         self.frames_directory.join(file_name(spec, size))
     }
 
+    /// The original bytes of a file on Discord's CDN, unlike the sized copies `load` caches.
+    pub(crate) async fn fetch_original(&self, url: &str) -> Option<Vec<u8>> {
+        let url = reqwest::Url::parse(url).ok().filter(allowed_url)?;
+        let response = self.client.get(url).send().await.ok()?;
+        let bytes = response.error_for_status().ok()?.bytes().await.ok()?;
+        Some(bytes.to_vec())
+    }
+
+    pub(crate) async fn fetch_size(&self, url: &str) -> Option<u64> {
+        let url = reqwest::Url::parse(url).ok().filter(allowed_url)?;
+        let response = self.client.head(url).send().await.ok()?;
+        response.error_for_status().ok()?.content_length()
+    }
+
     pub(crate) async fn load(&self, spec: &ImageSpec, size: u32) -> Option<PathBuf> {
         if let ImageSpec::LocalGif { path } | ImageSpec::LocalVideo { path } = spec {
             return if path.is_file() {
