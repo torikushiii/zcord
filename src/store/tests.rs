@@ -15,6 +15,7 @@ mod expressions;
 mod invites;
 mod members;
 mod messages;
+mod notifications;
 mod performance;
 mod pins_threads;
 mod reactions;

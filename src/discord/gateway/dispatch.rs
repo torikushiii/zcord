@@ -37,6 +37,9 @@ pub(super) fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) 
             "USER_SETTINGS_PROTO_UPDATE" => serde_json::from_value(value)
                 .ok()
                 .map(|settings| Event::SettingsUpdate(Box::new(settings))),
+            "USER_GUILD_SETTINGS_UPDATE" => serde_json::from_value(value)
+                .ok()
+                .map(|settings| Event::UserGuildSettingsUpdate(Box::new(settings))),
             "MESSAGE_CREATE" => serde_json::from_value(value)
                 .ok()
                 .map(|m| Event::MessageCreate(Box::new(m))),
@@ -484,6 +487,41 @@ mod tests {
             event,
             Some(Event::ThreadMemberUpdate(update))
                 if update.id == 30 && update.user_id == Some(1)
+        ));
+        assert!(ignored.is_empty());
+    }
+
+    #[test]
+    fn user_guild_settings_update_dispatches_server_and_dm_entries() {
+        let mut ignored = HashSet::new();
+        let event = dispatch(
+            "USER_GUILD_SETTINGS_UPDATE",
+            json!({
+                "guild_id":"7",
+                "message_notifications":2,
+                "channel_overrides":[{"channel_id":"8","muted":true}]
+            }),
+            &mut ignored,
+        );
+        assert!(matches!(
+            event,
+            Some(Event::UserGuildSettingsUpdate(settings))
+                if settings.guild_id == Some(7)
+                    && settings.message_notifications == model::NotificationLevel::Nothing
+                    && settings.channel_overrides[0].channel_id == Some(8)
+                    && settings.channel_overrides[0].muted
+        ));
+
+        let event = dispatch(
+            "USER_GUILD_SETTINGS_UPDATE",
+            json!({"guild_id":null,"channel_overrides":[{"channel_id":"9","muted":true}]}),
+            &mut ignored,
+        );
+        assert!(matches!(
+            event,
+            Some(Event::UserGuildSettingsUpdate(settings))
+                if settings.guild_id.is_none()
+                    && settings.channel_overrides[0].channel_id == Some(9)
         ));
         assert!(ignored.is_empty());
     }

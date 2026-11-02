@@ -13,6 +13,7 @@ pub enum Event {
     UserUpdate(Box<model::UserUpdate>),
     Ready(Box<model::Ready>),
     SettingsUpdate(Box<model::SettingsUpdate>),
+    UserGuildSettingsUpdate(Box<model::UserGuildSettings>),
     MessageCreate(Box<model::Message>),
     MessageUpdate(Box<model::MessageUpdate>),
     TypingStart(Box<model::TypingStart>),

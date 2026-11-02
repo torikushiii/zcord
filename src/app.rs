@@ -25,6 +25,7 @@ mod login;
 mod member_list;
 mod members;
 mod message_body;
+mod notifications;
 mod profile;
 mod read_state;
 mod rich_text;
@@ -469,6 +470,18 @@ impl DiscordApp {
             _composer_subscription: subscription,
             _composer_cursor_subscription: cursor_subscription,
         };
+        let mut activations = crate::notify::activations();
+        cx.spawn_in(window, async move |this, cx| {
+            while let Some((channel_id, message_id)) = activations.recv().await {
+                let opened = this.update_in(cx, |app, window, cx| {
+                    app.open_notification(channel_id, message_id, window, cx)
+                });
+                if opened.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         let games = Tokio::spawn(cx, async move { crate::games::start(game_enabled_rx) });
         let runtime = Tokio::handle(cx);
         cx.spawn(async move |this, cx| {
@@ -799,6 +812,7 @@ impl DiscordApp {
                         self.typing_started(typing.channel_id, typing.user_id, cx)
                     }
                     Event::MessageCreate(message) => {
+                        self.notify_message(message, cx);
                         self.typing_stopped(message.channel_id, message.author.id, cx)
                     }
                     Event::MessageDelete { id, .. } => self.forget_message(*id, cx),
