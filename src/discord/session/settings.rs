@@ -53,7 +53,7 @@ impl Session {
             .map_err(|_| Error::Closed)
     }
 
-    /// Persist the account setting with CAS, then wait for this socket's presence write.
+    /// Persist the account setting with CAS, then queue this socket's presence write.
     /// Not retried after a reconnect; the next READY reflects whatever was saved.
     pub async fn set_status(&self, status: SelfStatus) -> Result<(), Error> {
         self.set_status_for(status, StatusDuration::Forever).await
@@ -95,7 +95,7 @@ impl Session {
         if self.status_generation()? != generation {
             return Err(Error::Closed);
         }
-        let (mut command, settings_revision) = {
+        let command = {
             let mut presence = self
                 .inner
                 .presence
@@ -110,37 +110,17 @@ impl Session {
                 return Err(Error::SettingsOutdated);
             }
             let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
-            (
-                commands::presence(
-                    presence.payload(now).ok_or(Error::Decode)?,
-                    presence.revision,
-                ),
-                presence.settings_revision,
+            commands::presence(
+                presence.payload(now).ok_or(Error::Decode)?,
+                presence.revision,
             )
         };
-        let (done, result) = tokio::sync::oneshot::channel();
-        command.completion = Some(done);
+        // The setting is saved; the gateway's presence throttle (one write per 5s) only
+        // delays when other clients see it, so don't hold the caller for the socket write.
         self.inner
             .commands
             .send((generation, command))
             .map_err(|_| Error::Closed)?;
-        tokio::time::timeout(Duration::from_secs(30), result)
-            .await
-            .map_err(|_| Error::Network)?
-            .map_err(|_| Error::Closed)??;
-        if self.status_generation()? != generation {
-            return Err(Error::Closed);
-        }
-        if self
-            .inner
-            .presence
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .settings_revision
-            != settings_revision
-        {
-            return Err(Error::SettingsOutdated);
-        }
         Ok(())
     }
 

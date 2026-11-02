@@ -115,15 +115,21 @@ impl Commands {
                     .iter()
                     .position(|queued| queued.presence_revision.is_some())
             {
-                if self.queue[index]
+                // The newest projection carries every older settings write, so it reports
+                // their completion; a real conflict is caught by the settings revision.
+                let queued = &mut self.queue[index];
+                if queued
                     .presence_revision
                     .is_some_and(|queued| queued > revision)
                 {
+                    if queued.completion.is_none() {
+                        queued.completion = command.completion.take();
+                    }
                     command.complete(Err(super::Error::SettingsOutdated));
                     return;
                 }
                 let mut previous = self.queue.remove(index).expect("queued presence");
-                if previous.presence_revision == Some(revision) && command.completion.is_none() {
+                if command.completion.is_none() {
                     command.completion = previous.completion.take();
                 }
                 previous.complete(Err(super::Error::SettingsOutdated));
@@ -132,6 +138,23 @@ impl Commands {
         } else {
             log::debug!("Dropping gateway command before READY/RESUMED");
         }
+    }
+
+    /// A presence write that went stale while throttled hands its completion to the queued
+    /// newer projection. Returns the command when nothing newer is queued yet.
+    pub fn hand_off(&mut self, mut command: Command) -> Option<Command> {
+        let Some(queued) = self
+            .queue
+            .iter_mut()
+            .find(|queued| queued.presence_revision.is_some())
+        else {
+            return Some(command);
+        };
+        if queued.completion.is_none() {
+            queued.completion = command.completion.take();
+        }
+        command.complete(Err(super::Error::SettingsOutdated));
+        None
     }
 
     pub fn record_send(&mut self, now: Instant) {
@@ -238,20 +261,32 @@ mod tests {
     }
 
     #[test]
-    fn presence_coalescing_keeps_the_newest_revision_and_reports_superseded_writes() {
+    fn presence_coalescing_keeps_the_newest_revision_and_carries_superseded_completions() {
         let mut queue = Commands::new();
         let (done, mut result) = tokio::sync::oneshot::channel();
         let mut command = presence(json!({"op":3}), 1);
         command.completion = Some(done);
         queue.push(true, command);
         queue.push(true, presence(json!({"op":3}), 2));
-        assert!(matches!(
-            result.try_recv(),
-            Ok(Err(super::super::Error::SettingsOutdated))
-        ));
         queue.push(true, presence(json!({"op":3}), 1));
         assert_eq!(queue.queue.len(), 1);
-        assert_eq!(queue.pop().unwrap().presence_revision, Some(2));
+        assert!(matches!(
+            result.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        let command = queue.pop().unwrap();
+        assert_eq!(command.presence_revision, Some(2));
+        command.complete(Ok(()));
+        assert!(matches!(result.try_recv(), Ok(Ok(()))));
+
+        let (done, mut result) = tokio::sync::oneshot::channel();
+        let mut stale = presence(json!({"op":3}), 3);
+        stale.completion = Some(done);
+        queue.push(true, presence(json!({"op":3}), 4));
+        assert!(queue.hand_off(stale).is_none());
+        queue.pop().unwrap().complete(Ok(()));
+        assert!(matches!(result.try_recv(), Ok(Ok(()))));
+        assert!(queue.hand_off(presence(json!({"op":3}), 5)).is_some());
     }
 
     #[test]
