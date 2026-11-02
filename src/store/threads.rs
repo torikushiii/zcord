@@ -1,5 +1,4 @@
 use super::*;
-use crate::text::markdown;
 
 impl Store {
     pub(super) fn message_thread(&self, thread: &model::Channel) -> MessageThread {
@@ -256,7 +255,7 @@ impl Store {
         let recent = self.thread_recent.get(&thread.id).and_then(|message| {
             Some((
                 message.author.id,
-                recent_text(&message.content),
+                self.preview_text(&message.content, thread.guild_id, &message.mentions),
                 local_timestamp(&message.timestamp)?,
             ))
         });
@@ -565,16 +564,6 @@ impl Store {
 fn snowflake_ms(id: u64) -> Option<i64> {
     let timestamp = (id >> 22).checked_add(1_420_070_400_000)?;
     i64::try_from(timestamp).ok()
-}
-
-fn recent_text(content: &str) -> String {
-    let text = markdown::plain_text(&markdown::parse(content));
-    let text = text.trim();
-    let mut end = text.len().min(200);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_owned()
 }
 
 #[cfg(test)]
