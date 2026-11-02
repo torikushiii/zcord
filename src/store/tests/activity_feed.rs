@@ -74,7 +74,7 @@ fn activity_cards_keep_rank_order_cap_and_only_member_played_games() {
     store.set_content_inbox(Some(inbox(entries)));
 
     let cards = store.activity_cards(200, NOW_MS);
-    assert_eq!(cards.len(), 10, "at most ten cards");
+    assert_eq!(cards.len(), 3, "at most three cards");
     assert_eq!(cards[0].user_id, 1);
     assert_eq!(cards[0].game_name, "Own Game");
     assert_eq!(cards[0].entry_id, recent + 3, "rank order is preserved");

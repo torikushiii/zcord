@@ -142,6 +142,7 @@ impl DiscordApp {
             this.update(cx, |app, cx| {
                 app.members_timer = None;
                 app.sync_member_rows();
+                app.load_activity_assets(cx);
                 cx.notify();
             })
             .ok();
