@@ -418,6 +418,7 @@ pub(super) fn blurred_box(
     radius: f32,
     cx: &App,
 ) -> Div {
+    let image = images::blurred(spec, cx);
     div()
         .relative()
         .flex_none()
@@ -425,10 +426,11 @@ pub(super) fn blurred_box(
         .h(rpx(height))
         .rounded(rpx(radius))
         .overflow_hidden()
-        .bg(rgba(theme::BORDER))
+        // The placeholder would show as a pale rim around the image's rounded edge.
+        .when(image.is_none(), |this| this.bg(rgba(theme::BORDER)))
         // GPUI clips children to the parent's rectangle, not its rounded corners,
         // so the image must carry the radius itself and stay inside the box.
-        .children(images::blurred(spec, cx).map(|image| {
+        .children(image.map(|image| {
             img(image)
                 .absolute()
                 .inset_0()

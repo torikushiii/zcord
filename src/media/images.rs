@@ -850,6 +850,8 @@ pub fn resolve(spec: &ImageSpec, size: u32, cx: &App) -> Option<Arc<Path>> {
 
 const BLUR_SOURCE: u32 = 64;
 const BLUR_SIGMA: f32 = 5.;
+/// A small texture stretched over a large box fades out by half a texel at its edges.
+const BLUR_MIN_TEXTURE: u32 = 384;
 const BLUR_CACHE_LIMIT: usize = 64;
 type BlurKey = (Arc<Path>, u32, u32);
 
@@ -912,8 +914,15 @@ fn blur_file(path: &Path, sigma: f32, saturation: f32) -> Option<Arc<gpui::Rende
         let saturate = |channel: f32| (gray + (channel - gray) * saturation).round() as u8;
         pixel.0 = [saturate(b), saturate(g), saturate(r), 255];
     }
+    let scale = (BLUR_MIN_TEXTURE / blurred.width().max(blurred.height()).max(1)).max(1);
+    let texture = image::imageops::resize(
+        &blurred,
+        blurred.width() * scale,
+        blurred.height() * scale,
+        image::imageops::FilterType::Triangle,
+    );
     Some(Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
-        blurred,
+        texture,
     )])))
 }
 
