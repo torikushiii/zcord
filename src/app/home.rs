@@ -10,7 +10,7 @@ use std::{
 
 use crate::{
     app::{
-        DiscordApp, chat,
+        ComposerDraft, DiscordApp, chat,
         display_name::{self, Surface},
         friends, member_list,
         message_body::label,
@@ -141,7 +141,13 @@ impl DiscordApp {
         if draft.is_empty() {
             self.drafts.remove(&previous);
         } else {
-            self.drafts.insert(previous, draft);
+            self.drafts.insert(
+                previous,
+                ComposerDraft {
+                    content: draft,
+                    mentions: self.mention_names.clone(),
+                },
+            );
         }
         self.composer
             .update(cx, |input, cx| set_text(input, String::new(), window, cx));
@@ -152,6 +158,7 @@ impl DiscordApp {
         self.stop_player(Some(window), cx);
         self.close_lightbox(cx);
         self.selected_channel_id = 0;
+        self.reset_mention_draft();
         self.unread_since = None;
         self.unread_bar = false;
         self.sync_channel_rows();

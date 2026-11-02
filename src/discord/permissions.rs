@@ -4,6 +4,7 @@ pub const VIEW_CHANNEL: u64 = 1 << 10;
 pub const SEND_MESSAGES: u64 = 1 << 11;
 pub const MANAGE_MESSAGES: u64 = 1 << 13;
 pub const READ_MESSAGE_HISTORY: u64 = 1 << 16;
+pub const MENTION_EVERYONE: u64 = 1 << 17;
 pub const MANAGE_THREADS: u64 = 1 << 34;
 pub const CREATE_PUBLIC_THREADS: u64 = 1 << 35;
 pub const CREATE_PRIVATE_THREADS: u64 = 1 << 36;

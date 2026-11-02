@@ -29,6 +29,7 @@ impl DiscordApp {
             None => {
                 self.selected_guild_id = 0;
                 self.selected_channel_id = 0;
+                self.reset_mention_draft();
                 self.sync_channel_rows();
                 self.messages.reset(0);
                 cx.notify();
@@ -142,11 +143,18 @@ impl DiscordApp {
         if draft.is_empty() {
             self.drafts.remove(&previous);
         } else {
-            self.drafts.insert(previous, draft);
+            self.drafts.insert(
+                previous,
+                ComposerDraft {
+                    content: draft,
+                    mentions: self.mention_names.clone(),
+                },
+            );
         }
         let restored = self.drafts.remove(&id).unwrap_or_default();
 
         if previous != id {
+            self.reset_mention_draft();
             self.expression_info.clear_open();
             self.reply = None;
             self.editing = None;
@@ -156,6 +164,7 @@ impl DiscordApp {
             self.stop_player(Some(window), cx);
             self.close_lightbox(cx);
         }
+        self.mention_names = restored.mentions;
         self.selected_channel_id = id;
         self.load_dm_profile(cx);
         self.sync_search();
@@ -191,7 +200,7 @@ impl DiscordApp {
         self.reset_messages(if forum { 0 } else { count });
         self.composer.update(cx, |input, cx| {
             input.set_placeholder(placeholder, window, cx);
-            set_text(input, restored, window, cx);
+            set_text(input, restored.content, window, cx);
         });
         self.focus_composer(window, cx);
         if forum {

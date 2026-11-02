@@ -27,6 +27,7 @@ mod lightbox;
 mod login;
 mod member_list;
 mod members;
+pub(crate) mod mentions;
 mod message_body;
 mod notifications;
 mod profile;
@@ -154,9 +155,16 @@ pub(crate) struct ReplyTarget {
     pub mention: bool,
 }
 
+#[derive(Default)]
+struct ComposerDraft {
+    content: String,
+    mentions: HashMap<String, u64>,
+}
+
 pub(crate) struct Editing {
     pub message_id: u64,
     pub input: Entity<TextareaState>,
+    mentions: HashMap<String, u64>,
     _subscription: Subscription,
 }
 
@@ -250,6 +258,8 @@ pub struct DiscordApp {
     emoji_picker_animation: u64,
     emoji_picker_closed_at: Option<Instant>,
     pub(crate) emoji_suggest: emoji_picker::Suggest,
+    mention_suggest: mentions::Suggest,
+    mention_names: HashMap<String, u64>,
     pub(crate) gifs: gif_picker::Gifs,
     pub(crate) stickers: sticker_picker::Stickers,
     pub(crate) home: home::Home,
@@ -291,7 +301,7 @@ pub struct DiscordApp {
     pub(crate) invites: HashMap<String, InviteState>,
     member_top: usize,
     open_folders: HashSet<u64>,
-    drafts: HashMap<u64, String>,
+    drafts: HashMap<u64, ComposerDraft>,
     pub(crate) revealed_spoilers: HashSet<(u64, u16)>,
     pub(crate) hovered_rail: Option<u64>,
     pub(crate) hovered_add_reaction: Option<u64>,
@@ -352,8 +362,9 @@ impl DiscordApp {
         });
         let messages = ListState::new(0, ListAlignment::Bottom, px(800.));
         let last_cursor = Rc::new(Cell::new(0));
-        let cursor_subscription = cx.observe(&composer, move |_this, input, cx| {
+        let cursor_subscription = cx.observe(&composer, move |this, input, cx| {
             snap_composer_cursor(&input, &last_cursor, cx);
+            this.reset_mention_suggest(cx);
         });
         let subscription =
             cx.subscribe_in(
@@ -361,13 +372,16 @@ impl DiscordApp {
                 window,
                 |this, _, event, window, cx| match event {
                     InputEvent::PressEnter { shift: false, .. } => {
-                        if !this.accept_emoji_suggestion(None, window, cx) {
+                        if !(this.accept_mention_suggestion(None, window, cx)
+                            || this.accept_emoji_suggestion(None, window, cx))
+                        {
                             this.send_message(window, cx);
                         }
                     }
                     InputEvent::Change => {
                         this.repair_composer(window, cx);
                         this.reset_emoji_suggest(cx);
+                        this.reset_mention_suggest(cx);
                         this.send_typing(cx);
                     }
                     _ => {}
@@ -420,6 +434,8 @@ impl DiscordApp {
             emoji_picker_animation: 0,
             emoji_picker_closed_at: None,
             emoji_suggest: Default::default(),
+            mention_suggest: Default::default(),
+            mention_names: HashMap::new(),
             gifs: Default::default(),
             stickers: Default::default(),
             home: Default::default(),
@@ -979,6 +995,9 @@ impl DiscordApp {
             Change::Members { guild_id } => {
                 if guild_id.is_none_or(|id| id == self.selected_guild_id) {
                     self.arm_members_timer(cx);
+                    if self.mention_suggestions(cx).is_some() {
+                        cx.notify();
+                    }
                 }
                 return;
             }
@@ -1284,7 +1303,8 @@ impl Render for DiscordApp {
             .on_action(cx.listener(|app, _: &ComposerDown, window, cx| {
                 if !(app.move_search(1, cx)
                     || app.move_quick_switcher(1, cx)
-                    || app.composer_focused(window, cx) && app.move_emoji_suggestion(1, cx))
+                    || app.composer_focused(window, cx)
+                        && (app.move_mention_suggestion(1, cx) || app.move_emoji_suggestion(1, cx)))
                 {
                     cx.propagate();
                 }
@@ -1295,7 +1315,8 @@ impl Render for DiscordApp {
             .on_action(cx.listener(|app, _: &ComposerTab, window, cx| {
                 if !(app.accept_search(window, cx)
                     || app.composer_focused(window, cx)
-                        && app.accept_emoji_suggestion(None, window, cx))
+                        && (app.accept_mention_suggestion(None, window, cx)
+                            || app.accept_emoji_suggestion(None, window, cx)))
                 {
                     cx.propagate();
                 }
