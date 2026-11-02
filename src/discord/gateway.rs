@@ -444,16 +444,21 @@ async fn drive(
                 if let Some(mut command) = outgoing.pop() {
                     commands.presence_after = outgoing.presence_after;
                     if let Some(revision) = command.presence_revision {
-                        let payload = {
+                        let (current, payload) = {
                             let presence = commands.presence.lock()
                                 .unwrap_or_else(std::sync::PoisonError::into_inner);
                             let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
-                            (revision == presence.revision).then(|| presence.payload(now)).flatten()
+                            (presence.revision, presence.payload(now))
                         };
                         let Some(payload) = payload else {
                             command.complete(Err(super::Error::SettingsOutdated));
                             continue;
                         };
+                        if current != revision {
+                            let Some(stale) = outgoing.hand_off(command) else { continue };
+                            command = stale;
+                            command.presence_revision = Some(current);
+                        }
                         // Custom status may have expired while this command was throttled.
                         command.payload = payload;
                     }
