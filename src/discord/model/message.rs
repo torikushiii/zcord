@@ -105,6 +105,16 @@ pub struct Message {
     pub referenced_message: Option<Option<Box<ReferencedMessage>>>,
     #[serde(default)]
     pub thread: Option<Channel>,
+    #[serde(default)]
+    pub poll: Option<serde_json::Value>,
+    #[serde(default)]
+    pub call: Option<serde_json::Value>,
+    #[serde(default)]
+    pub activity: Option<serde_json::Value>,
+    #[serde(default)]
+    pub activity_instance: Option<serde_json::Value>,
+    #[serde(default)]
+    pub shared_client_theme: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Deserialize)]

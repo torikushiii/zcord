@@ -14,6 +14,7 @@ const DEFAULT_NAME_CHARS: usize = 40;
 const THREAD_CARD: u32 = 0x121214;
 const THREAD_RING: u32 = 0x97979F33;
 const THREAD_TEXT: u32 = 0xDCDCDF;
+const THREAD_ELBOW: u32 = 0x97979F80;
 const SUBTLE: u32 = 0x232327;
 const SUBTLE_HOVER: u32 = 0x2C2C31;
 
@@ -178,7 +179,12 @@ impl DiscordApp {
         .detach();
     }
 
-    fn join_or_leave_thread(&mut self, thread_id: u64, joined: bool, cx: &mut Context<Self>) {
+    pub(super) fn join_or_leave_thread(
+        &mut self,
+        thread_id: u64,
+        joined: bool,
+        cx: &mut Context<Self>,
+    ) {
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;
         };
@@ -598,7 +604,7 @@ pub(super) fn thread_notice_chip(app: &DiscordApp, message: &Message, cx: &App) 
                     .border_l_1()
                     .border_b_1()
                     .rounded_bl(rpx(8.))
-                    .border_color(rgba(theme::BORDER)),
+                    .border_color(rgba(THREAD_ELBOW)),
             )
             .child(chip),
     )
@@ -684,7 +690,7 @@ pub(super) fn thread_chip(app: &DiscordApp, message: &Message, cx: &App) -> Opti
                         div()
                             .flex_none()
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(theme::BLURPLE))
+                            .text_color(rgb(theme::LINK))
                             .child(format!("{count} {noun} \u{203a}")),
                     ),
             )

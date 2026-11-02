@@ -54,6 +54,7 @@ impl DiscordApp {
 }
 
 struct Permissions {
+    forward: bool,
     thread: bool,
     edit: bool,
     reply: bool,
@@ -65,6 +66,7 @@ fn permissions(app: &DiscordApp, message: &Message) -> Permissions {
     let channel_id = app.selected_channel_id;
     let own = message.author_id == app.store.current_user_id;
     Permissions {
+        forward: app.live && message.forwardable,
         thread: app.thread_parent().is_none()
             && message.thread.is_none()
             && app.store.can_create_thread(channel_id, false),
@@ -408,6 +410,20 @@ pub(in crate::app) fn message_menu(app: &DiscordApp, cx: &App) -> Option<AnyElem
                 "Reply",
                 text,
                 move |app, _, window, cx| app.start_reply(id, window, cx),
+            ))
+        })
+        .when(allowed.forward, |this| {
+            let channel_id = app
+                .thread_pane_channel()
+                .filter(|thread| thread.message_index(id).is_some())
+                .map_or(app.selected_channel_id, |thread| thread.id);
+            this.child(menu_entry(
+                app,
+                "menu-forward",
+                "forward",
+                "Forward",
+                text,
+                move |app, _, window, cx| app.open_forward_dialog(id, channel_id, window, cx),
             ))
         })
         .when(allowed.thread, |this| {

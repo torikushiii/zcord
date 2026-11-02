@@ -241,7 +241,7 @@ impl DiscordApp {
         {
             return;
         }
-        if self.close_lightbox(cx) {
+        if self.close_lightbox(cx) || self.close_forward_dialog(cx) {
             return;
         }
         if self.dismiss_status_menu(window, cx) {
@@ -267,6 +267,9 @@ impl DiscordApp {
             self.cancel_edit(window, cx);
         } else if self.reply.is_some() {
             self.cancel_reply(cx);
+        } else if self.thread_pane_focused(window, cx) {
+            self.close_thread_pane(cx);
+            self.focus_composer(window, cx);
         } else {
             self.jump_to_present(window, cx);
         }

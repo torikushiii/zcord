@@ -1,14 +1,17 @@
 pub(crate) mod attachments;
+mod call_view;
 mod channel_list;
 mod chat;
 mod composer;
 mod connection;
 mod display_name;
+mod dm_panel;
 mod embeds;
 mod emoji_picker;
 mod expression_info;
 mod forum;
 mod forum_actions;
+mod forward_dialog;
 mod friends;
 mod gif_picker;
 mod guild_rail;
@@ -193,6 +196,8 @@ pub struct DiscordApp {
     pub(crate) popout_closed: Option<(chat::PopoutKind, Instant)>,
     pub(crate) create_thread: Option<chat::CreateThread>,
     pub(crate) thread_menu: Option<chat::ThreadMenu>,
+    pub(crate) thread_pane: Option<chat::ThreadPane>,
+    pub(crate) thread_previews: HashSet<u64>,
     pub(crate) hovered_member: Option<u64>,
     pub(crate) hovered_account: bool,
     pub(crate) profile: Option<profile::ProfileCard>,
@@ -201,7 +206,11 @@ pub struct DiscordApp {
     settings_animation: u64,
     pub(crate) lightbox: Option<lightbox::Lightbox>,
     pub(crate) stream_view: Option<stream_view::StreamView>,
+    /// `(guild, channel)` to go back to when a stage's chat closes.
+    stage_chat: Option<(u64, u64)>,
     affinity_refresh: Option<Task<()>>,
+    dm_profile: Option<dm_panel::DmProfile>,
+    forward_dialog: Option<forward_dialog::ForwardDialog>,
     stream_nonce: u64,
     pub(crate) stream_members_shown: bool,
     pub(crate) stream_members_toggles: u64,
@@ -352,6 +361,8 @@ impl DiscordApp {
             popout_closed: None,
             create_thread: None,
             thread_menu: None,
+            thread_pane: None,
+            thread_previews: HashSet::new(),
             hovered_member: None,
             hovered_account: false,
             profile: None,
@@ -404,7 +415,10 @@ impl DiscordApp {
             hovered_add_reaction: None,
             hovered_upload_button: None,
             stream_view: None,
+            stage_chat: None,
             affinity_refresh: None,
+            dm_profile: None,
+            forward_dialog: None,
             stream_nonce: 0,
             stream_members_shown: true,
             stream_members_toggles: 0,
@@ -640,6 +654,7 @@ impl DiscordApp {
                 self.live = true;
                 self.reconnecting = false;
                 self.typing.clear();
+                self.thread_previews.clear();
                 let reconnect = matches!(self.screen, Screen::Chat);
                 self.member_subscription = None;
                 self.store.apply(event);
@@ -653,7 +668,9 @@ impl DiscordApp {
                 self.screen = Screen::Chat;
                 if reconnect && self.channel().is_some() {
                     let channel = self.selected_channel_id;
+                    let thread_pane = self.thread_pane.take();
                     self.select_channel(channel, window, cx);
+                    self.restore_thread_pane(thread_pane, window, cx);
                 } else {
                     self.select_initial(window, cx);
                 }
@@ -695,6 +712,7 @@ impl DiscordApp {
 
     fn apply_change(&mut self, change: Change, window: &mut Window, cx: &mut Context<Self>) {
         self.arm_status_expiry_timer(cx);
+        self.sync_thread_pane(&change, cx);
         // Background channels only change badges, which nobody can see until a
         // repaint; coalesce a burst into one refresh with the member sync timer.
         if is_background_change(&change, self.selected_channel_id) {
@@ -1021,17 +1039,29 @@ impl Render for DiscordApp {
                                         )
                                         .when(
                                             self.show_members
-                                                && !self.is_home()
-                                                && !self.stream_chat_open(),
+                                                && (!self.is_home()
+                                                    || self.dm_panel_width().is_some())
+                                                && !self.stream_chat_open()
+                                                && !self.thread_pane_open(),
                                             |this| {
                                                 this.child(
-                                                    self.views
-                                                        .members
-                                                        .clone()
-                                                        .cached(views::member_list_style()),
+                                                    self.views.members.clone().cached(
+                                                        views::member_list_style(
+                                                            self.dm_panel_width()
+                                                                .unwrap_or(member_list::WIDTH),
+                                                        ),
+                                                    ),
                                                 )
                                             },
-                                        ),
+                                        )
+                                        .when(self.thread_pane_open(), |this| {
+                                            this.child(
+                                                self.views
+                                                    .thread_pane
+                                                    .clone()
+                                                    .cached(views::thread_pane_style()),
+                                            )
+                                        }),
                                 ),
                         ),
                 )
@@ -1098,11 +1128,14 @@ impl Render for DiscordApp {
             .when(
                 cx.has_active_drag() && self.store.can_send(self.selected_channel_id),
                 |this| {
-                    this.child(attachments::drop_overlay(self, cx).on_drop(cx.listener(
-                        |app, paths: &ExternalPaths, window, cx| {
-                            app.drop_paths(paths.paths().to_vec(), window, cx);
-                        },
-                    )))
+                    this.child(
+                        attachments::drop_overlay(self, cx)
+                            .opacity(0.)
+                            .drag_over::<ExternalPaths>(|style, _, _, _| style.opacity(1.))
+                            .on_drop(cx.listener(|app, paths: &ExternalPaths, window, cx| {
+                                app.drop_paths(paths.paths().to_vec(), window, cx);
+                            })),
+                    )
                 },
             )
     }

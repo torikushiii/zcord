@@ -247,6 +247,17 @@ impl Timestamp {
         )
     }
 
+    pub fn short(self) -> String {
+        use chrono::Datelike;
+        let now = chrono::Local::now();
+        let today = (
+            i32::from(self.year),
+            u32::from(self.month),
+            u32::from(self.day),
+        ) == (now.year(), now.month(), now.day());
+        if today { self.time() } else { self.full() }
+    }
+
     /// "Jan 2017"
     pub fn month_year(self) -> String {
         let month = MONTHS[(self.month as usize).saturating_sub(1) % 12];
@@ -445,6 +456,31 @@ pub struct WebhookAuthor {
     pub avatar: Option<String>,
 }
 
+const FORWARDABLE_FLAGS: u64 = (1 << 0)
+    | (1 << 1)
+    | (1 << 2)
+    | (1 << 4)
+    | (1 << 5)
+    | (1 << 8)
+    | (1 << 9)
+    | (1 << 10)
+    | (1 << 12)
+    | (1 << 13)
+    | (1 << 14)
+    | (1 << 15)
+    | (1 << 19)
+    | (1 << 20);
+
+pub(super) fn is_forwardable(message: &model::Message) -> bool {
+    matches!(message.kind, 0 | 19 | 20 | 23)
+        && (message.flags & !FORWARDABLE_FLAGS) == 0
+        && message.poll.is_none()
+        && message.call.is_none()
+        && message.activity.is_none()
+        && message.activity_instance.is_none()
+        && message.shared_client_theme.is_none()
+}
+
 pub struct Message {
     pub id: u64,
     /// Composer order, retained through confirmation until replacing history observes it.
@@ -464,6 +500,7 @@ pub struct Message {
     pub edited: bool,
     pub reply: Option<ReplyState>,
     pub forward: Option<Forward>,
+    pub forwardable: bool,
     pub mentions_me: bool,
     pub uploads: Vec<PendingUpload>,
     pub thread: Option<MessageThread>,
@@ -1086,5 +1123,45 @@ impl InviteApp {
             uploaded: false,
             animated,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn message(kind: u8, flags: u64) -> model::Message {
+        serde_json::from_value(json!({
+            "id": "1",
+            "channel_id": "2",
+            "author": {"id": "3", "username": "tester", "discriminator": "0"},
+            "timestamp": "2024-01-01T00:00:00+00:00",
+            "type": kind,
+            "flags": flags,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn forwardable_plain_message() {
+        assert!(is_forwardable(&message(0, 0)));
+    }
+
+    #[test]
+    fn forwardable_rejects_kind_7() {
+        assert!(!is_forwardable(&message(7, 0)));
+    }
+
+    #[test]
+    fn forwardable_rejects_ephemeral_flag() {
+        assert!(!is_forwardable(&message(0, 1 << 6)));
+    }
+
+    #[test]
+    fn forwardable_rejects_poll() {
+        let mut message = message(0, 0);
+        message.poll = Some(json!({}));
+        assert!(!is_forwardable(&message));
     }
 }

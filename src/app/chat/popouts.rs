@@ -351,7 +351,7 @@ impl DiscordApp {
         cx: &mut Context<Self>,
     ) {
         self.close_channel_popout(cx);
-        self.select_channel(thread_id, window, cx);
+        self.open_thread_pane(thread_id, window, cx);
     }
 }
 
@@ -545,7 +545,7 @@ fn pins_popout(app: &DiscordApp, pins: &Pins, cx: &App) -> AnyElement {
                 .flex_col()
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
+                .overflow_y_scrollbar()
                 .p(rpx(8.))
                 .children(cards)
                 .when(empty && pins.loading, |this| {
@@ -725,7 +725,7 @@ fn threads_popout(app: &DiscordApp, threads: &Threads, window: &Window, cx: &App
         .flex_col()
         .flex_1()
         .min_h_0()
-        .overflow_y_scroll()
+        .overflow_y_scrollbar()
         .px(rpx(16.))
         .pb(rpx(8.));
     let list = if let Some(results) = &threads.results {

@@ -113,7 +113,7 @@ impl DiscordApp {
     }
 
     /// Discord drops a watch sent before the call connects, so joining defers it to `Connected`.
-    pub(super) fn watch_or_join(
+    pub(crate) fn watch_or_join(
         &mut self,
         (guild_id, channel_id, user_id): (u64, u64, u64),
         window: &mut Window,

@@ -1,3 +1,4 @@
+use gpui_component::scroll::ScrollableElement as _;
 use std::{
     cell::Cell,
     collections::{HashMap, HashSet},
@@ -309,138 +310,154 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
             this.child(guild_header(app, 1., window, cx))
         })
         .child(
-            list(app.channel_rows.state.clone(), move |index, window, cx| {
-                let Some(app_entity) = entity.upgrade() else {
-                    return div().into_any_element();
-                };
-                let app = app_entity.read(cx);
-                let Some(row) = app.channel_rows.rows.get(index).copied() else {
-                    return div().into_any_element();
-                };
-                let channel = match row {
-                    Row::Channel { category, channel } => app
-                        .guild()
-                        .and_then(|guild| guild.categories.get(category))
-                        .and_then(|category| category.channels.get(channel))
-                        .filter(|channel| {
-                            channel.kind.is_selectable() || channel.kind == ChannelKind::Voice
-                        })
-                        .map(|channel| (channel.id, channel.kind)),
-                    _ => None,
-                };
-                if let Row::VoiceMember {
-                    category,
-                    channel,
-                    index,
-                } = row
-                {
-                    let guild_id = app.selected_guild_id;
-                    let member = app
-                        .guild()
-                        .and_then(|guild| guild.categories.get(category))
-                        .and_then(|category| category.channels.get(channel))
-                        .and_then(|channel| {
-                            app.store
-                                .voice_members(guild_id, channel.id)
-                                .into_iter()
-                                .nth(index)
-                                .map(|member| (channel.id, member))
-                        });
-                    return match member {
-                        Some((channel_id, member)) => {
-                            voice::member_row(app, guild_id, channel_id, &member, cx)
-                                .into_any_element()
+            div()
+                .relative()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .child(
+                    list(app.channel_rows.state.clone(), move |index, window, cx| {
+                        let Some(app_entity) = entity.upgrade() else {
+                            return div().into_any_element();
+                        };
+                        let app = app_entity.read(cx);
+                        let Some(row) = app.channel_rows.rows.get(index).copied() else {
+                            return div().into_any_element();
+                        };
+                        let channel = match row {
+                            Row::Channel { category, channel } => app
+                                .guild()
+                                .and_then(|guild| guild.categories.get(category))
+                                .and_then(|category| category.channels.get(channel))
+                                .filter(|channel| {
+                                    channel.kind.is_selectable()
+                                        || channel.kind == ChannelKind::Voice
+                                })
+                                .map(|channel| (channel.id, channel.kind)),
+                            _ => None,
+                        };
+                        if let Row::VoiceMember {
+                            category,
+                            channel,
+                            index,
+                        } = row
+                        {
+                            let guild_id = app.selected_guild_id;
+                            let member = app
+                                .guild()
+                                .and_then(|guild| guild.categories.get(category))
+                                .and_then(|category| category.channels.get(channel))
+                                .and_then(|channel| {
+                                    app.store
+                                        .voice_members(guild_id, channel.id)
+                                        .into_iter()
+                                        .nth(index)
+                                        .map(|member| (channel.id, member))
+                                });
+                            return match member {
+                                Some((channel_id, member)) => {
+                                    voice::member_row(app, guild_id, channel_id, &member, cx)
+                                        .into_any_element()
+                                }
+                                None => div().into_any_element(),
+                            };
                         }
-                        None => div().into_any_element(),
-                    };
-                }
-                if let Row::Thread {
-                    category,
-                    channel,
-                    index,
-                } = row
-                {
-                    let thread = app
-                        .guild()
-                        .and_then(|guild| guild.categories.get(category))
-                        .and_then(|category| category.channels.get(channel))
-                        .and_then(|channel| {
-                            app.store
-                                .sidebar_threads(channel.id, app.selected_channel_id)
-                                .into_iter()
-                                .nth(index)
+                        if let Row::Thread {
+                            category,
+                            channel,
+                            index,
+                        } = row
+                        {
+                            let thread = app
+                                .guild()
+                                .and_then(|guild| guild.categories.get(category))
+                                .and_then(|category| category.channels.get(channel))
+                                .and_then(|channel| {
+                                    app.store
+                                        .sidebar_threads(channel.id, app.selected_channel_id)
+                                        .into_iter()
+                                        .nth(index)
+                                });
+                            return match thread {
+                                Some(thread) => thread_row(app, &thread).into_any_element(),
+                                None => div().into_any_element(),
+                            };
+                        }
+                        let group = match row {
+                            Row::Category(category)
+                            | Row::Channel { category, .. }
+                            | Row::VoiceMember { category, .. }
+                            | Row::Thread { category, .. } => {
+                                app.guild().and_then(|guild| guild.categories.get(category))
+                            }
+                            _ => None,
+                        };
+                        let rows = &app.channel_rows;
+                        let now = Instant::now();
+                        if group.is_some_and(|group| rows.folding(group.id, now)) {
+                            window.request_animation_frame();
+                        }
+                        let openness = group.map_or(1., |group| match row {
+                            Row::Channel { channel, .. }
+                                if group
+                                    .channels
+                                    .get(channel)
+                                    .is_some_and(|channel| channel.id == rows.kept) =>
+                            {
+                                1.
+                            }
+                            _ => rows.openness(group.id, now),
                         });
-                    return match thread {
-                        Some(thread) => thread_row(app, &thread).into_any_element(),
-                        None => div().into_any_element(),
-                    };
-                }
-                let group = match row {
-                    Row::Category(category)
-                    | Row::Channel { category, .. }
-                    | Row::VoiceMember { category, .. }
-                    | Row::Thread { category, .. } => {
-                        app.guild().and_then(|guild| guild.categories.get(category))
-                    }
-                    _ => None,
-                };
-                let rows = &app.channel_rows;
-                let now = Instant::now();
-                if group.is_some_and(|group| rows.folding(group.id, now)) {
-                    window.request_animation_frame();
-                }
-                let openness = group.map_or(1., |group| match row {
-                    Row::Channel { channel, .. }
-                        if group
-                            .channels
-                            .get(channel)
-                            .is_some_and(|channel| channel.id == rows.kept) =>
-                    {
-                        1.
-                    }
-                    _ => rows.openness(group.id, now),
-                });
-                let category = match row {
-                    Row::Category(_) => group.map(|group| group.id).filter(|id| *id != 0),
-                    _ => None,
-                };
-                if row == Row::Banner {
-                    return banner_row(app.channel_rows.banner.as_ref(), cx).into_any_element();
-                }
-                let entity = app.entity.clone();
-                row_content(
-                    app.guild(),
-                    row,
-                    app.selected_channel_id,
-                    openness,
-                    app.voice.joined(&app.store),
+                        let category = match row {
+                            Row::Category(_) => group.map(|group| group.id).filter(|id| *id != 0),
+                            _ => None,
+                        };
+                        if row == Row::Banner {
+                            return banner_row(app.channel_rows.banner.as_ref(), cx)
+                                .into_any_element();
+                        }
+                        let entity = app.entity.clone();
+                        row_content(
+                            app.guild(),
+                            row,
+                            app.highlighted_channel(),
+                            openness,
+                            app.voice.joined(&app.store),
+                        )
+                        .id(("channel-list-row", index))
+                        .map(|this| match (channel, category) {
+                            (Some((id, ChannelKind::Voice)), _) => {
+                                this.on_click(move |_, _, cx| {
+                                    entity
+                                        .update(cx, |app, cx| {
+                                            app.open_voice_channel(app.selected_guild_id, id, cx)
+                                        })
+                                        .ok();
+                                })
+                            }
+                            (Some((id, _)), _) => this.on_click(move |_, window, cx| {
+                                entity
+                                    .update(cx, |app, cx| app.select_channel(id, window, cx))
+                                    .ok();
+                            }),
+                            (None, Some(id)) => this.on_click(move |_, _, cx| {
+                                entity
+                                    .update(cx, |app, cx| app.toggle_category(id, cx))
+                                    .ok();
+                            }),
+                            (None, None) => this,
+                        })
+                        .into_any_element()
+                    })
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .when(!banner, |this| this.py_2())
+                    .when(banner, |this| this.pb_2()),
                 )
-                .id(("channel-list-row", index))
-                .map(|this| match (channel, category) {
-                    (Some((id, ChannelKind::Voice)), _) => this.on_click(move |_, _, cx| {
-                        entity
-                            .update(cx, |app, cx| app.join_voice(app.selected_guild_id, id, cx))
-                            .ok();
-                    }),
-                    (Some((id, _)), _) => this.on_click(move |_, window, cx| {
-                        entity
-                            .update(cx, |app, cx| app.select_channel(id, window, cx))
-                            .ok();
-                    }),
-                    (None, Some(id)) => this.on_click(move |_, _, cx| {
-                        entity
-                            .update(cx, |app, cx| app.toggle_category(id, cx))
-                            .ok();
-                    }),
-                    (None, None) => this,
-                })
-                .into_any_element()
-            })
-            .flex_1()
-            .min_h_0()
-            .w_full()
-            .when(!banner, |this| this.py_2())
-            .when(banner, |this| this.pb_2()),
+                .vertical_scrollbar(&app.channel_rows.state),
         )
         .when(banner, |this| {
             this.child(
@@ -715,7 +732,7 @@ fn thread_row(app: &DiscordApp, thread: &ThreadRow) -> impl IntoElement + use<> 
     let mentions = app.store.thread_mentions(id);
     let unread = (app.store.thread_unread(id) || mentions > 0) && !selected;
     let entity = app.entity.clone();
-    div().w_full().pl(rpx(24.)).pr_2().child(
+    div().w_full().pl(rpx(36.)).pr_2().child(
         div()
             .id(("thread-row", id))
             .relative()
@@ -750,10 +767,10 @@ fn thread_row(app: &DiscordApp, thread: &ThreadRow) -> impl IntoElement + use<> 
             .child(
                 div()
                     .absolute()
-                    .left(rpx(-12.))
-                    .top(rpx(-CHANNEL_GAP - 8.))
+                    .left(rpx(-10.))
+                    .top(rpx(-CHANNEL_GAP))
                     .w(rpx(10.))
-                    .h(rpx(CHANNEL_HEIGHT / 2. + CHANNEL_GAP + 8.))
+                    .h(rpx(CHANNEL_HEIGHT / 2. + CHANNEL_GAP))
                     .border_l_1()
                     .border_b_1()
                     .rounded_bl(rpx(6.))
@@ -815,11 +832,13 @@ fn channel_row(
     let mentions = channel.mentions;
     let new_posts = channel.new_posts;
     let unread = (channel.unread || mentions > 0 || new_posts > 0) && !selected;
-    let icon = match channel.kind {
-        ChannelKind::Text => "hash",
-        ChannelKind::Announcement => "megaphone",
-        ChannelKind::Forum => "messages-square",
-        ChannelKind::Voice => "volume-2",
+    let (icon, lock_built_in) = match (channel.kind, channel.private) {
+        (ChannelKind::Text, true) => ("hash-lock", true),
+        (ChannelKind::Text, false) => ("hash", false),
+        (ChannelKind::Voice, true) => ("volume-2-lock", true),
+        (ChannelKind::Voice, false) => ("volume-2", false),
+        (ChannelKind::Announcement, _) => ("megaphone", false),
+        (ChannelKind::Forum, _) => ("messages-square", false),
     };
     let badge = (new_posts > 0)
         .then(|| {
@@ -913,7 +932,7 @@ fn channel_row(
                 .flex_none()
                 .size(rpx(20.))
                 .child(theme::icon(icon, 20., color))
-                .when(channel.private, |this| {
+                .when(channel.private && !lock_built_in, |this| {
                     this.child(
                         div()
                             .absolute()
@@ -964,7 +983,7 @@ fn account_subtitle(user: &User, hovered: bool, animate: bool, cx: &App) -> AnyE
     let status = user
         .custom_status
         .as_ref()
-        .filter(|status| !status.is_expired(SystemTime::now()));
+        .filter(|status| user.status != Status::Offline && !status.is_expired(SystemTime::now()));
     let status_line = match status {
         None => line().child(div().truncate().child(status_label(user.status))),
         Some(status) => {

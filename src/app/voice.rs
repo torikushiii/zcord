@@ -13,7 +13,7 @@ pub(crate) mod share_picker;
 pub(crate) mod stream_card;
 
 use crate::{
-    app::{DiscordApp, message_body::label},
+    app::{DiscordApp, call_view::CallView, message_body::label},
     discord::{ShareEvent, VoiceEvent},
     settings::SavedChannel,
     store::{Store, VoiceMember},
@@ -35,6 +35,7 @@ pub(crate) struct Voice {
     pub(crate) call: Option<Call>,
     pub(crate) speaking: HashSet<u64>,
     pub(crate) noise_suppression: bool,
+    pub(crate) call_view: Option<CallView>,
     hovered_control: Option<Control>,
     status_hovered: bool,
     /// Until the first hover the title sits still, so it doesn't play the slide-back
@@ -235,6 +236,7 @@ impl DiscordApp {
             session.leave_voice();
         }
         remember_channel(None, cx);
+        self.voice.call_view = None;
         self.voice.pending_watch = None;
         self.voice.speaking.clear();
         self.voice.menu = None;
@@ -407,6 +409,7 @@ impl DiscordApp {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
                 let alive = this.update(cx, |app, cx| {
                     app.views.channel_list.update(cx, |_, cx| cx.notify());
+                    app.tick_call_view(cx);
                 });
                 if alive.is_err() {
                     break;
@@ -470,6 +473,7 @@ impl DiscordApp {
                     log::warn!("Voice disconnected: {reason}");
                 }
                 voice.call = None;
+                voice.call_view = None;
                 voice.pending_watch = None;
                 voice.menu = None;
                 voice.menu_close = None;
@@ -485,9 +489,12 @@ impl DiscordApp {
                 } else {
                     voice.speaking.remove(&user_id)
                 };
-                // Speaking flips several times a second; only the channel list shows it.
+                // Speaking flips several times a second; only these two show it.
                 if changed {
                     self.views.channel_list.update(cx, |_, cx| cx.notify());
+                    if self.voice.call_view.is_some() {
+                        self.views.overlays.update(cx, |_, cx| cx.notify());
+                    }
                 }
                 return;
             }

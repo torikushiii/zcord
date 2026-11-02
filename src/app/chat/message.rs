@@ -127,7 +127,7 @@ fn system_text(message: &Message) -> Option<(&'static str, u32, String)> {
                 message.kind - 8
             ),
         ),
-        18 => ("messages-square", theme::MUTED, "{}".into()),
+        18 => ("thread", theme::MUTED, "{}".into()),
         _ => return None,
     };
     Some(template)
@@ -195,7 +195,7 @@ fn render_system(app: &DiscordApp, message: &Message, cx: &App) -> Option<AnyEle
                                 div()
                                     .text_size(rpx(12.))
                                     .text_color(rgb(theme::FAINT))
-                                    .child(message.timestamp.full()),
+                                    .child(message.timestamp.short()),
                             ),
                     ),
             )
@@ -307,6 +307,7 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
                     .emoji_size(rpx(16.))
                     .into_any_element()
             };
+            let source = message.id;
             let target = reply.message_id;
             let entity = app.entity.clone();
             content
@@ -316,7 +317,11 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
                 .on_click(move |_, window, cx| {
                     cx.stop_propagation();
                     entity
-                        .update(cx, |app, cx| app.jump_to_message(target, window, cx))
+                        .update(cx, |app, cx| {
+                            if !app.jump_in_thread_pane(source, target) {
+                                app.jump_to_message(target, window, cx);
+                            }
+                        })
                         .ok();
                 })
                 .child(

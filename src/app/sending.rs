@@ -247,7 +247,7 @@ impl DiscordApp {
         self.submit_send(channel_id, content, reply, files, window, cx);
     }
 
-    fn submit_send(
+    pub(super) fn submit_send(
         &mut self,
         channel_id: u64,
         content: String,

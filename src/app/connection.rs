@@ -68,8 +68,10 @@ impl DiscordApp {
         self.status_expiry = None;
         self.status_expiry_timer = None;
         self.voice.call = None;
+        self.voice.call_view = None;
         self.affinity_refresh = None;
         self.voice.speaking.clear();
+        self.thread_previews.clear();
     }
 
     pub(super) fn connect(&mut self, token: String, window: &mut Window, cx: &mut Context<Self>) {

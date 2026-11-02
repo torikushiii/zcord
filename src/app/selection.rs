@@ -82,6 +82,7 @@ impl DiscordApp {
         self.message_menu = None;
         self.channel_popout = None;
         self.thread_menu = None;
+        self.thread_pane = None;
         let found = match self.guild() {
             Some(guild) => guild.channel(id).map(|channel| {
                 (
@@ -110,6 +111,9 @@ impl DiscordApp {
         let stream_chat = kind == crate::store::ChannelKind::Voice && self.stream_chat_open();
         if !kind.is_selectable() && !stream_chat {
             return;
+        }
+        if self.voice.joined_call().map(|(_, channel_id)| channel_id) != Some(id) {
+            self.dismiss_call_view();
         }
         let forum = kind.is_forum();
         let needs_history = self.live && !forum && !messages_loaded;
@@ -147,10 +151,12 @@ impl DiscordApp {
             self.editing = None;
             self.confirm_delete = None;
             self.typing_sent = None;
+            self.revealed_spoilers.clear();
             self.stop_player(Some(window), cx);
             self.close_lightbox(cx);
         }
         self.selected_channel_id = id;
+        self.load_dm_profile(cx);
         self.pending_jump = None;
         self.jump_missing = false;
         self.jump_missing_nonce += 1;

@@ -25,7 +25,7 @@ use crate::{
 mod account_logic;
 #[cfg(test)]
 mod activity_tests;
-mod avatar_colors;
+pub(super) mod avatar_colors;
 mod badges;
 mod board;
 mod connections;

@@ -75,10 +75,13 @@ impl DiscordApp {
     }
 
     pub(super) fn ack_channel(&mut self, cx: &mut Context<Self>) {
+        self.ack_channel_in(self.selected_channel_id, cx);
+    }
+
+    pub(crate) fn ack_channel_in(&mut self, channel_id: u64, cx: &mut Context<Self>) {
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;
         };
-        let channel_id = self.selected_channel_id;
         if !self.store.at_present(channel_id) {
             return;
         }

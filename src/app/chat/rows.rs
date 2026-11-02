@@ -26,14 +26,28 @@ pub(super) fn request_invites(app: &Entity<DiscordApp>, index: usize, cx: &mut A
     });
 }
 
-pub(super) fn render_row(app: &DiscordApp, index: usize, cx: &App) -> AnyElement {
-    let Some(channel) = app.channel() else {
-        return div().into_any_element();
+pub(super) fn request_thread_preview(app: &Entity<DiscordApp>, index: usize, cx: &mut App) {
+    let thread_id = {
+        let app = app.read(cx);
+        let Some(thread) = app
+            .channel()
+            .and_then(|channel| channel.messages.get(index))
+            .and_then(|message| message.thread.as_ref())
+            .filter(|thread| thread.recent.is_none() && !app.thread_previews.contains(&thread.id))
+        else {
+            return;
+        };
+        thread.id
     };
-    let messages = &channel.messages;
-    let Some(message) = messages.get(index) else {
-        return div().into_any_element();
-    };
+    let app = app.downgrade();
+    cx.defer(move |cx| {
+        app.update(cx, |app, cx| app.load_thread_preview(thread_id, cx))
+            .ok();
+    });
+}
+
+fn row_grouping(messages: &[Message], index: usize) -> (bool, bool) {
+    let message = &messages[index];
     let previous = index.checked_sub(1).and_then(|index| messages.get(index));
     let new_day = previous.is_some_and(|previous| !previous.timestamp.same_day(message.timestamp));
     let grouped = previous.is_some_and(|previous| {
@@ -44,6 +58,46 @@ pub(super) fn render_row(app: &DiscordApp, index: usize, cx: &App) -> AnyElement
             && !is_system(previous.kind)
             && !is_system(message.kind)
     });
+    (new_day, grouped)
+}
+
+pub(super) fn render_pane_row(
+    app: &DiscordApp,
+    channel_id: u64,
+    index: usize,
+    cx: &App,
+) -> AnyElement {
+    let Some(channel) = app.channel_by_id(channel_id) else {
+        return div().into_any_element();
+    };
+    let messages = &channel.messages;
+    let Some(message) = messages.get(index) else {
+        return div().into_any_element();
+    };
+    let (new_day, grouped) = row_grouping(messages, index);
+    let start = index == 0 && app.history_complete.contains(&channel_id);
+    div()
+        .w_full()
+        .when(new_day || start, |this| {
+            this.child(date_divider(message, false))
+        })
+        .when(!grouped, |this| this.pt_4())
+        .when(index + 1 == messages.len(), |this| {
+            this.pb(rpx(BOTTOM_SPACER))
+        })
+        .child(render_message(app, message, grouped, true, cx))
+        .into_any_element()
+}
+
+pub(super) fn render_row(app: &DiscordApp, index: usize, cx: &App) -> AnyElement {
+    let Some(channel) = app.channel() else {
+        return div().into_any_element();
+    };
+    let messages = &channel.messages;
+    let Some(message) = messages.get(index) else {
+        return div().into_any_element();
+    };
+    let (new_day, grouped) = row_grouping(messages, index);
     let start = index == 0 && app.history_complete.contains(&app.selected_channel_id);
     let first_unread = app.unread_since.is_some_and(|since| {
         is_first_unread(messages, index, since, start, app.store.current_user_id)
