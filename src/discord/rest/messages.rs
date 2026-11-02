@@ -12,6 +12,7 @@ const UPLOAD_CHUNK: usize = 64 * 1024;
 const UPLOAD_STALL: Duration = Duration::from_secs(60);
 const UPLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const CHAT_INPUT_CONTEXT: &str = "eyJsb2NhdGlvbiI6ImNoYXRfaW5wdXQifQ==";
+const FORWARD_CONTEXT: &str = "eyJsb2NhdGlvbiI6ImZvcndhcmRpbmcifQ==";
 
 pub(super) fn history_query(anchor: Anchor, limit: usize) -> Vec<(&'static str, String)> {
     let mut query = Vec::new();
@@ -124,6 +125,46 @@ pub(super) fn message_body<'a>(
                 original_content_type: &attachment.content_type,
             })
             .collect(),
+    }
+}
+
+#[derive(Serialize)]
+pub(super) struct ForwardMessage {
+    content: &'static str,
+    nonce: String,
+    tts: bool,
+    flags: u64,
+    mobile_network_type: &'static str,
+    message_reference: ForwardReference,
+}
+
+#[derive(Serialize)]
+struct ForwardReference {
+    guild_id: Option<String>,
+    channel_id: String,
+    message_id: String,
+    #[serde(rename = "type")]
+    kind: u8,
+}
+
+pub(super) fn forward_body(
+    source_guild: Option<u64>,
+    source_channel: u64,
+    message_id: u64,
+    nonce: u64,
+) -> ForwardMessage {
+    ForwardMessage {
+        content: "",
+        nonce: nonce.to_string(),
+        tts: false,
+        flags: 0,
+        mobile_network_type: "unknown",
+        message_reference: ForwardReference {
+            guild_id: source_guild.map(|id| id.to_string()),
+            channel_id: source_channel.to_string(),
+            message_id: message_id.to_string(),
+            kind: 1,
+        },
     }
 }
 
@@ -487,6 +528,64 @@ impl Rest {
             .map_err(|_| Error::Decode)
     }
 
+    pub async fn forward_message(
+        &self,
+        source_guild: Option<u64>,
+        source_channel: u64,
+        message_id: u64,
+        target_guild: Option<u64>,
+        target_channel: u64,
+        nonce: u64,
+    ) -> Result<model::Message, Error> {
+        let referer = referer(target_guild, target_channel);
+        let url = format!("https://discord.com/api/v9/channels/{target_channel}/messages");
+        let body = forward_body(source_guild, source_channel, message_id, nonce);
+        let response = self
+            .send(|| {
+                self.client
+                    .post(&url)
+                    .header(REFERER, &referer)
+                    .header("x-context-properties", FORWARD_CONTEXT)
+                    .json(&body)
+            })
+            .await?;
+        response
+            .json::<model::Message>()
+            .await
+            .map_err(|_| Error::Decode)
+    }
+
+    pub async fn send_forward_note(
+        &self,
+        target_guild: Option<u64>,
+        target_channel: u64,
+        content: &str,
+        nonce: u64,
+    ) -> Result<model::Message, Error> {
+        let referer = referer(target_guild, target_channel);
+        let url = format!("https://discord.com/api/v9/channels/{target_channel}/messages");
+        let message = OutgoingMessage {
+            content: content.to_owned(),
+            nonce,
+            reply: None,
+            attachments: Vec::new(),
+        };
+        let body = message_body(target_guild, target_channel, &message);
+        let response = self
+            .send(|| {
+                self.client
+                    .post(&url)
+                    .header(REFERER, &referer)
+                    .header("x-context-properties", FORWARD_CONTEXT)
+                    .json(&body)
+            })
+            .await?;
+        response
+            .json::<model::Message>()
+            .await
+            .map_err(|_| Error::Decode)
+    }
+
     pub async fn edit_message(
         &self,
         guild_id: Option<u64>,
@@ -585,7 +684,16 @@ impl Rest {
 
 #[cfg(test)]
 mod tests {
-    use super::AckManual;
+    use super::{AckManual, forward_body};
+
+    #[test]
+    fn forward_body_matches_discord() {
+        let body = forward_body(Some(200), 2002, 3003, 44);
+        assert_eq!(
+            serde_json::to_string(&body).unwrap(),
+            r#"{"content":"","nonce":"44","tts":false,"flags":0,"mobile_network_type":"unknown","message_reference":{"guild_id":"200","channel_id":"2002","message_id":"3003","type":1}}"#
+        );
+    }
 
     #[test]
     fn ack_manual_body_matches_discord() {

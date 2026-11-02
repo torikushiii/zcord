@@ -40,6 +40,18 @@ impl Store {
         }
     }
 
+    pub fn set_thread_preview(&mut self, thread_id: u64, message: model::Message) {
+        self.register_author(&message.author);
+        let entry = self
+            .thread_recent
+            .entry(thread_id)
+            .or_insert_with(|| message.clone());
+        if message.id > entry.id {
+            *entry = message;
+        }
+        self.refresh_thread_chips(thread_id);
+    }
+
     pub(super) fn refresh_thread_chips(&mut self, thread_id: u64) {
         let Some(thread) = self
             .source

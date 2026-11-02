@@ -355,6 +355,7 @@ pub(super) fn map_message(message: &model::Message) -> Option<Message> {
         edited: message.edited_timestamp.is_some(),
         reply: None,
         forward: map_forward(message),
+        forwardable: is_forwardable(message),
         mentions_me: false,
         uploads: Vec::new(),
         thread: message

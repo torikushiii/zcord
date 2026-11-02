@@ -15,8 +15,9 @@ use gpui::{prelude::*, *};
 
 use crate::{
     app::{
-        DiscordApp, channel_list, chat, emoji_picker, expression_info, gif_picker, guild_rail,
-        home, lightbox, member_list, profile, settings_page, switcher, voice,
+        DiscordApp, channel_list, chat, dm_panel, emoji_picker, expression_info, forward_dialog,
+        gif_picker, guild_rail, home, lightbox, member_list, profile, settings_page, switcher,
+        voice,
     },
     theme::rpx,
 };
@@ -28,6 +29,7 @@ pub(crate) struct PanelViews {
     pub(crate) messages: Entity<MessagesView>,
     pub(crate) composer: Entity<ComposerView>,
     pub(crate) members: Entity<MemberListView>,
+    pub(crate) thread_pane: Entity<ThreadPaneView>,
     pub(crate) overlays: Entity<OverlaysView>,
 }
 
@@ -40,6 +42,7 @@ impl PanelViews {
             messages: cx.new(|cx| MessagesView::new(app, cx)),
             composer: cx.new(|cx| ComposerView::new(app, cx)),
             members: cx.new(|cx| MemberListView::new(app, cx)),
+            thread_pane: cx.new(|cx| ThreadPaneView::new(app, cx)),
             overlays: cx.new(|cx| OverlaysView::new(app, cx)),
         }
     }
@@ -74,9 +77,16 @@ pub(crate) fn messages_style() -> StyleRefinement {
         .w_full()
 }
 
-pub(crate) fn member_list_style() -> StyleRefinement {
+pub(crate) fn member_list_style(width: f32) -> StyleRefinement {
     StyleRefinement::default()
-        .w(rpx(member_list::WIDTH))
+        .w(rpx(width))
+        .h_full()
+        .flex_none()
+}
+
+pub(crate) fn thread_pane_style() -> StyleRefinement {
+    StyleRefinement::default()
+        .w(rpx(chat::THREAD_PANE_WIDTH))
         .h_full()
         .flex_none()
 }
@@ -313,6 +323,29 @@ impl Render for ComposerView {
     }
 }
 
+pub(crate) struct ThreadPaneView {
+    app: WeakEntity<DiscordApp>,
+    _observe: Subscription,
+}
+
+impl ThreadPaneView {
+    fn new(app: &Entity<DiscordApp>, cx: &mut Context<Self>) -> Self {
+        Self {
+            app: app.downgrade(),
+            _observe: observe_app(app, cx),
+        }
+    }
+}
+
+impl Render for ThreadPaneView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(app) = self.app.upgrade() else {
+            return div().into_any_element();
+        };
+        chat::render_thread_pane(app.read(cx))
+    }
+}
+
 pub(crate) struct MemberListView {
     app: WeakEntity<DiscordApp>,
     _observe: Subscription,
@@ -333,7 +366,11 @@ impl Render for MemberListView {
         let Some(app) = self.app.upgrade() else {
             return div().into_any_element();
         };
-        member_list::render(app.read(cx)).into_any_element()
+        let app = app.read(cx);
+        if app.is_home() {
+            return dm_panel::render(app, cx);
+        }
+        member_list::render(app).into_any_element()
     }
 }
 
@@ -357,12 +394,20 @@ impl Render for OverlaysView {
         let Some(app) = self.app.upgrade() else {
             return div().into_any_element();
         };
+        if app.read(cx).stage_chat_orphaned() {
+            let app = app.clone();
+            window.defer(cx, move |window, cx| {
+                app.update(cx, |app, cx| app.close_stream_chat(window, cx));
+            });
+        }
         let app = app.read(cx);
         overlay_root()
+            .children(super::call_view::render(app, window, cx))
             .children(super::stream_view::render(app, cx))
             .children(settings_page::render(app, window, cx))
             .children(chat::channel_popout(app, window, cx))
             .children(chat::create_thread_dialog(app))
+            .children(forward_dialog::render(app))
             .children(chat::thread_menu(app))
             .children(chat::delete_dialog(app, cx))
             .children(profile::render(app, window, cx))

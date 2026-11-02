@@ -468,6 +468,7 @@ fn seed_messages(
                 None
             },
             forward: None,
+            forwardable: false,
             mentions_me: false,
             uploads: Vec::new(),
             thread: None,

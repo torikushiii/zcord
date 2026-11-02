@@ -93,12 +93,18 @@ impl DiscordApp {
             self.jump = None;
             return;
         };
-        let current = self.list_offset();
         let viewport = self.messages.viewport_bounds().size.height;
+        let content = self.messages.offset_for_item(self.messages.item_count());
+        let bottom = (content - viewport).max(px(0.));
+        // While following the tail the list reports its end, a viewport below what's on screen.
+        let logical = self.list_offset();
+        let current = logical.min(bottom);
         let top = self.messages.offset_for_item(index);
         let height = self.messages.offset_for_item(index + 1) - top;
         // Rows taller than the viewport start at its top rather than being centred off-screen.
-        let target = (top - ((viewport - height) / 2.).max(px(16.).min(viewport / 4.))).max(px(0.));
+        let target = (top - ((viewport - height) / 2.).max(px(16.).min(viewport / 4.)))
+            .max(px(0.))
+            .min(bottom);
         let distance = target - current;
         let step = if distance.abs() > viewport * JUMP_GLIDE_VIEWPORTS {
             distance - viewport * distance.signum()
@@ -107,7 +113,7 @@ impl DiscordApp {
         } else {
             distance * JUMP_STEP_FRACTION
         };
-        self.messages.scroll_by(step);
+        self.messages.scroll_by(current + step - logical);
         self.views.messages.update(cx, |_, cx| cx.notify());
         if distance.abs() < px(1.) {
             self.jump = None;
@@ -219,6 +225,7 @@ impl DiscordApp {
                             app.history_complete.insert(channel_id);
                         }
                         app.request_missing_members(channel_id);
+                        app.reset_thread_pane(channel_id, cx);
                         if app.selected_channel_id == channel_id {
                             let count = app.channel().map_or(0, |channel| channel.messages.len());
                             app.reset_messages(count);
@@ -310,11 +317,7 @@ impl DiscordApp {
                 match result {
                     Ok(Ok(messages)) => {
                         let current_newest = app
-                            .store
-                            .guilds
-                            .iter()
-                            .find(|guild| guild.channel(channel_id).is_some())
-                            .and_then(|guild| guild.channel(channel_id))
+                            .history_channel(channel_id)
                             .and_then(|channel| channel.newest_history_message())
                             .map(|message| message.id);
                         if current_newest != Some(newest) {
@@ -360,12 +363,15 @@ impl DiscordApp {
     }
 
     pub(super) fn fetch_older(&mut self, cx: &mut Context<Self>) {
-        let channel_id = self.selected_channel_id;
+        self.fetch_older_in(self.selected_channel_id, cx);
+    }
+
+    pub(crate) fn fetch_older_in(&mut self, channel_id: u64, cx: &mut Context<Self>) {
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;
         };
         let Some(oldest) = self
-            .channel()
+            .history_channel(channel_id)
             .filter(|channel| channel.messages_loaded)
             .and_then(|channel| channel.oldest_history_message())
             .map(|message| message.id)
@@ -396,11 +402,7 @@ impl DiscordApp {
                     Ok(Ok(messages)) => {
                         app.older_retry_at.remove(&channel_id);
                         let current_oldest = app
-                            .store
-                            .guilds
-                            .iter()
-                            .find(|guild| guild.channel(channel_id).is_some())
-                            .and_then(|guild| guild.channel(channel_id))
+                            .history_channel(channel_id)
                             .and_then(|channel| channel.oldest_history_message())
                             .map(|message| message.id);
                         if current_oldest != Some(oldest) {
@@ -411,13 +413,16 @@ impl DiscordApp {
                         if complete {
                             app.history_complete.insert(channel_id);
                         }
-                        let optimistic = app.channel().is_some_and(|channel| {
+                        let optimistic = app.history_channel(channel_id).is_some_and(|channel| {
                             channel
                                 .messages
                                 .iter()
                                 .any(|message| message.delivery != Delivery::Sent)
                         });
                         let inserted = app.store.prepend_messages(channel_id, messages);
+                        if inserted > 0 {
+                            app.prepend_thread_pane(channel_id, inserted);
+                        }
                         if complete && inserted == 0 && app.selected_channel_id == channel_id {
                             app.messages.remeasure_items(0..1);
                         }

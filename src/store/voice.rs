@@ -150,7 +150,26 @@ impl Store {
     }
 
     pub fn guild_voice_members(&self, guild_id: u64) -> Vec<VoiceMember> {
-        self.voice_members_matching(guild_id, |state| state.channel_id.is_some())
+        let Some(guild) = self
+            .source
+            .as_ref()
+            .and_then(|source| source.guilds.iter().find(|guild| guild.id == guild_id))
+        else {
+            return Vec::new();
+        };
+        self.voice_members_matching(guild_id, |state| self.voice_state_visible(guild, state))
+    }
+
+    fn voice_state_visible(&self, guild: &model::Guild, state: &model::VoiceState) -> bool {
+        let Some(channel_id) = state.channel_id else {
+            return false;
+        };
+        guild
+            .channels
+            .iter()
+            .flatten()
+            .find(|channel| channel.id == channel_id)
+            .is_none_or(|channel| crate::discord::can_view(guild, channel, self.current_user_id))
     }
 
     fn voice_members_matching(
@@ -206,7 +225,7 @@ impl Store {
         let mut states = guild
             .voice_states
             .iter()
-            .filter(|state| state.channel_id.is_some())
+            .filter(|state| self.voice_state_visible(guild, state))
             .peekable();
         states.peek()?;
         Some(if states.any(|state| state.self_stream) {

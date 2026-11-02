@@ -128,7 +128,9 @@ impl DiscordApp {
 
     fn show_home_page(&mut self, page: HomePage, window: &mut Window, cx: &mut Context<Self>) {
         self.enter_home();
+        self.dismiss_call_view();
         self.home.page = page;
+        self.revealed_spoilers.clear();
         let previous = self.selected_channel_id;
         let draft = self.composer.read(cx).value().to_string();
         if draft.is_empty() {
@@ -1608,6 +1610,8 @@ pub(crate) fn dm_header(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> 
     let game = user
         .filter(|user| user.status.is_online() && user.playing)
         .and_then(|user| user.activity.clone());
+    let group = dm.is_some_and(|dm| dm.group);
+    let toggle = app.entity.clone();
     div()
         .flex()
         .items_center()
@@ -1652,6 +1656,21 @@ pub(crate) fn dm_header(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> 
         }))
         .child(div().flex_1())
         .child(chat::pins_button(app))
+        .child(
+            theme::icon_button(
+                "dm-members",
+                if group { "users" } else { "user" },
+                20.,
+                if app.show_members {
+                    theme::STRONG
+                } else {
+                    theme::MUTED
+                },
+            )
+            .on_click(move |_, _, cx| {
+                toggle.update(cx, |app, cx| app.toggle_members(cx)).ok();
+            }),
+        )
 }
 
 fn header_avatar(app: &DiscordApp, dm: &PrivateChannel, cx: &App) -> AnyElement {

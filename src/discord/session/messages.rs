@@ -16,6 +16,43 @@ impl Session {
         .await
     }
 
+    pub async fn forward_message(
+        &self,
+        source_guild: Option<u64>,
+        source_channel: u64,
+        message_id: u64,
+        target_guild: Option<u64>,
+        target_channel: u64,
+        nonce: u64,
+    ) -> Result<model::Message, Error> {
+        self.rest(async |rest| {
+            rest.forward_message(
+                source_guild,
+                source_channel,
+                message_id,
+                target_guild,
+                target_channel,
+                nonce,
+            )
+            .await
+        })
+        .await
+    }
+
+    pub async fn send_forward_note(
+        &self,
+        target_guild: Option<u64>,
+        target_channel: u64,
+        content: &str,
+        nonce: u64,
+    ) -> Result<model::Message, Error> {
+        self.rest(async |rest| {
+            rest.send_forward_note(target_guild, target_channel, content, nonce)
+                .await
+        })
+        .await
+    }
+
     pub async fn ack_bulk(
         &self,
         guild_id: Option<u64>,

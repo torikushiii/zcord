@@ -1,3 +1,4 @@
+use gpui_component::scroll::ScrollableElement as _;
 use std::{cell::Cell, rc::Rc, time::Duration};
 
 use gpui::{prelude::*, *};
@@ -32,6 +33,7 @@ mod message;
 mod popouts;
 mod rows;
 mod skeleton;
+mod thread_pane;
 mod thread_ui;
 use crate::app::invite_card;
 pub(super) use actions::{MessageMenu, message_menu};
@@ -43,8 +45,10 @@ pub(super) use message::{author_name, body_context};
 pub(in crate::app) use popouts::{
     ChannelPopout, PopoutKind, channel_popout, pins_button, threads_button,
 };
-use rows::{render_row, request_invites, welcome};
+use rows::{render_row, request_invites, request_thread_preview, welcome};
 use skeleton::skeleton;
+pub(in crate::app) use thread_pane::ThreadPane;
+pub(crate) use thread_pane::{WIDTH as THREAD_PANE_WIDTH, render_thread_pane};
 pub(in crate::app) use thread_ui::{CreateThread, ThreadMenu, create_thread_dialog, thread_menu};
 
 const GROUP_MINUTES: u32 = 7;
@@ -259,12 +263,14 @@ pub fn messages(app: &DiscordApp, cx: &App) -> AnyElement {
                                     return div().into_any_element();
                                 };
                                 request_invites(&app, index, cx);
+                                request_thread_preview(&app, index, cx);
                                 render_row(app.read(cx), index, cx)
                             })
                             .flex_1()
                             .min_h_0()
                             .w_full(),
                         )
+                        .vertical_scrollbar(&app.messages)
                         .children(bar)
                         .children(older)
                         .children(missing),

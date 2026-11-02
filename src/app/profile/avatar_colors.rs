@@ -3,7 +3,7 @@ use std::path::Path;
 use color_thief::{ColorFormat, get_palette};
 use image::{ImageReader, Limits, RgbaImage};
 
-pub(super) fn load(path: &Path) -> Option<[u32; 2]> {
+pub(crate) fn load(path: &Path) -> Option<[u32; 2]> {
     let mut reader = ImageReader::open(path).ok()?.with_guessed_format().ok()?;
     let mut limits = Limits::default();
     limits.max_image_width = Some(4096);

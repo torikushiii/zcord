@@ -1,4 +1,5 @@
 use gpui::{prelude::*, *};
+use gpui_component::scroll::ScrollableElement as _;
 
 use crate::{
     app::{
@@ -92,6 +93,7 @@ pub fn render(app: &DiscordApp) -> impl IntoElement + use<> {
         .id("members")
         .w(rpx(WIDTH))
         .h_full()
+        .relative()
         .flex_none()
         .border_l_1()
         .border_color(rgba(theme::BORDER))
@@ -104,6 +106,7 @@ pub fn render(app: &DiscordApp) -> impl IntoElement + use<> {
             })
             .size_full(),
         )
+        .vertical_scrollbar(&app.member_rows)
 }
 
 fn render_row(app: &DiscordApp, index: usize, cx: &App) -> AnyElement {
@@ -136,7 +139,7 @@ fn row_content(app: &DiscordApp, index: usize, cx: &App) -> AnyElement {
     }
 }
 
-fn group_row(index: usize, name: &str, count: u32) -> Div {
+pub(super) fn group_row(index: usize, name: &str, count: u32) -> Div {
     div()
         .pt(rpx(if index == 0 { 16. } else { 24. }))
         .pb(rpx(4.))
@@ -176,7 +179,12 @@ fn placeholder_row() -> AnyElement {
         .into_any_element()
 }
 
-fn member_row(app: &DiscordApp, guild_id: u64, user: &User, cx: &App) -> impl IntoElement + use<> {
+pub(super) fn member_row(
+    app: &DiscordApp,
+    guild_id: u64,
+    user: &User,
+    cx: &App,
+) -> impl IntoElement + use<> {
     let online = user.status.is_online();
     let name = app
         .store
