@@ -59,7 +59,6 @@ fn hierarchy_updates_without_resetting_scroll_for_the_same_server() {
     assert_eq!(
         rows.rows,
         [
-            Row::Shortcuts,
             Row::Category(0),
             Row::Channel {
                 category: 0,
@@ -92,15 +91,15 @@ fn hierarchy_updates_without_resetting_scroll_for_the_same_server() {
     );
     guild.categories[0].channels.pop();
     rows.sync(Some(&guild), 101);
-    assert_eq!(rows.rows.len(), 5);
-    assert_eq!(rows.state.item_count(), 5);
+    assert_eq!(rows.rows.len(), 4);
+    assert_eq!(rows.state.item_count(), 4);
     assert_eq!(rows.state.logical_scroll_top().item_ix, position.item_ix);
     guild.id = 2;
     rows.sync(Some(&guild), 101);
     assert_eq!(rows.state.logical_scroll_top().item_ix, 0);
     rows.sync(None, 0);
-    assert_eq!(rows.rows, [Row::Shortcuts]);
-    assert_eq!(rows.state.item_count(), 1);
+    assert!(rows.rows.is_empty());
+    assert_eq!(rows.state.item_count(), 0);
 }
 
 #[test]
@@ -114,7 +113,6 @@ fn collapsed_categories_hide_channels_but_keep_the_selected_one_across_syncs() {
     assert_eq!(
         rows.rows,
         [
-            Row::Shortcuts,
             Row::Category(0),
             Row::Channel {
                 category: 0,
@@ -122,13 +120,12 @@ fn collapsed_categories_hide_channels_but_keep_the_selected_one_across_syncs() {
             },
         ]
     );
-    assert_eq!(rows.state.item_count(), 3);
+    assert_eq!(rows.state.item_count(), 2);
 
     rows.sync(Some(&first), 100);
     assert_eq!(
         rows.rows,
         [
-            Row::Shortcuts,
             Row::Category(0),
             Row::Channel {
                 category: 0,
@@ -139,18 +136,18 @@ fn collapsed_categories_hide_channels_but_keep_the_selected_one_across_syncs() {
 
     rows.collapsed.remove(&category);
     rows.sync(Some(&first), 100);
-    assert_eq!(rows.rows.len(), 6);
-    assert_eq!(rows.state.item_count(), 6);
+    assert_eq!(rows.rows.len(), 5);
+    assert_eq!(rows.state.item_count(), 5);
 
     rows.collapsed.insert(category);
     rows.sync(Some(&first), 101);
-    assert_eq!(rows.rows.len(), 3);
+    assert_eq!(rows.rows.len(), 2);
     rows.sync(Some(&guild(2, 2)), 100);
-    assert_eq!(rows.rows.len(), 4);
+    assert_eq!(rows.rows.len(), 3);
     assert!(rows.collapsed.contains(&category));
     rows.sync(Some(&first), 101);
-    assert_eq!(rows.rows.len(), 3);
-    assert_eq!(rows.state.item_count(), 3);
+    assert_eq!(rows.rows.len(), 2);
+    assert_eq!(rows.state.item_count(), 2);
 }
 
 #[test]
@@ -161,14 +158,14 @@ fn collapsing_keeps_channels_listed_until_the_fold_ends() {
     let category = guild.categories[0].id;
     assert!(rows.toggle_collapsed(category));
     rows.sync(Some(&guild), 101);
-    assert_eq!(rows.rows.len(), 6);
+    assert_eq!(rows.rows.len(), 5);
     rows.folds.get_mut(&category).unwrap().started -= FOLD;
     rows.sync(Some(&guild), 101);
-    assert_eq!(rows.rows.len(), 3);
-    assert_eq!(rows.state.item_count(), 3);
+    assert_eq!(rows.rows.len(), 2);
+    assert_eq!(rows.state.item_count(), 2);
     assert!(!rows.toggle_collapsed(category));
     rows.sync(Some(&guild), 101);
-    assert_eq!(rows.rows.len(), 6);
+    assert_eq!(rows.rows.len(), 5);
 }
 
 #[test]
@@ -340,8 +337,8 @@ fn hundreds_of_channels_only_build_visible_rows_and_can_reach_the_end(cx: &mut T
             rendered.borrow().len() < 80,
             "off-screen channels should not be built"
         );
-        let category = cx.debug_bounds("row-1").unwrap();
-        let channel = cx.debug_bounds("row-2").unwrap();
+        let category = cx.debug_bounds("row-0").unwrap();
+        let channel = cx.debug_bounds("row-1").unwrap();
         assert!((category.size.height - px(40. * zoom)).abs() <= px(1.));
         assert!((channel.size.height - px(34. * zoom)).abs() <= px(1.));
         assert!(
@@ -352,7 +349,7 @@ fn hundreds_of_channels_only_build_visible_rows_and_can_reach_the_end(cx: &mut T
         rendered.borrow_mut().clear();
         view.update(cx, |sidebar, cx| {
             sidebar.rows.state.scroll_to(ListOffset {
-                item_ix: 501,
+                item_ix: 500,
                 offset_in_item: px(0.),
             });
             cx.notify();
@@ -361,8 +358,8 @@ fn hundreds_of_channels_only_build_visible_rows_and_can_reach_the_end(cx: &mut T
             let _ = window.draw(cx);
         });
         assert!(rendered.borrow().len() < 80);
-        assert!(rendered.borrow().contains(&501));
-        assert!(cx.debug_bounds("row-501").is_some());
+        assert!(rendered.borrow().contains(&500));
+        assert!(cx.debug_bounds("row-500").is_some());
     }
 }
 

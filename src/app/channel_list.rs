@@ -39,7 +39,6 @@ mod tests;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Row {
     Banner,
-    Shortcuts,
     Category(usize),
     Channel {
         category: usize,
@@ -131,9 +130,9 @@ pub(crate) struct Rows {
 impl Rows {
     pub fn new() -> Self {
         Self {
-            state: ListState::new(1, ListAlignment::Top, px(200.)),
+            state: ListState::new(0, ListAlignment::Top, px(200.)),
             account_bounds: Rc::new(Cell::new(None)),
-            rows: vec![Row::Shortcuts],
+            rows: Vec::new(),
             guild_id: None,
             banner: None,
             banner_hover: BannerHover::default(),
@@ -202,7 +201,6 @@ impl Rows {
         if banner.is_some() {
             rows.push(Row::Banner);
         }
-        rows.push(Row::Shortcuts);
         for (category, group) in guild
             .into_iter()
             .flat_map(|guild| &guild.categories)
@@ -371,7 +369,7 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
                         if let Row::Thread {
                             category,
                             channel,
-                            index,
+                            index: thread_index,
                         } = row
                         {
                             let thread = app
@@ -382,10 +380,10 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
                                     app.store
                                         .sidebar_threads(channel.id, app.selected_channel_id)
                                         .into_iter()
-                                        .nth(index)
+                                        .nth(thread_index)
                                 });
                             return match thread {
-                                Some(thread) => thread_row(app, &thread).into_any_element(),
+                                Some(thread) => thread_row(app, &thread, index).into_any_element(),
                                 None => div().into_any_element(),
                             };
                         }
@@ -436,6 +434,7 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
                                 this.on_click(move |_, _, cx| {
                                     entity
                                         .update(cx, |app, cx| {
+                                            app.channel_rows.state.scroll_to_reveal_item(index);
                                             app.open_voice_channel(app.selected_guild_id, id, cx)
                                         })
                                         .ok();
@@ -443,7 +442,10 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
                             }
                             (Some((id, _)), _) => this.on_click(move |_, window, cx| {
                                 entity
-                                    .update(cx, |app, cx| app.select_channel(id, window, cx))
+                                    .update(cx, |app, cx| {
+                                        app.channel_rows.state.scroll_to_reveal_item(index);
+                                        app.select_channel(id, window, cx)
+                                    })
                                     .ok();
                             }),
                             (None, Some(id)) => this.on_click(move |_, _, cx| {
@@ -473,6 +475,7 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
                     .child(guild_header(app, solidity, window, cx)),
             )
         })
+        .child(corner_cover())
         .child(user_panel(app, cx))
         .into_any_element()
 }
@@ -593,6 +596,51 @@ fn guild_header(
         )
 }
 
+/// Content masks are rectangular, so rows scrolled under the header would show through the
+/// panel's rounded corner. This repaints the corner as the panel draws it: window background,
+/// then the 1px border, then the panel background down to the header's own curve.
+fn corner_cover() -> impl IntoElement {
+    const RADIUS: f32 = 8.;
+    canvas(
+        |_, _, _| {},
+        |bounds, _, window, _| {
+            let radius = rpx(RADIUS).to_pixels(window.rem_size());
+            let border = px(1.);
+            let outside = bounds.origin;
+            let inside = outside + point(border, border);
+            let outer = outside + point(radius, radius);
+            let layers = [
+                (inside + point(radius, radius), radius, theme::base_lower()),
+                (
+                    outer,
+                    radius - border,
+                    theme::composite(theme::border(), theme::base_lower()),
+                ),
+                (outer, radius, theme::base_lowest()),
+            ];
+            for (center, radius, color) in layers {
+                let mut path = PathBuilder::fill();
+                path.move_to(outside);
+                path.line_to(point(center.x, outside.y));
+                for step in 0..=12 {
+                    let angle = (3. - step as f32 / 12.) * std::f32::consts::FRAC_PI_2;
+                    path.line_to(center + point(radius * angle.cos(), radius * angle.sin()));
+                }
+                path.line_to(point(outside.x, center.y));
+                path.close();
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, rgb(color));
+                }
+            }
+        },
+    )
+    .absolute()
+    // Starts at the outer edge of the panel's 1px border.
+    .top(px(-1.))
+    .left(px(-1.))
+    .size(rpx(RADIUS + 1.))
+}
+
 fn banner_glass(spec: &ImageSpec, solidity: f32, opacity: f32, cx: &App) -> Div {
     let sigma = BANNER_BLUR_RADIUS * BANNER_BLUR_SOURCE as f32 / WIDTH;
     let image = images::blurred_with(spec, BANNER_BLUR_SOURCE, sigma, 1., cx);
@@ -670,11 +718,6 @@ fn row_content(
 ) -> Div {
     let content = match row {
         Row::Banner | Row::VoiceMember { .. } | Row::Thread { .. } => div().into_any_element(),
-        Row::Shortcuts => div()
-            .child(shortcut_row("events", "calendar", "Events"))
-            .child(shortcut_row("boosts", "gem", "Server Boosts"))
-            .child(div().mx_2().my_2().h(rpx(1.)).bg(rgba(theme::border())))
-            .into_any_element(),
         Row::Category(index) => match guild.and_then(|guild| guild.categories.get(index)) {
             Some(category) => div()
                 .pt_4()
@@ -734,7 +777,7 @@ fn row_content(
     div().w_full().px_2().child(content)
 }
 
-fn thread_row(app: &DiscordApp, thread: &ThreadRow) -> impl IntoElement + use<> {
+fn thread_row(app: &DiscordApp, thread: &ThreadRow, row: usize) -> impl IntoElement + use<> {
     let id = thread.id;
     let selected = app.selected_channel_id == id;
     let mentions = app.store.thread_mentions(id);
@@ -769,7 +812,10 @@ fn thread_row(app: &DiscordApp, thread: &ThreadRow) -> impl IntoElement + use<> 
             })
             .on_click(move |_, window, cx| {
                 entity
-                    .update(cx, |app, cx| app.select_channel(id, window, cx))
+                    .update(cx, |app, cx| {
+                        app.channel_rows.state.scroll_to_reveal_item(row);
+                        app.select_channel(id, window, cx)
+                    })
                     .ok();
             })
             .child(
@@ -810,28 +856,6 @@ fn thread_row(app: &DiscordApp, thread: &ThreadRow) -> impl IntoElement + use<> 
                 )
             }),
     )
-}
-
-fn shortcut_row(id: &'static str, icon: &str, label: &'static str) -> impl IntoElement {
-    div()
-        .id(id)
-        .flex()
-        .items_center()
-        .gap_2()
-        .h(rpx(32.))
-        .px_2()
-        .rounded(rpx(6.))
-        .text_size(rpx(16.))
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(theme::muted()))
-        .cursor_pointer()
-        .hover(|style| {
-            style
-                .bg(rgba(theme::hover()))
-                .text_color(rgb(theme::text()))
-        })
-        .child(theme::icon(icon, 20., theme::muted()))
-        .child(label)
 }
 
 fn channel_row(
