@@ -1011,9 +1011,10 @@ fn with_tooltip(
 /// Discord's voice controls that zcord doesn't implement yet: shown for familiarity, with a
 /// tooltip saying so instead of doing nothing silently.
 fn unavailable(button: Stateful<Div>, feature: &'static str) -> Stateful<Div> {
-    button.tooltip(move |_, cx| {
-        theme::text_tooltip(format!("{feature} isn't available in zcord yet"), cx)
-    })
+    button.relative().child(theme::hover_tooltip(
+        SharedString::from(format!("unavailable-{feature}")),
+        format!("{feature} isn't available in zcord yet"),
+    ))
 }
 
 /// Noise suppression popover above the voice panel's waveform button. Rendered from the

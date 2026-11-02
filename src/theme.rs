@@ -689,26 +689,6 @@ pub fn tooltip_entrance(body: Div, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-struct TextTooltip(SharedString);
-
-impl Render for TextTooltip {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        tooltip_entrance(
-            tooltip_bubble()
-                .text_size(rpx(14.))
-                .line_height(rpx(18.))
-                .child(self.0.clone()),
-            cx,
-        )
-    }
-}
-
-/// For `.tooltip(..)` on elements without their own hover state.
-pub fn text_tooltip(label: impl Into<SharedString>, cx: &mut App) -> AnyView {
-    let label = label.into();
-    cx.new(|_| TextTooltip(label)).into()
-}
-
 #[derive(IntoElement)]
 struct TooltipAbove {
     label: SharedString,

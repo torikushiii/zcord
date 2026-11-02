@@ -807,7 +807,11 @@ fn header(app: &DiscordApp, id: u64, name: &str) -> impl IntoElement + use<> {
         })
         .child(
             theme::icon_button("thread-pane-expand", "maximize-2", 20., theme::MUTED)
-                .tooltip(|_, cx| theme::text_tooltip("Open in Full View", cx))
+                .relative()
+                .child(theme::hover_tooltip(
+                    "thread-pane-expand-tip",
+                    "Open in Full View",
+                ))
                 .on_click(move |_, window, cx| {
                     expand
                         .update(cx, |app, cx| app.expand_thread_pane(window, cx))
@@ -816,7 +820,8 @@ fn header(app: &DiscordApp, id: u64, name: &str) -> impl IntoElement + use<> {
         )
         .child(
             theme::icon_button("thread-pane-close", "x", 20., theme::MUTED)
-                .tooltip(|_, cx| theme::text_tooltip("Close", cx))
+                .relative()
+                .child(theme::hover_tooltip("thread-pane-close-tip", "Close"))
                 .on_click(move |_, _, cx| {
                     close.update(cx, |app, cx| app.close_thread_pane(cx)).ok();
                 }),
