@@ -1,3 +1,4 @@
+use super::dm_menu;
 use gpui::{prelude::*, *};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement as _;
@@ -376,6 +377,7 @@ impl DiscordApp {
     ) {
         self.enter_home();
         self.select_channel(channel_id, window, cx);
+        self.request_dm_call(channel_id);
     }
 
     /// Creates the DM on Discord first when none exists yet.
@@ -567,7 +569,26 @@ pub(crate) fn sidebar(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(rgb(theme::muted()))
                         .child("Direct Messages")
-                        .child(theme::icon("plus", 16., theme::muted())),
+                        .child(
+                            theme::icon_button("dm-create", "plus", 16., theme::muted()).on_click(
+                                {
+                                    let entity = app.entity.clone();
+                                    move |_, _, cx| {
+                                        entity
+                                            .update(cx, |app, cx| {
+                                                app.open_dm_dialog(
+                                                    dm_menu::DmDialog::Recipients {
+                                                        channel_id: None,
+                                                        selected: Vec::new(),
+                                                    },
+                                                    cx,
+                                                )
+                                            })
+                                            .ok();
+                                    }
+                                },
+                            ),
+                        ),
                 )
                 .children(rows),
         )
@@ -773,6 +794,16 @@ fn dm_row(
                 .update(cx, |app, cx| app.select_dm(id, window, cx))
                 .ok();
         })
+        .on_mouse_down(MouseButton::Right, {
+            let entity = app.entity.clone();
+            move |event, _, cx| {
+                let position = event.position;
+                entity
+                    .update(cx, |app, cx| app.open_dm_menu(id, position, cx))
+                    .ok();
+            }
+        })
+        .group("dm-row")
         .children(nameplate)
         .when(plated, |this| {
             this.child(
@@ -809,6 +840,36 @@ fn dm_row(
         )
         .when(dm.channel.mentions > 0, |this| {
             this.child(count_pill(dm.channel.mentions))
+        })
+        .when(!dm.message_request, |this| {
+            let close = app.entity.clone();
+            let group = dm.group;
+            this.child(
+                div()
+                    .id(("dm-close", id))
+                    .flex_none()
+                    .opacity(0.)
+                    .group_hover("dm-row", |style| style.opacity(1.))
+                    .child(theme::icon("x", 16., theme::muted()))
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        close
+                            .update(cx, |app, cx| {
+                                if group {
+                                    app.open_dm_dialog(
+                                        dm_menu::DmDialog::LeaveGroup {
+                                            channel_id: id,
+                                            silent: false,
+                                        },
+                                        cx,
+                                    );
+                                } else {
+                                    app.close_dm(id, window, cx);
+                                }
+                            })
+                            .ok();
+                    }),
+            )
         });
     div()
         .relative()
@@ -1766,7 +1827,9 @@ pub(crate) fn dm_header(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> 
                         .child(label(("header-game", channel_id), &game)),
                 )
         }))
+        .children(dm_menu::header_error(app, channel_id))
         .child(div().flex_1())
+        .child(dm_menu::header_actions(app, channel_id))
         .child(chat::pins_button(app))
         .child(
             theme::icon_button(

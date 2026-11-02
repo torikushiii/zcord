@@ -10,6 +10,7 @@ use serde_json::json;
 
 mod account;
 mod activity_feed;
+mod calls;
 mod channels;
 mod embeds;
 mod expressions;

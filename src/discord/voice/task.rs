@@ -33,10 +33,15 @@ struct Task {
     endpoint: String,
 }
 
+// Private calls use the channel as the voice server identity, not the guild sentinel.
+fn server_id(guild_id: u64, channel_id: u64) -> u64 {
+    if guild_id == 0 { channel_id } else { guild_id }
+}
+
 struct StreamWatch {
     user_id: u64,
     key: String,
-    guild_id: u64,
+    server_id: u64,
     rtc_server_id: Option<u64>,
     rtc_channel_id: Option<u64>,
     token: Option<Secret>,
@@ -48,7 +53,7 @@ struct StreamWatch {
 
 struct StreamShare {
     key: String,
-    guild_id: u64,
+    server_id: u64,
     source: Option<ScreenSource>,
     rtc_server_id: Option<u64>,
     rtc_channel_id: Option<u64>,
@@ -154,7 +159,10 @@ impl VoiceManager {
             None => "join requested",
         };
         shared.restart = Some(restart);
-        shared.servers.remove(&guild_id);
+        shared.servers.remove(&server_id(guild_id, channel_id));
+        if let Some((guild, channel)) = shared.desired.or(shared.confirmed) {
+            shared.servers.remove(&server_id(guild, channel));
+        }
         if let Some(previous) = shared.last_guild {
             shared.servers.remove(&previous);
         }
@@ -176,6 +184,9 @@ impl VoiceManager {
         let mut shared = self.lock();
         let had_voice =
             shared.desired.is_some() || shared.confirmed.is_some() || shared.task.is_some();
+        if let Some((guild, channel)) = shared.desired.or(shared.confirmed) {
+            shared.servers.remove(&server_id(guild, channel));
+        }
         shared.desired = None;
         shared.confirmed = None;
         shared.session_id = None;
@@ -209,7 +220,7 @@ impl VoiceManager {
         shared.stream = Some(StreamWatch {
             user_id,
             key: key.clone(),
-            guild_id,
+            server_id: server_id(guild_id, channel_id),
             rtc_server_id: None,
             rtc_channel_id: None,
             token: None,
@@ -363,7 +374,7 @@ impl VoiceManager {
         self.end_share(&mut shared, Some("Sharing replaced".into()));
         shared.share = Some(StreamShare {
             key,
-            guild_id,
+            server_id: server_id(guild_id, channel_id),
             source,
             rtc_server_id: None,
             rtc_channel_id: None,
@@ -432,7 +443,7 @@ impl VoiceManager {
         let Some(endpoint) = share
             .endpoint
             .clone()
-            .or_else(|| shared.servers.get(&share.guild_id)?.endpoint.clone())
+            .or_else(|| shared.servers.get(&share.server_id)?.endpoint.clone())
         else {
             return;
         };
@@ -541,7 +552,7 @@ impl VoiceManager {
         let Some(endpoint) = stream
             .endpoint
             .clone()
-            .or_else(|| shared.servers.get(&stream.guild_id)?.endpoint.clone())
+            .or_else(|| shared.servers.get(&stream.server_id)?.endpoint.clone())
         else {
             return;
         };
@@ -694,9 +705,15 @@ impl VoiceManager {
             }
             return;
         }
-        let Some(guild_id) = state.guild_id else {
+        let guild_id = state.guild_id.unwrap_or(0);
+        if guild_id == 0
+            && shared
+                .desired
+                .or(shared.confirmed)
+                .is_some_and(|(guild, _)| guild != 0)
+        {
             return;
-        };
+        }
         let Some(channel_id) = state.channel_id else {
             let was_joined = shared.desired.is_some() || shared.confirmed.is_some();
             shared.desired = None;
@@ -765,7 +782,7 @@ impl VoiceManager {
             if shared
                 .task
                 .as_ref()
-                .is_some_and(|task| task.guild_id == guild_id)
+                .is_some_and(|task| server_id(task.guild_id, task.channel_id) == guild_id)
                 && let Some(task) = shared.task.take()
             {
                 let _ = task.shutdown.send(true);
@@ -779,7 +796,7 @@ impl VoiceManager {
             if shared
                 .task
                 .as_ref()
-                .is_some_and(|task| task.guild_id == guild_id)
+                .is_some_and(|task| server_id(task.guild_id, task.channel_id) == guild_id)
                 && let Some(task) = shared.task.take()
             {
                 let _ = task.shutdown.send(true);
@@ -787,6 +804,23 @@ impl VoiceManager {
         }
         drop(shared);
         self.spawn_if_ready();
+    }
+
+    pub fn dm_voice_server(
+        &self,
+        channel_id: Option<u64>,
+        token: Secret,
+        endpoint: Option<String>,
+    ) {
+        let shared = self.lock();
+        let Some((0, desired_channel)) = shared.desired else {
+            return;
+        };
+        if channel_id.is_some_and(|id| id != desired_channel) {
+            return;
+        }
+        drop(shared);
+        self.voice_server(desired_channel, token, endpoint);
     }
 
     pub fn gateway_ready(&self, user_id: u64, session_id: &str, fresh: bool) {
@@ -882,12 +916,16 @@ impl VoiceManager {
         let Some(user_id) = shared.user_id else {
             return;
         };
-        let Some((endpoint, token)) = shared.servers.get(&guild_id).and_then(|server| {
-            server
-                .endpoint
-                .clone()
-                .map(|endpoint| (endpoint, server.token.clone()))
-        }) else {
+        let Some((endpoint, token)) = shared
+            .servers
+            .get(&server_id(guild_id, channel_id))
+            .and_then(|server| {
+                server
+                    .endpoint
+                    .clone()
+                    .map(|endpoint| (endpoint, server.token.clone()))
+            })
+        else {
             return;
         };
         let Some(ws_url) = ws_url(&endpoint) else {
@@ -970,10 +1008,12 @@ impl VoiceManager {
 
 fn op4(shared: &Shared) -> Value {
     let (guild_id, channel_id) = match shared.desired {
+        Some((0, channel)) => (Value::Null, json!(channel.to_string())),
         Some((guild, channel)) => (json!(guild.to_string()), json!(channel.to_string())),
         None => (
             shared
                 .last_guild
+                .filter(|guild| *guild != 0)
                 .map(|guild| json!(guild.to_string()))
                 .unwrap_or(Value::Null),
             Value::Null,
@@ -1162,6 +1202,54 @@ mod tests {
         let leave = manager.leave().unwrap();
         assert_eq!(leave["d"]["guild_id"], "10");
         assert_eq!(leave["d"]["channel_id"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn dm_join_confirm_flags_server_and_leave_use_private_identity() {
+        let manager = VoiceManager::default();
+        manager.gateway_ready(1, "own-session", false);
+        let join = manager.join(0, 902);
+        assert!(join["d"]["guild_id"].is_null());
+        assert_eq!(join["d"]["channel_id"], "902");
+        let state = serde_json::from_value(json!({
+            "user_id": "1", "channel_id": "902", "guild_id": null
+        }))
+        .unwrap();
+        manager.voice_state(&state, Some("own-session".into()));
+        assert_eq!(manager.lock().confirmed, Some((0, 902)));
+        manager.dm_voice_server(
+            Some(901),
+            Secret("stale".into()),
+            Some("old.invalid".into()),
+        );
+        assert!(manager.lock().servers.is_empty());
+        manager.dm_voice_server(
+            Some(902),
+            Secret("dm-token".into()),
+            Some("dm.invalid".into()),
+        );
+        assert!(manager.lock().servers.contains_key(&902));
+        let mute = manager.set_mute(true).unwrap();
+        assert!(mute["d"]["guild_id"].is_null());
+        assert_eq!(mute["d"]["self_mute"], true);
+        let deaf = manager.set_deaf(true).unwrap();
+        assert!(deaf["d"]["guild_id"].is_null());
+        assert_eq!(deaf["d"]["self_deaf"], true);
+        let leave = manager.leave().unwrap();
+        assert!(leave["d"]["guild_id"].is_null());
+        assert!(leave["d"]["channel_id"].is_null());
+        assert!(manager.lock().servers.is_empty());
+    }
+
+    #[test]
+    fn dm_gateway_disconnect_clears_confirmed_connection() {
+        let manager = VoiceManager::default();
+        manager.gateway_ready(1, "own-session", false);
+        manager.join(0, 902);
+        let state = serde_json::from_value(json!({"user_id": "1", "channel_id": null})).unwrap();
+        manager.voice_state(&state, Some("own-session".into()));
+        assert!(manager.lock().desired.is_none());
+        assert!(manager.lock().confirmed.is_none());
     }
 
     #[test]

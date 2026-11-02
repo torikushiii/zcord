@@ -95,15 +95,45 @@ fn group_members(app: &DiscordApp, dm: &crate::store::PrivateChannel, cx: &App) 
         .filter_map(|id| app.store.user(id))
         .collect();
     users.sort_by_key(|user| user.name.to_lowercase());
+    let own_group = dm.owner_id == Some(app.store.current_user_id);
+    let channel_id = dm.channel.id;
     div()
         .w_full()
         .px_2()
         .pb_4()
         .child(member_list::group_row(0, "Members", users.len() as u32))
-        .children(
-            users
-                .into_iter()
-                .map(|user| member_list::member_row(app, 0, user, cx)),
-        )
+        .children(users.into_iter().map(|user| {
+            let user_id = user.id;
+            let removable = own_group && user_id != app.store.current_user_id;
+            let remove = app.entity.clone();
+            div()
+                .relative()
+                .group("group-member")
+                .child(member_list::member_row(app, 0, user, cx))
+                .when(removable, |this| {
+                    this.child(
+                        div()
+                            .id(("group-member-remove", user_id))
+                            .absolute()
+                            .right(rpx(8.))
+                            .top_0()
+                            .bottom_0()
+                            .flex()
+                            .items_center()
+                            .opacity(0.)
+                            .group_hover("group-member", |style| style.opacity(1.))
+                            .cursor_pointer()
+                            .child(theme::icon("x", 16., theme::muted()))
+                            .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                remove
+                                    .update(cx, |app, cx| {
+                                        app.remove_group_recipient(channel_id, user_id, cx)
+                                    })
+                                    .ok();
+                            }),
+                    )
+                })
+        }))
         .into_any_element()
 }

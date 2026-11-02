@@ -3,11 +3,14 @@ mod activity_popout;
 mod appearance;
 pub(crate) mod attachments;
 mod call_view;
+mod calls;
 mod channel_list;
 mod chat;
 mod composer;
 mod connection;
 mod display_name;
+mod dm_actions;
+mod dm_menu;
 mod dm_panel;
 mod embeds;
 mod emoji_picker;
@@ -211,6 +214,10 @@ pub struct DiscordApp {
     pub(crate) activity_card_tops: std::rc::Rc<std::cell::RefCell<HashMap<u64, Pixels>>>,
     pub(crate) selected_guild_id: u64,
     pub(crate) selected_channel_id: u64,
+    pub(crate) dm_error: Option<(u64, String)>,
+    dm_menu: Option<dm_menu::DmMenu>,
+    dm_dialog: Option<dm_menu::DmDialog>,
+    calls: calls::Calls,
     pub(crate) show_members: bool,
     pub(crate) composer: Entity<TextareaState>,
     pub(crate) reply: Option<ReplyTarget>,
@@ -225,13 +232,13 @@ pub struct DiscordApp {
     upload_ticking: bool,
     pub(crate) hovered_message: Option<u64>,
     pub(crate) hovered_actions: Option<u64>,
-    pub(crate) message_menu: Option<chat::MessageMenu>,
+    pub(in crate::app) message_menu: Option<chat::MessageMenu>,
     pub(crate) shift_held: bool,
-    pub(crate) channel_popout: Option<chat::ChannelPopout>,
-    pub(crate) popout_closed: Option<(chat::PopoutKind, Instant)>,
-    pub(crate) create_thread: Option<chat::CreateThread>,
-    pub(crate) thread_menu: Option<chat::ThreadMenu>,
-    pub(crate) thread_pane: Option<chat::ThreadPane>,
+    pub(in crate::app) channel_popout: Option<chat::ChannelPopout>,
+    pub(in crate::app) popout_closed: Option<(chat::PopoutKind, Instant)>,
+    pub(in crate::app) create_thread: Option<chat::CreateThread>,
+    pub(in crate::app) thread_menu: Option<chat::ThreadMenu>,
+    pub(in crate::app) thread_pane: Option<chat::ThreadPane>,
     pub(crate) thread_previews: HashSet<u64>,
     pub(crate) sharing_paused: Option<Point<Pixels>>,
     pub(crate) hovered_member: Option<u64>,
@@ -400,6 +407,10 @@ impl DiscordApp {
             activity_card_tops: Default::default(),
             selected_guild_id: 0,
             selected_channel_id: 0,
+            dm_error: None,
+            dm_menu: None,
+            dm_dialog: None,
+            calls: calls::Calls::default(),
             show_members: true,
             composer,
             reply: None,
@@ -882,6 +893,11 @@ impl DiscordApp {
                         self.typing_stopped(message.channel_id, message.author.id, cx)
                     }
                     Event::MessageDelete { id, .. } => self.forget_message(*id, cx),
+                    Event::CallDelete { channel_id }
+                        if self.voice.joined_call() == Some((0, *channel_id)) =>
+                    {
+                        self.leave_voice(cx);
+                    }
                     _ => {}
                 }
                 let supplemental = matches!(event, Event::ReadySupplemental(_));
@@ -912,6 +928,7 @@ impl DiscordApp {
     }
 
     fn apply_change(&mut self, change: Change, window: &mut Window, cx: &mut Context<Self>) {
+        self.reconcile_dm_call(cx);
         self.arm_status_expiry_timer(cx);
         self.follow_account_theme(cx);
         self.load_activity_reply_assets(cx);

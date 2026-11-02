@@ -232,7 +232,7 @@ impl DiscordApp {
         }
     }
 
-    pub(crate) fn restore_thread_pane(
+    pub(in crate::app) fn restore_thread_pane(
         &mut self,
         pane: Option<ThreadPane>,
         window: &mut Window,

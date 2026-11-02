@@ -268,6 +268,7 @@ impl Store {
             guild_badges: Vec::new(),
             dm_badges: 77,
             private: Vec::new(),
+            dm_calls: HashMap::new(),
             private_locations: HashMap::new(),
             relationships: HashMap::new(),
             notification_settings: HashMap::new(),

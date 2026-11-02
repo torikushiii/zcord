@@ -638,13 +638,23 @@ async fn drive(
                     } else if kind == "VOICE_SERVER_UPDATE" {
                         let guild_id = payload.d.get("guild_id").and_then(model::id_value);
                         let token = payload.d.get("token").and_then(Value::as_str);
-                        if let (Some(guild_id), Some(token)) = (guild_id, token) {
+                        if let Some(token) = token {
                             let endpoint = payload
                                 .d
                                 .get("endpoint")
                                 .and_then(Value::as_str)
                                 .map(str::to_owned);
-                            voice.voice_server(guild_id, Secret(token.to_owned()), endpoint);
+                            if let Some(guild_id) = guild_id {
+                                voice.voice_server(guild_id, Secret(token.to_owned()), endpoint);
+                            } else {
+                                let channel_id =
+                                    payload.d.get("channel_id").and_then(model::id_value);
+                                voice.dm_voice_server(
+                                    channel_id,
+                                    Secret(token.to_owned()),
+                                    endpoint,
+                                );
+                            }
                         }
                     } else if kind == "STREAM_CREATE" {
                         let key = payload.d.get("stream_key").and_then(Value::as_str);

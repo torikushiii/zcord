@@ -11,6 +11,8 @@ use serde::Serialize;
 use serde_json::Value;
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::OnceCell;
+mod calls;
+mod dms;
 mod expressions;
 mod gifs;
 mod messages;

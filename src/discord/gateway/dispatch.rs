@@ -76,6 +76,17 @@ pub(super) fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) 
                 id(&value, "id").map(|id| Event::ChannelDelete { id })
             }
             "CHANNEL_INFO" => serde_json::from_value(value).ok().map(Event::ChannelInfo),
+            "CHANNEL_RECIPIENT_ADD" => serde_json::from_value(value)
+                .ok()
+                .map(Event::ChannelRecipientAdd),
+            "CHANNEL_RECIPIENT_REMOVE" => serde_json::from_value(value)
+                .ok()
+                .map(Event::ChannelRecipientRemove),
+            "CALL_CREATE" => serde_json::from_value(value).ok().map(Event::CallCreate),
+            "CALL_UPDATE" => serde_json::from_value(value).ok().map(Event::CallUpdate),
+            "CALL_DELETE" => {
+                id(&value, "channel_id").map(|channel_id| Event::CallDelete { channel_id })
+            }
             "VOICE_CHANNEL_START_TIME_UPDATE" => serde_json::from_value(value)
                 .ok()
                 .map(Event::VoiceChannelStartTimeUpdate),
@@ -144,6 +155,82 @@ pub(super) fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_call_events_parse_ids_and_partial_updates() {
+        let mut ignored = HashSet::new();
+        let event = dispatch(
+            "CALL_CREATE",
+            json!({
+                "channel_id": "902", "message_id": "50", "region": "singapore",
+                "ringing": ["1", 10], "voice_states": [{"user_id": "10", "self_mute": true}]
+            }),
+            &mut ignored,
+        );
+        let Some(Event::CallCreate(call)) = event else {
+            panic!("expected call create")
+        };
+        assert_eq!(call.channel_id, 902);
+        assert_eq!(call.message_id, Some(50));
+        assert_eq!(call.region, Some(Some("singapore".to_owned())));
+        assert_eq!(call.ringing, Some(vec![1, 10]));
+        assert_eq!(call.voice_states.unwrap()[0].user_id, 10);
+        let event = dispatch(
+            "CALL_UPDATE",
+            json!({"channel_id": 902, "ringing": [], "region": null}),
+            &mut ignored,
+        );
+        let Some(Event::CallUpdate(call)) = event else {
+            panic!("expected call update")
+        };
+        assert_eq!(call.ringing, Some(vec![]));
+        assert_eq!(call.region, Some(None));
+        assert!(call.voice_states.is_none());
+        assert!(matches!(
+            dispatch("CALL_DELETE", json!({"channel_id": "902"}), &mut ignored),
+            Some(Event::CallDelete { channel_id: 902 })
+        ));
+        for kind in ["CALL_CREATE", "CALL_UPDATE", "CALL_DELETE"] {
+            assert!(dispatch(kind, json!({"channel_id": "bad"}), &mut ignored).is_none());
+        }
+        assert!(ignored.is_empty());
+    }
+
+    #[test]
+    fn private_recipient_events_parse_user_and_channel() {
+        let mut ignored = HashSet::new();
+        let payload = json!({"channel_id": "902", "user": {"id": "20", "username": "new"}});
+        for kind in ["CHANNEL_RECIPIENT_ADD", "CHANNEL_RECIPIENT_REMOVE"] {
+            let event = dispatch(kind, payload.clone(), &mut ignored).unwrap();
+            let (Event::ChannelRecipientAdd(update) | Event::ChannelRecipientRemove(update)) =
+                event
+            else {
+                panic!("expected recipient event");
+            };
+            assert_eq!(update.channel_id, 902);
+            assert_eq!(update.user.id, 20);
+            assert!(dispatch(kind, json!({"channel_id": "902"}), &mut ignored).is_none());
+        }
+        assert!(ignored.is_empty());
+    }
+
+    #[test]
+    fn channel_updates_share_the_existing_guild_and_private_dispatch_path() {
+        let mut ignored = HashSet::new();
+        for payload in [
+            json!({"id": "902", "type": 3, "name": "Renamed", "icon": null, "owner_id": "1"}),
+            json!({"id": "2002", "guild_id": "200", "type": 2, "name": "Voice"}),
+        ] {
+            assert!(matches!(
+                dispatch("CHANNEL_UPDATE", payload, &mut ignored),
+                Some(Event::ChannelUpsert(_))
+            ));
+        }
+        assert!(matches!(
+            dispatch("CHANNEL_DELETE", json!({"id": "902"}), &mut ignored),
+            Some(Event::ChannelDelete { id: 902 })
+        ));
+    }
 
     #[test]
     fn guild_stickers_update_dispatches_typed_catalog_and_skips_malformed_entries() {
