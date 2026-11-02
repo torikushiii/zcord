@@ -9,7 +9,7 @@ use std::{
 use gpui::{App, Bounds, Global, Pixels, Task, Window, WindowBounds, point, px, size};
 use serde::{Deserialize, Serialize};
 
-use crate::discord::gifs::GifProvider;
+use crate::discord::{IdentityCache, gifs::GifProvider};
 
 const SAVE_DELAY: Duration = Duration::from_millis(500);
 
@@ -25,6 +25,8 @@ static CHAT_FONT_SIZE: AtomicU32 = AtomicU32::new(16.0f32.to_bits());
 
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
+    #[serde(default)]
+    pub discord_identity: IdentityCache,
     #[serde(default)]
     pub zoom: Option<usize>,
     #[serde(default)]
@@ -123,17 +125,34 @@ fn path() -> Option<PathBuf> {
     data_dir().map(|dir| dir.join("settings.json"))
 }
 
-pub fn init(cx: &mut App) {
-    let settings = path()
+fn load() -> Settings {
+    path()
         .and_then(|path| fs::read(path).ok())
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+pub(crate) fn discord_identity() -> IdentityCache {
+    load().discord_identity
+}
+
+pub fn init(cx: &mut App) {
+    let settings = load();
+    let identity = settings.discord_identity.clone();
     cx.set_global(State {
         settings,
         revision: 0,
         saved_revision: 0,
         pending_save: None,
     });
+    let refresh = gpui_tokio::Tokio::spawn(cx, crate::discord::refresh_identity(identity));
+    cx.spawn(async move |cx| {
+        let Ok(identity) = refresh.await else {
+            return;
+        };
+        cx.update(|cx| update(cx, |settings| settings.discord_identity = identity));
+    })
+    .detach();
 }
 
 pub fn get(cx: &App) -> Settings {

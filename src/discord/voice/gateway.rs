@@ -1115,7 +1115,7 @@ pub(super) fn unix_ms() -> u64 {
 pub(super) fn ws_request(url: &str) -> Option<Request> {
     let mut request = url.into_client_request().ok()?;
     for (name, value) in [
-        ("user-agent", properties::USER_AGENT),
+        ("user-agent", properties::user_agent()),
         ("origin", "https://discord.com"),
         ("accept-language", properties::ACCEPT_LANGUAGE),
     ] {

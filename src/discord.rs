@@ -38,7 +38,8 @@ pub use permissions::{
     USE_EXTERNAL_EMOJIS, VIEW_CHANNEL, can_view, channel_permissions,
 };
 pub use presence::{SelfStatus, StatusDuration};
-pub use properties::USER_AGENT;
+pub use properties::user_agent;
+pub(crate) use properties::{IdentityCache, refresh_identity};
 pub use voice::{
     AudioDevice, FrameSlot, MicTest, ScreenSource, ScreenSourceId, StreamFrame, audio_devices,
 };
