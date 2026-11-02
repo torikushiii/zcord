@@ -497,8 +497,8 @@ fn surface(
         .rounded(rpx(8.))
         .max_h((window.viewport_size().height - rpx(16.).to_pixels(window.rem_size())).max(px(0.)))
         .overflow_y_scroll()
-        .bg(rgb(theme::ELEVATED))
-        .text_color(rgb(theme::TEXT))
+        .bg(rgb(theme::elevated()))
+        .text_color(rgb(theme::text()))
         .shadow_lg()
         .occlude()
         .child(record(state, part as usize))
@@ -530,12 +530,12 @@ fn choice_row(id: &'static str, enabled: bool) -> Stateful<Div> {
         .text_size(rpx(14.))
         .line_height(rpx(18.))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(theme::TEXT))
+        .text_color(rgb(theme::text()))
         .without_text_selection()
         .when(enabled, |this| {
             this.cursor_pointer()
-                .hover(|style| style.bg(rgba(theme::HOVER)))
-                .focus_visible(|style| style.bg(rgba(theme::HOVER)))
+                .hover(|style| style.bg(rgba(theme::hover())))
+                .focus_visible(|style| style.bg(rgba(theme::hover())))
         })
         .when(!enabled, |this| {
             this.opacity(0.5)
@@ -559,7 +559,7 @@ fn choices(
                     .flex_none()
                     .h(rpx(1.))
                     .my(rpx(8.))
-                    .bg(rgba(theme::BORDER)),
+                    .bg(rgba(theme::border())),
             );
         }
         let click = listener.clone();
@@ -622,13 +622,13 @@ fn choices(
                             .font_weight(FontWeight::NORMAL)
                             .text_size(rpx(12.))
                             .line_height(rpx(16.))
-                            .text_color(rgb(theme::MUTED))
+                            .text_color(rgb(theme::muted()))
                             .child(text)
                     })),
             )
             .when(status != SelfStatus::Online, |this| {
                 this.child(
-                    theme::icon("chevron-down", 16., theme::MUTED).with_transformation(
+                    theme::icon("chevron-down", 16., theme::muted()).with_transformation(
                         Transformation::rotate(radians(-std::f32::consts::FRAC_PI_2)),
                     ),
                 )

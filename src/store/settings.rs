@@ -40,6 +40,10 @@ impl Store {
         &self.favorite_gifs
     }
 
+    pub fn account_theme(&self) -> Option<settings_proto::AccountTheme> {
+        self.account_theme
+    }
+
     pub fn is_favorite_gif(&self, url: &str) -> bool {
         self.favorite_gifs.iter().any(|gif| gif.url == url)
     }
@@ -86,6 +90,13 @@ impl Store {
             Ok(settings) => {
                 let structure = settings.folders.is_some() || !update.partial;
                 let status = settings.status.is_some() || !update.partial;
+                let theme = if settings.theme.is_some() || !update.partial {
+                    let changed = self.account_theme != settings.theme;
+                    self.account_theme = settings.theme;
+                    changed
+                } else {
+                    false
+                };
                 if settings.folders.is_some() || !update.partial {
                     self.folder_layout = settings.folders;
                 }
@@ -98,6 +109,8 @@ impl Store {
                 }
                 return if status {
                     Change::Members { guild_id: None }
+                } else if theme {
+                    Change::Theme
                 } else {
                     Change::None
                 };

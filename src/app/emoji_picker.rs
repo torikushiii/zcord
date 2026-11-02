@@ -557,8 +557,8 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
         .h(gif_picker::panel_height(picker.position, window))
         .rounded(rpx(8.))
         .border_1()
-        .border_color(rgba(theme::BORDER))
-        .bg(rgb(theme::ELEVATED))
+        .border_color(rgba(theme::border()))
+        .bg(rgb(theme::elevated()))
         .shadow_lg()
         .overflow_hidden()
         .when(!closing, |this| {
@@ -576,7 +576,7 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
                 .gap(rpx(12.))
                 .p(rpx(12.))
                 .border_b_1()
-                .border_color(rgba(theme::BORDER))
+                .border_color(rgba(theme::border()))
                 .when(
                     matches!(picker.target, PickerTarget::Composer | PickerTarget::Pane),
                     |this| this.child(gif_picker::tabs(app, gif_picker::Tab::Emoji)),
@@ -588,10 +588,10 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
                         .gap(rpx(8.))
                         .px(rpx(12.))
                         .rounded(rpx(8.))
-                        .bg(rgb(theme::BG))
+                        .bg(rgb(theme::bg()))
                         .border_1()
-                        .border_color(rgba(theme::BORDER))
-                        .child(theme::icon("search", 18., theme::MUTED))
+                        .border_color(rgba(theme::border()))
+                        .child(theme::icon("search", 18., theme::muted()))
                         .child(
                             div().flex_1().min_w_0().child(
                                 Input::new(&picker.search)
@@ -647,13 +647,13 @@ fn sidebar(picker: &EmojiPicker, cx: &App, interactive: bool) -> impl IntoElemen
         .flex_none()
         .w(rpx(SIDEBAR))
         .py(rpx(8.))
-        .bg(rgb(theme::BG))
+        .bg(rgb(theme::bg()))
         .overflow_y_scroll()
         .children(picker.sections.iter().enumerate().map(|(index, section)| {
             let scroll = picker.scroll.clone();
             let row = section.row;
             let icon: AnyElement = match &section.icon {
-                SectionIcon::Recent => theme::icon("clock", 20., theme::MUTED).into_any_element(),
+                SectionIcon::Recent => theme::icon("clock", 20., theme::muted()).into_any_element(),
                 SectionIcon::Unicode(emoji) => div()
                     .size(rpx(22.))
                     .children(
@@ -677,9 +677,9 @@ fn sidebar(picker: &EmojiPicker, cx: &App, interactive: bool) -> impl IntoElemen
                             .justify_center()
                             .size(rpx(28.))
                             .rounded_full()
-                            .bg(rgba(theme::SELECTED))
+                            .bg(rgba(theme::selected()))
                             .text_size(rpx(10.))
-                            .text_color(rgb(theme::TEXT))
+                            .text_color(rgb(theme::text()))
                             .child(initials.clone())
                             .into_any_element(),
                     }
@@ -695,7 +695,7 @@ fn sidebar(picker: &EmojiPicker, cx: &App, interactive: bool) -> impl IntoElemen
                 .rounded(rpx(6.))
                 .when(interactive, |this| {
                     this.cursor_pointer()
-                        .hover(|style| style.bg(rgba(theme::SELECTED)))
+                        .hover(|style| style.bg(rgba(theme::selected())))
                         .on_click(move |_, _, _| scroll.scroll_to_item(row, ScrollStrategy::Top))
                 })
                 .child(icon)
@@ -718,7 +718,7 @@ fn grid(
             .items_center()
             .justify_center()
             .text_size(rpx(14.))
-            .text_color(rgb(theme::MUTED))
+            .text_color(rgb(theme::muted()))
             .child("No emoji match your search")
             .into_any_element();
     }
@@ -733,7 +733,7 @@ fn grid(
                     .pb(rpx(8.))
                     .text_size(rpx(14.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(theme::TEXT))
+                    .text_color(rgb(theme::text()))
                     .truncate()
                     .child(name.clone())
                     .into_any_element(),
@@ -754,7 +754,7 @@ fn grid(
                             .justify_center()
                             .size(rpx(CELL))
                             .rounded(rpx(6.))
-                            .when(selected, |this| this.bg(rgba(theme::SELECTED)))
+                            .when(selected, |this| this.bg(rgba(theme::selected())))
                             .when(usable && interactive, |this| this.cursor_pointer())
                             .when(interactive, move |this| {
                                 this.on_hover(move |hovered, _, cx| {
@@ -825,7 +825,7 @@ fn footer(app: &DiscordApp, picker: &EmojiPicker, cx: &App) -> impl IntoElement 
                                 .truncate()
                                 .text_size(rpx(14.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(theme::STRONG))
+                                .text_color(rgb(theme::strong()))
                                 .child(format!(":{}:", choice_name(choice))),
                         )
                         .children(note.map(|note| {
@@ -833,7 +833,7 @@ fn footer(app: &DiscordApp, picker: &EmojiPicker, cx: &App) -> impl IntoElement 
                                 .truncate()
                                 .text_size(rpx(12.))
                                 .text_color(rgb(if *access == EmojiAccess::Usable {
-                                    theme::MUTED
+                                    theme::muted()
                                 } else {
                                     theme::YELLOW
                                 }))
@@ -844,7 +844,7 @@ fn footer(app: &DiscordApp, picker: &EmojiPicker, cx: &App) -> impl IntoElement 
         }
         None => div()
             .text_size(rpx(13.))
-            .text_color(rgb(theme::FAINT))
+            .text_color(rgb(theme::faint()))
             .child("Hover an emoji to preview it")
             .into_any_element(),
     };
@@ -855,8 +855,8 @@ fn footer(app: &DiscordApp, picker: &EmojiPicker, cx: &App) -> impl IntoElement 
         .h(rpx(56.))
         .px(rpx(12.))
         .border_t_1()
-        .border_color(rgba(theme::BORDER))
-        .bg(rgb(theme::BG))
+        .border_color(rgba(theme::border()))
+        .bg(rgb(theme::bg()))
         .child(content)
 }
 
@@ -875,8 +875,8 @@ pub(super) fn suggestions(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
             .py(rpx(8.))
             .rounded(rpx(8.))
             .border_1()
-            .border_color(rgba(theme::BORDER))
-            .bg(rgb(theme::ELEVATED))
+            .border_color(rgba(theme::border()))
+            .bg(rgb(theme::elevated()))
             .shadow_lg()
             .occlude()
             .child(
@@ -885,7 +885,7 @@ pub(super) fn suggestions(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                     .pb(rpx(6.))
                     .text_size(rpx(12.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(theme::MUTED))
+                    .text_color(rgb(theme::muted()))
                     .child(format!("EMOJI MATCHING :{}", query.to_uppercase())),
             )
             .children(choices.iter().enumerate().map(|(index, choice)| {
@@ -910,7 +910,7 @@ pub(super) fn suggestions(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                     .h(rpx(36.))
                     .rounded(rpx(4.))
                     .cursor_pointer()
-                    .when(index == selected, |this| this.bg(rgba(theme::SELECTED)))
+                    .when(index == selected, |this| this.bg(rgba(theme::selected())))
                     .on_hover(move |hovered, _, cx| {
                         if *hovered {
                             hover
@@ -938,7 +938,7 @@ pub(super) fn suggestions(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                             .min_w_0()
                             .truncate()
                             .text_size(rpx(15.))
-                            .text_color(rgb(theme::STRONG))
+                            .text_color(rgb(theme::strong()))
                             .child(format!(":{}:", choice_name(choice))),
                     )
                     .children(source.map(|source| {
@@ -947,7 +947,7 @@ pub(super) fn suggestions(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                             .max_w(rpx(200.))
                             .truncate()
                             .text_size(rpx(12.))
-                            .text_color(rgb(theme::MUTED))
+                            .text_color(rgb(theme::muted()))
                             .child(source)
                     }))
             }))

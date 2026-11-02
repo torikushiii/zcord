@@ -13,11 +13,6 @@ const PIN_WIDTH: f32 = 420.;
 const THREAD_MIN_WIDTH: f32 = 480.;
 const THREAD_MAX_WIDTH: f32 = 600.;
 const THREAD_WIDTH_SHARE: f32 = 0.35;
-const CARD: u32 = 0x121214;
-const PANEL: u32 = 0x0A0A0C;
-const RING: u32 = 0x97979F33;
-const OUTLINE: u32 = 0xFFFFFF14;
-const HEADING: u32 = 0xDCDCDF;
 const MAX_PREVIEW_AVATARS: usize = 5;
 /// The press that closes a popout also clicks its header button, which must not reopen it.
 const REOPEN_GUARD: Duration = Duration::from_millis(200);
@@ -358,7 +353,7 @@ impl DiscordApp {
 pub(in crate::app) fn pins_button(app: &DiscordApp) -> Stateful<Div> {
     let entity = app.entity.clone();
     let unread = app.store.pins_unread(app.selected_channel_id);
-    theme::icon_button("pins", "pin", 20., theme::MUTED)
+    theme::icon_button("pins", "pin", 20., theme::muted())
         .relative()
         .child(theme::hover_tooltip("pins-tip", "Pinned Messages"))
         .on_click(move |_, window, cx| {
@@ -383,7 +378,7 @@ pub(in crate::app) fn pins_button(app: &DiscordApp) -> Stateful<Div> {
 
 pub(in crate::app) fn threads_button(app: &DiscordApp) -> Stateful<Div> {
     let entity = app.entity.clone();
-    theme::icon_button("threads", "messages-square", 20., theme::MUTED)
+    theme::icon_button("threads", "messages-square", 20., theme::muted())
         .relative()
         .child(theme::hover_tooltip("threads-tip", "Threads"))
         .on_click(move |_, window, cx| {
@@ -407,9 +402,9 @@ fn frame(app: &DiscordApp, id: &'static str, width: f32) -> Stateful<Div> {
         .w(rpx(width))
         .h(relative(0.8))
         .rounded(rpx(8.))
-        .bg(rgb(PANEL))
+        .bg(rgb(theme::surface_high()))
         .border_1()
-        .border_color(rgba(OUTLINE))
+        .border_color(rgba(theme::border_bright()))
         .shadow_lg()
         .occlude()
         .on_mouse_down_out(move |_, _, cx| {
@@ -433,11 +428,11 @@ fn load_more(
         .mb(rpx(8.))
         .rounded(rpx(8.))
         .cursor_pointer()
-        .bg(rgb(CARD))
-        .hover(|style| style.bg(rgba(theme::SELECTED)))
+        .bg(rgb(theme::elevated()))
+        .hover(|style| style.bg(rgba(theme::selected())))
         .text_size(rpx(14.))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(HEADING))
+        .text_color(rgb(theme::strong()))
         .on_click(action)
         .child("Load More")
 }
@@ -447,7 +442,7 @@ fn note(text: &'static str) -> Div {
         .py(rpx(32.))
         .text_center()
         .text_size(rpx(14.))
-        .text_color(rgb(theme::MUTED))
+        .text_color(rgb(theme::muted()))
         .child(text)
 }
 
@@ -465,11 +460,11 @@ fn pin_card(app: &DiscordApp, message: &Message, can_unpin: bool, cx: &App) -> i
             .px(rpx(8.))
             .rounded(rpx(6.))
             .cursor_pointer()
-            .bg(rgb(PANEL))
-            .hover(|style| style.bg(rgba(theme::SELECTED)))
+            .bg(rgb(theme::surface_high()))
+            .hover(|style| style.bg(rgba(theme::selected())))
             .text_size(rpx(12.))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(rgb(HEADING))
+            .text_color(rgb(theme::strong()))
     };
     div()
         .relative()
@@ -477,9 +472,9 @@ fn pin_card(app: &DiscordApp, message: &Message, can_unpin: bool, cx: &App) -> i
         .mb(rpx(8.))
         .py(rpx(8.))
         .rounded(rpx(8.))
-        .bg(rgb(CARD))
+        .bg(rgb(theme::elevated()))
         .border_1()
-        .border_color(rgba(RING))
+        .border_color(rgba(theme::outline()))
         .overflow_hidden()
         .child(render_message(app, message, false, true, cx))
         .child(
@@ -503,7 +498,7 @@ fn pin_card(app: &DiscordApp, message: &Message, can_unpin: bool, cx: &App) -> i
                 .when(can_unpin, |this| {
                     this.child(
                         action("pin-remove")
-                            .child(theme::icon("x", 14., HEADING))
+                            .child(theme::icon("x", 14., theme::strong()))
                             .on_click(move |_, _, cx| {
                                 unpin.update(cx, |app, cx| app.unpin_message(id, cx)).ok();
                             }),
@@ -531,12 +526,12 @@ fn pins_popout(app: &DiscordApp, pins: &Pins, cx: &App) -> AnyElement {
                 .h(rpx(57.))
                 .px(rpx(16.))
                 .border_b_1()
-                .border_color(rgba(theme::BORDER))
+                .border_color(rgba(theme::border()))
                 .text_size(rpx(20.))
                 .line_height(rpx(24.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(HEADING))
-                .child(theme::icon("pin", 24., theme::MUTED))
+                .text_color(rgb(theme::strong()))
+                .child(theme::icon("pin", 24., theme::muted()))
                 .child("Pinned Messages"),
         )
         .child(
@@ -587,7 +582,7 @@ fn thread_card(app: &DiscordApp, guild_id: u64, row: &ThreadRow, cx: &App) -> im
         .min_w_0()
         .text_size(rpx(14.))
         .line_height(rpx(18.))
-        .text_color(rgb(theme::MUTED));
+        .text_color(rgb(theme::muted()));
     let line = match (&row.recent, row.archived) {
         (Some((author, text, at)), false) => line
             .child(avatar(*author, 16.))
@@ -595,7 +590,7 @@ fn thread_card(app: &DiscordApp, guild_id: u64, row: &ThreadRow, cx: &App) -> im
                 div()
                     .flex_none()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(HEADING))
+                    .text_color(rgb(theme::strong()))
                     .child(name_of(*author)),
             )
             .child(div().min_w_0().truncate().child(text.clone()))
@@ -610,7 +605,7 @@ fn thread_card(app: &DiscordApp, guild_id: u64, row: &ThreadRow, cx: &App) -> im
                 div()
                     .flex_none()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(HEADING))
+                    .text_color(rgb(theme::strong()))
                     .child(name_of(owner))
             }))
             .children(
@@ -630,10 +625,10 @@ fn thread_card(app: &DiscordApp, guild_id: u64, row: &ThreadRow, cx: &App) -> im
         .px(rpx(16.))
         .rounded(rpx(8.))
         .cursor_pointer()
-        .bg(rgb(CARD))
+        .bg(rgb(theme::elevated()))
         .border_1()
-        .border_color(rgba(RING))
-        .hover(|style| style.bg(rgba(theme::SELECTED)))
+        .border_color(rgba(theme::outline()))
+        .hover(|style| style.bg(rgba(theme::selected())))
         .on_click(move |_, window, cx| {
             open.update(cx, |app, cx| app.open_listed_thread(id, window, cx))
                 .ok();
@@ -651,7 +646,7 @@ fn thread_card(app: &DiscordApp, guild_id: u64, row: &ThreadRow, cx: &App) -> im
                         .text_size(rpx(16.))
                         .line_height(rpx(20.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(HEADING))
+                        .text_color(rgb(theme::strong()))
                         .child(row.name.clone()),
                 )
                 .child(line),
@@ -682,10 +677,10 @@ fn thread_card(app: &DiscordApp, guild_id: u64, row: &ThreadRow, cx: &App) -> im
                             .h(rpx(24.))
                             .px(rpx(6.))
                             .rounded_full()
-                            .bg(rgb(0x000000))
+                            .bg(rgb(theme::bg()))
                             .text_size(rpx(12.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(white())
+                            .text_color(rgb(theme::bright()))
                             .child(format!("+{extra}")),
                     )
                 }),
@@ -702,7 +697,7 @@ fn section_heading(text: String, first: bool) -> Div {
         .mb(rpx(8.))
         .text_size(rpx(14.))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(HEADING))
+        .text_color(rgb(theme::strong()))
         .child(text)
 }
 
@@ -788,15 +783,15 @@ fn threads_popout(app: &DiscordApp, threads: &Threads, window: &Window, cx: &App
                 .h(rpx(49.))
                 .px(rpx(16.))
                 .border_b_1()
-                .border_color(rgba(theme::BORDER))
-                .child(theme::icon("messages-square", 24., theme::MUTED))
+                .border_color(rgba(theme::border()))
+                .child(theme::icon("messages-square", 24., theme::muted()))
                 .child(
                     div()
                         .flex_none()
                         .text_size(rpx(16.))
                         .line_height(rpx(20.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(HEADING))
+                        .text_color(rgb(theme::strong()))
                         .child("Threads"),
                 )
                 .child(
@@ -804,7 +799,7 @@ fn threads_popout(app: &DiscordApp, threads: &Threads, window: &Window, cx: &App
                         .flex_none()
                         .w(rpx(1.))
                         .h(rpx(24.))
-                        .bg(rgba(theme::BORDER)),
+                        .bg(rgba(theme::border())),
                 )
                 .child(
                     div()
@@ -816,10 +811,10 @@ fn threads_popout(app: &DiscordApp, threads: &Threads, window: &Window, cx: &App
                         .h(rpx(32.))
                         .px(rpx(10.))
                         .rounded(rpx(8.))
-                        .bg(rgb(CARD))
+                        .bg(rgb(theme::elevated()))
                         .border_1()
-                        .border_color(rgba(theme::BORDER))
-                        .child(theme::icon("search", 16., theme::MUTED))
+                        .border_color(rgba(theme::border()))
+                        .child(theme::icon("search", 16., theme::muted()))
                         .child(
                             div().flex_1().min_w_0().child(
                                 Input::new(&threads.search)

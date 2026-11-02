@@ -30,7 +30,7 @@ pub(super) fn skeleton(seed: u64) -> impl IntoElement {
             let lines: Vec<_> = (0..shuffle.next(1..4))
                 .map(|_| {
                     let words: Vec<_> = (0..shuffle.next(2..9))
-                        .map(|_| bar(shuffle.next(24..90) as f32, 14., rgba(theme::SELECTED)))
+                        .map(|_| bar(shuffle.next(24..90) as f32, 14., rgba(theme::selected())))
                         .collect();
                     div()
                         .flex()
@@ -47,7 +47,7 @@ pub(super) fn skeleton(seed: u64) -> impl IntoElement {
                     .w(rpx(shuffle.next(200..320) as f32))
                     .h(rpx(shuffle.next(120..200) as f32))
                     .rounded(rpx(8.))
-                    .bg(rgba(theme::SELECTED))
+                    .bg(rgba(theme::selected()))
             });
             div()
                 .flex()
@@ -67,7 +67,7 @@ pub(super) fn skeleton(seed: u64) -> impl IntoElement {
                                 .mt(rpx(2.))
                                 .size(rpx(40.))
                                 .rounded_full()
-                                .bg(rgba(theme::SELECTED)),
+                                .bg(rgba(theme::selected())),
                         ),
                 )
                 .child(
@@ -79,7 +79,7 @@ pub(super) fn skeleton(seed: u64) -> impl IntoElement {
                         .child(div().flex().items_center().h(rpx(22.)).child(bar(
                             name,
                             16.,
-                            rgb(theme::PLACEHOLDER_STRONG),
+                            rgb(theme::placeholder_strong()),
                         )))
                         .children(lines)
                         .children(image),

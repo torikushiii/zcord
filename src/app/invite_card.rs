@@ -47,15 +47,15 @@ fn frame(key: u64) -> Stateful<Div> {
         .max_w_full()
         .rounded(rpx(12.))
         .border_1()
-        .border_color(rgba(theme::BORDER))
-        .bg(rgb(theme::ELEVATED))
+        .border_color(rgba(theme::border()))
+        .bg(rgb(theme::elevated()))
 }
 
 fn loading() -> Div {
     div()
         .p(rpx(16.))
         .text_size(rpx(14.))
-        .text_color(rgb(theme::MUTED))
+        .text_color(rgb(theme::muted()))
         .child("Resolving invite…")
 }
 
@@ -71,7 +71,7 @@ fn invalid(sent: bool) -> Div {
             div()
                 .text_size(rpx(12.))
                 .line_height(rpx(16.))
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child(lead),
         )
         .child(
@@ -109,7 +109,7 @@ fn invalid(sent: bool) -> Div {
                                 .mt(rpx(2.))
                                 .text_size(rpx(14.))
                                 .line_height(rpx(18.))
-                                .text_color(rgb(theme::MUTED))
+                                .text_color(rgb(theme::muted()))
                                 .child("Try sending a new invite"),
                         ),
                 ),
@@ -146,12 +146,12 @@ fn card(app: &DiscordApp, key: u64, invite: &Invite, cx: &App) -> AnyElement {
             div()
                 .size_full()
                 .rounded(rpx(16.))
-                .bg(rgba(theme::SELECTED))
+                .bg(rgba(theme::selected()))
                 .flex()
                 .items_center()
                 .justify_center()
                 .text_size(rpx(20.))
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child(initials(&invite.name))
                 .into_any_element()
         });
@@ -180,7 +180,7 @@ fn card(app: &DiscordApp, key: u64, invite: &Invite, cx: &App) -> AnyElement {
                         .truncate()
                         .text_size(rpx(14.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(theme::STRONG))
+                        .text_color(rgb(theme::strong()))
                         .child(game.name.clone()),
                 ),
         ),
@@ -238,7 +238,7 @@ fn card(app: &DiscordApp, key: u64, invite: &Invite, cx: &App) -> AnyElement {
                         .relative()
                         .h(rpx(BANNER))
                         .rounded_t(rpx(12.))
-                        .bg(rgba(theme::SELECTED))
+                        .bg(rgba(theme::selected()))
                         .children(banner),
                 )
                 .child(
@@ -249,7 +249,7 @@ fn card(app: &DiscordApp, key: u64, invite: &Invite, cx: &App) -> AnyElement {
                         .size(rpx(ICON + ICON_RING * 2.))
                         .p(rpx(ICON_RING))
                         .rounded(rpx(20.))
-                        .bg(rgb(theme::ELEVATED))
+                        .bg(rgb(theme::elevated()))
                         .child(icon),
                 ),
         )
@@ -271,7 +271,7 @@ fn card(app: &DiscordApp, key: u64, invite: &Invite, cx: &App) -> AnyElement {
                                 .text_size(rpx(16.))
                                 .line_height(rpx(20.))
                                 .font_weight(FontWeight::BOLD)
-                                .text_color(rgb(theme::STRONG))
+                                .text_color(rgb(theme::strong()))
                                 .child(invite.name.clone()),
                         )
                         .children(invite.tag.as_ref().map(|tag| theme::guild_tag(tag, cx))),
@@ -284,13 +284,13 @@ fn card(app: &DiscordApp, key: u64, invite: &Invite, cx: &App) -> AnyElement {
                         .gap(rpx(8.))
                         .text_size(rpx(14.))
                         .line_height(rpx(18.))
-                        .text_color(rgb(theme::MUTED))
+                        .text_color(rgb(theme::muted()))
                         .child(count(
                             theme::GREEN,
                             format!("{} Online", grouped(invite.online)),
                         ))
                         .child(count(
-                            theme::MUTED,
+                            theme::muted(),
                             format!("{} Members", grouped(invite.members)),
                         )),
                 )
@@ -299,7 +299,7 @@ fn card(app: &DiscordApp, key: u64, invite: &Invite, cx: &App) -> AnyElement {
                         .mt(rpx(2.))
                         .text_size(rpx(14.))
                         .line_height(rpx(18.))
-                        .text_color(rgb(theme::MUTED))
+                        .text_color(rgb(theme::muted()))
                         .child(format!("Est. {}", invite.created_at.month_year())),
                 )
                 .children(invite.description.as_ref().map(|description| {
@@ -307,7 +307,7 @@ fn card(app: &DiscordApp, key: u64, invite: &Invite, cx: &App) -> AnyElement {
                         .mt(rpx(12.))
                         .text_size(rpx(14.))
                         .line_height(rpx(18.))
-                        .text_color(rgb(theme::TEXT))
+                        .text_color(rgb(theme::text()))
                         .child(description.clone())
                 }))
                 .children(games.map(|games| games.mt(rpx(12.))))
@@ -319,7 +319,7 @@ fn card(app: &DiscordApp, key: u64, invite: &Invite, cx: &App) -> AnyElement {
                 .inset_0()
                 .rounded(rpx(12.))
                 .border_1()
-                .border_color(rgba(theme::BORDER)),
+                .border_color(rgba(theme::border())),
         )
         .into_any_element()
 }

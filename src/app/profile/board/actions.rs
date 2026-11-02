@@ -183,7 +183,7 @@ fn game_action_button(
         .h(rpx(32.))
         .px(rpx(12.))
         .rounded(rpx(8.))
-        .bg(rgba(0x97979F1F))
+        .bg(rgba(theme::control_bg()))
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
         .text_size(rpx(14.))

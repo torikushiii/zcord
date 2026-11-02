@@ -658,7 +658,7 @@ pub(crate) fn member_row(
         .user(user_id)
         .and_then(|user| user.tag.as_ref())
         .map(|tag| theme::guild_tag(tag, cx));
-    let muted_color = |server: bool| if server { theme::RED } else { theme::MUTED };
+    let muted_color = |server: bool| if server { theme::RED } else { theme::muted() };
     let can_watch = user_id != app.store.current_user_id;
     let watch = app.entity.clone();
     let streamer = can_watch && member.streaming;
@@ -685,7 +685,7 @@ pub(crate) fn member_row(
         .rounded(rpx(6.))
         .when(connected_elsewhere, |this| this.opacity(0.5))
         .cursor_pointer()
-        .hover(|style| style.bg(rgba(theme::HOVER)))
+        .hover(|style| style.bg(rgba(theme::hover())))
         .child(
             div()
                 .relative()
@@ -713,7 +713,7 @@ pub(crate) fn member_row(
                                     .size_full()
                                     .rounded_full()
                                     .border_1()
-                                    .border_color(rgb(theme::BG)),
+                                    .border_color(rgb(theme::bg())),
                             ),
                     )
                 }),
@@ -725,9 +725,9 @@ pub(crate) fn member_row(
                 .text_size(rpx(14.))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(rgb(if speaking {
-                    theme::STRONG
+                    theme::strong()
                 } else {
-                    theme::MUTED
+                    theme::muted()
                 }))
                 .child(label(("voice-member-name", user_id), &name)),
         )
@@ -750,7 +750,7 @@ pub(crate) fn member_row(
             )
         })
         .when(member.video, |this| {
-            this.child(theme::icon("video", 16., theme::MUTED))
+            this.child(theme::icon("video", 16., theme::muted()))
         })
         .when(
             member.mute || (member.self_mute && !member.self_deaf),
@@ -868,16 +868,16 @@ pub(crate) fn panel(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
                         .text_size(rpx(12.))
                         .line_height(rpx(16.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(theme::MUTED))
+                        .text_color(rgb(theme::muted()))
                         .child(place),
                 ),
         )
         .child({
             let entity = app.entity.clone();
             let color = if app.voice.noise_suppression {
-                theme::TEXT
+                theme::text()
             } else {
-                theme::FAINT
+                theme::faint()
             };
             let menu_open = app
                 .voice
@@ -913,15 +913,17 @@ pub(crate) fn panel(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
                 .size(rpx(28.))
                 .rounded(rpx(4.))
                 .cursor_pointer()
-                .hover(|style| style.bg(rgba(theme::SELECTED)))
+                .hover(|style| style.bg(rgba(theme::selected())))
                 .on_click(move |_, _, cx| {
                     entity.update(cx, |app, cx| app.leave_voice(cx)).ok();
                 })
                 .map(|this| with_tooltip(this, app, Control::Disconnect, "Disconnect"))
                 // Lucide's handset tilted down into Discord's hang-up glyph.
-                .child(theme::icon("phone", 20., theme::TEXT).with_transformation(
-                    Transformation::rotate(radians(std::f32::consts::FRAC_PI_4 * 3.)),
-                )),
+                .child(
+                    theme::icon("phone", 20., theme::text()).with_transformation(
+                        Transformation::rotate(radians(std::f32::consts::FRAC_PI_4 * 3.)),
+                    ),
+                ),
         );
     let action = |id: &'static str, icon: &'static str| {
         div()
@@ -932,8 +934,8 @@ pub(crate) fn panel(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
             .justify_center()
             .h(rpx(32.))
             .rounded(rpx(8.))
-            .bg(rgba(theme::HOVER))
-            .child(theme::icon(icon, 20., theme::TEXT))
+            .bg(rgba(theme::hover()))
+            .child(theme::icon(icon, 20., theme::text()))
     };
     let sharing = app.voice.sharing != Sharing::Off;
     let share = app.entity.clone();
@@ -974,7 +976,7 @@ pub(crate) fn panel(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
             .flex_col()
             .gap_2()
             .p(rpx(8.))
-            .bg(black())
+            .bg(rgb(theme::bg()))
             .child(header)
             .child(actions),
     )
@@ -1062,7 +1064,7 @@ fn noise_card(app: &DiscordApp, menu: &Menu, cx: &App) -> Stateful<Div> {
                 .text_size(rpx(16.))
                 .line_height(rpx(20.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child("Noise Suppression"),
         )
         .child(switch("noise-switch", enabled, slide));
@@ -1075,7 +1077,7 @@ fn noise_card(app: &DiscordApp, menu: &Menu, cx: &App) -> Stateful<Div> {
             div()
                 .text_size(rpx(14.))
                 .line_height(rpx(18.))
-                .text_color(rgb(theme::TEXT))
+                .text_color(rgb(theme::text()))
                 .child(
                     "Filters steady background noise like fans, hum and typing out of your \
                      microphone before it's sent. Sudden sounds, such as clapping, may still \
@@ -1087,7 +1089,7 @@ fn noise_card(app: &DiscordApp, menu: &Menu, cx: &App) -> Stateful<Div> {
                 .pt(rpx(4.))
                 .text_size(rpx(12.))
                 .line_height(rpx(16.))
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child("Powered by RNNoise"),
         )
 }
@@ -1098,9 +1100,9 @@ fn menu_frame(id: &'static str) -> Stateful<Div> {
         .flex()
         .flex_col()
         .rounded(rpx(8.))
-        .bg(rgb(theme::ELEVATED))
+        .bg(rgb(theme::elevated()))
         .border_1()
-        .border_color(rgba(theme::BORDER))
+        .border_color(rgba(theme::border()))
         .shadow_lg()
 }
 
@@ -1143,7 +1145,7 @@ pub(crate) fn switch(id: &'static str, on: bool, slide: Option<u64>) -> AnyEleme
     let (icon, icon_color) = if on {
         ("check", theme::BLURPLE)
     } else {
-        ("x", theme::FAINT)
+        ("x", theme::faint())
     };
     let at = move |t: f32| if on { t } else { 1. - t };
     let knob = div()
@@ -1154,7 +1156,7 @@ pub(crate) fn switch(id: &'static str, on: bool, slide: Option<u64>) -> AnyEleme
         .justify_center()
         .size(rpx(20.))
         .rounded_full()
-        .bg(white())
+        .bg(rgb(theme::control_thumb()))
         .child(theme::icon(icon, 12., icon_color));
     let track = div()
         .relative()
@@ -1164,7 +1166,7 @@ pub(crate) fn switch(id: &'static str, on: bool, slide: Option<u64>) -> AnyEleme
         .rounded_full();
     let Some(slide) = slide else {
         return track
-            .bg(blend(theme::FAINT, theme::BLURPLE, at(1.)))
+            .bg(blend(theme::faint(), theme::BLURPLE, at(1.)))
             .child(knob.left(rpx(OFF_LEFT + (ON_LEFT - OFF_LEFT) * at(1.))))
             .into_any_element();
     };
@@ -1179,7 +1181,7 @@ pub(crate) fn switch(id: &'static str, on: bool, slide: Option<u64>) -> AnyEleme
         .with_animation(
             ElementId::NamedInteger(format!("{id}-track").into(), key),
             animation,
-            move |this, delta| this.bg(blend(theme::FAINT, theme::BLURPLE, at(delta))),
+            move |this, delta| this.bg(blend(theme::faint(), theme::BLURPLE, at(delta))),
         )
         .into_any_element()
 }

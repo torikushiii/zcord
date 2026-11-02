@@ -32,9 +32,9 @@ pub struct BodyColors {
 impl Default for BodyColors {
     fn default() -> Self {
         Self {
-            strong: theme::STRONG,
-            muted: theme::MUTED,
-            faint: theme::FAINT,
+            strong: theme::strong(),
+            muted: theme::muted(),
+            faint: theme::faint(),
             link: None,
             quote: None,
         }
@@ -192,7 +192,7 @@ fn render_block(
                     .w(rpx(4.))
                     .flex_none()
                     .rounded(rpx(4.))
-                    .bg(rgb(0x4E5058)),
+                    .bg(rgb(theme::divider())),
             )
             .child(
                 div()
@@ -225,11 +225,11 @@ fn render_block(
             .w_full()
             .p(rpx(8.))
             .rounded(rpx(4.))
-            .bg(rgb(theme::ELEVATED))
+            .bg(rgb(theme::elevated()))
             .border_1()
-            .border_color(rgba(theme::BORDER))
+            .border_color(rgba(theme::border()))
             .font_family(cx.theme().mono_font_family.clone())
-            .text_color(rgb(theme::TEXT))
+            .text_color(rgb(theme::text()))
             .text_size(rpx(14. * scale))
             .line_height(rpx(18. * scale))
             .whitespace_normal()
@@ -279,7 +279,7 @@ fn render_block(
                             )
                             .into_any_element()
                     }
-                    None => list_bullet(depth, theme::TEXT).into_any_element(),
+                    None => list_bullet(depth, theme::text()).into_any_element(),
                 };
                 div()
                     .flex()
@@ -534,7 +534,7 @@ fn span_pieces(
             style.scale = Some(0.85);
             if !hidden {
                 style.chip = Some(Chip::Code);
-                style.color = Some(rgb(theme::TEXT).into());
+                style.color = Some(rgb(theme::text()).into());
                 style.group = 0x8000_0000 | unique;
             }
             code.clone()

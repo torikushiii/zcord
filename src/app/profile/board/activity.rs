@@ -171,7 +171,7 @@ fn current_game(
                             let backdrop = card
                                 .theme()
                                 .and_then(|theme| theme.modal_background().as_solid())
-                                .unwrap_or_else(|| rgb(theme::BG).into())
+                                .unwrap_or_else(|| rgb(theme::bg()).into())
                                 .blend(palette.panel);
                             art_tooltip(
                                 div()
@@ -479,7 +479,7 @@ pub(in crate::app::profile) fn popout_playing(
                             .children(badge.map(|badge| {
                                 let surface = card
                                     .theme()
-                                    .map_or(theme::ELEVATED, |theme| theme.surface());
+                                    .map_or(theme::elevated(), |theme| theme.surface());
                                 let ring = Hsla::from(rgb(surface)).blend(palette.panel);
                                 art_tooltip(
                                     div()
@@ -618,11 +618,11 @@ pub(in crate::app::profile) fn listening(
     let ring = if modal {
         card.theme()
             .and_then(|theme| theme.modal_background().as_solid())
-            .unwrap_or_else(|| rgb(theme::BG).into())
+            .unwrap_or_else(|| rgb(theme::bg()).into())
     } else {
         let surface = card
             .theme()
-            .map_or(theme::ELEVATED, |theme| theme.surface());
+            .map_or(theme::elevated(), |theme| theme.surface());
         Hsla::from(rgb(surface))
     }
     .blend(palette.panel);

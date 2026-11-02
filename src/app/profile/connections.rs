@@ -32,7 +32,7 @@ pub(super) fn connections(profile: &model::Profile, palette: ProfilePalette) -> 
                                     .items_center()
                                     .justify_center()
                                     .rounded(rpx(8.))
-                                    .bg(rgb(0xFFFFFF))
+                                    .bg(rgb(theme::connection_tile_bg()))
                                     .map(|this| match connection_icon(&account.kind) {
                                         Some((icon, color)) => {
                                             this.child(theme::icon(icon, 18., color))
@@ -40,7 +40,7 @@ pub(super) fn connections(profile: &model::Profile, palette: ProfilePalette) -> 
                                         None => this
                                             .text_size(rpx(13.))
                                             .font_weight(FontWeight::BOLD)
-                                            .text_color(rgb(0x2E3035))
+                                            .text_color(rgb(theme::connection_tile_text()))
                                             .child(connection_initial(&account.kind)),
                                     }),
                             )

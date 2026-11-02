@@ -420,7 +420,7 @@ fn tile() -> Div {
         .h(rpx(TILE_HEIGHT))
         .rounded(rpx(8.))
         .overflow_hidden()
-        .bg(rgb(theme::SURFACE_HIGHEST))
+        .bg(rgb(theme::surface_highest()))
 }
 
 pub(super) fn control(
@@ -544,7 +544,7 @@ fn ended_panel(app: &DiscordApp, reason: &str, name: String, members_shown: bool
                 .text_size(rpx(20.))
                 .line_height(rpx(24.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child(ended_message(reason).to_owned()),
         )
         .child(
@@ -558,11 +558,11 @@ fn ended_panel(app: &DiscordApp, reason: &str, name: String, members_shown: bool
                 .cursor_pointer()
                 .bg(rgb(0x1E1F22))
                 .border_1()
-                .border_color(rgba(theme::BORDER_SUBTLE))
+                .border_color(rgba(theme::border_subtle()))
                 .hover(|style| style.bg(rgb(0x2B2C31)))
                 .text_size(rpx(14.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .on_click(move |_, _, cx| {
                     back.update(cx, |app, cx| app.return_to_call(cx)).ok();
                 })
@@ -581,7 +581,7 @@ pub(super) fn control_group() -> Div {
         .rounded(rpx(12.))
         .bg(rgb(PANEL))
         .border_1()
-        .border_color(rgba(theme::BORDER_SUBTLE))
+        .border_color(rgba(theme::border_subtle()))
 }
 
 fn quality_pill(height: u32, fps: u32) -> Div {
@@ -621,7 +621,7 @@ fn stage_members(app: &DiscordApp, view: &StreamView, cx: &App) -> Option<Div> {
     let name = member_name(app, guild_id, view.user_id);
     let live = view.ended.is_none();
     let stream_tile = tile()
-        .bg(rgb(theme::BG))
+        .bg(rgb(theme::bg()))
         .children(view.frame.clone().filter(|_| live).map(|frame| {
             img(frame)
                 .size_full()
@@ -694,7 +694,7 @@ pub(super) fn voice_controls(app: &DiscordApp) -> Div {
                 "stage-mute",
                 if muted { "Unmute" } else { "Mute" },
                 if muted { "mic-off" } else { "mic" },
-                if muted { theme::RED } else { theme::TEXT },
+                if muted { theme::RED } else { theme::text() },
                 tint(muted),
             )
             .on_click(move |_, _, cx| {
@@ -711,7 +711,7 @@ pub(super) fn voice_controls(app: &DiscordApp) -> Div {
                 } else {
                     "headphones"
                 },
-                if deafened { theme::RED } else { theme::TEXT },
+                if deafened { theme::RED } else { theme::text() },
                 tint(deafened),
             )
             .on_click(move |_, _, cx| {
@@ -733,7 +733,7 @@ pub(super) fn share_control(app: &DiscordApp) -> Div {
                 "Share Your Screen"
             },
             "monitor-up",
-            if sharing { theme::GREEN } else { theme::TEXT },
+            if sharing { theme::GREEN } else { theme::text() },
             0,
         )
         .on_click(move |_, _, cx| {
@@ -753,7 +753,7 @@ pub(super) fn show_chat_button(app: &DiscordApp) -> Stateful<Div> {
         .size(rpx(32.))
         .rounded(rpx(8.))
         .cursor_pointer()
-        .hover(|style| style.bg(rgba(theme::HOVER)))
+        .hover(|style| style.bg(rgba(theme::hover())))
         .relative()
         .child(theme::hover_tooltip("stream-show-chat-tip", "Show Chat"))
         .on_click(move |_, window, cx| {
@@ -819,17 +819,17 @@ pub(super) fn stage_frame(
                     .w(rpx(CHAT_WIDTH))
                     .h(rpx(chat::HEADER_HEIGHT))
                     .px(rpx(16.))
-                    .bg(rgb(theme::BG))
+                    .bg(rgb(theme::bg()))
                     .border_b_1()
-                    .border_color(rgba(theme::BORDER))
+                    .border_color(rgba(theme::border()))
                     .occlude()
                     .text_size(rpx(16.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(theme::STRONG))
-                    .child(theme::icon("message-circle", 20., theme::MUTED))
+                    .text_color(rgb(theme::strong()))
+                    .child(theme::icon("message-circle", 20., theme::muted()))
                     .child(div().flex_1().min_w_0().truncate().child(chat_title))
                     .child(
-                        theme::icon_button("stage-hide-chat", "x", 20., theme::MUTED).on_click(
+                        theme::icon_button("stage-hide-chat", "x", 20., theme::muted()).on_click(
                             move |_, window, cx| {
                                 hide_chat
                                     .update(cx, |app, cx| app.close_stream_chat(window, cx))
@@ -868,7 +868,7 @@ pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
             .into_any_element(),
         (None, None) => div()
             .text_size(rpx(15.))
-            .text_color(rgb(theme::MUTED))
+            .text_color(rgb(theme::muted()))
             .child(status)
             .into_any_element(),
     };
@@ -898,7 +898,7 @@ pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
         .text_color(white())
         .child(theme::icon("volume-2", 20., 0xFFFFFF))
         .child(channel)
-        .child(div().text_color(rgb(theme::MUTED)).child("\u{b7}"))
+        .child(div().text_color(rgb(theme::muted())).child("\u{b7}"))
         .child(theme::undecorated_member_avatar(
             &app.store,
             guild_id,
@@ -985,7 +985,7 @@ pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                                 .rounded(rpx(8.))
                                 .bg(rgb(PANEL))
                                 .border_1()
-                                .border_color(rgba(theme::BORDER_SUBTLE))
+                                .border_color(rgba(theme::border_subtle()))
                                 .occlude()
                                 .on_click(|_, _, cx| cx.stop_propagation())
                                 .child(

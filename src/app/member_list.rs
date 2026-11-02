@@ -96,7 +96,7 @@ pub fn render(app: &DiscordApp) -> impl IntoElement + use<> {
         .relative()
         .flex_none()
         .border_l_1()
-        .border_color(rgba(theme::BORDER))
+        .border_color(rgba(theme::border()))
         .child(
             list(app.member_rows.clone(), move |index, _, cx| {
                 let Some(app) = entity.upgrade() else {
@@ -147,7 +147,7 @@ pub(super) fn group_row(index: usize, name: &str, count: u32) -> Div {
         .text_size(rpx(14.))
         .line_height(rpx(18.))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(theme::MUTED))
+        .text_color(rgb(theme::muted()))
         .truncate()
         .child(label(
             ("member-group", index as u64),
@@ -167,14 +167,14 @@ fn placeholder_row() -> AnyElement {
                 .size(rpx(32.))
                 .flex_none()
                 .rounded_full()
-                .bg(rgba(theme::SELECTED)),
+                .bg(rgba(theme::selected())),
         )
         .child(
             div()
                 .h(rpx(12.))
                 .w(rpx(110.))
                 .rounded(rpx(6.))
-                .bg(rgba(theme::SELECTED)),
+                .bg(rgba(theme::selected())),
         )
         .into_any_element()
 }
@@ -199,9 +199,9 @@ pub(super) fn member_row(
         .and_then(|nameplate| nameplate_layer(nameplate, user.id, ROW_HEIGHT, hovered, cx));
     let plated = nameplate.is_some();
     let row_background = if hovered {
-        theme::composite(theme::HOVER, theme::BG)
+        theme::composite(theme::hover(), theme::base_lower())
     } else {
-        theme::BG
+        theme::base_lower()
     };
     let dim = rgba(row_background << 8 | NAMEPLATE_DIM);
     let entity = app.entity.clone();
@@ -219,7 +219,7 @@ pub(super) fn member_row(
         .overflow_hidden()
         .cursor_pointer()
         .when(!online, |this| this.opacity(0.35))
-        .hover(|style| style.bg(rgba(theme::HOVER)).opacity(1.))
+        .hover(|style| style.bg(rgba(theme::hover())).opacity(1.))
         .on_hover(move |hovered, _, cx| {
             entity
                 .update(cx, |app, cx| {
@@ -263,7 +263,7 @@ pub(super) fn member_row(
             guild_id,
             user.id,
             AVATAR,
-            online.then_some((user.status, theme::BG)),
+            online.then_some((user.status, theme::base_lower())),
             hovered,
             cx,
         ))
@@ -313,7 +313,7 @@ fn name_line(
                 .text_size(rpx(16.))
                 .line_height(rpx(20.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(role_color.unwrap_or(theme::TEXT)))
+                .text_color(rgb(role_color.unwrap_or(theme::text())))
                 .child(display_name::render(
                     ("member-name", user.id),
                     name,
@@ -336,7 +336,7 @@ fn activity_line(user: &User, online: bool) -> Option<impl IntoElement> {
             .min_w_0()
             .text_size(rpx(12.))
             .line_height(rpx(16.))
-            .text_color(rgb(theme::MUTED))
+            .text_color(rgb(theme::muted()))
             .children(icon.map(|icon| theme::icon(icon, 14., theme::GREEN)))
             .child(
                 div()

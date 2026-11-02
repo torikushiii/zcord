@@ -84,7 +84,7 @@ pub(super) fn source<'a>(app: &'a DiscordApp, popout: &Popout) -> Option<Source<
             .filter_map(|word| word.chars().next())
             .take(2)
             .collect(),
-        color: theme::SURFACE_HIGHEST,
+        color: theme::surface_highest(),
         online,
         discoverable: guild.discoverable(),
         stickers,
@@ -145,7 +145,7 @@ pub(super) fn source_card(
         )
         .when(
             source.online.is_some() && source.discoverable.is_some(),
-            |this| this.child(div().size(rpx(3.)).rounded_full().bg(rgb(theme::MUTED))),
+            |this| this.child(div().size(rpx(3.)).rounded_full().bg(rgb(theme::muted()))),
         )
         .children(source.discoverable.map(|discoverable| {
             div().child(match (sticker, discoverable) {
@@ -159,7 +159,7 @@ pub(super) fn source_card(
         .flex()
         .flex_col()
         .gap(rpx(12.))
-        .child(div().text_color(rgb(theme::MUTED)).child(if sticker {
+        .child(div().text_color(rgb(theme::muted())).child(if sticker {
             "Get this sticker from"
         } else {
             "This emoji is from"
@@ -216,10 +216,10 @@ pub(super) fn source_card(
                 .gap(rpx(4.))
                 .text_size(rpx(12.))
                 .line_height(rpx(16.))
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .cursor_pointer()
-                .hover(|style| style.text_color(rgb(theme::TEXT)))
-                .focus_visible(|style| style.bg(rgba(theme::SELECTED)))
+                .hover(|style| style.text_color(rgb(theme::text())))
+                .focus_visible(|style| style.bg(rgba(theme::selected())))
                 .on_click(move |_, _, cx| {
                     click
                         .update(cx, |app, cx| app.toggle_expression_stickers(cx))
@@ -246,7 +246,7 @@ pub(super) fn source_card(
                         "chevron-down"
                     },
                     14.,
-                    theme::MUTED,
+                    theme::muted(),
                 )),
         );
         if popout.expanded {
@@ -313,8 +313,10 @@ fn sticker_grid(app: &DiscordApp, popout: &Popout, source: &Source<'_>) -> AnyEl
                                             .flex_none()
                                             .rounded(rpx(4.))
                                             .cursor_pointer()
-                                            .hover(|style| style.bg(rgba(theme::SELECTED)))
-                                            .focus_visible(|style| style.bg(rgba(theme::SELECTED)))
+                                            .hover(|style| style.bg(rgba(theme::selected())))
+                                            .focus_visible(|style| {
+                                                style.bg(rgba(theme::selected()))
+                                            })
                                             .on_hover(move |hovered, _, cx| {
                                                 hover
                                                     .update(cx, |app, cx| {
@@ -381,7 +383,7 @@ fn sticker_grid(app: &DiscordApp, popout: &Popout, source: &Source<'_>) -> AnyEl
             div()
                 .text_size(rpx(12.))
                 .line_height(rpx(16.))
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child(text),
         );
         if failed {
@@ -395,7 +397,7 @@ fn sticker_grid(app: &DiscordApp, popout: &Popout, source: &Source<'_>) -> AnyEl
                     .tab_index(0)
                     .cursor_pointer()
                     .text_size(rpx(12.))
-                    .text_color(rgb(theme::LINK))
+                    .text_color(rgb(theme::link()))
                     .hover(|style| style.underline())
                     .focus_visible(|style| style.underline())
                     .on_click(move |_, _, cx| {

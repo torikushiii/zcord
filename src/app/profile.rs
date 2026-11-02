@@ -1225,14 +1225,14 @@ mod tests {
         profile.user_profile.as_mut().unwrap().theme_colors = Some(vec![0x15223A, 0x30203B]);
         let dark = ProfilePalette::of(ProfileTheme::of(Some(&profile)));
         assert!(!dark.light);
-        assert_eq!(dark.strong, crate::theme::STRONG);
+        assert_eq!(dark.strong, crate::theme::strong());
         profile.user_profile.as_mut().unwrap().theme_colors = Some(vec![0x8000FF, 0x00FFFF]);
         let saturated = ProfilePalette::of(ProfileTheme::of(Some(&profile)));
         assert!(!saturated.light);
-        assert_eq!(saturated.strong, crate::theme::STRONG);
+        assert_eq!(saturated.strong, crate::theme::strong());
         let default = ProfilePalette::of(None);
         assert!(!default.light);
-        assert_eq!(default.text, crate::theme::TEXT);
+        assert_eq!(default.text, crate::theme::text());
     }
 
     #[test]

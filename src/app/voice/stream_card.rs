@@ -13,10 +13,7 @@ use crate::{
 const CARD_WIDTH: f32 = 280.;
 const PREVIEW_WIDTH: f32 = 248.;
 const PREVIEW_HEIGHT: f32 = 142.;
-const PANEL: u32 = 0x0A0A0C;
-const RING: u32 = 0x97979F33;
 const PREVIEW_BG: u32 = 0x2C2D32;
-const LABEL: u32 = 0x81828A;
 const LIVE_RED: u32 = 0xD22D39;
 const WATCH_GREEN: u32 = 0x008545;
 const ROW_GAP: f32 = 16.;
@@ -185,9 +182,9 @@ pub(crate) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                         .w(rpx(CARD_WIDTH))
                         .p(rpx(15.))
                         .rounded(rpx(12.))
-                        .bg(rgb(PANEL))
+                        .bg(rgb(theme::surface_high()))
                         .border_1()
-                        .border_color(rgba(RING))
+                        .border_color(rgba(theme::outline()))
                         .shadow_lg()
                         .occlude()
                         .on_hover(move |hovered, _, cx| {
@@ -211,7 +208,7 @@ pub(crate) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                                 .text_size(rpx(12.))
                                 .line_height(rpx(16.))
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(LABEL))
+                                .text_color(rgb(theme::faint()))
                                 .child("Streaming Now")
                                 .child(
                                     super::live_badge()
@@ -239,9 +236,8 @@ pub(crate) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                                         .rounded(rpx(8.))
                                         .object_fit(ObjectFit::Contain)
                                         .into_any_element(),
-                                    None => {
-                                        theme::icon("monitor-filled", 40., LABEL).into_any_element()
-                                    }
+                                    None => theme::icon("monitor-filled", 40., theme::faint())
+                                        .into_any_element(),
                                 })
                                 .when(can_watch, |this| {
                                     this.cursor_pointer()

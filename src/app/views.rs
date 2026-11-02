@@ -80,6 +80,7 @@ pub(crate) fn messages_style() -> StyleRefinement {
 pub(crate) fn member_list_style(width: f32) -> StyleRefinement {
     StyleRefinement::default()
         .w(rpx(width))
+        .bg(rgb(crate::theme::base_lower()))
         .h_full()
         .flex_none()
 }

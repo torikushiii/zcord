@@ -175,10 +175,10 @@ impl ProfilePalette {
         };
         let mut palette = Self {
             light,
-            strong: if light { 0x18141F } else { theme::STRONG },
-            text: if light { 0x2E2938 } else { theme::TEXT },
-            muted: if light { 0x51495E } else { theme::MUTED },
-            faint: if light { 0x62596F } else { theme::FAINT },
+            strong: if light { 0x18141F } else { theme::strong() },
+            text: if light { 0x2E2938 } else { theme::text() },
+            muted: if light { 0x51495E } else { theme::muted() },
+            faint: if light { 0x62596F } else { theme::faint() },
             // Discord's dark profile surfaces are a faintly blue white over the card: #18181a,
             // #2a2a2c and #2c2c30 on a black theme.
             panel: if light {
@@ -201,7 +201,7 @@ impl ProfilePalette {
             status_surface: status_color(if light { 0xFFFFFF } else { 0x17181B }),
             status_border: rgba((status_border << 8) | status_border_alpha).into(),
             status_text: match (light, theme.is_some()) {
-                (false, false) => rgb(0xD4D5D8).into(),
+                (false, false) => rgb(theme::text()).into(),
                 (true, false) => rgb(0x2E2E34).into(),
                 (false, true) => rgba(0xFFFFFFF5).into(),
                 (true, true) => rgba(0x000000F5).into(),

@@ -383,9 +383,9 @@ impl Render for AccountSample {
                     .into_any_element(),
             ),
             [
-                account_button("mic", "mic", theme::TEXT).into_any_element(),
-                account_button("deafen", "headphones", theme::TEXT).into_any_element(),
-                account_button("user-settings", "settings", theme::TEXT).into_any_element(),
+                account_button("mic", "mic", theme::text()).into_any_element(),
+                account_button("deafen", "headphones", theme::text()).into_any_element(),
+                account_button("user-settings", "settings", theme::text()).into_any_element(),
             ],
         ))
     }

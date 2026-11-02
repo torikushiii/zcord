@@ -474,8 +474,8 @@ fn bar_button(
         .size(rpx(BAR_BUTTON))
         .rounded(rpx(8.))
         .cursor_pointer()
-        .when(active, |this| this.bg(rgba(theme::SELECTED)))
-        .hover(|style| style.bg(rgba(theme::SELECTED)))
+        .when(active, |this| this.bg(rgba(theme::selected())))
+        .hover(|style| style.bg(rgba(theme::selected())))
         .on_hover(move |hovered, _, cx| {
             hover
                 .update(cx, |app, cx| {
@@ -488,7 +488,7 @@ fn bar_button(
                 })
                 .ok();
         })
-        .child(theme::icon(icon, BAR_ICON, theme::STRONG))
+        .child(theme::icon(icon, BAR_ICON, theme::strong()))
         .when(app.hovered_stage_control == Some(id), |this| {
             this.child(theme::tooltip_below(tip))
         })
@@ -498,7 +498,7 @@ fn panel() -> Div {
     div()
         .bg(rgb(SURFACE))
         .border_1()
-        .border_color(rgba(theme::BORDER))
+        .border_color(rgba(theme::border()))
         .rounded(rpx(BAR_RADIUS))
         .shadow_lg()
 }
@@ -522,8 +522,8 @@ fn menu_row(
         .cursor_pointer()
         .text_size(rpx(14.))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(theme::STRONG))
-        .hover(|style| style.bg(rgba(theme::SELECTED)))
+        .text_color(rgb(theme::strong()))
+        .hover(|style| style.bg(rgba(theme::selected())))
         .on_hover(move |hovered, _, cx| {
             if *hovered {
                 hover
@@ -531,7 +531,7 @@ fn menu_row(
                     .ok();
             }
         })
-        .children(icon.map(|icon| theme::icon(icon, 20., theme::STRONG)))
+        .children(icon.map(|icon| theme::icon(icon, 20., theme::strong())))
         .child(div().flex_1().min_w_0().truncate().child(label))
 }
 
@@ -544,14 +544,14 @@ fn details_field(title: &'static str, value: String) -> Div {
             div()
                 .text_size(rpx(14.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child(title),
         )
         .child(
             div()
                 .truncate()
                 .text_size(rpx(13.))
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child(value),
         )
 }
@@ -620,9 +620,9 @@ fn more_menu(app: &DiscordApp, lightbox: &Lightbox, attachment: Option<&Attachme
                 .child(
                     menu_row(app, "lightbox-details", "View Details", None, Menu::Details)
                         .when(lightbox.menu == Menu::Details, |this| {
-                            this.bg(rgba(theme::SELECTED))
+                            this.bg(rgba(theme::selected()))
                         })
-                        .child(theme::icon("chevron-right", 16., theme::STRONG)),
+                        .child(theme::icon("chevron-right", 16., theme::strong())),
                 )
                 .children(attachment_id.map(|id| {
                     menu_row(
@@ -830,7 +830,7 @@ fn author_chip(app: &DiscordApp, message: &Message, cx: &App) -> Div {
                                 .truncate()
                                 .text_size(rpx(14.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(theme::STRONG))
+                                .text_color(rgb(theme::strong()))
                                 .child(display_name::render(
                                     ("lightbox-author", message.id),
                                     &name,
@@ -844,7 +844,7 @@ fn author_chip(app: &DiscordApp, message: &Message, cx: &App) -> Div {
                 .child(
                     div()
                         .text_size(rpx(12.))
-                        .text_color(rgb(theme::MUTED))
+                        .text_color(rgb(theme::muted()))
                         .child(message.timestamp.short()),
                 ),
         )
@@ -919,7 +919,7 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
         .h(rpx(height))
         .rounded(rpx(4.))
         .overflow_hidden()
-        .bg(rgb(theme::ELEVATED))
+        .bg(rgb(theme::elevated()))
         .without_text_selection()
         .cursor(match (lightbox.zoomed, dragging) {
             (true, true) => CursorStyle::ClosedHand,

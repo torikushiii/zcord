@@ -13,7 +13,11 @@ pub(super) fn page(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> Vec<A
         Page::Account => account(app, settings),
         Page::GameActivity => vec![game_activity(app, settings)],
         Page::VoiceVideo => super::voice_audio::page(app, settings, cx),
-        Page::Appearance => vec![appearance(app, cx), chat_text()],
+        Page::Appearance => vec![
+            theme_section(app, settings, cx),
+            appearance(app, cx),
+            chat_text(),
+        ],
         Page::Accessibility => vec![accessibility(app, settings, cx)],
         Page::Chat => vec![chat_media(app, settings), chat(app, cx)],
         Page::Notifications => vec![notifications(app, settings)],
@@ -29,7 +33,7 @@ fn account(app: &DiscordApp, settings: &SettingsPage) -> Vec<AnyElement> {
         div()
             .id(id)
             .cursor_pointer()
-            .text_color(rgb(crate::app::chat::LINK))
+            .text_color(rgb(theme::link()))
             .hover(|style| style.underline())
             .on_click(move |_, _, cx| {
                 entity
@@ -117,6 +121,47 @@ fn mask_phone(phone: &str) -> String {
     format!("**********{last}")
 }
 
+fn theme_section(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> AnyElement {
+    let light = theme::is_light();
+    let options = [("Dark", false), ("Light", true)]
+        .into_iter()
+        .map(|(label, choice)| {
+            let entity = app.entity.clone();
+            (
+                label,
+                light == choice,
+                move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                    entity
+                        .update(cx, |app, cx| app.choose_theme(choice, cx))
+                        .ok();
+                },
+            )
+        })
+        .collect();
+    let entity = app.entity.clone();
+    section(
+        "Theme",
+        vec![
+            row(
+                "Theme",
+                Some("Light or dark colors for the whole app."),
+                segmented("settings-theme", options),
+            ),
+            toggle_row(
+                app,
+                settings,
+                "settings-theme-sync",
+                "Sync Across Clients",
+                "Use the same theme as your Discord account on your other devices.",
+                !crate::settings::get(cx).theme_sync_off,
+                move |cx, on| {
+                    entity.update(cx, |app, cx| app.set_theme_sync(on, cx)).ok();
+                },
+            ),
+        ],
+    )
+}
+
 fn appearance(_app: &DiscordApp, cx: &App) -> AnyElement {
     let index = theme::zoom_index(cx);
     let percent = (theme::ZOOM_LEVELS[index] * 100.).round() as u32;
@@ -126,11 +171,15 @@ fn appearance(_app: &DiscordApp, cx: &App) -> AnyElement {
             id,
             icon,
             16.,
-            if enabled { theme::TEXT } else { theme::FAINT },
+            if enabled {
+                theme::text()
+            } else {
+                theme::faint()
+            },
         )
         .size(rpx(32.))
         .rounded(rpx(8.))
-        .bg(rgba(theme::SELECTED))
+        .bg(rgba(theme::selected()))
         .when_some(target, |this, target| {
             this.on_click(move |_, _, cx| theme::set_zoom(target, cx))
         })
@@ -147,7 +196,7 @@ fn appearance(_app: &DiscordApp, cx: &App) -> AnyElement {
                 .text_center()
                 .text_size(rpx(16.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child(format!("{percent}%")),
         )
         .child(step(
@@ -363,14 +412,14 @@ fn chat_text() -> AnyElement {
             icon,
             16.,
             if target.is_some() {
-                theme::TEXT
+                theme::text()
             } else {
-                theme::FAINT
+                theme::faint()
             },
         )
         .size(rpx(32.))
         .rounded(rpx(8.))
-        .bg(rgba(theme::SELECTED))
+        .bg(rgba(theme::selected()))
         .when_some(target, |this, target| {
             this.on_click(move |_, _, cx| crate::settings::set_chat_font_size(cx, target))
         })
@@ -390,7 +439,7 @@ fn chat_text() -> AnyElement {
                 .text_center()
                 .text_size(rpx(16.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child(format!("{size:.0}px")),
         )
         .child(step(
@@ -417,10 +466,10 @@ fn chat_text() -> AnyElement {
                 .mt(rpx(8.))
                 .p(rpx(16.))
                 .rounded(rpx(8.))
-                .bg(rgb(theme::BG))
+                .bg(rgb(theme::bg()))
                 .text_size(rpx(size))
                 .line_height(rpx(size * 1.375))
-                .text_color(rgb(theme::TEXT))
+                .text_color(rgb(theme::text()))
                 .child("Waiting for the day when zcord ships compact mode.")
                 .into_any_element(),
         ],
@@ -518,14 +567,14 @@ pub(super) fn section(title: &'static str, rows: Vec<AnyElement>) -> AnyElement 
         .pb(rpx(40.))
         .mb(rpx(40.))
         .border_b_1()
-        .border_color(rgba(theme::BORDER))
+        .border_color(rgba(theme::border()))
         .child(
             div()
                 .mb(rpx(16.))
                 .text_size(rpx(24.))
                 .line_height(rpx(30.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child(title),
         )
         .children(rows)
@@ -554,7 +603,7 @@ pub(super) fn row(
                     div()
                         .text_size(rpx(16.))
                         .line_height(rpx(20.))
-                        .text_color(rgb(theme::TEXT))
+                        .text_color(rgb(theme::text()))
                         .child(label),
                 )
                 .children(description.map(|description| {
@@ -562,7 +611,7 @@ pub(super) fn row(
                     div()
                         .text_size(rpx(14.))
                         .line_height(rpx(18.))
-                        .text_color(rgb(theme::MUTED))
+                        .text_color(rgb(theme::muted()))
                         .child(description)
                 })),
         )
@@ -575,7 +624,7 @@ pub(super) fn note(text: impl Into<SharedString>) -> AnyElement {
         .mt(rpx(8.))
         .text_size(rpx(14.))
         .line_height(rpx(18.))
-        .text_color(rgb(theme::MUTED))
+        .text_color(rgb(theme::muted()))
         .child(text.into())
         .into_any_element()
 }
@@ -584,7 +633,7 @@ fn value(text: impl Into<SharedString>) -> AnyElement {
     div()
         .text_size(rpx(16.))
         .line_height(rpx(20.))
-        .text_color(rgb(theme::STRONG))
+        .text_color(rgb(theme::strong()))
         .child(text.into())
         .into_any_element()
 }
@@ -596,7 +645,7 @@ fn value_with(text: String, action: impl IntoElement) -> AnyElement {
         .gap(rpx(6.))
         .text_size(rpx(16.))
         .line_height(rpx(20.))
-        .text_color(rgb(theme::STRONG))
+        .text_color(rgb(theme::strong()))
         .child(text)
         .child(action)
         .into_any_element()
@@ -615,11 +664,11 @@ fn button(
         .px(rpx(12.))
         .rounded(rpx(8.))
         .cursor_pointer()
-        .bg(rgba(theme::SELECTED))
-        .hover(|style| style.bg(rgb(theme::PLACEHOLDER_STRONG)))
+        .bg(rgba(theme::selected()))
+        .hover(|style| style.bg(rgb(theme::placeholder_strong())))
         .text_size(rpx(14.))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(theme::STRONG))
+        .text_color(rgb(theme::strong()))
         .on_click(on_click)
         .child(label)
 }
@@ -635,9 +684,9 @@ where
         .p(rpx(2.))
         .gap(rpx(2.))
         .rounded(rpx(8.))
-        .bg(rgb(theme::BG))
+        .bg(rgb(theme::bg()))
         .border_1()
-        .border_color(rgba(theme::BORDER))
+        .border_color(rgba(theme::border()))
         .children(
             options
                 .into_iter()
@@ -655,12 +704,12 @@ where
                         .font_weight(FontWeight::MEDIUM)
                         .map(|this| {
                             if selected {
-                                this.bg(rgba(theme::SELECTED))
-                                    .text_color(rgb(theme::STRONG))
+                                this.bg(rgba(theme::selected()))
+                                    .text_color(rgb(theme::strong()))
                             } else {
                                 this.cursor_pointer()
-                                    .text_color(rgb(theme::MUTED))
-                                    .hover(|style| style.text_color(rgb(theme::TEXT)))
+                                    .text_color(rgb(theme::muted()))
+                                    .hover(|style| style.text_color(rgb(theme::text())))
                                     .on_click(on_click)
                             }
                         })

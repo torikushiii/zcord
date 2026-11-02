@@ -28,7 +28,7 @@ fn dialog_button(id: &'static str, text: &'static str, bg: u32, hover: u32) -> S
         .hover(move |style| style.bg(rgb(hover)))
         .text_size(rpx(16.))
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(theme::STRONG))
+        .text_color(rgb(theme::strong()))
         .child(text)
 }
 
@@ -76,12 +76,12 @@ pub(in crate::app) fn delete_dialog(app: &DiscordApp, cx: &App) -> Option<AnyEle
                     .max_w_full()
                     .p(rpx(24.))
                     .rounded(rpx(12.))
-                    .bg(rgb(theme::ELEVATED))
+                    .bg(rgb(theme::elevated()))
                     .border_1()
-                    .border_color(rgba(theme::BORDER))
+                    .border_color(rgba(theme::border()))
                     .occlude()
                     .child(
-                        theme::icon_button("delete-close", "x", 24., theme::MUTED)
+                        theme::icon_button("delete-close", "x", 24., theme::muted())
                             .absolute()
                             .top(rpx(16.))
                             .right(rpx(16.))
@@ -94,14 +94,14 @@ pub(in crate::app) fn delete_dialog(app: &DiscordApp, cx: &App) -> Option<AnyEle
                             .text_size(rpx(20.))
                             .line_height(rpx(24.))
                             .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(theme::STRONG))
+                            .text_color(rgb(theme::strong()))
                             .child("Delete Message"),
                     )
                     .child(
                         div()
                             .mt_2()
                             .text_size(rpx(16.))
-                            .text_color(rgb(theme::MUTED))
+                            .text_color(rgb(theme::muted()))
                             .child("Are you sure you want to delete this message?"),
                     )
                     .child(
@@ -111,9 +111,9 @@ pub(in crate::app) fn delete_dialog(app: &DiscordApp, cx: &App) -> Option<AnyEle
                             .overflow_hidden()
                             .py_3()
                             .rounded(rpx(8.))
-                            .bg(rgb(theme::BG))
+                            .bg(rgb(theme::bg()))
                             .border_1()
-                            .border_color(rgba(theme::BORDER))
+                            .border_color(rgba(theme::border()))
                             .child(render_message(app, message, false, true, cx)),
                     )
                     .child(
@@ -121,7 +121,7 @@ pub(in crate::app) fn delete_dialog(app: &DiscordApp, cx: &App) -> Option<AnyEle
                             .mt_4()
                             .text_size(rpx(14.))
                             .line_height(rpx(18.))
-                            .text_color(rgb(theme::TEXT))
+                            .text_color(rgb(theme::text()))
                             .child(
                                 div()
                                     .font_weight(FontWeight::SEMIBOLD)
@@ -136,12 +136,17 @@ pub(in crate::app) fn delete_dialog(app: &DiscordApp, cx: &App) -> Option<AnyEle
                             .gap_2()
                             .mt_6()
                             .child(
-                                dialog_button("delete-cancel", "Cancel", 0x232327, 0x2C2C31)
-                                    .border_1()
-                                    .border_color(rgba(theme::BORDER))
-                                    .on_click(move |_, _, cx| {
-                                        cancel.update(cx, |app, cx| app.cancel_delete(cx)).ok();
-                                    }),
+                                dialog_button(
+                                    "delete-cancel",
+                                    "Cancel",
+                                    theme::button_subtle(),
+                                    theme::button_subtle_hover(),
+                                )
+                                .border_1()
+                                .border_color(rgba(theme::border()))
+                                .on_click(move |_, _, cx| {
+                                    cancel.update(cx, |app, cx| app.cancel_delete(cx)).ok();
+                                }),
                             )
                             .child(
                                 dialog_button("delete-confirm", "Delete", 0xD22D39, 0xB82A33)

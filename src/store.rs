@@ -65,6 +65,7 @@ pub struct Store {
     pub friend_suggestion_count: u32,
     guild_indices: HashMap<u64, usize>,
     folder_layout: Option<Vec<settings_proto::GuildFolder>>,
+    account_theme: Option<settings_proto::AccountTheme>,
     frecency: Option<Vec<u8>>,
     favorite_gifs: Vec<settings_proto::FavoriteGif>,
     rail_order: Vec<u64>,
@@ -201,6 +202,7 @@ pub enum Change {
     },
     FavoriteGifs,
     VoiceTimers,
+    Theme,
 }
 
 impl Store {
@@ -211,6 +213,7 @@ impl Store {
             .and_then(|proto| settings_proto::decode_base64(proto).ok())
             .unwrap_or_default();
         let folder_layout = settings.folders;
+        let account_theme = settings.theme;
         if folder_layout.is_none() {
             log::warn!("Server folder settings unavailable; using READY order");
         }
@@ -302,6 +305,7 @@ impl Store {
             friend_suggestion_count,
             guild_indices: HashMap::new(),
             folder_layout,
+            account_theme,
             frecency: None,
             favorite_gifs: Vec::new(),
             rail_order,

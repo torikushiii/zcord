@@ -312,7 +312,10 @@ pub(crate) fn video_box(app: &DiscordApp, video: Video<'_>, cx: &App) -> AnyElem
             .rounded(rpx(radius))
             .into_any_element()
     } else {
-        div().size_full().bg(rgba(theme::BORDER)).into_any_element()
+        div()
+            .size_full()
+            .bg(rgba(theme::border()))
+            .into_any_element()
     };
 
     let hovered = app.hovered_video == Some(video.key);
@@ -342,7 +345,7 @@ pub(crate) fn video_box(app: &DiscordApp, video: Video<'_>, cx: &App) -> AnyElem
                     .w(rpx(width))
                     .h(rpx(height))
                     .rounded(rpx(radius))
-                    .bg(rgb(theme::ELEVATED))
+                    .bg(rgb(theme::elevated()))
             }
         })
         .overflow_hidden()
@@ -426,7 +429,7 @@ fn center_play() -> AnyElement {
                 .size(rpx(56.))
                 .rounded_full()
                 .bg(rgba(0x000000A6))
-                .child(theme::icon("video-play", 28., theme::STRONG)),
+                .child(theme::icon("video-play", 28., theme::strong())),
         )
         .into_any_element()
 }
@@ -446,14 +449,14 @@ fn error_overlay(error: &str, url: &str) -> AnyElement {
             div()
                 .text_size(rpx(14.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child("Couldn't play video"),
         )
         .child(
             div()
                 .max_w(rpx(280.))
                 .text_size(rpx(11.))
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child(error.to_owned()),
         )
         .child(
@@ -503,7 +506,7 @@ fn control_bar(
                 "video-pause"
             },
             22.,
-            theme::STRONG,
+            theme::strong(),
         ))
         .on_click(move |_, _, cx| {
             cx.stop_propagation();
@@ -584,7 +587,7 @@ fn fullscreen_button(app: &DiscordApp, target: &FullscreenTarget, open: bool) ->
                 "video-fullscreen"
             },
             20.,
-            theme::STRONG,
+            theme::strong(),
         ))
         .on_click(move |_, window, cx| {
             cx.stop_propagation();
@@ -632,7 +635,7 @@ fn volume_control(app: &DiscordApp, key: u64, state: &PlayerView) -> impl IntoEl
                 "video-volume"
             },
             22.,
-            theme::STRONG,
+            theme::strong(),
         ))
         .on_click(move |_, _, cx| {
             cx.stop_propagation();

@@ -144,7 +144,11 @@ fn tab(
 ) -> Stateful<Div> {
     let active = picker.tab == kind;
     let entity = app.entity.clone();
-    let color = if active { theme::STRONG } else { theme::MUTED };
+    let color = if active {
+        theme::strong()
+    } else {
+        theme::muted()
+    };
     div()
         .id(label)
         .flex()
@@ -155,7 +159,7 @@ fn tab(
         .h(rpx(36.))
         .rounded(rpx(8.))
         .cursor_pointer()
-        .when(active, |this| this.bg(rgb(theme::SURFACE_HIGHEST)))
+        .when(active, |this| this.bg(rgb(theme::surface_highest())))
         .text_size(rpx(15.))
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(color))
@@ -198,20 +202,20 @@ fn source_tile(
                 .h(rpx(THUMBNAIL_HEIGHT))
                 .rounded(rpx(8.))
                 .overflow_hidden()
-                .bg(rgb(theme::BG))
+                .bg(rgb(theme::bg()))
                 .border_2()
                 .border_color(if selected {
                     rgb(theme::BLURPLE).into()
                 } else {
                     rgba(0x00000000)
                 })
-                .hover(|style| style.border_color(rgba(theme::BORDER_STRONG)))
+                .hover(|style| style.border_color(rgba(theme::border_strong())))
                 .child(match image {
                     Some(image) => img(image)
                         .size_full()
                         .object_fit(ObjectFit::Contain)
                         .into_any_element(),
-                    None => theme::icon("monitor-filled", 40., theme::FAINT).into_any_element(),
+                    None => theme::icon("monitor-filled", 40., theme::faint()).into_any_element(),
                 }),
         )
         .child(
@@ -227,7 +231,7 @@ fn source_tile(
                         "monitor-filled"
                     },
                     18.,
-                    theme::MUTED,
+                    theme::muted(),
                 ))
                 .child(
                     div()
@@ -235,7 +239,7 @@ fn source_tile(
                         .truncate()
                         .text_size(rpx(15.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(theme::STRONG))
+                        .text_color(rgb(theme::strong()))
                         .child(source.name.clone()),
                 ),
         )
@@ -280,9 +284,9 @@ pub(crate) fn render(app: &DiscordApp) -> Option<AnyElement> {
                     .p(rpx(20.))
                     .gap(rpx(16.))
                     .rounded(rpx(12.))
-                    .bg(rgb(theme::SURFACE_HIGH))
+                    .bg(rgb(theme::surface_high()))
                     .border_1()
-                    .border_color(rgba(theme::BORDER))
+                    .border_color(rgba(theme::border()))
                     .shadow_lg()
                     .occlude()
                     .on_mouse_down_out(move |_, _, cx| {
@@ -295,7 +299,7 @@ pub(crate) fn render(app: &DiscordApp) -> Option<AnyElement> {
                             .gap_1()
                             .p(rpx(4.))
                             .rounded(rpx(10.))
-                            .bg(rgb(theme::BG))
+                            .bg(rgb(theme::bg()))
                             .child(tab(
                                 app,
                                 picker,
@@ -338,14 +342,14 @@ pub(crate) fn render(app: &DiscordApp) -> Option<AnyElement> {
                                         div()
                                             .text_size(rpx(16.))
                                             .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(rgb(theme::STRONG))
+                                            .text_color(rgb(theme::strong()))
                                             .child("Standard"),
                                     )
                                     .child(
                                         div()
                                             .truncate()
                                             .text_size(rpx(14.))
-                                            .text_color(rgb(theme::MUTED))
+                                            .text_color(rgb(theme::muted()))
                                             .child(note.unwrap_or_else(|| "720p · 30fps".into())),
                                     ),
                             )

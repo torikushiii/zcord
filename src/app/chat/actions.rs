@@ -99,7 +99,7 @@ fn quick_reaction(
         .justify_center()
         .rounded(rpx(8.))
         .cursor_pointer()
-        .hover(|style| style.bg(rgba(theme::HOVER)))
+        .hover(|style| style.bg(rgba(theme::hover())))
         .on_click(move |_, _, cx| {
             entity
                 .update(cx, |app, cx| {
@@ -159,20 +159,20 @@ pub(super) fn message_actions(app: &DiscordApp, message: &Message, cx: &App) -> 
         .collect();
     let divider = !reactions.is_empty();
     let edit_button = allowed.edit.then(|| {
-        button("edit", "pencil", theme::MUTED, "Edit").on_click(move |_, window, cx| {
+        button("edit", "pencil", theme::muted(), "Edit").on_click(move |_, window, cx| {
             edit.update(cx, |app, cx| app.start_edit(id, window, cx))
                 .ok();
         })
     });
     let reply_button = allowed.reply.then(|| {
-        button("reply", "reply", theme::MUTED, "Reply").on_click(move |_, window, cx| {
+        button("reply", "reply", theme::muted(), "Reply").on_click(move |_, window, cx| {
             reply
                 .update(cx, |app, cx| app.start_reply(id, window, cx))
                 .ok();
         })
     });
     let react_button = app.live.then(|| {
-        button("react", "smile", theme::MUTED, "Add Reaction").on_mouse_down(
+        button("react", "smile", theme::muted(), "Add Reaction").on_mouse_down(
             MouseButton::Left,
             move |event, window, cx| {
                 let position = event.position - point(px(0.), px(8.));
@@ -185,7 +185,7 @@ pub(super) fn message_actions(app: &DiscordApp, message: &Message, cx: &App) -> 
         )
     });
     let forward_button = allowed.forward.then(|| {
-        button("forward", "forward", theme::MUTED, "Forward").on_click(move |_, window, cx| {
+        button("forward", "forward", theme::muted(), "Forward").on_click(move |_, window, cx| {
             forward
                 .update(cx, |app, cx| {
                     app.open_forward_dialog(id, channel_id, window, cx)
@@ -196,7 +196,7 @@ pub(super) fn message_actions(app: &DiscordApp, message: &Message, cx: &App) -> 
     let mut buttons = Vec::new();
     if extended {
         buttons.push(
-            button("copy-id", "id-badge", theme::MUTED, "Copy Message ID").on_click(
+            button("copy-id", "id-badge", theme::muted(), "Copy Message ID").on_click(
                 move |_, _, cx| {
                     copy_id
                         .update(cx, |app, cx| app.copy_message_id(id, cx))
@@ -205,7 +205,7 @@ pub(super) fn message_actions(app: &DiscordApp, message: &Message, cx: &App) -> 
             ),
         );
         buttons.push(
-            button("copy-link", "link", theme::MUTED, "Copy Message Link").on_click(
+            button("copy-link", "link", theme::muted(), "Copy Message Link").on_click(
                 move |_, _, cx| {
                     copy_link
                         .update(cx, |app, cx| app.copy_message_link(id, cx))
@@ -215,14 +215,14 @@ pub(super) fn message_actions(app: &DiscordApp, message: &Message, cx: &App) -> 
         );
         if allowed.unread {
             buttons.push(
-                button("unread", "mail", theme::MUTED, "Mark Unread").on_click(move |_, _, cx| {
+                button("unread", "mail", theme::muted(), "Mark Unread").on_click(move |_, _, cx| {
                     unread.update(cx, |app, cx| app.mark_unread(id, cx)).ok();
                 }),
             );
         }
         if allowed.thread {
             buttons.push(
-                button("thread", "messages-square", theme::MUTED, "Create Thread").on_click(
+                button("thread", "messages-square", theme::muted(), "Create Thread").on_click(
                     move |_, window, cx| {
                         thread
                             .update(cx, |app, cx| app.open_create_thread(Some(id), window, cx))
@@ -260,9 +260,9 @@ pub(super) fn message_actions(app: &DiscordApp, message: &Message, cx: &App) -> 
             .items_center()
             .p(rpx(2.))
             .rounded(rpx(8.))
-            .bg(rgb(theme::ELEVATED))
+            .bg(rgb(theme::elevated()))
             .border_1()
-            .border_color(rgba(theme::BORDER))
+            .border_color(rgba(theme::border()))
             .block_mouse_except_scroll()
             .on_hover(move |hovered, _, cx| {
                 hover
@@ -277,12 +277,12 @@ pub(super) fn message_actions(app: &DiscordApp, message: &Message, cx: &App) -> 
                         .w(rpx(1.))
                         .h(rpx(20.))
                         .mx(rpx(4.))
-                        .bg(rgba(theme::BORDER)),
+                        .bg(rgba(theme::border())),
                 )
             })
             .children(buttons)
             .when(!extended || !allowed.delete, |this| {
-                this.child(button("more", "ellipsis", theme::MUTED, "More").on_click(
+                this.child(button("more", "ellipsis", theme::muted(), "More").on_click(
                     move |event, _, cx| {
                         let position = event.position();
                         more.update(cx, |app, cx| app.toggle_message_menu(id, position, cx))
@@ -313,7 +313,7 @@ pub(super) fn menu_entry(
         .px(rpx(8.))
         .rounded(rpx(4.))
         .cursor_pointer()
-        .hover(|style| style.bg(rgba(theme::SELECTED)))
+        .hover(|style| style.bg(rgba(theme::selected())))
         .text_size(rpx(14.))
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(color))
@@ -337,7 +337,7 @@ pub(super) fn menu_divider() -> Div {
         .h(rpx(1.))
         .my(rpx(4.))
         .mx(rpx(6.))
-        .bg(rgba(theme::BORDER))
+        .bg(rgba(theme::border()))
 }
 
 pub(in crate::app) fn message_menu(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
@@ -361,10 +361,10 @@ pub(in crate::app) fn message_menu(app: &DiscordApp, cx: &App) -> Option<AnyElem
             quick_reaction(app, ("menu-reaction", index), id, choice, 24., cx)
                 .flex_1()
                 .h(rpx(40.))
-                .bg(rgba(theme::HOVER))
+                .bg(rgba(theme::hover()))
         })
         .collect();
-    let text = theme::TEXT;
+    let text = theme::text();
     let body = div()
         .id("message-menu")
         .flex()
@@ -372,9 +372,9 @@ pub(in crate::app) fn message_menu(app: &DiscordApp, cx: &App) -> Option<AnyElem
         .w(rpx(MENU_WIDTH))
         .p(rpx(8.))
         .rounded(rpx(8.))
-        .bg(rgb(theme::ELEVATED))
+        .bg(rgb(theme::elevated()))
         .border_1()
-        .border_color(rgba(theme::BORDER))
+        .border_color(rgba(theme::border()))
         .shadow_lg()
         .occlude()
         .on_mouse_down_out(move |_, _, cx| {
@@ -402,7 +402,7 @@ pub(in crate::app) fn message_menu(app: &DiscordApp, cx: &App) -> Option<AnyElem
                         app.toggle_emoji_picker(PickerTarget::Reaction(id), position, window, cx);
                     },
                 )
-                .child(theme::icon("chevron-right", 16., theme::MUTED)),
+                .child(theme::icon("chevron-right", 16., theme::muted())),
             )
             .child(menu_divider())
         })

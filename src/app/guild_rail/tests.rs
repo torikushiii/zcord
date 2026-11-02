@@ -47,7 +47,7 @@ impl Render for ActivityPreview {
                     .debug_selector(move || format!("preview-avatar-{icon}-{index}"))
                     .child(theme::avatar(
                         "A",
-                        rgb(theme::BG).into(),
+                        rgb(theme::bg()).into(),
                         TOOLTIP_AVATAR_SIZE - 4.,
                         None,
                         false,

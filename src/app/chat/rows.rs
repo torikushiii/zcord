@@ -169,7 +169,7 @@ pub(super) fn welcome(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
         return home::dm_welcome(app, cx);
     }
     let channel = app.channel()?;
-    let subtitle = || div().mt_2().text_color(rgb(0xB5BAC1));
+    let subtitle = || div().mt_2().text_color(rgb(theme::text_secondary()));
     if let Some(guild) = app.guild().filter(|guild| guild.id == channel.id) {
         return Some(
             div()
@@ -188,7 +188,7 @@ pub(super) fn welcome(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                         .text_size(rpx(32.))
                         .line_height(rpx(40.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(theme::STRONG))
+                        .text_color(rgb(theme::strong()))
                         .child("Welcome to")
                         .child(wrapped_label(("welcome-guild", guild.id), &guild.name)),
                 )
@@ -214,8 +214,8 @@ pub(super) fn welcome(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                     .justify_center()
                     .size(rpx(68.))
                     .rounded_full()
-                    .bg(rgb(0x1F1F23))
-                    .child(theme::icon("hash", 42., theme::STRONG)),
+                    .bg(rgb(theme::icon_bg()))
+                    .child(theme::icon("hash", 42., theme::strong())),
             )
             .child(
                 div()
@@ -223,7 +223,7 @@ pub(super) fn welcome(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                     .text_size(rpx(32.))
                     .line_height(rpx(40.))
                     .font_weight(FontWeight::EXTRA_BOLD)
-                    .text_color(rgb(theme::STRONG))
+                    .text_color(rgb(theme::strong()))
                     .child(wrapped_label(
                         ("welcome-title", channel.id),
                         &format!("Welcome to #{}!", channel.name),
@@ -261,14 +261,14 @@ fn starter_actions(app: &DiscordApp, thread_id: u64) -> impl IntoElement {
             .h(rpx(32.))
             .px(rpx(12.))
             .rounded(rpx(8.))
-            .bg(rgba(0x97979F1F))
+            .bg(rgba(theme::control_bg()))
             .border_1()
-            .border_color(rgba(theme::BORDER_SUBTLE))
+            .border_color(rgba(theme::border_subtle()))
             .cursor_pointer()
-            .hover(|style| style.bg(rgba(theme::HOVER)))
+            .hover(|style| style.bg(rgba(theme::hover())))
             .text_size(rpx(14.))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(rgb(theme::STRONG))
+            .text_color(rgb(theme::strong()))
     };
     div()
         .flex()
@@ -289,7 +289,7 @@ fn starter_actions(app: &DiscordApp, thread_id: u64) -> impl IntoElement {
                                 })
                                 .ok();
                         })
-                        .child(theme::icon("bell", 16., theme::STRONG))
+                        .child(theme::icon("bell", 16., theme::strong()))
                         .child(if joined { "Following" } else { "Follow" }),
                 )
                 .child(
@@ -300,10 +300,10 @@ fn starter_actions(app: &DiscordApp, thread_id: u64) -> impl IntoElement {
                         .on_click(move |_, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(link.clone()));
                         })
-                        .child(theme::icon("link", 16., theme::STRONG)),
+                        .child(theme::icon("link", 16., theme::strong())),
                 ),
         )
-        .child(div().h(rpx(4.)).bg(rgba(theme::BORDER_SUBTLE)))
+        .child(div().h(rpx(4.)).bg(rgba(theme::border_subtle())))
 }
 
 fn post_intro(
@@ -324,14 +324,14 @@ fn post_intro(
                 .items_center()
                 .justify_center()
                 .size(rpx(56.))
-                .child(theme::icon("message-circle", 40., theme::STRONG)),
+                .child(theme::icon("message-circle", 40., theme::strong())),
         )
         .child(
             div()
                 .text_size(rpx(32.))
                 .line_height(rpx(40.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child(wrapped_label(("post-intro", post.id), name)),
         )
         .children(forum::post_tags(app, post, cx))
@@ -341,7 +341,7 @@ fn date_divider(message: &Message, unread: bool) -> impl IntoElement {
     let color = if unread {
         rgb(theme::RED)
     } else {
-        rgba(theme::BORDER)
+        rgba(theme::border())
     };
     let line = || div().flex_1().h(rpx(1.)).bg(color);
     div()
@@ -356,7 +356,7 @@ fn date_divider(message: &Message, unread: bool) -> impl IntoElement {
             div()
                 .text_size(rpx(12.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(if unread { theme::RED } else { theme::FAINT }))
+                .text_color(rgb(if unread { theme::RED } else { theme::faint() }))
                 .child(message.timestamp.date()),
         )
         .child(line())
@@ -383,6 +383,6 @@ fn new_badge() -> impl IntoElement {
         .text_size(rpx(10.))
         .line_height(rpx(14.))
         .font_weight(FontWeight::BOLD)
-        .text_color(rgb(theme::STRONG))
+        .text_color(rgb(theme::strong()))
         .child("NEW")
 }

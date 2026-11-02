@@ -112,9 +112,9 @@ fn shop_menu(
             .min_w(rpx(220.))
             .p(rpx(8.))
             .rounded(rpx(8.))
-            .bg(rgb(theme::ELEVATED))
+            .bg(rgb(theme::elevated()))
             .border_1()
-            .border_color(hsla(0., 0., 1., 0.06))
+            .border_color(rgb(theme::menu_border()).opacity(0.06))
             .shadow_lg()
             .occlude()
             .on_mouse_down_out(move |_, _, cx| {
@@ -137,10 +137,10 @@ fn shop_menu(
                             .px(rpx(10.))
                             .rounded(rpx(4.))
                             .cursor_pointer()
-                            .hover(|style| style.bg(rgba(theme::SELECTED)))
+                            .hover(|style| style.bg(rgba(theme::selected())))
                             .text_size(rpx(15.))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(theme::STRONG))
+                            .text_color(rgb(theme::strong()))
                             .child(
                                 div()
                                     .flex()
@@ -150,13 +150,13 @@ fn shop_menu(
                                     .size(rpx(20.))
                                     .map(|this| match icon {
                                         None => {
-                                            this.child(theme::icon("store", 20., theme::STRONG))
+                                            this.child(theme::icon("store", 20., theme::strong()))
                                         }
                                         Some(Some(path)) => {
                                             this.child(img(path).size_full().rounded(rpx(4.)))
                                         }
                                         Some(None) => {
-                                            this.rounded(rpx(4.)).bg(rgba(theme::SELECTED))
+                                            this.rounded(rpx(4.)).bg(rgba(theme::selected()))
                                         }
                                     }),
                             )

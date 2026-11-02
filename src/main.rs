@@ -56,6 +56,7 @@ fn main() {
             settings::set_notification_sound(cx, !saved.notification_sound_off);
             settings::set_game_activity(cx, saved.share_game_activity);
             settings::set_chat_font_size(cx, saved.chat_font_size.unwrap_or(16.0));
+            theme::set_light(saved.light_theme, cx);
             theme::set_zoom(saved.zoom.unwrap_or(theme::DEFAULT_ZOOM), cx);
             cx.bind_keys([
                 KeyBinding::new("secondary-=", ZoomIn, None),

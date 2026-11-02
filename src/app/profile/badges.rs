@@ -82,9 +82,9 @@ fn badge_tooltip(tip: &BadgeTip, cx: &App) -> impl IntoElement {
         .px(rpx(16.))
         .py(rpx(16.))
         .rounded(rpx(8.))
-        .bg(rgb(theme::ELEVATED))
+        .bg(rgb(theme::elevated()))
         .border_1()
-        .border_color(rgba(theme::BORDER))
+        .border_color(rgba(theme::border()))
         .shadow_lg()
         .text_center()
         .children(art.map(|path| {
@@ -97,7 +97,7 @@ fn badge_tooltip(tip: &BadgeTip, cx: &App) -> impl IntoElement {
             div()
                 .text_size(rpx(14.))
                 .line_height(rpx(18.))
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child(category)
         }))
         .child(
@@ -106,14 +106,14 @@ fn badge_tooltip(tip: &BadgeTip, cx: &App) -> impl IntoElement {
                 .line_height(rpx(24.))
                 .font_weight(FontWeight::EXTRA_BOLD)
                 .italic()
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child(tip.title.to_uppercase()),
         )
         .children(tip.detail.clone().map(|detail| {
             div()
                 .text_size(rpx(14.))
                 .line_height(rpx(18.))
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child(detail)
         }));
     div()
@@ -131,7 +131,7 @@ fn badge_tooltip(tip: &BadgeTip, cx: &App) -> impl IntoElement {
                         .child(body)
                         // Overlaps the border by 1px so the arrow reads as part of the card.
                         .child(
-                            theme::icon("tooltip-arrow-down", 12., theme::ELEVATED)
+                            theme::icon("tooltip-arrow-down", 12., theme::elevated())
                                 .h(rpx(6.))
                                 .mt(rpx(-1.)),
                         ),

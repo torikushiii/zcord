@@ -425,12 +425,16 @@ pub(crate) fn sidebar(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         .h(rpx(32.))
         .px_2()
         .rounded(rpx(8.))
-        .bg(rgba(theme::HOVER))
+        .bg(rgba(theme::hover()))
         .text_size(rpx(14.))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(theme::MUTED))
+        .text_color(rgb(theme::muted()))
         .cursor_pointer()
-        .hover(|style| style.bg(rgba(theme::ACTIVE)).text_color(rgb(theme::TEXT)))
+        .hover(|style| {
+            style
+                .bg(rgba(theme::active()))
+                .text_color(rgb(theme::text()))
+        })
         .child("Find or start a conversation")
         .on_click(move |_, window, cx| {
             entity
@@ -449,7 +453,11 @@ pub(crate) fn sidebar(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
     )
     .cursor_pointer()
     .when(!friends_selected, |this| {
-        this.hover(|style| style.bg(rgba(theme::HOVER)).text_color(rgb(theme::TEXT)))
+        this.hover(|style| {
+            style
+                .bg(rgba(theme::hover()))
+                .text_color(rgb(theme::text()))
+        })
     })
     .on_click(move |_, window, cx| {
         entity
@@ -477,7 +485,7 @@ pub(crate) fn sidebar(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 .h(rpx(chat::HEADER_HEIGHT))
                 .px_2()
                 .border_b_1()
-                .border_color(rgba(theme::BORDER))
+                .border_color(rgba(theme::border()))
                 .child(find),
         )
         .child(
@@ -504,7 +512,9 @@ pub(crate) fn sidebar(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                     .cursor_pointer()
                     .when(!requests_selected, |this| {
                         this.hover(|style| {
-                            style.bg(rgba(theme::HOVER)).text_color(rgb(theme::TEXT))
+                            style
+                                .bg(rgba(theme::hover()))
+                                .text_color(rgb(theme::text()))
                         })
                     })
                     .on_click({
@@ -522,7 +532,7 @@ pub(crate) fn sidebar(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                         .h(rpx(1.))
                         .mx_2()
                         .my_2()
-                        .bg(rgba(theme::BORDER)),
+                        .bg(rgba(theme::border())),
                 )
                 .child(
                     div()
@@ -534,9 +544,9 @@ pub(crate) fn sidebar(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                         .px_2()
                         .text_size(rpx(14.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(theme::MUTED))
+                        .text_color(rgb(theme::muted()))
                         .child("Direct Messages")
-                        .child(theme::icon("plus", 16., theme::MUTED)),
+                        .child(theme::icon("plus", 16., theme::muted())),
                 )
                 .children(rows),
         )
@@ -550,9 +560,9 @@ fn nav_row(
     badge: u32,
 ) -> Stateful<Div> {
     let color = if selected {
-        theme::STRONG
+        theme::strong()
     } else {
-        theme::MUTED
+        theme::muted()
     };
     div()
         .id(id)
@@ -566,7 +576,7 @@ fn nav_row(
         .text_size(rpx(16.))
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(color))
-        .when(selected, |this| this.bg(rgba(theme::SELECTED)))
+        .when(selected, |this| this.bg(rgba(theme::selected())))
         .child(theme::icon(icon, 20., color))
         .child(div().flex_1().child(text))
         .when(badge > 0, |this| this.child(count_pill(badge)))
@@ -608,7 +618,7 @@ fn dm_avatar(
             .size(rpx(DM_AVATAR))
             .rounded_full()
             .bg(theme::user_color(dm.channel.id))
-            .child(theme::icon("users", 18., theme::STRONG))
+            .child(theme::icon("users", 18., theme::strong()))
             .into_any_element(),
     }
 }
@@ -634,14 +644,14 @@ fn dm_row(
     let name = app.store.private_channel_name(id);
     let subtitle = subtitle(app, dm);
     let text = if selected || unread {
-        theme::STRONG
+        theme::strong()
     } else {
-        theme::MUTED
+        theme::muted()
     };
     let ring = if selected {
-        theme::composite(theme::SELECTED, theme::BG)
+        theme::composite(theme::selected(), theme::base_lower())
     } else {
-        theme::BG
+        theme::base_lower()
     };
     let recipient = dm.recipient_ids.first().copied().filter(|_| !dm.group);
     let user = recipient.and_then(|user_id| app.store.user(user_id));
@@ -677,7 +687,7 @@ fn dm_row(
             .min_w_0()
             .text_size(rpx(12.))
             .line_height(rpx(16.))
-            .text_color(rgb(theme::MUTED))
+            .text_color(rgb(theme::muted()))
             .children(icon.map(|icon| theme::icon(icon, 14., theme::GREEN)))
             .child(
                 div()
@@ -695,9 +705,9 @@ fn dm_row(
         if selected {
             ring
         } else if hovered {
-            theme::composite(theme::HOVER, theme::BG)
+            theme::composite(theme::hover(), theme::base_lower())
         } else {
-            theme::BG
+            theme::base_lower()
         } << 8
             | member_list::NAMEPLATE_DIM,
     );
@@ -715,9 +725,13 @@ fn dm_row(
         .overflow_hidden()
         .cursor_pointer()
         .text_color(rgb(text))
-        .when(selected, |this| this.bg(rgba(theme::SELECTED)))
+        .when(selected, |this| this.bg(rgba(theme::selected())))
         .when(!selected, |this| {
-            this.hover(|style| style.bg(rgba(theme::HOVER)).text_color(rgb(theme::TEXT)))
+            this.hover(|style| {
+                style
+                    .bg(rgba(theme::hover()))
+                    .text_color(rgb(theme::text()))
+            })
         })
         .when_some(recipient, |this, user_id| {
             let entity = app.entity.clone();
@@ -788,7 +802,7 @@ fn dm_row(
                     .w(rpx(4.))
                     .h(rpx(8.))
                     .rounded_r(rpx(4.))
-                    .bg(rgb(theme::STRONG)),
+                    .bg(rgb(theme::strong())),
             )
         })
         .child(row)
@@ -811,13 +825,17 @@ pub(crate) fn friends_header(app: &DiscordApp) -> impl IntoElement + use<> {
             .font_weight(FontWeight::MEDIUM)
             .cursor_pointer()
             .text_color(rgb(if selected {
-                theme::STRONG
+                theme::strong()
             } else {
-                theme::MUTED
+                theme::muted()
             }))
-            .when(selected, |this| this.bg(rgba(theme::SELECTED)))
+            .when(selected, |this| this.bg(rgba(theme::selected())))
             .when(!selected, |this| {
-                this.hover(|style| style.bg(rgba(theme::HOVER)).text_color(rgb(theme::TEXT)))
+                this.hover(|style| {
+                    style
+                        .bg(rgba(theme::hover()))
+                        .text_color(rgb(theme::text()))
+                })
             })
             .child(tab.label())
             .when(badge > 0, |this| this.child(count_pill(badge)))
@@ -841,7 +859,7 @@ pub(crate) fn friends_header(app: &DiscordApp) -> impl IntoElement + use<> {
         .font_weight(FontWeight::MEDIUM)
         .cursor_pointer()
         .text_color(rgb(if adding { theme::BLURPLE } else { 0xFFFFFF }))
-        .when(adding, |this| this.bg(rgba(theme::SELECTED)))
+        .when(adding, |this| this.bg(rgba(theme::selected())))
         .when(!adding, |this| {
             this.bg(rgb(theme::BLURPLE))
                 .hover(|style| style.bg(rgb(theme::BLURPLE_ACTIVE)))
@@ -861,13 +879,13 @@ pub(crate) fn friends_header(app: &DiscordApp) -> impl IntoElement + use<> {
         .flex_none()
         .px_4()
         .border_b_1()
-        .border_color(rgba(theme::BORDER))
-        .child(theme::icon("users", 20., theme::FAINT))
+        .border_color(rgba(theme::border()))
+        .child(theme::icon("users", 20., theme::faint()))
         .child(
             div()
                 .text_size(rpx(16.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child("Friends"),
         )
         .child(
@@ -875,7 +893,7 @@ pub(crate) fn friends_header(app: &DiscordApp) -> impl IntoElement + use<> {
                 .size(rpx(4.))
                 .mx(rpx(4.))
                 .rounded_full()
-                .bg(rgb(theme::FAINT)),
+                .bg(rgb(theme::faint())),
         )
         .child(tab(FriendsTab::Online, 0))
         .child(tab(FriendsTab::All, 0))
@@ -976,9 +994,9 @@ pub(crate) fn friends_page(app: &DiscordApp, cx: &App) -> AnyElement {
                         .h(rpx(36.))
                         .px(rpx(10.))
                         .rounded(rpx(8.))
-                        .bg(rgb(theme::ELEVATED))
+                        .bg(rgb(theme::elevated()))
                         .border_1()
-                        .border_color(rgba(theme::BORDER))
+                        .border_color(rgba(theme::border()))
                         .child(
                             div().flex_1().min_w_0().child(
                                 Input::new(search)
@@ -987,7 +1005,7 @@ pub(crate) fn friends_page(app: &DiscordApp, cx: &App) -> AnyElement {
                                     .text_size(rpx(16.)),
                             ),
                         )
-                        .child(theme::icon("search", 18., theme::MUTED))
+                        .child(theme::icon("search", 18., theme::muted()))
                 }))
                 .child(
                     div()
@@ -997,7 +1015,7 @@ pub(crate) fn friends_page(app: &DiscordApp, cx: &App) -> AnyElement {
                         .mb(rpx(8.))
                         .text_size(rpx(14.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(theme::MUTED))
+                        .text_color(rgb(theme::muted()))
                         .child(heading),
                 )
                 .children(
@@ -1031,7 +1049,7 @@ pub(crate) fn friends_page(app: &DiscordApp, cx: &App) -> AnyElement {
                                     .mt(rpx(40.))
                                     .text_center()
                                     .text_size(rpx(14.))
-                                    .text_color(rgb(theme::MUTED))
+                                    .text_color(rgb(theme::muted()))
                                     .child(match tab {
                                         FriendsTab::Pending => {
                                             "There are no pending friend requests."
@@ -1055,10 +1073,10 @@ fn round_action(id: impl Into<ElementId>, icon: &'static str) -> Stateful<Div> {
         .justify_center()
         .size(rpx(ACTION_SIZE))
         .rounded_full()
-        .bg(rgb(theme::ELEVATED))
+        .bg(rgb(theme::elevated()))
         .cursor_pointer()
-        .hover(|style| style.bg(rgba(theme::SELECTED)))
-        .child(theme::icon(icon, 18., theme::MUTED))
+        .hover(|style| style.bg(rgba(theme::selected())))
+        .child(theme::icon(icon, 18., theme::muted()))
 }
 
 fn friend_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement + use<> {
@@ -1095,9 +1113,9 @@ fn friend_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement + us
         .px(rpx(10.))
         .rounded(rpx(8.))
         .border_t_1()
-        .border_color(rgba(theme::BORDER))
+        .border_color(rgba(theme::border()))
         .cursor_pointer()
-        .hover(|style| style.bg(rgba(theme::HOVER)))
+        .hover(|style| style.bg(rgba(theme::hover())))
         .without_text_selection()
         .on_click(move |_, window, cx| {
             entity
@@ -1108,7 +1126,7 @@ fn friend_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement + us
             user,
             user_id,
             DM_AVATAR,
-            Some((status, theme::BG)),
+            Some((status, theme::bg())),
             false,
             cx,
         ))
@@ -1131,7 +1149,7 @@ fn friend_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement + us
                                 .text_size(rpx(16.))
                                 .line_height(rpx(20.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(theme::STRONG))
+                                .text_color(rgb(theme::strong()))
                                 .child(label(("friend-name", user_id), &name)),
                         )
                         .children(tag)
@@ -1142,7 +1160,7 @@ fn friend_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement + us
                                 .min_w_0()
                                 .truncate()
                                 .text_size(rpx(14.))
-                                .text_color(rgb(theme::MUTED))
+                                .text_color(rgb(theme::muted()))
                                 .child(username),
                         ),
                 )
@@ -1154,7 +1172,7 @@ fn friend_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement + us
                         .min_w_0()
                         .text_size(rpx(14.))
                         .line_height(rpx(18.))
-                        .text_color(rgb(theme::MUTED))
+                        .text_color(rgb(theme::muted()))
                         .children(icon.map(|icon| theme::icon(icon, 14., theme::GREEN)))
                         .child(
                             div()
@@ -1245,7 +1263,7 @@ fn active_art(image: AnyElement, badge: Option<AnyElement>) -> Div {
         .flex_none()
         .size(rpx(ACTIVE_ART))
         .rounded(rpx(ACTIVE_ART / 5.))
-        .bg(rgba(theme::SELECTED))
+        .bg(rgba(theme::selected()))
         .child(image)
         .children(badge.map(|badge| {
             div()
@@ -1255,7 +1273,7 @@ fn active_art(image: AnyElement, badge: Option<AnyElement>) -> Div {
                 .size(rpx(ACTIVE_BADGE + 4.))
                 .p(rpx(2.))
                 .rounded_full()
-                .bg(rgb(theme::BG))
+                .bg(rgb(theme::bg()))
                 .child(badge)
         }))
 }
@@ -1277,7 +1295,7 @@ fn active_detail_text(
                 .text_size(rpx(14.))
                 .line_height(rpx(18.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child(label(("active-detail", id), detail)),
         )
         .children(state.map(|state| {
@@ -1285,7 +1303,7 @@ fn active_detail_text(
                 .truncate()
                 .text_size(rpx(12.))
                 .line_height(rpx(16.))
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child(label(("active-state", id), state))
         }))
         .children(duration.map(|duration| {
@@ -1293,7 +1311,7 @@ fn active_detail_text(
                 .debug_selector(|| "active-elapsed".into())
                 .text_size(rpx(12.))
                 .line_height(rpx(16.))
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child(format!("{} elapsed", voice::format_elapsed(duration)))
         }))
 }
@@ -1311,15 +1329,15 @@ fn active_header(
         .items_center()
         .gap(rpx(12.))
         .p(rpx(16.))
-        .bg(rgb(theme::ELEVATED))
+        .bg(rgb(theme::elevated()))
         .group_hover(ACTIVE_CARD_GROUP, |style| {
-            style.bg(rgb(theme::composite(theme::HOVER, theme::ELEVATED)))
+            style.bg(rgb(theme::composite(theme::hover(), theme::elevated())))
         })
         .child(theme::user_avatar(
             Some(user),
             id,
             DM_AVATAR,
-            Some((user.status, theme::ELEVATED)),
+            Some((user.status, theme::elevated())),
             false,
             cx,
         ))
@@ -1335,7 +1353,7 @@ fn active_header(
                         .text_size(rpx(16.))
                         .line_height(rpx(20.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(theme::STRONG))
+                        .text_color(rgb(theme::strong()))
                         .child(label(("active-name", id), &app.store.friend_name(id))),
                 )
                 .child(
@@ -1343,7 +1361,7 @@ fn active_header(
                         .truncate()
                         .text_size(rpx(14.))
                         .line_height(rpx(18.))
-                        .text_color(rgb(theme::MUTED))
+                        .text_color(rgb(theme::muted()))
                         .child(label(("active-game", id), headline)),
                 ),
         )
@@ -1358,9 +1376,9 @@ fn active_card_frame() -> Div {
         .flex_none()
         .rounded(rpx(12.))
         .border_1()
-        .border_color(rgba(theme::BORDER))
+        .border_color(rgba(theme::border()))
         .overflow_hidden()
-        .hover(|style| style.bg(rgba(theme::HOVER)))
+        .hover(|style| style.bg(rgba(theme::hover())))
 }
 
 fn service_icon(service: &str, size: f32) -> Div {
@@ -1385,7 +1403,7 @@ fn service_icon(service: &str, size: f32) -> Div {
     }
     let (icon, color) = match service {
         "YouTube" => ("connections/youtube", YOUTUBE_RED),
-        _ => ("monitor-up", theme::MUTED),
+        _ => ("monitor-up", theme::muted()),
     };
     div()
         .flex_none()
@@ -1432,7 +1450,7 @@ fn live_stream_preview(id: u64, stream: &LiveStream, cx: &App) -> Div {
             .h(rpx(TWITCH_PREVIEW_HEIGHT))
             .rounded(rpx(8.))
             .overflow_hidden()
-            .bg(rgba(theme::SELECTED))
+            .bg(rgba(theme::selected()))
             .when_some(url, |this, url| {
                 this.cursor_pointer()
                     .on_click(move |_, _, cx| cx.open_url(&url))
@@ -1541,7 +1559,7 @@ fn active_card(
             .justify_center()
             .size_full()
             .rounded(rpx(size / 5.))
-            .child(theme::icon("gamepad-2", size * 0.55, theme::MUTED))
+            .child(theme::icon("gamepad-2", size * 0.55, theme::muted()))
             .into_any_element()
     };
     // `presence_art` and the app icon fill their parent, so each needs a sized box.
@@ -1634,13 +1652,13 @@ fn active_now(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         .p(rpx(16.))
         .overflow_y_scrollbar()
         .border_l_1()
-        .border_color(rgba(theme::BORDER))
+        .border_color(rgba(theme::border()))
         .child(
             div()
                 .text_size(rpx(20.))
                 .line_height(rpx(24.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child("Active Now"),
         )
         .children(cards)
@@ -1657,13 +1675,13 @@ fn active_now(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                         div()
                             .text_size(rpx(16.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(theme::STRONG))
+                            .text_color(rgb(theme::strong()))
                             .child("It's quiet for now..."),
                     )
                     .child(
                         div()
                             .text_size(rpx(14.))
-                            .text_color(rgb(theme::MUTED))
+                            .text_color(rgb(theme::muted()))
                             .child(
                                 "When a friend starts an activity, like playing a game, we'll show it here!",
                             ),
@@ -1695,7 +1713,7 @@ pub(crate) fn dm_header(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> 
         .pl_4()
         .pr_2()
         .border_b_1()
-        .border_color(rgba(theme::BORDER))
+        .border_color(rgba(theme::border()))
         .children(dm.map(|dm| {
             div()
                 .flex_none()
@@ -1708,7 +1726,7 @@ pub(crate) fn dm_header(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> 
                 .truncate()
                 .text_size(rpx(16.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child(label(("header-dm", channel_id), &name)),
         )
         .children(game.map(|game| {
@@ -1718,7 +1736,7 @@ pub(crate) fn dm_header(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> 
                 .gap(rpx(4.))
                 .min_w_0()
                 .text_size(rpx(14.))
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child(theme::icon("gamepad-2", 14., theme::GREEN))
                 .child(
                     div()
@@ -1735,9 +1753,9 @@ pub(crate) fn dm_header(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> 
                 if group { "users" } else { "user" },
                 20.,
                 if app.show_members {
-                    theme::STRONG
+                    theme::strong()
                 } else {
-                    theme::MUTED
+                    theme::muted()
                 },
             )
             .on_click(move |_, _, cx| {
@@ -1763,7 +1781,7 @@ fn header_avatar(app: &DiscordApp, dm: &PrivateChannel, cx: &App) -> AnyElement 
             .size(rpx(24.))
             .rounded_full()
             .bg(theme::user_color(dm.channel.id))
-            .child(theme::icon("users", 14., theme::STRONG))
+            .child(theme::icon("users", 14., theme::strong()))
             .into_any_element();
     }
     let user_id = dm.recipient_ids.first().copied().unwrap_or(0);
@@ -1798,20 +1816,20 @@ pub(crate) fn dm_welcome(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                     .text_size(rpx(32.))
                     .line_height(rpx(40.))
                     .font_weight(FontWeight::EXTRA_BOLD)
-                    .text_color(rgb(theme::STRONG))
+                    .text_color(rgb(theme::strong()))
                     .child(label(("welcome-dm", channel_id), &name)),
             )
             .children(user.map(|user| {
                 div()
                     .text_size(rpx(20.))
-                    .text_color(rgb(theme::TEXT))
+                    .text_color(rgb(theme::text()))
                     .child(user.username.clone())
             }))
             .child(
                 div()
                     .mt_2()
                     .text_size(rpx(16.))
-                    .text_color(rgb(theme::MUTED))
+                    .text_color(rgb(theme::muted()))
                     .child(text),
             )
             .into_any_element(),
@@ -1832,13 +1850,17 @@ fn header_tab(id: &'static str, text: &'static str, selected: bool, badge: u32) 
         .font_weight(FontWeight::MEDIUM)
         .cursor_pointer()
         .text_color(rgb(if selected {
-            theme::STRONG
+            theme::strong()
         } else {
-            theme::MUTED
+            theme::muted()
         }))
-        .when(selected, |this| this.bg(rgba(theme::SELECTED)))
+        .when(selected, |this| this.bg(rgba(theme::selected())))
         .when(!selected, |this| {
-            this.hover(|style| style.bg(rgba(theme::HOVER)).text_color(rgb(theme::TEXT)))
+            this.hover(|style| {
+                style
+                    .bg(rgba(theme::hover()))
+                    .text_color(rgb(theme::text()))
+            })
         })
         .child(text)
         .when(badge > 0, |this| this.child(count_pill(badge)))
@@ -1862,13 +1884,13 @@ pub(crate) fn requests_header(app: &DiscordApp) -> impl IntoElement + use<> {
         .flex_none()
         .px_4()
         .border_b_1()
-        .border_color(rgba(theme::BORDER))
-        .child(theme::icon("mail", 20., theme::FAINT))
+        .border_color(rgba(theme::border()))
+        .child(theme::icon("mail", 20., theme::faint()))
         .child(
             div()
                 .text_size(rpx(16.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child("Message Requests"),
         )
         .child(
@@ -1876,7 +1898,7 @@ pub(crate) fn requests_header(app: &DiscordApp) -> impl IntoElement + use<> {
                 .size(rpx(4.))
                 .mx(rpx(4.))
                 .rounded_full()
-                .bg(rgb(theme::FAINT)),
+                .bg(rgb(theme::faint())),
         )
         .child(tab(
             "requests-tab",
@@ -1916,7 +1938,7 @@ pub(crate) fn requests_page(app: &DiscordApp, cx: &App) -> AnyElement {
                 .mb(rpx(8.))
                 .text_size(rpx(14.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child(heading),
         )
         .child(
@@ -1936,7 +1958,7 @@ pub(crate) fn requests_page(app: &DiscordApp, cx: &App) -> AnyElement {
                             .mt(rpx(40.))
                             .text_center()
                             .text_size(rpx(14.))
-                            .text_color(rgb(theme::MUTED))
+                            .text_color(rgb(theme::muted()))
                             .child(if spam {
                                 "There are no spam requests."
                             } else {
@@ -1987,16 +2009,16 @@ fn request_row(app: &DiscordApp, dm: &PrivateChannel, cx: &App) -> impl IntoElem
         .px(rpx(10.))
         .rounded(rpx(8.))
         .border_t_1()
-        .border_color(rgba(theme::BORDER))
+        .border_color(rgba(theme::border()))
         .cursor_pointer()
-        .hover(|style| style.bg(rgba(theme::HOVER)))
+        .hover(|style| style.bg(rgba(theme::hover())))
         .without_text_selection()
         .on_click(move |_, window, cx| {
             entity
                 .update(cx, |app, cx| app.select_dm(id, window, cx))
                 .ok();
         })
-        .child(dm_avatar(app, dm, theme::BG, false, cx))
+        .child(dm_avatar(app, dm, theme::base_lower(), false, cx))
         .child(
             div()
                 .flex()
@@ -2016,14 +2038,14 @@ fn request_row(app: &DiscordApp, dm: &PrivateChannel, cx: &App) -> impl IntoElem
                                 .text_size(rpx(16.))
                                 .line_height(rpx(20.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(theme::STRONG))
+                                .text_color(rgb(theme::strong()))
                                 .child(label(("request-name", id), &name)),
                         )
                         .children(time.map(|time| {
                             div()
                                 .flex_none()
                                 .text_size(rpx(12.))
-                                .text_color(rgb(theme::FAINT))
+                                .text_color(rgb(theme::faint()))
                                 .child(time)
                         })),
                 )
@@ -2033,7 +2055,7 @@ fn request_row(app: &DiscordApp, dm: &PrivateChannel, cx: &App) -> impl IntoElem
                         .truncate()
                         .text_size(rpx(14.))
                         .line_height(rpx(18.))
-                        .text_color(rgb(theme::MUTED))
+                        .text_color(rgb(theme::muted()))
                         .child(label(("request-preview", id), &content)),
                 ),
         )
@@ -2055,23 +2077,24 @@ pub(crate) fn request_bar(app: &DiscordApp) -> Option<AnyElement> {
         .private_channel(id)
         .filter(|dm| app.is_home() && dm.message_request)?;
     let name = app.store.private_channel_name(id);
-    let button = |key: &'static str, text: &'static str, background: Rgba, hover: Rgba| {
-        div()
-            .id(key)
-            .flex()
-            .items_center()
-            .justify_center()
-            .h(rpx(32.))
-            .px(rpx(16.))
-            .rounded(rpx(8.))
-            .bg(background)
-            .hover(move |style| style.bg(hover))
-            .cursor_pointer()
-            .text_size(rpx(14.))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(white())
-            .child(text)
-    };
+    let button =
+        |key: &'static str, text: &'static str, background: Rgba, hover: Rgba, color: Hsla| {
+            div()
+                .id(key)
+                .flex()
+                .items_center()
+                .justify_center()
+                .h(rpx(32.))
+                .px(rpx(16.))
+                .rounded(rpx(8.))
+                .bg(background)
+                .hover(move |style| style.bg(hover))
+                .cursor_pointer()
+                .text_size(rpx(14.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(color)
+                .child(text)
+        };
     let accept = {
         let entity = app.entity.clone();
         button(
@@ -2079,6 +2102,7 @@ pub(crate) fn request_bar(app: &DiscordApp) -> Option<AnyElement> {
             "Accept",
             rgb(theme::BLURPLE),
             rgb(theme::BLURPLE),
+            white(),
         )
         .on_click(move |_, window, cx| {
             entity
@@ -2091,8 +2115,9 @@ pub(crate) fn request_bar(app: &DiscordApp) -> Option<AnyElement> {
         button(
             "request-bar-ignore",
             "Ignore",
-            rgba(theme::CONTROL),
-            rgba(theme::HOVER),
+            rgba(theme::control()),
+            rgba(theme::hover()),
+            rgb(theme::bright()).into(),
         )
         .on_click(move |_, window, cx| {
             entity
@@ -2109,20 +2134,20 @@ pub(crate) fn request_bar(app: &DiscordApp) -> Option<AnyElement> {
             .mb(rpx(24.))
             .p(rpx(16.))
             .rounded(rpx(8.))
-            .bg(rgb(theme::ELEVATED))
+            .bg(rgb(theme::elevated()))
             .border_1()
-            .border_color(rgba(theme::BORDER))
+            .border_color(rgba(theme::border()))
             .child(
                 div()
                     .text_size(rpx(16.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(theme::STRONG))
+                    .text_color(rgb(theme::strong()))
                     .child(format!("{name} wants to message you")),
             )
             .child(
                 div()
                     .text_size(rpx(14.))
-                    .text_color(rgb(theme::MUTED))
+                    .text_color(rgb(theme::muted()))
                     .child(if dm.spam {
                         "Discord flagged this as possible spam. Ignoring removes it."
                     } else {

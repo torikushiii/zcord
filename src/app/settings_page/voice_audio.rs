@@ -313,7 +313,8 @@ pub(super) fn page(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> Vec<A
             .text_color(white())
             .map(|this| {
                 if in_call {
-                    this.bg(rgba(theme::SELECTED)).text_color(rgb(theme::FAINT))
+                    this.bg(rgba(theme::selected()))
+                        .text_color(rgb(theme::faint()))
                 } else {
                     this.cursor_pointer()
                         .bg(rgb(theme::BLURPLE))
@@ -341,7 +342,7 @@ pub(super) fn page(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> Vec<A
             div()
                 .text_size(rpx(14.))
                 .line_height(rpx(18.))
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child(if in_call {
                     "Your input level below is live from the call. The mic test is off while \
                      you're in a call."
@@ -424,7 +425,7 @@ pub(super) fn page(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> Vec<A
                 .child(
                     div()
                         .text_size(rpx(14.))
-                        .text_color(rgb(theme::MUTED))
+                        .text_color(rgb(theme::muted()))
                         .child(format!(
                             "Your mic opens above {:.0} dB. Green in the meter means you'd be heard.",
                             audio.sensitivity.read(cx).value().start()
@@ -485,12 +486,12 @@ fn device_picker(
         .px(rpx(12.))
         .rounded(rpx(8.))
         .cursor_pointer()
-        .bg(rgb(theme::BG))
+        .bg(rgb(theme::bg()))
         .border_1()
         .border_color(if open {
-            rgb(theme::FOCUS)
+            rgb(theme::focus())
         } else {
-            rgba(theme::BORDER)
+            rgba(theme::border())
         })
         .on_click(move |_, _, cx| {
             toggle
@@ -505,13 +506,13 @@ fn device_picker(
                 .min_w_0()
                 .truncate()
                 .text_size(rpx(14.))
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child(current),
         )
         .child(theme::icon(
             if open { "chevron-up" } else { "chevron-down" },
             16.,
-            theme::MUTED,
+            theme::muted(),
         ));
     let names: Vec<Option<String>> = match &audio.devices {
         Some((inputs, outputs)) => std::iter::once(None)
@@ -542,9 +543,9 @@ fn device_picker(
                 .mt(rpx(4.))
                 .p(rpx(4.))
                 .rounded(rpx(8.))
-                .bg(rgb(theme::BG))
+                .bg(rgb(theme::bg()))
                 .border_1()
-                .border_color(rgba(theme::BORDER))
+                .border_color(rgba(theme::border()))
                 .max_h(rpx(DEVICE_LIST_MAX_HEIGHT))
                 .overflow_y_scrollbar()
                 .occlude()
@@ -573,7 +574,7 @@ fn device_picker(
                         .px(rpx(8.))
                         .rounded(rpx(6.))
                         .cursor_pointer()
-                        .hover(|style| style.bg(rgba(theme::HOVER)))
+                        .hover(|style| style.bg(rgba(theme::hover())))
                         .on_click(move |_, _, cx| {
                             entity
                                 .update(cx, |app, cx| app.select_device(kind, name.clone(), cx))
@@ -584,7 +585,11 @@ fn device_picker(
                                 .min_w_0()
                                 .truncate()
                                 .text_size(rpx(14.))
-                                .text_color(rgb(if chosen { theme::STRONG } else { theme::TEXT }))
+                                .text_color(rgb(if chosen {
+                                    theme::strong()
+                                } else {
+                                    theme::text()
+                                }))
                                 .child(text),
                         )
                         .when(chosen, |this| {
@@ -598,7 +603,7 @@ fn device_picker(
                             .px(rpx(8.))
                             .py(rpx(6.))
                             .text_size(rpx(14.))
-                            .text_color(rgb(theme::MUTED))
+                            .text_color(rgb(theme::muted()))
                             .child("Looking for devices…"),
                     )
                 }),
@@ -637,7 +642,7 @@ fn labeled_slider(label: &'static str, state: &Entity<SliderState>, cx: &App) ->
                 .child(
                     div()
                         .text_size(rpx(14.))
-                        .text_color(rgb(theme::MUTED))
+                        .text_color(rgb(theme::muted()))
                         .child(format!("{percent}%")),
                 ),
         )
@@ -655,7 +660,7 @@ fn field_label(text: &'static str) -> impl IntoElement {
         .text_size(rpx(12.))
         .line_height(rpx(16.))
         .font_weight(FontWeight::BOLD)
-        .text_color(rgb(theme::MUTED))
+        .text_color(rgb(theme::muted()))
         .child(text.to_uppercase())
 }
 
@@ -719,7 +724,7 @@ impl Render for LevelMeter {
             .h(rpx(8.))
             .rounded_full()
             .overflow_hidden()
-            .bg(rgba(theme::SELECTED))
+            .bg(rgba(theme::selected()))
             .child(
                 div()
                     .absolute()
@@ -736,7 +741,7 @@ impl Render for LevelMeter {
                     .bottom_0()
                     .left(relative(fraction))
                     .w(px(2.))
-                    .bg(white())
+                    .bg(rgb(theme::bright()))
             }))
     }
 }

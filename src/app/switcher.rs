@@ -18,10 +18,6 @@ const WIDTH: f32 = 695.;
 const ROW_HEIGHT: f32 = 34.;
 const RESULTS_HEIGHT: f32 = 234.;
 const INPUT_HEIGHT: f32 = 70.;
-const PANEL_BG: u32 = 0x0C0C0E;
-const PANEL_BORDER: u32 = 0x26262B;
-const INPUT_BG: u32 = 0x0F0F12;
-const INPUT_BORDER: u32 = 0x2E2E34;
 const SIGILS: [&str; 2] = ["#", "*"];
 
 pub(crate) struct QuickSwitcher {
@@ -223,7 +219,7 @@ pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                     .text_size(rpx(14.))
                     .line_height(rpx(18.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(theme::MUTED))
+                    .text_color(rgb(theme::muted()))
                     .child(title)
                     .into_any_element(),
             );
@@ -247,9 +243,9 @@ pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
         .pt(rpx(22.))
         .pb(rpx(18.))
         .rounded(rpx(12.))
-        .bg(rgb(PANEL_BG))
+        .bg(rgb(theme::dialog_bg()))
         .border_1()
-        .border_color(rgb(PANEL_BORDER))
+        .border_color(rgb(theme::dialog_border()))
         .shadow_lg()
         .occlude()
         .child(
@@ -260,9 +256,9 @@ pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                 .h(rpx(INPUT_HEIGHT))
                 .px(rpx(14.))
                 .rounded(rpx(8.))
-                .bg(rgb(INPUT_BG))
+                .bg(rgb(theme::input_bg()))
                 .border_1()
-                .border_color(rgb(INPUT_BORDER))
+                .border_color(rgb(theme::input_border()))
                 .child(
                     Input::new(&switcher.search)
                         .appearance(false)
@@ -292,7 +288,7 @@ pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                     .py(rpx(24.))
                     .text_center()
                     .text_size(rpx(14.))
-                    .text_color(rgb(theme::MUTED))
+                    .text_color(rgb(theme::muted()))
                     .child("No results found"),
             )
         })
@@ -345,7 +341,11 @@ fn item_row(app: &DiscordApp, item: &Item, index: usize, selected: bool, cx: &Ap
                 _ => "hash",
             },
             20.,
-            if bright { theme::TEXT } else { theme::FAINT },
+            if bright {
+                theme::text()
+            } else {
+                theme::faint()
+            },
         )
         .into_any_element(),
     };
@@ -376,7 +376,7 @@ fn item_row(app: &DiscordApp, item: &Item, index: usize, selected: bool, cx: &Ap
             .truncate()
             .text_size(rpx(11.))
             .font_weight(FontWeight::SEMIBOLD)
-            .text_color(rgb(theme::MUTED))
+            .text_color(rgb(theme::muted()))
             .child(label(("quick-switcher-context", index), context))
     });
     let guild = item.guild_name.as_ref().map(|name| {
@@ -385,7 +385,7 @@ fn item_row(app: &DiscordApp, item: &Item, index: usize, selected: bool, cx: &Ap
             .max_w(rpx(180.))
             .truncate()
             .text_size(rpx(14.))
-            .text_color(rgb(theme::MUTED))
+            .text_color(rgb(theme::muted()))
             .child(label(("quick-switcher-guild", index), name))
     });
     div()
@@ -397,7 +397,7 @@ fn item_row(app: &DiscordApp, item: &Item, index: usize, selected: bool, cx: &Ap
         .px(rpx(12.))
         .rounded(rpx(4.))
         .cursor_pointer()
-        .when(selected, |this| this.bg(rgba(theme::SELECTED)))
+        .when(selected, |this| this.bg(rgba(theme::selected())))
         .on_mouse_move(move |_, _, cx| {
             hover
                 .update(cx, |app, cx| {
@@ -427,7 +427,11 @@ fn item_row(app: &DiscordApp, item: &Item, index: usize, selected: bool, cx: &Ap
                 } else {
                     FontWeight::MEDIUM
                 })
-                .text_color(rgb(if bright { theme::STRONG } else { theme::MUTED }))
+                .text_color(rgb(if bright {
+                    theme::strong()
+                } else {
+                    theme::muted()
+                }))
                 .child(label(("quick-switcher-name", index), &item.name)),
         )
         .children(badge)
@@ -458,10 +462,10 @@ fn guild_icon(app: &DiscordApp, target: Target, cx: &App) -> AnyElement {
             .justify_center()
             .size(rpx(20.))
             .rounded_full()
-            .bg(rgba(theme::SELECTED))
+            .bg(rgba(theme::selected()))
             .text_size(rpx(8.))
             .font_weight(FontWeight::SEMIBOLD)
-            .text_color(rgb(theme::TEXT))
+            .text_color(rgb(theme::text()))
             .children(guild.map(|guild| guild.initials.clone()))
             .into_any_element(),
     }
@@ -472,9 +476,9 @@ fn protip() -> impl IntoElement {
         div()
             .px(rpx(4.))
             .rounded(rpx(3.))
-            .bg(rgb(theme::BG))
+            .bg(rgb(theme::bg()))
             .font_weight(FontWeight::SEMIBOLD)
-            .text_color(rgb(theme::STRONG))
+            .text_color(rgb(theme::strong()))
             .child(text)
     };
     div()
@@ -484,7 +488,7 @@ fn protip() -> impl IntoElement {
         .mt(rpx(24.))
         .text_size(rpx(13.))
         .line_height(rpx(16.))
-        .text_color(rgb(theme::TEXT))
+        .text_color(rgb(theme::text()))
         .child(
             div()
                 .font_weight(FontWeight::SEMIBOLD)

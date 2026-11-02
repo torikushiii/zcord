@@ -34,17 +34,17 @@ fn sticker_placeholder(sticker: &Sticker) -> AnyElement {
         .gap(rpx(8.))
         .size_full()
         .rounded(rpx(8.))
-        .bg(rgb(theme::ELEVATED))
+        .bg(rgb(theme::elevated()))
         .border_1()
-        .border_color(rgba(theme::BORDER))
-        .child(theme::icon("sticker", 48., theme::MUTED))
+        .border_color(rgba(theme::border()))
+        .child(theme::icon("sticker", 48., theme::muted()))
         .child(
             div()
                 .max_w(rpx(STICKER_SIZE - 16.))
                 .truncate()
                 .text_size(rpx(12.))
                 .line_height(rpx(16.))
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child(name),
         )
         .into_any_element()
@@ -158,7 +158,7 @@ pub(super) fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &
                         .h(rpx(height))
                         .rounded(rpx(8.))
                         .overflow_hidden()
-                        .bg(rgba(theme::BORDER))
+                        .bg(rgba(theme::border()))
                 },
                 |spec| embeds::blurred_box(spec, width, height, 8., cx),
             );
@@ -251,7 +251,7 @@ pub(super) fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &
         .h(rpx(height))
         .rounded(rpx(8.))
         .overflow_hidden()
-        .bg(rgb(theme::ELEVATED))
+        .bg(rgb(theme::elevated()))
         .cursor_pointer()
         .on_click(move |_, _, cx| {
             entity
@@ -296,10 +296,10 @@ fn file_card(attachment: &Attachment) -> impl IntoElement + use<> {
         .max_w(rpx(432.))
         .p_3()
         .rounded(rpx(8.))
-        .bg(rgb(theme::ELEVATED))
+        .bg(rgb(theme::elevated()))
         .border_1()
-        .border_color(rgba(theme::BORDER))
-        .child(theme::icon("file", 32., theme::MUTED))
+        .border_color(rgba(theme::border()))
+        .child(theme::icon("file", 32., theme::muted()))
         .child(
             div()
                 .flex()
@@ -308,13 +308,13 @@ fn file_card(attachment: &Attachment) -> impl IntoElement + use<> {
                 .child(
                     div()
                         .truncate()
-                        .text_color(rgb(LINK))
+                        .text_color(rgb(theme::link()))
                         .child(attachment.filename.clone()),
                 )
                 .child(
                     div()
                         .text_size(rpx(12.))
-                        .text_color(rgb(theme::FAINT))
+                        .text_color(rgb(theme::faint()))
                         .child(file_size(attachment.size)),
                 ),
         )
@@ -335,10 +335,10 @@ pub(super) fn upload_card(
         .max_w(rpx(432.))
         .p_3()
         .rounded(rpx(8.))
-        .bg(rgb(theme::ELEVATED))
+        .bg(rgb(theme::elevated()))
         .border_1()
-        .border_color(rgba(theme::BORDER))
-        .child(theme::icon("file", 32., theme::MUTED))
+        .border_color(rgba(theme::border()))
+        .child(theme::icon("file", 32., theme::muted()))
         .child(
             div()
                 .flex()
@@ -350,7 +350,7 @@ pub(super) fn upload_card(
                 .child(
                     div()
                         .text_size(rpx(12.))
-                        .text_color(rgb(theme::FAINT))
+                        .text_color(rgb(theme::faint()))
                         .child(file_size(upload.size)),
                 )
                 .children(fraction.map(|fraction| {
@@ -358,7 +358,7 @@ pub(super) fn upload_card(
                         .h(rpx(4.))
                         .rounded(rpx(2.))
                         .overflow_hidden()
-                        .bg(rgba(theme::BORDER))
+                        .bg(rgba(theme::border()))
                         .child(
                             div()
                                 .h_full()
@@ -372,7 +372,7 @@ pub(super) fn upload_card(
                 app.upload_tip(
                     UploadButton::Cancel(nonce),
                     "Cancel Upload",
-                    theme::icon_button(("cancel-upload", nonce), "x", 16., theme::MUTED),
+                    theme::icon_button(("cancel-upload", nonce), "x", 16., theme::muted()),
                 )
                 .on_click(move |_, _, cx| {
                     cancel.update(cx, |app, _| app.cancel_upload(nonce)).ok();

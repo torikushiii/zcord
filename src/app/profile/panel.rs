@@ -78,7 +78,7 @@ pub(in crate::app) fn render(app: &DiscordApp, card: &ProfileCard, cx: &App) -> 
     let theme = card.theme();
     let palette = card.palette();
     let layout = Layout::panel(theme.is_some());
-    let surface = theme.map_or(theme::ELEVATED, ProfileTheme::surface);
+    let surface = theme.map_or(theme::elevated(), ProfileTheme::surface);
     let open_full = |app: &DiscordApp| -> ClickHandler {
         let entity = app.entity.clone();
         Box::new(move |_, _, cx| {
@@ -167,9 +167,9 @@ pub(in crate::app) fn render(app: &DiscordApp, card: &ProfileCard, cx: &App) -> 
         .map(|this| match theme {
             Some(theme) => this.p(rpx(THEME_BORDER)).bg(theme.outer()),
             None => this
-                .bg(rgb(theme::ELEVATED))
+                .bg(rgb(theme::elevated()))
                 .border_1()
-                .border_color(rgba(theme::BORDER)),
+                .border_color(rgba(theme::border())),
         })
         .child(inner)
         .into_any_element();

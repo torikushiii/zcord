@@ -7,8 +7,6 @@ pub(crate) const MAX_FILES: usize = 10;
 pub(crate) const STAGED_PREVIEW: f32 = 200.;
 const VIDEO_LIGHTBOX_SIDE: u32 = 1920;
 const DROP_SCRIM: u32 = 0x000000D9;
-const DROP_SHEET: u32 = 0xD4D8FF;
-const DROP_FOLD: u32 = 0xA7AEFF;
 const DROP_ENTER: Duration = Duration::from_millis(160);
 
 #[derive(Clone)]
@@ -163,8 +161,8 @@ fn drop_sheet(glyph: &str, angle: f32, left: f32, top: f32) -> impl IntoElement 
         .top(rpx(top))
         .w(rpx(84.))
         .h(rpx(98.))
-        .child(layer("upload-sheet", DROP_SHEET))
-        .child(layer("upload-fold", DROP_FOLD))
+        .child(layer("upload-sheet", theme::upload_sheet()))
+        .child(layer("upload-fold", theme::upload_fold()))
         .child(layer(glyph, theme::BLURPLE))
 }
 
@@ -194,7 +192,7 @@ pub(super) fn drop_overlay(app: &DiscordApp, cx: &App) -> Div {
                 .rounded(rpx(8.))
                 .border_2()
                 .border_dashed()
-                .border_color(rgba(0xFFFFFF99)),
+                .border_color(rgba(theme::accent_border())),
         )
         .child(
             div()

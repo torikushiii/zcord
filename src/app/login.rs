@@ -137,7 +137,7 @@ pub fn render(
         .min_h_0()
         .items_center()
         .justify_center()
-        .bg(rgb(theme::BG))
+        .bg(rgb(theme::bg()))
         .child(
             div()
                 .flex()
@@ -146,9 +146,9 @@ pub fn render(
                 .w(rpx(if show_qr { CARD_WIDTH } else { FORM_WIDTH }))
                 .p(rpx(32.))
                 .rounded(rpx(8.))
-                .bg(rgb(theme::ELEVATED))
+                .bg(rgb(theme::elevated()))
                 .border_1()
-                .border_color(rgba(theme::BORDER))
+                .border_color(rgba(theme::border()))
                 .child(token_form(form, cx))
                 .when(show_qr, |card| card.child(qr_panel(&form.qr.state, cx))),
         )
@@ -166,7 +166,7 @@ fn token_form(form: &LoginForm, cx: &mut Context<DiscordApp>) -> Div {
                 .justify_center()
                 .text_size(rpx(24.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child("Welcome back!"),
         )
         .child(
@@ -175,7 +175,7 @@ fn token_form(form: &LoginForm, cx: &mut Context<DiscordApp>) -> Div {
                 .justify_center()
                 .mt_2()
                 .text_size(rpx(16.))
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child("We're so excited to see you again!"),
         )
         .child(
@@ -189,7 +189,7 @@ fn token_form(form: &LoginForm, cx: &mut Context<DiscordApp>) -> Div {
                 .text_color(rgb(if form.error.is_some() {
                     theme::RED
                 } else {
-                    theme::MUTED
+                    theme::muted()
                 }))
                 .child("TOKEN")
                 .child(match &form.error {
@@ -204,9 +204,9 @@ fn token_form(form: &LoginForm, cx: &mut Context<DiscordApp>) -> Div {
             div()
                 .px_3()
                 .rounded(rpx(8.))
-                .bg(rgb(theme::BG))
+                .bg(rgb(theme::bg()))
                 .border_1()
-                .border_color(rgba(theme::BORDER))
+                .border_color(rgba(theme::border()))
                 .child(
                     Input::new(&form.token)
                         .appearance(false)
@@ -248,7 +248,7 @@ fn token_form(form: &LoginForm, cx: &mut Context<DiscordApp>) -> Div {
             div()
                 .mt_2()
                 .text_size(rpx(12.))
-                .text_color(rgb(theme::FAINT))
+                .text_color(rgb(theme::faint()))
                 .child("Stored in your system's credential manager and sent only to Discord."),
         )
 }
@@ -270,7 +270,7 @@ fn qr_panel(state: &QrState, cx: &mut Context<DiscordApp>) -> Div {
                         .child(
                             div()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(theme::STRONG))
+                                .text_color(rgb(theme::strong()))
                                 .child(user.username.clone()),
                         ),
                 )
@@ -304,7 +304,7 @@ fn qr_panel(state: &QrState, cx: &mut Context<DiscordApp>) -> Div {
                 .child(
                     div()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(theme::STRONG))
+                        .text_color(rgb(theme::strong()))
                         .child("Discord mobile app"),
                 )
                 .child(" to log in instantly.")
@@ -327,7 +327,7 @@ fn qr_panel(state: &QrState, cx: &mut Context<DiscordApp>) -> Div {
                 .mb_2()
                 .text_size(rpx(24.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::STRONG))
+                .text_color(rgb(theme::strong()))
                 .child(title),
         )
         .child(
@@ -336,7 +336,7 @@ fn qr_panel(state: &QrState, cx: &mut Context<DiscordApp>) -> Div {
                 .text_size(rpx(16.))
                 .line_height(rpx(20.))
                 .text_center()
-                .text_color(rgb(theme::MUTED))
+                .text_color(rgb(theme::muted()))
                 .child(body),
         )
 }
@@ -398,7 +398,7 @@ fn qr_visual(state: &QrState, cx: &App) -> AnyElement {
                 .into_any_element()
         }
         QrState::Failed(_) => frame
-            .bg(rgb(theme::BG))
+            .bg(rgb(theme::bg()))
             .child(theme::logo(QR_LOGO).opacity(0.5))
             .into_any_element(),
     }
@@ -440,7 +440,7 @@ fn link(id: &'static str, label: &'static str) -> Stateful<Div> {
     div()
         .id(id)
         .text_size(rpx(14.))
-        .text_color(rgb(theme::LINK))
+        .text_color(rgb(theme::link()))
         .cursor_pointer()
         .hover(|style| style.underline())
         .child(label)

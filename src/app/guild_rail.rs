@@ -227,11 +227,11 @@ pub fn render(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                     .justify_center()
                     .size(rpx(ICON))
                     .bg(rgb(if app.is_home() {
-                        theme::SURFACE_HIGHEST
+                        theme::surface_highest()
                     } else {
-                        theme::ELEVATED
+                        theme::elevated()
                     }))
-                    .group_hover("rail-item", |style| style.bg(rgb(theme::SURFACE_HIGHEST)))
+                    .group_hover("rail-item", |style| style.bg(rgb(theme::surface_highest())))
                     .child(theme::logo(32.)),
                 Corners::Morph(HOME_KEY, app.is_home()),
                 app,
@@ -244,7 +244,7 @@ pub fn render(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 .w(rpx(32.))
                 .h(rpx(1.))
                 .flex_none()
-                .bg(rgba(theme::BORDER)),
+                .bg(rgba(theme::border())),
         )
         .children(app.store.rail.iter().filter_map(|entry| {
             match entry {
@@ -500,7 +500,7 @@ fn rail_item(
                 .left_0()
                 .w(rpx(4.))
                 .rounded_r(rpx(4.))
-                .bg(rgb(theme::STRONG))
+                .bg(rgb(theme::strong()))
                 .map(|pill| {
                     if selected {
                         pill.h(rpx(40.)).top(rpx(4.))
@@ -522,7 +522,7 @@ fn corner_badge(count: u32) -> Option<impl IntoElement> {
             .absolute()
             .bottom(rpx(-4.))
             .right(rpx(8.))
-            .child(theme::badge(count, theme::BG))
+            .child(theme::badge(count, theme::base_lowest()))
     })
 }
 
@@ -540,16 +540,16 @@ fn voice_badge(activity: VoiceActivity, connected: bool) -> impl IntoElement {
         .justify_center()
         .size(rpx(20.))
         .rounded_full()
-        .bg(rgb(theme::BG))
+        .bg(rgb(theme::base_lowest()))
         .when(connected, |this| {
             this.bg(rgb(theme::GREEN))
                 .border(rpx(2.))
-                .border_color(rgb(theme::BG))
+                .border_color(rgb(theme::base_lowest()))
         })
         .child(theme::icon(
             icon,
             size,
-            if connected { 0xFFFFFF } else { theme::STRONG },
+            if connected { 0xFFFFFF } else { theme::strong() },
         ))
 }
 
@@ -643,7 +643,7 @@ fn activity_row(icon: &str, count: usize, avatars: impl Iterator<Item = AnyEleme
         .items_center()
         .gap(rpx(8.))
         .h(rpx(TOOLTIP_AVATAR_SIZE))
-        .child(theme::icon(icon, 20., theme::MUTED).flex_none())
+        .child(theme::icon(icon, 20., theme::muted()).flex_none())
         .child(
             div()
                 .flex()
@@ -666,8 +666,8 @@ fn activity_row(icon: &str, count: usize, avatars: impl Iterator<Item = AnyEleme
                                 .size(rpx(TOOLTIP_AVATAR_SIZE))
                                 .rounded_full()
                                 .border(rpx(2.))
-                                .border_color(rgb(theme::TOOLTIP_BG))
-                                .bg(rgb(theme::TOOLTIP_BG))
+                                .border_color(rgb(theme::tooltip_bg()))
+                                .bg(rgb(theme::tooltip_bg()))
                                 .overflow_hidden()
                                 .child(avatar)
                         })),
@@ -686,8 +686,8 @@ fn activity_row(icon: &str, count: usize, avatars: impl Iterator<Item = AnyEleme
                             .px(rpx(4.))
                             .rounded_full()
                             .border(rpx(2.))
-                            .border_color(rgb(theme::TOOLTIP_BG))
-                            .bg(rgb(theme::BG))
+                            .border_color(rgb(theme::tooltip_bg()))
+                            .bg(rgb(theme::bg()))
                             .text_size(rpx(12.))
                             .line_height(rpx(16.))
                             .child(format!("+{remaining}")),
@@ -751,8 +751,8 @@ fn action_item(
             .items_center()
             .justify_center()
             .size(rpx(ICON))
-            .bg(rgb(theme::ELEVATED))
-            .child(theme::icon(icon, 24., theme::TEXT)),
+            .bg(rgb(theme::elevated()))
+            .child(theme::icon(icon, 24., theme::text())),
         Corners::Morph(key, false),
         app,
         morphs,
