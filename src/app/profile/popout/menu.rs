@@ -317,34 +317,29 @@ fn friend_button(app: &DiscordApp, card: &ProfileCard, action: FriendAction) -> 
     let user_id = card.user_id;
     let palette = card.palette();
     let entity = app.entity.clone();
+    // A status badge, not a button: Discord only removes friends from the Home friends list.
     if action == FriendAction::Friends {
-        return theme::icon_button_with_hover(
-            "profile-friend",
-            "user-check",
-            18.,
-            palette.text,
-            palette.hover,
-        )
-        .role(Role::Button)
-        .aria_label("Friends")
-        .size(rpx(32.))
-        .rounded(rpx(8.))
-        .bg(palette.button)
-        .without_text_selection()
-        .map(|this| action_tooltip(this, app, card, "Friends", true))
-        .on_click(move |_, _, cx| {
-            cx.stop_propagation();
-            entity
-                .update(cx, |app, cx| app.ask_remove_friend(user_id, cx))
-                .ok();
-        })
-        .into_any_element();
+        return div()
+            .id("profile-friend")
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .aria_label("Friends")
+            .size(rpx(32.))
+            .rounded(rpx(8.))
+            .bg(palette.button)
+            .without_text_selection()
+            .child(theme::icon("user-check", 18., palette.text))
+            .map(|this| action_tooltip(this, app, card, "Friends", true))
+            .into_any_element();
     }
     let (title, primary) = match action {
         FriendAction::Add => ("Add Friend", true),
         FriendAction::Accept => ("Accept", true),
         _ => ("Request Sent", false),
     };
+    let needs_captcha = action == FriendAction::Add;
     let busy = app.friend_busy(user_id);
     let color = if primary { 0xFFFFFF } else { theme::muted() };
     div()
@@ -363,8 +358,17 @@ fn friend_button(app: &DiscordApp, card: &ProfileCard, action: FriendAction) -> 
         .text_color(rgb(color))
         .when(!primary, |this| this.bg(rgba(theme::selected())))
         .when(primary, |this| this.bg(rgb(theme::BLURPLE)))
-        .when(primary && busy, |this| this.opacity(0.5))
-        .when(primary && !busy, |this| {
+        .when(primary && (busy || needs_captcha), |this| this.opacity(0.5))
+        .when(needs_captcha, |this| {
+            action_tooltip(
+                this,
+                app,
+                card,
+                "Send friend requests from Discord for now",
+                true,
+            )
+        })
+        .when(primary && !busy && !needs_captcha, |this| {
             this.cursor_pointer()
                 .hover(|style| style.bg(rgb(theme::BLURPLE_ACTIVE)))
                 .on_click(move |_, _, cx| {

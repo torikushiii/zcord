@@ -6,8 +6,13 @@ impl Session {
             .await
     }
 
-    pub async fn put_relationship(&self, user_id: u64) -> Result<(), Error> {
-        self.rest(async |rest| rest.put_relationship(user_id).await)
+    pub async fn put_relationship(
+        &self,
+        user_id: u64,
+        guild_id: Option<u64>,
+        channel_id: Option<u64>,
+    ) -> Result<(), Error> {
+        self.rest(async |rest| rest.put_relationship(user_id, guild_id, channel_id).await)
             .await
     }
 

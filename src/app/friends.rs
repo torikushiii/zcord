@@ -56,11 +56,15 @@ impl DiscordApp {
         }
         self.home.friends.error = None;
         cx.notify();
+        let guild_id = self.request_guild();
+        let channel_id = (self.selected_channel_id != 0).then_some(self.selected_channel_id);
         let request = Tokio::spawn(cx, async move {
             if remove {
                 session.delete_relationship(user_id).await
             } else {
-                session.put_relationship(user_id).await
+                session
+                    .put_relationship(user_id, guild_id, channel_id)
+                    .await
             }
         });
         cx.spawn(async move |this, cx| {
