@@ -35,7 +35,7 @@ fn range_sync_and_presence_updates_keep_the_scroll_anchor() {
     let state = ListState::new(0, ListAlignment::Top, px(400.));
     let mut layout = Layout::default();
     let mut list = members(500);
-    layout.sync(&state, Some(&list));
+    layout.sync(&state, Some(&list), 0);
     state.scroll_to(ListOffset {
         item_ix: 150,
         offset_in_item: px(13.),
@@ -45,21 +45,21 @@ fn range_sync_and_presence_updates_keep_the_scroll_anchor() {
             user_id: index as u64,
         });
     }
-    layout.sync(&state, Some(&list));
+    layout.sync(&state, Some(&list), 0);
     assert_position(&state, 150, 13.);
-    layout.sync(&state, Some(&list));
+    layout.sync(&state, Some(&list), 0);
     assert_position(&state, 150, 13.);
     assert_eq!(state.item_count(), 500);
 
     list.rows.resize(550, None);
-    layout.sync(&state, Some(&list));
+    layout.sync(&state, Some(&list), 0);
     assert_position(&state, 150, 13.);
     list.rows.truncate(450);
-    layout.sync(&state, Some(&list));
+    layout.sync(&state, Some(&list), 0);
     assert_position(&state, 150, 13.);
-    layout.sync(&state, None);
+    layout.sync(&state, None, 0);
     assert_eq!(state.item_count(), 0);
-    layout.sync(&state, Some(&list));
+    layout.sync(&state, Some(&list), 0);
     assert_position(&state, 0, 0.);
 }
 
@@ -74,7 +74,7 @@ impl MemberSidebar {
         let list = members(500);
         let state = ListState::new(0, ListAlignment::Top, px(400.));
         let mut layout = Layout::default();
-        layout.sync(&state, Some(&list));
+        layout.sync(&state, Some(&list), 0);
         Self {
             list,
             state,
@@ -83,7 +83,7 @@ impl MemberSidebar {
     }
 
     fn sync(&mut self) {
-        self.layout.sync(&self.state, Some(&self.list));
+        self.layout.sync(&self.state, Some(&self.list), 0);
     }
 }
 

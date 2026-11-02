@@ -72,6 +72,18 @@ impl Rest {
         response.json().await.map_err(|_| Error::Decode)
     }
 
+    pub async fn fetch_content_inbox(&self) -> Result<model::ContentInbox, Error> {
+        let url = "https://discord.com/api/v9/content-inventory/users/@me?for_game_profile=false&feature=inbox";
+        let response = self
+            .send(|| {
+                self.client
+                    .get(url)
+                    .header(REFERER, "https://discord.com/channels/@me")
+            })
+            .await?;
+        response.json().await.map_err(|_| Error::Decode)
+    }
+
     pub async fn fetch_application_identities(
         &self,
         user_id: u64,

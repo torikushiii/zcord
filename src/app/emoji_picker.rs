@@ -46,6 +46,7 @@ pub(crate) enum PickerTarget {
     Composer,
     Pane,
     Reaction(u64),
+    Activity(u64),
 }
 
 type Entry = (EmojiChoice, EmojiAccess);
@@ -291,6 +292,7 @@ impl DiscordApp {
             PickerTarget::Composer => self.insert_emoji(choice, window, cx),
             PickerTarget::Pane => self.insert_pane_emoji(choice, window, cx),
             PickerTarget::Reaction(message_id) => self.react(message_id, choice, cx),
+            PickerTarget::Activity(entry_id) => self.react_to_activity(entry_id, choice, cx),
         }
         if !keep_open {
             self.close_emoji_picker(cx);

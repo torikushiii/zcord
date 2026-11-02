@@ -215,6 +215,11 @@ impl Session {
             .await
     }
 
+    pub async fn content_inbox(&self) -> Result<model::ContentInbox, Error> {
+        self.rest(async |rest| rest.fetch_content_inbox().await)
+            .await
+    }
+
     pub async fn update_frecency_settings(&self, proto: &[u8]) -> Result<Vec<u8>, Error> {
         self.rest(async |rest| rest.update_frecency_settings(proto).await)
             .await

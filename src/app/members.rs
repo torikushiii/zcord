@@ -58,9 +58,11 @@ impl DiscordApp {
     }
 
     pub(super) fn sync_member_rows(&mut self) {
+        let lead = usize::from(!self.activity_cards().is_empty());
         self.member_layout.sync(
             &self.member_rows,
             self.store.member_list(self.selected_guild_id),
+            lead,
         );
     }
 

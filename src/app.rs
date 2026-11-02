@@ -1,3 +1,5 @@
+mod activity_feed;
+mod activity_popout;
 mod appearance;
 pub(crate) mod attachments;
 mod call_view;
@@ -161,6 +163,8 @@ pub(crate) struct Editing {
 pub(crate) struct FailedSend {
     reply: Option<ReplyTarget>,
     files: Vec<attachments::StagedFile>,
+    /// Activity reply/reaction entry to re-attach when the send is retried.
+    entry: Option<Arc<serde_json::Value>>,
     pub error: String,
 }
 
@@ -193,6 +197,10 @@ pub struct DiscordApp {
     pub(crate) screen: Screen,
     pub(crate) store: Store,
     account_theme: Option<crate::discord::settings_proto::AccountTheme>,
+    activity_feed: activity_feed::ActivityFeed,
+    activity_ticker: Option<Task<()>>,
+    pub(crate) activity_popout: Option<activity_popout::ActivityPopout>,
+    pub(crate) activity_card_tops: std::rc::Rc<std::cell::RefCell<HashMap<u64, Pixels>>>,
     pub(crate) selected_guild_id: u64,
     pub(crate) selected_channel_id: u64,
     pub(crate) show_members: bool,
@@ -372,6 +380,10 @@ impl DiscordApp {
             screen: Screen::Connecting,
             store: Store::seed(),
             account_theme: None,
+            activity_feed: activity_feed::ActivityFeed::default(),
+            activity_ticker: None,
+            activity_popout: None,
+            activity_card_tops: Default::default(),
             selected_guild_id: 0,
             selected_channel_id: 0,
             show_members: true,
@@ -573,6 +585,7 @@ impl DiscordApp {
         cx.observe_window_activation(window, |app, window, cx| {
             app.window_active = window.is_window_active();
             app.schedule_ack(cx);
+            app.refresh_activity_feed(false, cx);
         })
         .detach();
         let weak = app.entity.clone();
@@ -831,6 +844,7 @@ impl DiscordApp {
                 self.refresh_voice_start_times();
                 self.arm_status_expiry_timer(cx);
                 self.load_user_affinities(cx);
+                self.refresh_activity_feed(true, cx);
                 self.sync_channel_rows();
                 self.screen = Screen::Chat;
                 if reconnect && self.channel().is_some() {
@@ -884,6 +898,7 @@ impl DiscordApp {
     fn apply_change(&mut self, change: Change, window: &mut Window, cx: &mut Context<Self>) {
         self.arm_status_expiry_timer(cx);
         self.follow_account_theme(cx);
+        self.load_activity_reply_assets(cx);
         self.sync_thread_pane(&change, cx);
         // Background channels only change badges, which nobody can see until a
         // repaint; coalesce a burst into one refresh with the member sync timer.
@@ -988,6 +1003,7 @@ impl DiscordApp {
     }
 
     fn sync_channel_rows(&mut self) {
+        self.request_activity_members();
         let guild = self
             .store
             .guilds

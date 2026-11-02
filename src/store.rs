@@ -1,4 +1,5 @@
 mod account;
+mod activity_feed;
 mod authors;
 mod channels;
 mod emoji;
@@ -24,6 +25,7 @@ mod voice;
 use crate::discord::{self, model, settings_proto};
 use crate::media::images::ImageSpec;
 pub use account::Account;
+pub use activity_feed::ActivityCard;
 use base64::{Engine, engine::general_purpose::STANDARD};
 pub use expressions::{PickerSticker, StickerSection, sticker_matches};
 use home::PrivateLocation;
@@ -69,6 +71,7 @@ pub struct Store {
     account_theme: Option<settings_proto::AccountTheme>,
     frecency: Option<Vec<u8>>,
     favorite_gifs: Vec<settings_proto::FavoriteGif>,
+    content_inbox: Option<model::ContentInbox>,
     rail_order: Vec<u64>,
     social: social::Social,
     voice_start_times: HashMap<(u64, u64), u64>,
@@ -309,6 +312,7 @@ impl Store {
             account_theme,
             frecency: None,
             favorite_gifs: Vec::new(),
+            content_inbox: None,
             rail_order,
             social: social::Social::default(),
             voice_start_times: HashMap::new(),

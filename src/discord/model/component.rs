@@ -4,13 +4,12 @@ use serde::{Deserialize, Deserializer};
 
 fn component_type<'de, D: Deserializer<'de>>(d: D) -> Result<u8, D::Error> {
     let kind = u8::deserialize(d)?;
-    if matches!(kind, 1..=3 | 5..=14 | 17) {
+    if matches!(kind, 1..=3 | 5..=16 | 17) {
         Ok(kind)
     } else {
         Err(serde::de::Error::custom("unknown component type"))
     }
 }
-
 #[derive(Clone, Deserialize)]
 pub struct Component {
     #[serde(rename = "type", deserialize_with = "component_type")]
@@ -53,6 +52,8 @@ pub struct Component {
     pub spacing: u8,
     #[serde(default)]
     pub accent_color: Option<u32>,
+    #[serde(default)]
+    pub content_inventory_entry: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Deserialize)]

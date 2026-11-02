@@ -71,7 +71,7 @@ fn channel(app: &DiscordApp, target: PickerTarget) -> Option<u64> {
             app.thread_pane_channel().map(|channel| channel.id)
         }
         PickerTarget::Pane => None,
-        PickerTarget::Reaction(_) => None,
+        PickerTarget::Reaction(_) | PickerTarget::Activity(_) => None,
     }
 }
 
