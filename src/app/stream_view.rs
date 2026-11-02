@@ -754,7 +754,8 @@ pub(super) fn show_chat_button(app: &DiscordApp) -> Stateful<Div> {
         .rounded(rpx(8.))
         .cursor_pointer()
         .hover(|style| style.bg(rgba(theme::HOVER)))
-        .tooltip(|_, cx| theme::text_tooltip("Show Chat", cx))
+        .relative()
+        .child(theme::hover_tooltip("stream-show-chat-tip", "Show Chat"))
         .on_click(move |_, window, cx| {
             show_chat
                 .update(cx, |app, cx| app.open_stream_chat(window, cx))

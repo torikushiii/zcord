@@ -226,7 +226,8 @@ pub(super) fn thread_menu_button(app: &DiscordApp) -> Option<Stateful<Div>> {
     let entity = app.entity.clone();
     Some(
         theme::icon_button("thread-more", "ellipsis", 20., theme::MUTED)
-            .tooltip(|_, cx| theme::text_tooltip("More", cx))
+            .relative()
+            .child(theme::hover_tooltip("thread-more-tip", "More"))
             .on_click(move |event, _, cx| {
                 let position = event.position();
                 entity

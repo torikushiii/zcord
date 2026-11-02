@@ -1174,7 +1174,11 @@ fn friend_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement + us
                     let accept = entity_for_accept.clone();
                     this.child(
                         round_action(("friend-accept", user_id), "check")
-                            .tooltip(|_, cx| theme::text_tooltip("Accept", cx))
+                            .relative()
+                            .child(theme::hover_tooltip(
+                                ("friend-accept-tip", user_id),
+                                "Accept",
+                            ))
                             .on_click(move |_, _, cx| {
                                 cx.stop_propagation();
                                 accept
@@ -1191,7 +1195,8 @@ fn friend_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement + us
                     };
                     this.child(
                         round_action(("friend-drop", user_id), "x")
-                            .tooltip(move |_, cx| theme::text_tooltip(tip, cx))
+                            .relative()
+                            .child(theme::hover_tooltip(("friend-drop-tip", user_id), tip))
                             .on_click(move |_, _, cx| {
                                 cx.stop_propagation();
                                 entity_for_drop

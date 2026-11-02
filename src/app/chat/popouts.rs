@@ -360,7 +360,7 @@ pub(in crate::app) fn pins_button(app: &DiscordApp) -> Stateful<Div> {
     let unread = app.store.pins_unread(app.selected_channel_id);
     theme::icon_button("pins", "pin", 20., theme::MUTED)
         .relative()
-        .tooltip(|_, cx| theme::text_tooltip("Pinned Messages", cx))
+        .child(theme::hover_tooltip("pins-tip", "Pinned Messages"))
         .on_click(move |_, window, cx| {
             entity
                 .update(cx, |app, cx| {
@@ -384,7 +384,8 @@ pub(in crate::app) fn pins_button(app: &DiscordApp) -> Stateful<Div> {
 pub(in crate::app) fn threads_button(app: &DiscordApp) -> Stateful<Div> {
     let entity = app.entity.clone();
     theme::icon_button("threads", "messages-square", 20., theme::MUTED)
-        .tooltip(|_, cx| theme::text_tooltip("Threads", cx))
+        .relative()
+        .child(theme::hover_tooltip("threads-tip", "Threads"))
         .on_click(move |_, window, cx| {
             entity
                 .update(cx, |app, cx| {
