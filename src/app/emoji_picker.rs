@@ -170,6 +170,7 @@ impl DiscordApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.take_sticker_picker();
         self.close_gif_picker(cx);
         // A pending close must never remove the picker opened in its place.
         self.emoji_picker_closing = None;

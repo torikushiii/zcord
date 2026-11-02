@@ -10,6 +10,9 @@ pub struct StickerDetails {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
+    /// Discord's comma-separated autocomplete tags.
+    #[serde(default)]
+    pub tags: Option<String>,
     #[serde(default, deserialize_with = "default_value")]
     pub format_type: u8,
     #[serde(default, deserialize_with = "optional_id")]
@@ -65,6 +68,7 @@ mod tests {
             "id": "9007199254740993",
             "name": "wave",
             "description": "A greeting",
+            "tags": "hello,wave",
             "format_type": 4,
             "guild_id": "200",
             "pack_id": "9007199254740995",
@@ -75,6 +79,7 @@ mod tests {
         assert_eq!(sticker.id, 9007199254740993);
         assert_eq!(sticker.name, "wave");
         assert_eq!(sticker.description.as_deref(), Some("A greeting"));
+        assert_eq!(sticker.tags.as_deref(), Some("hello,wave"));
         assert_eq!(sticker.format_type, 4);
         assert_eq!(sticker.guild_id, Some(200));
         assert_eq!(sticker.pack_id, Some(9007199254740995));
@@ -90,6 +95,7 @@ mod tests {
                 "id": 10,
                 "name": null,
                 "description": null,
+                "tags": null,
                 "format_type": null,
                 "guild_id": null,
                 "pack_id": null,
@@ -101,6 +107,7 @@ mod tests {
             assert_eq!(sticker.id, 10);
             assert!(sticker.name.is_empty());
             assert!(sticker.description.is_none());
+            assert!(sticker.tags.is_none());
             assert_eq!(sticker.format_type, 0);
             assert!(sticker.guild_id.is_none());
             assert!(sticker.pack_id.is_none());

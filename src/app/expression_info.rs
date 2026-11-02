@@ -10,7 +10,7 @@ use crate::{
         images::{self, ImageSpec},
     },
     store::{EmojiAccess, Guild, Sticker},
-    theme::{self, rpx},
+    theme::{self, WithoutTextSelection, rpx},
 };
 
 use super::{DiscordApp, Tokio};
@@ -737,6 +737,7 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
                         div()
                             .id("expression-info-popout")
                             .occlude()
+                            .without_text_selection()
                             .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
                             .on_mouse_down_out(move |_, _, cx| {
                                 entity

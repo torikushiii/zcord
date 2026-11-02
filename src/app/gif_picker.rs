@@ -231,6 +231,7 @@ impl DiscordApp {
             return;
         }
         self.close_emoji_picker(cx);
+        self.take_sticker_picker();
         self.gifs.pane = pane;
         self.open_gif_picker(position, false, window, cx);
     }
@@ -929,6 +930,7 @@ fn header(
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Tab {
     Media,
+    Stickers,
     Emoji,
 }
 
@@ -936,8 +938,13 @@ pub(super) fn tabs(app: &DiscordApp, selected: Tab) -> impl IntoElement {
     let tab = |label: &'static str, tab: Tab| {
         let active = tab == selected;
         let entity = app.entity.clone();
+        let keyboard = entity.clone();
         div()
             .id(label)
+            .role(Role::Tab)
+            .aria_selected(active)
+            .focusable()
+            .tab_index(0)
             .flex()
             .items_center()
             .h(rpx(TAB))
@@ -945,25 +952,50 @@ pub(super) fn tabs(app: &DiscordApp, selected: Tab) -> impl IntoElement {
             .rounded(rpx(8.))
             .text_size(rpx(15.))
             .font_weight(FontWeight::SEMIBOLD)
-            .text_color(rgb(if active { theme::strong() } else { theme::text() }))
+            .text_color(rgb(if active {
+                theme::strong()
+            } else {
+                theme::text()
+            }))
             .when(active, |this| this.bg(rgba(theme::selected())))
+            .focus_visible(|style| style.bg(rgba(theme::selected())))
             .when(!active, |this| {
                 this.cursor_pointer()
-                    .hover(|style| style.bg(rgba(theme::hover())).text_color(rgb(theme::strong())))
+                    .hover(|style| {
+                        style
+                            .bg(rgba(theme::hover()))
+                            .text_color(rgb(theme::strong()))
+                    })
                     .on_click(move |_, window, cx| {
                         entity
-                            .update(cx, |app, cx| app.switch_picker_tab(tab, window, cx))
+                            .update(cx, |app, cx| {
+                                app.switch_picker_tab(selected, tab, window, cx)
+                            })
                             .ok();
                     })
+            })
+            .on_key_down(move |event, window, cx| {
+                if !matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    return;
+                }
+                keyboard
+                    .update(cx, |app, cx| {
+                        app.switch_picker_tab(selected, tab, window, cx)
+                    })
+                    .ok();
+                cx.stop_propagation();
             })
             .child(label)
     };
     div()
+        .id("expression-picker-tabs")
+        .role(Role::TabList)
         .flex()
         .flex_none()
         .items_center()
         .gap(rpx(8.))
         .child(tab("Media", Tab::Media))
+        .child(tab("Stickers", Tab::Stickers))
         .child(tab("Emoji", Tab::Emoji))
 }
 
@@ -977,21 +1009,29 @@ pub(super) fn panel_height(position: Point<Pixels>, window: &Window) -> Pixels {
 }
 
 impl DiscordApp {
-    fn switch_picker_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
+    fn switch_picker_tab(
+        &mut self,
+        selected: Tab,
+        tab: Tab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if selected == tab {
+            return;
+        }
+        let position = match selected {
+            Tab::Media => self.gifs.picker.take().map(|picker| picker.position),
+            Tab::Stickers => self.take_sticker_picker(),
+            Tab::Emoji => self.take_emoji_picker(),
+        };
+        let Some(position) = position else {
+            return;
+        };
+        self.gifs.closing = None;
         match tab {
-            Tab::Media => {
-                let Some(position) = self.take_emoji_picker() else {
-                    return;
-                };
-                self.open_gif_picker(position, true, window, cx);
-            }
-            Tab::Emoji => {
-                let Some(position) = self.gifs.picker.take().map(|picker| picker.position) else {
-                    return;
-                };
-                self.gifs.closing = None;
-                self.open_emoji_tab(position, window, cx);
-            }
+            Tab::Media => self.open_gif_picker(position, true, window, cx),
+            Tab::Stickers => self.open_sticker_tab(position, window, cx),
+            Tab::Emoji => self.open_emoji_tab(position, window, cx),
         }
     }
 }
@@ -1040,7 +1080,11 @@ fn provider_menu(app: &DiscordApp, selected: GifProvider) -> impl IntoElement {
                 .hover(|style| style.bg(rgba(theme::selected())))
                 .when(active, |this| this.bg(rgba(theme::selected())))
                 .text_size(rpx(16.))
-                .text_color(rgb(if active { theme::strong() } else { theme::muted() }))
+                .text_color(rgb(if active {
+                    theme::strong()
+                } else {
+                    theme::muted()
+                }))
                 .on_click(move |_, window, cx| {
                     entity
                         .update(cx, |app, cx| app.select_gif_provider(provider, window, cx))

@@ -1,14 +1,22 @@
 use super::attachments::{StagedFile, remove_pasted};
 use super::*;
 use crate::discord::UploadFile;
-use crate::store::PendingUpload;
+use crate::store::{PendingUpload, Sticker};
 
 #[cfg(test)]
 mod tests;
 
+type PendingEntry = (
+    u64,
+    String,
+    Option<ReplyTarget>,
+    Vec<StagedFile>,
+    Option<Sticker>,
+);
+
 #[derive(Default)]
 pub(super) struct PendingSends {
-    entries: Vec<(u64, String, Option<ReplyTarget>, Vec<StagedFile>)>,
+    entries: Vec<PendingEntry>,
 }
 
 impl PendingSends {
@@ -27,13 +35,15 @@ impl PendingSends {
         reply: Option<ReplyTarget>,
         files: Vec<StagedFile>,
     ) {
-        self.entries.push((channel_id, content, reply, files));
+        self.entries.push((channel_id, content, reply, files, None));
     }
 
-    fn take_channel(
-        &mut self,
-        channel_id: u64,
-    ) -> Vec<(u64, String, Option<ReplyTarget>, Vec<StagedFile>)> {
+    fn push_sticker(&mut self, channel_id: u64, reply: Option<ReplyTarget>, sticker: Sticker) {
+        self.entries
+            .push((channel_id, String::new(), reply, Vec::new(), Some(sticker)));
+    }
+
+    fn take_channel(&mut self, channel_id: u64) -> Vec<PendingEntry> {
         let (ready, waiting) = std::mem::take(&mut self.entries)
             .into_iter()
             .partition(|entry| entry.0 == channel_id);
@@ -187,8 +197,12 @@ impl DiscordApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        for (channel, content, reply, files) in self.pending_sends.take_channel(channel_id) {
-            self.dispatch_send(channel, content, reply, files, window, cx);
+        for (channel, content, reply, files, sticker) in self.pending_sends.take_channel(channel_id)
+        {
+            match sticker {
+                Some(sticker) => self.submit_sticker(channel, sticker, reply, window, cx),
+                None => self.dispatch_send(channel, content, reply, files, window, cx),
+            }
         }
     }
 
@@ -245,6 +259,45 @@ impl DiscordApp {
         }
         self.messages.set_follow_mode(FollowMode::Tail);
         self.submit_send(channel_id, content, reply, files, window, cx);
+    }
+
+    pub(crate) fn send_sticker(
+        &mut self,
+        channel_id: u64,
+        sticker_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.store.can_send(channel_id) {
+            return;
+        }
+        let Some(sticker) = self.store.sticker(sticker_id) else {
+            return;
+        };
+        let reply = self.reply.take();
+        self.typing_sent = None;
+        self.unread_since = None;
+        self.unread_bar = false;
+        self.manual_unread = None;
+        self.messages.set_follow_mode(FollowMode::Tail);
+        if !self.live {
+            let guild_id = self
+                .store
+                .guilds
+                .iter()
+                .find(|guild| guild.channel(channel_id).is_some())
+                .map(|guild| guild.id);
+            if let Some(index) = guild_id
+                .and_then(|guild_id| self.store.append_sticker(guild_id, channel_id, sticker))
+            {
+                let previous = index.saturating_sub(1);
+                self.messages.splice(previous..index, index - previous + 1);
+                self.messages.scroll_to_end();
+            }
+            cx.notify();
+            return;
+        }
+        self.submit_sticker(channel_id, sticker, reply, window, cx);
     }
 
     pub(super) fn submit_send(
@@ -315,6 +368,7 @@ impl DiscordApp {
                 mention: reply.mention,
             }),
             attachments: Vec::new(),
+            sticker_ids: Vec::new(),
         };
         let request = if files.is_empty() {
             Tokio::spawn(cx, session.send_message(guild_id, channel_id, outgoing))
@@ -376,6 +430,101 @@ impl DiscordApp {
         .detach();
     }
 
+    fn submit_sticker(
+        &mut self,
+        channel_id: u64,
+        sticker: Sticker,
+        reply: Option<ReplyTarget>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.pending_sends.should_stage(
+            channel_id,
+            self.store.at_present(channel_id),
+            self.loading.contains(&channel_id),
+        ) {
+            self.pending_sends.push_sticker(channel_id, reply, sticker);
+            self.pending_present.insert(channel_id);
+            smooth_scroll::cancel(cx);
+            self.fetch_history(channel_id, None, window, cx);
+        } else {
+            self.dispatch_sticker(channel_id, sticker, reply, window, cx);
+        }
+    }
+
+    fn dispatch_sticker(
+        &mut self,
+        channel_id: u64,
+        sticker: Sticker,
+        reply: Option<ReplyTarget>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let guild_id = self
+            .store
+            .guilds
+            .iter()
+            .find(|guild| guild.channel(channel_id).is_some())
+            .map(|guild| guild.id);
+        self.last_nonce = now_snowflake().max(self.last_nonce + 1);
+        let nonce = self.last_nonce;
+        let sticker_id = sticker.id;
+        let change = self.store.queue_sticker(
+            channel_id,
+            nonce,
+            reply.as_ref().map(|reply| reply.message_id),
+            sticker,
+        );
+        self.apply_change(change, window, cx);
+        let outgoing = OutgoingMessage {
+            content: String::new(),
+            nonce,
+            reply: reply.as_ref().map(|reply| OutgoingReply {
+                message_id: reply.message_id,
+                mention: reply.mention,
+            }),
+            attachments: Vec::new(),
+            sticker_ids: vec![sticker_id],
+        };
+        let request = Tokio::spawn(cx, session.send_message(guild_id, channel_id, outgoing));
+        cx.spawn_in(window, async move |this, cx| {
+            let result = request.await;
+            this.update_in(cx, |app, window, cx| {
+                let error = match result {
+                    Ok(Ok(message)) => {
+                        let change = app.store.apply(Event::MessageCreate(Box::new(message)));
+                        app.apply_change(change, window, cx);
+                        return;
+                    }
+                    Ok(Err(error)) => error,
+                    Err(_) => discord::Error::Closed,
+                };
+                if matches!(error, discord::Error::Cancelled) {
+                    let change = app.store.discard_message(channel_id, nonce);
+                    app.apply_change(change, window, cx);
+                    cx.notify();
+                    return;
+                }
+                log::warn!("Could not send sticker: {error}");
+                app.failed_sends.insert(
+                    nonce,
+                    FailedSend {
+                        reply,
+                        files: Vec::new(),
+                        error: send_error_text(&error),
+                    },
+                );
+                let change = app.store.fail_message(channel_id, nonce);
+                app.apply_change(change, window, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn start_upload_ticker(&mut self, cx: &mut Context<Self>) {
         if self.upload_ticking {
             return;
@@ -412,10 +561,10 @@ impl DiscordApp {
         cx: &mut Context<Self>,
     ) {
         let channel_id = self.selected_channel_id;
-        let Some(content) = self
+        let Some((content, sticker)) = self
             .channel()
             .and_then(|channel| channel.messages.iter().find(|message| message.id == nonce))
-            .map(|message| message.content.clone())
+            .map(|message| (message.content.clone(), message.stickers.first().cloned()))
         else {
             return;
         };
@@ -425,7 +574,11 @@ impl DiscordApp {
         let change = self.store.discard_message(channel_id, nonce);
         self.apply_change(change, window, cx);
         self.messages.set_follow_mode(FollowMode::Tail);
-        self.submit_send(channel_id, content, reply, files, window, cx);
+        if let Some(sticker) = sticker {
+            self.submit_sticker(channel_id, sticker, reply, window, cx);
+        } else {
+            self.submit_send(channel_id, content, reply, files, window, cx);
+        }
     }
 
     pub(crate) fn discard_message(

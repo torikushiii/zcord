@@ -171,6 +171,13 @@ impl DiscordApp {
             .is_some_and(|pane| pane.composer.read(cx).focus_handle(cx).is_focused(window))
     }
 
+    pub(in crate::app) fn focus_thread_pane_composer(&self, window: &mut Window, cx: &mut App) {
+        if let Some(pane) = &self.thread_pane {
+            let focus = pane.composer.read(cx).focus_handle(cx);
+            focus.focus(window, cx);
+        }
+    }
+
     fn schedule_pane_ack(&mut self, cx: &mut Context<Self>) {
         if !self.thread_pane_open() {
             return;
@@ -881,8 +888,10 @@ fn composer_box(app: &DiscordApp, pane: &ThreadPane, cx: &App) -> impl IntoEleme
     let picker_anchor = Rc::new(Cell::new(None));
     let attach = app.entity.clone();
     let gif = app.entity.clone();
+    let sticker = app.entity.clone();
     let emoji = app.entity.clone();
     let gif_anchor = picker_anchor.clone();
+    let sticker_anchor = picker_anchor.clone();
     let emoji_anchor = picker_anchor.clone();
     div()
         .flex_none()
@@ -963,6 +972,26 @@ fn composer_box(app: &DiscordApp, pane: &ThreadPane, cx: &App) -> impl IntoEleme
                                         app.toggle_gif_picker_for(true, position, window, cx)
                                     })
                                     .ok();
+                                }),
+                        )
+                        .child(
+                            theme::icon_button("pane-stickers", "sticker", 24., theme::muted())
+                                .relative()
+                                .child(theme::hover_tooltip("pane-stickers-tip", "Stickers"))
+                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                    let Some(position) = sticker_anchor.get() else {
+                                        return;
+                                    };
+                                    sticker
+                                        .update(cx, |app, cx| {
+                                            app.toggle_sticker_picker(
+                                                PickerTarget::Pane,
+                                                position,
+                                                window,
+                                                cx,
+                                            )
+                                        })
+                                        .ok();
                                 }),
                         )
                         .child(
