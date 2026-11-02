@@ -5,9 +5,9 @@ the whole UI is drawn on the GPU with [zui](https://github.com/zeronsh/zui), zer
 Zed's GPUI, and [gpui-component](https://github.com/zeronsh/gpui-component). It also builds on
 Linux and macOS, but Windows is the platform it is made and tested for.
 
-The goal of this project is to recreate Discord's UI as closely as possible: layouts, sizes,
-colors and interactions are matched against the official desktop client, while zcord starts
-faster and uses far less memory. Text chat is the focus; voice is newer and still rough.
+zcord is just a fun project that I created to see how far I can recreate Discord's UI
+as closely as possible.
+Text chat is the focus; voice is newer and still rough.
 
 > [!IMPORTANT]
 > Third-party clients are against Discord's Terms of Service, and accounts can be disabled for
