@@ -2,6 +2,7 @@ use super::serde_helpers::*;
 use super::*;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
+use std::collections::HashMap;
 
 #[derive(Clone, Deserialize)]
 pub struct ReadState {
@@ -34,6 +35,8 @@ pub struct Ready {
     pub session_id: String,
     pub resume_gateway_url: Option<String>,
     pub user_settings_proto: Option<String>,
+    pub user_guild_settings: Vec<UserGuildSettings>,
+    pub guild_notification_defaults: HashMap<u64, NotificationLevel>,
     pub sessions: Vec<Session>,
     pub relationships: Vec<Relationship>,
     pub friend_suggestion_count: u32,
@@ -60,6 +63,8 @@ impl<'de> Deserialize<'de> for Ready {
             resume_gateway_url: Option<String>,
             #[serde(default)]
             user_settings_proto: Option<String>,
+            #[serde(default, deserialize_with = "user_guild_settings")]
+            user_guild_settings: Vec<UserGuildSettings>,
             #[serde(default, deserialize_with = "entries")]
             sessions: Vec<Session>,
             #[serde(default, deserialize_with = "entries")]
@@ -75,7 +80,7 @@ impl<'de> Deserialize<'de> for Ready {
             .iter()
             .map(|guild| guild.get("id").and_then(id_value))
             .collect();
-        let guilds = wire
+        let guilds: Vec<Guild> = wire
             .guilds
             .into_iter()
             .enumerate()
@@ -95,6 +100,17 @@ impl<'de> Deserialize<'de> for Ready {
                 },
             )
             .collect();
+        let guild_notification_defaults = guilds
+            .iter()
+            .map(|guild| {
+                let level = guild.notification_default();
+                (guild.id, level.unwrap_or(NotificationLevel::All))
+            })
+            .collect();
+        log::info!(
+            "READY: {} guild notification settings",
+            wire.user_guild_settings.len()
+        );
         Ok(Self {
             user: wire.user,
             users: wire.users,
@@ -105,6 +121,8 @@ impl<'de> Deserialize<'de> for Ready {
             session_id: wire.session_id,
             resume_gateway_url: wire.resume_gateway_url,
             user_settings_proto: wire.user_settings_proto,
+            user_guild_settings: wire.user_guild_settings,
+            guild_notification_defaults,
             sessions: wire.sessions,
             relationships: wire.relationships,
             friend_suggestion_count: wire.friend_suggestion_count,

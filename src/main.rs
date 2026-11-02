@@ -7,6 +7,7 @@ mod discord;
 mod fonts;
 mod games;
 mod media;
+mod notify;
 mod quick_switcher;
 mod settings;
 mod startup;
@@ -33,6 +34,7 @@ fn main() {
         .filter_module("rustls", log::LevelFilter::Off)
         .filter_module("keyring", log::LevelFilter::Off)
         .init();
+    notify::init();
     gpui_platform::application()
         .with_assets(assets::AppAssets)
         .run(|cx| {
@@ -50,6 +52,8 @@ fn main() {
             settings::set_smooth_scroll(cx, !saved.smooth_scroll_off);
             settings::set_emoji_animation(cx, !saved.emoji_animation_off);
             settings::set_link_previews(cx, !saved.link_previews_off);
+            settings::set_notifications(cx, !saved.notifications_off);
+            settings::set_notification_sound(cx, !saved.notification_sound_off);
             settings::set_game_activity(cx, saved.share_game_activity);
             settings::set_chat_font_size(cx, saved.chat_font_size.unwrap_or(16.0));
             theme::set_zoom(saved.zoom.unwrap_or(theme::DEFAULT_ZOOM), cx);

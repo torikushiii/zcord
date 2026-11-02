@@ -18,6 +18,8 @@ static GIF_AUTOPLAY: AtomicBool = AtomicBool::new(true);
 static SMOOTH_SCROLL: AtomicBool = AtomicBool::new(true);
 static EMOJI_ANIMATION: AtomicBool = AtomicBool::new(true);
 static LINK_PREVIEWS: AtomicBool = AtomicBool::new(true);
+static NOTIFICATIONS: AtomicBool = AtomicBool::new(true);
+static NOTIFICATION_SOUND: AtomicBool = AtomicBool::new(true);
 static GAME_ACTIVITY: AtomicBool = AtomicBool::new(false);
 static CHAT_FONT_SIZE: AtomicU32 = AtomicU32::new(16.0f32.to_bits());
 
@@ -65,6 +67,10 @@ pub struct Settings {
     pub emoji_animation_off: bool,
     #[serde(default)]
     pub link_previews_off: bool,
+    #[serde(default)]
+    pub notifications_off: bool,
+    #[serde(default)]
+    pub notification_sound_off: bool,
     #[serde(default)]
     pub chat_font_size: Option<f32>,
     #[serde(default)]
@@ -191,6 +197,26 @@ pub fn set_link_previews(cx: &mut App, on: bool) {
 
 pub fn link_previews() -> bool {
     LINK_PREVIEWS.load(Ordering::Relaxed)
+}
+
+pub fn set_notifications(cx: &mut App, on: bool) {
+    NOTIFICATIONS.store(on, Ordering::Relaxed);
+    update(cx, |settings| settings.notifications_off = !on);
+    cx.refresh_windows();
+}
+
+pub fn notifications() -> bool {
+    NOTIFICATIONS.load(Ordering::Relaxed)
+}
+
+pub fn set_notification_sound(cx: &mut App, on: bool) {
+    NOTIFICATION_SOUND.store(on, Ordering::Relaxed);
+    update(cx, |settings| settings.notification_sound_off = !on);
+    cx.refresh_windows();
+}
+
+pub fn notification_sound() -> bool {
+    NOTIFICATION_SOUND.load(Ordering::Relaxed)
 }
 
 pub fn set_game_activity(cx: &mut App, on: bool) {
@@ -406,6 +432,16 @@ mod tests {
         LINK_PREVIEWS.store(true, Ordering::Relaxed);
         assert!(link_previews());
 
+        NOTIFICATIONS.store(false, Ordering::Relaxed);
+        assert!(!notifications());
+        NOTIFICATIONS.store(true, Ordering::Relaxed);
+        assert!(notifications());
+
+        NOTIFICATION_SOUND.store(false, Ordering::Relaxed);
+        assert!(!notification_sound());
+        NOTIFICATION_SOUND.store(true, Ordering::Relaxed);
+        assert!(notification_sound());
+
         GAME_ACTIVITY.store(true, Ordering::Relaxed);
         assert!(game_activity());
         GAME_ACTIVITY.store(false, Ordering::Relaxed);
@@ -444,6 +480,8 @@ mod tests {
         assert!(!settings.smooth_scroll_off);
         assert!(!settings.emoji_animation_off);
         assert!(!settings.link_previews_off);
+        assert!(!settings.notifications_off);
+        assert!(!settings.notification_sound_off);
         assert!(settings.chat_font_size.is_none());
         assert!(settings.clock_24h);
         assert!(!settings.share_game_activity);

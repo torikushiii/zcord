@@ -14,6 +14,7 @@ mod settings;
 mod sticker;
 mod thread;
 mod user;
+mod user_guild_settings;
 mod voice;
 
 pub use channel::*;
@@ -32,6 +33,7 @@ pub use settings::*;
 pub use sticker::*;
 pub use thread::*;
 pub use user::*;
+pub use user_guild_settings::*;
 pub use voice::*;
 
 #[cfg(test)]

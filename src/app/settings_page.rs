@@ -37,6 +37,7 @@ pub(crate) enum Page {
     Appearance,
     Accessibility,
     Chat,
+    Notifications,
     LanguageTime,
     Advanced,
 }
@@ -126,6 +127,14 @@ const PAGES: &[PageInfo] = &[
             "link preview",
             "embed",
         ],
+    },
+    PageInfo {
+        page: Page::Notifications,
+        group: "Experience",
+        label: "Notifications",
+        icon: "bell",
+        sections: &[],
+        keywords: &["toast", "desktop", "alert", "sound", "mention"],
     },
     PageInfo {
         page: Page::LanguageTime,

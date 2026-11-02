@@ -16,6 +16,7 @@ pub(super) fn page(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> Vec<A
         Page::Appearance => vec![appearance(app, cx), chat_text()],
         Page::Accessibility => vec![accessibility(app, settings, cx)],
         Page::Chat => vec![chat_media(app, settings), chat(app, cx)],
+        Page::Notifications => vec![notifications(app, settings)],
         Page::LanguageTime => vec![language_time(app, settings, cx)],
         Page::Advanced => vec![advanced(app, settings)],
     }
@@ -252,6 +253,33 @@ fn toggle_row(
         })
         .child(switch(id, on, moved(settings, id)));
     row(label, Some(description), toggle.into_any_element())
+}
+
+fn notifications(app: &DiscordApp, settings: &SettingsPage) -> AnyElement {
+    section(
+        "Notifications",
+        vec![
+            toggle_row(
+                app,
+                settings,
+                "settings-notifications",
+                "Enable desktop notifications",
+                "Shows a Windows notification for new messages while zcord isn't focused.",
+                crate::settings::notifications(),
+                crate::settings::set_notifications,
+            ),
+            toggle_row(
+                app,
+                settings,
+                "settings-notification-sound",
+                "Play notification sound",
+                "Plays a sound for new messages outside the channel you have open.",
+                crate::settings::notification_sound(),
+                crate::settings::set_notification_sound,
+            ),
+            note("Follows your Discord notification settings for each server and channel."),
+        ],
+    )
 }
 
 fn game_activity(app: &DiscordApp, settings: &SettingsPage) -> AnyElement {

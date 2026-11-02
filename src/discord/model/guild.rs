@@ -14,6 +14,8 @@ pub struct GuildProperties {
     pub banner: Option<Option<String>>,
     #[serde(default)]
     pub features: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "optional_level")]
+    pub default_message_notifications: Option<NotificationLevel>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -76,6 +78,11 @@ impl Guild {
             .features
             .as_deref()
             .or(self.legacy.features.as_deref())
+    }
+    pub fn notification_default(&self) -> Option<NotificationLevel> {
+        self.properties
+            .default_message_notifications
+            .or(self.legacy.default_message_notifications)
     }
     pub fn fill_voice_state_guilds(&mut self) {
         for state in &mut self.voice_states {

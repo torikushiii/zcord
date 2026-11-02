@@ -8,6 +8,7 @@ mod guilds;
 mod home;
 mod mapping;
 mod messages;
+mod notifications;
 mod pins;
 mod reactions;
 mod read_state;
@@ -30,6 +31,7 @@ use mapping::{
     map_message, map_name_style, map_nameplate, map_reactions, map_snapshot, map_stickers,
     map_user, read_state, timestamp_from_nonce,
 };
+pub use notifications::Alert;
 use seed::SEED_START;
 use std::{cell::RefCell, collections::HashMap};
 pub use view::*;
@@ -57,6 +59,8 @@ pub struct Store {
     private: Vec<PrivateChannel>,
     private_locations: HashMap<u64, PrivateLocation>,
     relationships: HashMap<u64, Relationship>,
+    notification_settings: HashMap<Option<u64>, model::UserGuildSettings>,
+    guild_notification_defaults: HashMap<u64, model::NotificationLevel>,
     request_previews: HashMap<u64, RequestPreview>,
     pub friend_suggestion_count: u32,
     guild_indices: HashMap<u64, usize>,
@@ -263,6 +267,13 @@ impl Store {
             mfa_enabled: ready.user.mfa_enabled,
         };
         let friend_suggestion_count = ready.friend_suggestion_count;
+        let notification_settings = ready
+            .user_guild_settings
+            .iter()
+            .cloned()
+            .map(|settings| (settings.guild_id, settings))
+            .collect();
+        let guild_notification_defaults = ready.guild_notification_defaults.clone();
         let mut store = Self {
             guilds,
             rail: Vec::new(),
@@ -285,6 +296,8 @@ impl Store {
             private: Vec::new(),
             private_locations: HashMap::new(),
             relationships: HashMap::new(),
+            notification_settings,
+            guild_notification_defaults,
             request_previews: HashMap::new(),
             friend_suggestion_count,
             guild_indices: HashMap::new(),
@@ -342,6 +355,11 @@ impl Store {
                 Change::Structure
             }
             Event::SettingsUpdate(update) => self.settings_update(update),
+            Event::UserGuildSettingsUpdate(settings) => {
+                self.notification_settings
+                    .insert(settings.guild_id, *settings);
+                Change::None
+            }
             Event::MessageCreate(message) => self.message_create(message),
             Event::MessageUpdate(update) => self.message_update(update),
             Event::MessageReactionAdd(event) => self.reaction_add(event),
@@ -365,6 +383,9 @@ impl Store {
             }
             Event::TypingStart(typing) => self.typing_start(typing),
             Event::GuildUpsert(update) => {
+                if let Some(level) = update.notification_default() {
+                    self.guild_notification_defaults.insert(update.id, level);
+                }
                 if let Some(source) = &mut self.source
                     && (update.unavailable == Some(false) || !update.voice_states.is_empty())
                     && let Some(guild) = source.guilds.iter_mut().find(|g| g.id == update.id)

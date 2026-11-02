@@ -270,6 +270,8 @@ impl Store {
             private: Vec::new(),
             private_locations: HashMap::new(),
             relationships: HashMap::new(),
+            notification_settings: HashMap::new(),
+            guild_notification_defaults: HashMap::new(),
             request_previews: HashMap::new(),
             friend_suggestion_count: 0,
             guild_indices: HashMap::new(),
