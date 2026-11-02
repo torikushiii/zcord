@@ -1,6 +1,9 @@
 use super::*;
 
 const RELATIONSHIPS_URL: &str = "https://discord.com/api/v9/users/@me/relationships";
+const INSTALLATION_URL: &str = "https://discord.com/api/v9/apex/experiments?surface=2";
+// `{"location":"user profile modal v2"}`; matches the official profile modal.
+const PROFILE_CONTEXT: &str = "eyJsb2NhdGlvbiI6InVzZXIgcHJvZmlsZSBtb2RhbCB2MiJ9";
 
 #[derive(Serialize)]
 struct OpenDm {
@@ -27,8 +30,13 @@ fn friend_request(client: &Client, username: &str) -> RequestBuilder {
     })
 }
 
-fn relationship_put(client: &Client, user_id: u64) -> RequestBuilder {
-    client.put(relationship_url(user_id)).json(&EmptyBody {})
+fn relationship_put(client: &Client, user_id: u64, referer: &str) -> RequestBuilder {
+    client
+        .put(relationship_url(user_id))
+        .header("origin", "https://discord.com")
+        .header(REFERER, referer)
+        .header("x-context-properties", PROFILE_CONTEXT)
+        .json(&EmptyBody {})
 }
 
 fn relationship_delete(client: &Client, user_id: u64) -> RequestBuilder {
@@ -46,8 +54,24 @@ impl Rest {
         Ok(())
     }
 
-    pub async fn put_relationship(&self, user_id: u64) -> Result<(), Error> {
-        self.send(|| relationship_put(&self.client, user_id))
+    pub async fn put_relationship(
+        &self,
+        user_id: u64,
+        guild_id: Option<u64>,
+        channel_id: Option<u64>,
+    ) -> Result<(), Error> {
+        let referer = channel_id.map_or_else(
+            || "https://discord.com/channels/@me".to_owned(),
+            |channel_id| referer(guild_id, channel_id),
+        );
+        if self
+            .fetch_installation(INSTALLATION_URL, &referer)
+            .await
+            .is_err()
+        {
+            log::warn!("Could not fetch Discord installation metadata");
+        }
+        self.send(|| relationship_put(&self.client, user_id, &referer))
             .await?;
         Ok(())
     }
@@ -147,7 +171,8 @@ mod tests {
             Some(br#"{"username":"a.b_c1","discriminator":null}"#.as_slice())
         );
 
-        let request = relationship_put(&client, 42).build().unwrap();
+        let referer = super::referer(Some(7), 8);
+        let request = relationship_put(&client, 42, &referer).build().unwrap();
         assert_eq!(request.method(), reqwest::Method::PUT);
         assert_eq!(
             request.url().as_str(),
@@ -156,6 +181,30 @@ mod tests {
         assert_eq!(
             request.body().and_then(reqwest::Body::as_bytes),
             Some(b"{}".as_slice())
+        );
+        assert_eq!(
+            request.headers()["x-context-properties"],
+            "eyJsb2NhdGlvbiI6InVzZXIgcHJvZmlsZSBtb2RhbCB2MiJ9"
+        );
+        assert_eq!(request.headers()["origin"], "https://discord.com");
+        assert_eq!(
+            request.headers()[REFERER],
+            "https://discord.com/channels/7/8"
+        );
+        assert_eq!(request.headers()["content-type"], "application/json");
+        let request = relationship_put(&client, 42, &super::referer(None, 8))
+            .build()
+            .unwrap();
+        assert_eq!(
+            request.headers()[REFERER],
+            "https://discord.com/channels/@me/8"
+        );
+        let request = relationship_put(&client, 42, "https://discord.com/channels/@me")
+            .build()
+            .unwrap();
+        assert_eq!(
+            request.headers()[REFERER],
+            "https://discord.com/channels/@me"
         );
 
         let request = relationship_delete(&client, 42).build().unwrap();

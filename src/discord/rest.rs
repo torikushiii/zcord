@@ -10,6 +10,7 @@ use reqwest::{
 use serde::Serialize;
 use serde_json::Value;
 use std::{collections::HashMap, time::Duration};
+use tokio::sync::OnceCell;
 mod expressions;
 mod gifs;
 mod messages;
@@ -27,6 +28,7 @@ pub(super) struct Rest {
     client: Client,
     pub(super) upload_client: Client,
     limits: Limiter,
+    installation_id: OnceCell<HeaderValue>,
 }
 
 impl Rest {
@@ -47,12 +49,18 @@ impl Rest {
             client,
             upload_client: upload_client()?,
             limits: Limiter::default(),
+            installation_id: OnceCell::new(),
         })
     }
 
     async fn send(&self, request: impl Fn() -> RequestBuilder) -> Result<Response, Error> {
         for attempt in 0..3 {
-            let request = request().build().map_err(|_| Error::Network)?;
+            let mut request = request().build().map_err(|_| Error::Network)?;
+            if let Some(installation) = self.installation_id.get() {
+                request
+                    .headers_mut()
+                    .insert("x-installation-id", installation.clone());
+            }
             let permit = self.limits.acquire(Route::of(&request)).await?;
             match self.execute(request, permit).await {
                 Err(Error::RateLimited { .. }) if attempt < 2 => continue,
@@ -60,6 +68,25 @@ impl Rest {
             }
         }
         unreachable!()
+    }
+
+    async fn fetch_installation(&self, url: &str, referer: &str) -> Result<&HeaderValue, Error> {
+        self.installation_id
+            .get_or_try_init(|| async {
+                let response = self
+                    .send(|| self.client.get(url).header(REFERER, referer))
+                    .await?;
+                let value = response.json::<Value>().await.map_err(|_| Error::Decode)?;
+                let installation = value
+                    .get("installation")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .ok_or(Error::Decode)?;
+                let mut header = HeaderValue::from_str(installation).map_err(|_| Error::Decode)?;
+                header.set_sensitive(true);
+                Ok(header)
+            })
+            .await
     }
 
     async fn execute(&self, request: Request, permit: Permit<'_>) -> Result<Response, Error> {
@@ -241,6 +268,7 @@ mod tests {
                 .unwrap(),
             upload_client: upload_client().unwrap(),
             limits: Limiter::default(),
+            installation_id: OnceCell::new(),
         }
     }
 
@@ -636,6 +664,87 @@ mod tests {
                 .unwrap(),
             "13726"
         );
+    }
+
+    #[tokio::test]
+    async fn relationship_installation_is_cached_and_sent_on_subsequent_requests() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/apex/experiments?surface=2",
+            listener.local_addr().unwrap()
+        );
+        let rest = local_rest();
+        let referer = "https://discord.com/channels/7/8";
+        let server = async {
+            let (stream, headers) = accept_upload(&listener).await;
+            assert!(headers.starts_with("GET /apex/experiments?surface=2 HTTP/1.1\r\n"));
+            assert!(headers.contains("referer: https://discord.com/channels/7/8\r\n"));
+            assert!(!headers.contains("x-installation-id:"));
+            respond(
+                stream,
+                "200 OK",
+                "",
+                r#"{"installation":"fixture-installation"}"#,
+            )
+            .await;
+
+            let (stream, headers) = accept_upload(&listener).await;
+            assert!(headers.contains("x-installation-id: fixture-installation\r\n"));
+            respond(stream, "204 No Content", "", "").await;
+        };
+        let requests = async {
+            let installation = rest.fetch_installation(&url, referer).await.unwrap();
+            assert!(installation.is_sensitive());
+            assert_eq!(installation, "fixture-installation");
+            let cached = rest.fetch_installation(&url, referer).await.unwrap();
+            assert_eq!(installation, cached);
+            rest.send(|| rest.client.get(&url)).await.unwrap();
+        };
+        timeout(Duration::from_secs(5), async {
+            tokio::join!(server, requests);
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn relationship_installation_rejects_invalid_metadata_and_can_retry() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/apex/experiments?surface=2",
+            listener.local_addr().unwrap()
+        );
+        let rest = local_rest();
+        let referer = "https://discord.com/channels/@me";
+        let server = async {
+            for body in [
+                r#"{}"#,
+                r#"{"installation":""}"#,
+                r#"{"installation":"invalid\nheader"}"#,
+                r#"{"installation":"fixture-installation"}"#,
+            ] {
+                let stream = accept_request(&listener).await;
+                respond(stream, "200 OK", "", body).await;
+            }
+        };
+        let requests = async {
+            for _ in 0..3 {
+                assert!(matches!(
+                    rest.fetch_installation(&url, referer).await,
+                    Err(Error::Decode)
+                ));
+                assert!(rest.installation_id.get().is_none());
+            }
+            assert_eq!(
+                rest.fetch_installation(&url, referer).await.unwrap(),
+                "fixture-installation"
+            );
+        };
+        timeout(Duration::from_secs(5), async {
+            tokio::join!(server, requests);
+        })
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
