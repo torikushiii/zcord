@@ -1,21 +1,35 @@
 use super::composer::{emoji_token_overlay, flush_textarea};
+use super::popouts::PopoutKind;
 use super::rows::render_pane_row;
 use super::*;
 use crate::app::OLDER_MESSAGES_THRESHOLD;
-use crate::store::{Change, Channel};
+use crate::discord::model;
+use crate::store::{Change, Channel, EmojiChoice};
 use gpui_component::input::InputEvent;
 use gpui_tokio::Tokio;
+use std::time::Instant;
 
 pub(crate) const WIDTH: f32 = 420.;
 const LIST_OVERDRAW: f32 = 800.;
 const PREVIEW_PAGE: usize = 1;
 const ACK_DELAY: Duration = Duration::from_secs(1);
+const MENU_WIDTH: f32 = 220.;
+const MENU_REOPEN_GUARD: Duration = Duration::from_millis(200);
 
 pub(in crate::app) struct ThreadPane {
     id: u64,
     list: ListState,
     composer: Entity<TextareaState>,
     ack: Option<Task<()>>,
+    /// A forum post opened for the first time reads from its starter message, so the list
+    /// keeps returning to the top while older pages load, until the history is complete.
+    seek_top: bool,
+    /// Read position when the pane opened, so the NEW divider stays put after the ack.
+    unread_since: Option<u64>,
+    menu: bool,
+    menu_closed: Option<Instant>,
+    /// The menu shows the notification levels under "Notification Settings".
+    notify_open: bool,
     _submit: Subscription,
 }
 
@@ -66,13 +80,18 @@ impl DiscordApp {
         }) else {
             return;
         };
+        let placeholder = if self.store.forum_post(thread_id).is_some() {
+            format!("Send a message in \"{name}\"")
+        } else {
+            format!("Message {name}")
+        };
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(1, 8)
                 .submit_on_enter(true)
         });
         composer.update(cx, |input, cx| {
-            input.set_placeholder(format!("Message {name}"), window, cx);
+            input.set_placeholder(placeholder, window, cx);
             input.focus(window, cx);
         });
         let submit = cx.subscribe_in(
@@ -100,16 +119,27 @@ impl DiscordApp {
                 });
             }
         });
+        let post = self.store.forum_post(thread_id).is_some();
+        let last_read = self.store.last_read(thread_id);
+        let seek_top = post && last_read.is_none();
+        // A post never opened is new from its starter message on.
+        let unread_since = last_read.or(post.then_some(0));
         self.thread_pane = Some(ThreadPane {
             id: thread_id,
             list,
             composer,
             ack: None,
+            seek_top,
+            unread_since,
+            menu: false,
+            menu_closed: None,
+            notify_open: false,
             _submit: submit,
         });
         if self.live && (!loaded || !self.store.at_present(thread_id)) {
             self.fetch_history(thread_id, None, window, cx);
         } else {
+            self.seek_pane_top(thread_id, cx);
             self.schedule_pane_ack(cx);
         }
         cx.notify();
@@ -118,6 +148,13 @@ impl DiscordApp {
     pub(crate) fn close_thread_pane(&mut self, cx: &mut Context<Self>) {
         self.thread_pane = None;
         cx.notify();
+    }
+
+    pub(crate) fn thread_pane_unread_since(&self, channel_id: u64) -> Option<u64> {
+        self.thread_pane
+            .as_ref()
+            .filter(|pane| pane.id == channel_id)
+            .and_then(|pane| pane.unread_since)
     }
 
     pub(crate) fn thread_pane_shows(&self, channel_id: u64) -> bool {
@@ -219,10 +256,16 @@ impl DiscordApp {
         };
         pane.list.reset(count);
         pane.list.set_follow_mode(FollowMode::Tail);
+        self.seek_pane_top(channel_id, cx);
         self.schedule_pane_ack(cx);
     }
 
-    pub(crate) fn prepend_thread_pane(&self, channel_id: u64, inserted: usize) {
+    pub(crate) fn prepend_thread_pane(
+        &mut self,
+        channel_id: u64,
+        inserted: usize,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(pane) = self
             .thread_pane
             .as_ref()
@@ -230,6 +273,78 @@ impl DiscordApp {
         {
             pane.list.splice(0..0, inserted);
             pane.list.remeasure_items(inserted..inserted + 1);
+        }
+        self.seek_pane_top(channel_id, cx);
+    }
+
+    /// Scrolls to the first loaded message; at the top the scroll handler fetches older pages.
+    fn seek_pane_top(&mut self, channel_id: u64, cx: &mut Context<Self>) {
+        let complete = self.history_complete.contains(&channel_id);
+        let Some(pane) = self
+            .thread_pane
+            .as_mut()
+            .filter(|pane| pane.id == channel_id && pane.seek_top)
+        else {
+            return;
+        };
+        pane.list.set_follow_mode(FollowMode::Normal);
+        pane.list.scroll_to(ListOffset {
+            item_ix: 0,
+            offset_in_item: px(0.),
+        });
+        if complete {
+            pane.seek_top = false;
+        } else {
+            self.fetch_older_in(channel_id, cx);
+        }
+    }
+
+    fn toggle_pane_menu(&mut self, cx: &mut Context<Self>) {
+        if let Some(pane) = &mut self.thread_pane {
+            let guarded = pane
+                .menu_closed
+                .is_some_and(|at| at.elapsed() < MENU_REOPEN_GUARD);
+            pane.menu = !guarded && !pane.menu;
+            cx.notify();
+        }
+    }
+
+    fn toggle_pane_notify(&mut self, cx: &mut Context<Self>) {
+        if let Some(pane) = &mut self.thread_pane {
+            pane.notify_open = !pane.notify_open;
+            cx.notify();
+        }
+    }
+
+    /// Applies the change locally first; Discord echoes it back over the gateway.
+    fn update_thread_settings(
+        &mut self,
+        thread_id: u64,
+        settings: model::ThreadSettings,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(session) = self.session.clone().filter(|_| self.live) else {
+            return;
+        };
+        self.store.set_thread_settings(thread_id, settings);
+        let request = Tokio::spawn(cx, async move {
+            session.update_thread_settings(thread_id, settings).await
+        });
+        cx.spawn(async move |_, _| match request.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => log::warn!("Could not update thread settings: {error}"),
+            Err(error) => log::warn!("Thread settings task failed: {error}"),
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn close_pane_menu(&mut self, cx: &mut Context<Self>) {
+        if let Some(pane) = self.thread_pane.as_mut().filter(|pane| pane.menu) {
+            pane.menu = false;
+            pane.notify_open = false;
+            pane.menu_closed = Some(Instant::now());
+            cx.notify();
         }
     }
 
@@ -273,30 +388,62 @@ impl DiscordApp {
     }
 
     fn send_pane_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((channel_id, composer)) = self
-            .thread_pane
-            .as_ref()
-            .map(|pane| (pane.id, pane.composer.clone()))
-        else {
+        let Some(composer) = self.thread_pane.as_ref().map(|pane| pane.composer.clone()) else {
             return;
         };
         let content = composer_tokens::to_wire(&composer.read(cx).value());
-        let content = content.trim().to_owned();
-        if !self.live || content.is_empty() || !self.store.can_send(channel_id) {
-            return;
+        if self.send_pane_content(content.trim().to_owned(), window, cx) {
+            composer.update(cx, |input, cx| input.set_value("", window, cx));
+        }
+    }
+
+    /// Sends text plus the pane's staged files to its thread; false when nothing could be sent.
+    pub(crate) fn send_pane_content(
+        &mut self,
+        content: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(channel_id) = self.thread_pane.as_ref().map(|pane| pane.id) else {
+            return false;
+        };
+        let has_files = !self.staged_files_in(channel_id).is_empty();
+        if !self.live || (content.is_empty() && !has_files) || !self.store.can_send(channel_id) {
+            return false;
         }
         let (content, used_emoji) = self.encode_emoji_text(&content);
         if content.chars().count() > MESSAGE_LIMIT {
-            return;
+            return false;
         }
         for choice in &used_emoji {
             self.record_emoji_use(choice, cx);
         }
-        composer.update(cx, |input, cx| input.set_value("", window, cx));
         if let Some(pane) = &self.thread_pane {
             pane.list.set_follow_mode(FollowMode::Tail);
         }
-        self.submit_send(channel_id, content, None, Vec::new(), window, cx);
+        let files = self.staged.remove(&channel_id).unwrap_or_default();
+        self.submit_send(channel_id, content, None, files, window, cx);
+        true
+    }
+
+    pub(crate) fn insert_pane_emoji(
+        &mut self,
+        choice: &EmojiChoice,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(text) = self.emoji_insert_text(choice) else {
+            return;
+        };
+        let Some(composer) = self.thread_pane.as_ref().map(|pane| pane.composer.clone()) else {
+            return;
+        };
+        composer.update(cx, |input, cx| {
+            input.insert(format!("{text} "), window, cx);
+            input.focus(window, cx);
+        });
+        self.record_emoji_use(choice, cx);
+        cx.notify();
     }
 
     pub(crate) fn load_thread_preview(&mut self, thread_id: u64, cx: &mut Context<Self>) {
@@ -329,6 +476,287 @@ impl DiscordApp {
         })
         .detach();
     }
+}
+
+fn post_header(app: &DiscordApp, pane: &ThreadPane, name: &str) -> impl IntoElement + use<> {
+    let id = pane.id;
+    let toggle = app.entity.clone();
+    let close = app.entity.clone();
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap_2()
+        .h(rpx(HEADER_HEIGHT))
+        .pl_4()
+        .pr_2()
+        .border_b_1()
+        .border_color(rgba(theme::BORDER))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(rpx(16.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(theme::STRONG))
+                .child(label(("thread-pane-name", id), name)),
+        )
+        .child(
+            div()
+                .relative()
+                .flex_none()
+                .children(pane.menu.then(|| post_menu(app, id, pane.notify_open)))
+                .child(
+                    theme::icon_button("thread-pane-more", "ellipsis", 20., theme::MUTED)
+                        .relative()
+                        .child(theme::hover_tooltip("thread-pane-more-tip", "More"))
+                        .on_click(move |_, _, cx| {
+                            toggle.update(cx, |app, cx| app.toggle_pane_menu(cx)).ok();
+                        }),
+                ),
+        )
+        .child(
+            theme::icon_button("thread-pane-close", "x", 20., theme::MUTED)
+                .relative()
+                .child(theme::hover_tooltip("post-pane-close-tip", "Close"))
+                .on_click(move |_, _, cx| {
+                    close.update(cx, |app, cx| app.close_thread_pane(cx)).ok();
+                }),
+        )
+}
+
+type MenuAction = Box<dyn Fn(&mut DiscordApp, &mut Window, &mut Context<DiscordApp>)>;
+
+fn post_menu(app: &DiscordApp, id: u64, notify_open: bool) -> impl IntoElement + use<> {
+    let row = app.store.thread_row_by_id(id);
+    let joined = row.as_ref().is_some_and(|row| row.joined);
+    let muted = row.as_ref().is_some_and(|row| row.muted);
+    // An unset level behaves as "Only @mentions".
+    let level = row.as_ref().map_or(0, |row| row.notify);
+    let level = if level == 0 { 4 } else { level };
+    let link = format!(
+        "https://discord.com/channels/{}/{id}",
+        app.selected_guild_id
+    );
+    let item = |key: &'static str,
+                text: &'static str,
+                trailing: Option<&'static str>,
+                run: Option<MenuAction>| {
+        let entity = app.entity.clone();
+        let enabled = run.is_some();
+        let color = if enabled { theme::STRONG } else { theme::FAINT };
+        div()
+            .id(key)
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(rpx(8.))
+            .h(rpx(36.))
+            .px(rpx(8.))
+            .rounded(rpx(4.))
+            .text_color(rgb(color))
+            .when(enabled, |this| {
+                this.cursor_pointer()
+                    .hover(|style| style.bg(rgba(theme::HOVER)))
+            })
+            .when_some(run, |this, run| {
+                this.on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    entity
+                        .update(cx, |app, cx| {
+                            app.close_pane_menu(cx);
+                            run(app, window, cx);
+                        })
+                        .ok();
+                })
+            })
+            .child(text)
+            .children(trailing.map(|icon| theme::icon(icon, 20., color)))
+    };
+    let separator = || {
+        div()
+            .h(rpx(1.))
+            .my(rpx(8.))
+            .mx(rpx(8.))
+            .bg(rgba(theme::BORDER_SUBTLE))
+    };
+    let close = app.entity.clone();
+    div().absolute().top(rpx(32.)).right_0().size_0().child(
+        deferred(
+            anchored().anchor(Anchor::TopRight).child(
+                div()
+                    .id("thread-pane-menu")
+                    .flex()
+                    .flex_col()
+                    .w(rpx(MENU_WIDTH))
+                    .p(rpx(8.))
+                    .rounded(rpx(8.))
+                    .bg(rgb(theme::ELEVATED))
+                    .border_1()
+                    .border_color(rgba(theme::BORDER_SUBTLE))
+                    .shadow(vec![BoxShadow {
+                        color: hsla(0., 0., 0., 0.24),
+                        offset: point(px(0.), px(12.)),
+                        blur_radius: px(24.),
+                        spread_radius: px(0.),
+                        inset: false,
+                    }])
+                    .occlude()
+                    .text_size(rpx(14.))
+                    .line_height(rpx(18.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .without_text_selection()
+                    .on_mouse_down_out(move |_, _, cx| {
+                        close.update(cx, |app, cx| app.close_pane_menu(cx)).ok();
+                    })
+                    .child(item(
+                        "post-follow",
+                        if joined {
+                            "Unfollow Post"
+                        } else {
+                            "Follow Post"
+                        },
+                        None,
+                        Some(Box::new(move |app, _, cx| {
+                            app.join_or_leave_thread(id, joined, cx)
+                        })),
+                    ))
+                    .child(item(
+                        "post-full-view",
+                        "Open in Full View",
+                        None,
+                        Some(Box::new(|app, window, cx| {
+                            app.expand_thread_pane(window, cx)
+                        })),
+                    ))
+                    .child(separator())
+                    .child(item(
+                        "post-mute",
+                        if muted { "Unmute Post" } else { "Mute Post" },
+                        None,
+                        Some(Box::new(move |app, _, cx| {
+                            let settings = model::ThreadSettings {
+                                muted: Some(!muted),
+                                flags: None,
+                            };
+                            app.update_thread_settings(id, settings, cx);
+                        })),
+                    ))
+                    .child({
+                        let entity = app.entity.clone();
+                        item(
+                            "post-notifications",
+                            "Notification Settings",
+                            Some(if notify_open {
+                                "chevron-down"
+                            } else {
+                                "chevron-right"
+                            }),
+                            None,
+                        )
+                        .text_color(rgb(theme::STRONG))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(rgba(theme::HOVER)))
+                        .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            entity.update(cx, |app, cx| app.toggle_pane_notify(cx)).ok();
+                        })
+                    })
+                    .when(notify_open, |this| {
+                        this.children(
+                            [(2, "All Messages"), (4, "Only @mentions"), (8, "Nothing")].map(
+                                |(flag, text)| {
+                                    let entity = app.entity.clone();
+                                    div()
+                                        .id(("post-notify", flag))
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .h(rpx(36.))
+                                        .pl(rpx(20.))
+                                        .pr(rpx(8.))
+                                        .rounded(rpx(4.))
+                                        .text_color(rgb(theme::STRONG))
+                                        .cursor_pointer()
+                                        .hover(|style| style.bg(rgba(theme::HOVER)))
+                                        .on_click(move |_, _, cx| {
+                                            cx.stop_propagation();
+                                            entity
+                                                .update(cx, |app, cx| {
+                                                    app.close_pane_menu(cx);
+                                                    let settings = model::ThreadSettings {
+                                                        muted: None,
+                                                        flags: Some(flag),
+                                                    };
+                                                    app.update_thread_settings(id, settings, cx);
+                                                })
+                                                .ok();
+                                        })
+                                        .child(text)
+                                        .child(radio_dot(level == flag))
+                                },
+                            ),
+                        )
+                    })
+                    .child(separator())
+                    .child(item(
+                        "post-search",
+                        "Search",
+                        Some("external-link"),
+                        Some(Box::new(|app, window, cx| {
+                            app.expand_thread_pane(window, cx);
+                            app.open_search(window, cx);
+                        })),
+                    ))
+                    .child(item(
+                        "post-pins",
+                        "Pins",
+                        Some("external-link"),
+                        Some(Box::new(|app, window, cx| {
+                            app.expand_thread_pane(window, cx);
+                            app.toggle_channel_popout(PopoutKind::Pins, window, cx);
+                        })),
+                    ))
+                    .child(separator())
+                    .child(item(
+                        "post-copy-link",
+                        "Copy Link",
+                        None,
+                        Some(Box::new(move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(link.clone()));
+                        })),
+                    ))
+                    .child(item(
+                        "post-copy-id",
+                        "Copy Thread ID",
+                        Some("id-badge"),
+                        Some(Box::new(move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(id.to_string()));
+                        })),
+                    )),
+            ),
+        )
+        .with_priority(1),
+    )
+}
+
+fn radio_dot(checked: bool) -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(rpx(20.))
+        .rounded_full()
+        .map(|this| {
+            if checked {
+                this.bg(rgb(theme::BLURPLE))
+                    .child(div().size(rpx(8.)).rounded_full().bg(white()))
+            } else {
+                this.border_2().border_color(rgb(theme::MUTED))
+            }
+        })
 }
 
 fn header(app: &DiscordApp, id: u64, name: &str) -> impl IntoElement + use<> {
@@ -437,29 +865,120 @@ fn body(app: &DiscordApp, pane: &ThreadPane, thread: &Channel) -> AnyElement {
         .into_any_element()
 }
 
-fn composer_box(app: &DiscordApp, pane: &ThreadPane) -> impl IntoElement {
-    div().flex_none().px_2().pb_2().child(
-        div()
-            .relative()
-            .min_h(rpx(44.))
-            .px(rpx(12.))
-            .rounded(rpx(8.))
-            .bg(rgb(theme::ELEVATED))
-            .border_1()
-            .border_color(rgba(theme::BORDER))
-            .child(
-                flush_textarea(Textarea::new(&pane.composer))
-                    .disabled(!app.store.can_send(pane.id))
-                    .py(rpx(11.))
-                    .text_size(rpx(16.))
-                    .line_height(rpx(22.))
-                    .text_color(rgb(theme::TEXT)),
-            )
-            .child(emoji_token_overlay(&pane.composer)),
-    )
+fn composer_box(app: &DiscordApp, pane: &ThreadPane, cx: &App) -> impl IntoElement {
+    let id = pane.id;
+    let can_send = app.store.can_send(id);
+    let staged = app.staged_files_in(id);
+    let picker_anchor = Rc::new(Cell::new(None));
+    let attach = app.entity.clone();
+    let gif = app.entity.clone();
+    let emoji = app.entity.clone();
+    let gif_anchor = picker_anchor.clone();
+    let emoji_anchor = picker_anchor.clone();
+    div()
+        .flex_none()
+        .px_2()
+        .pb_2()
+        .on_prepaint({
+            let anchor = picker_anchor.clone();
+            move |bounds, window, _| {
+                let gap = rpx(8.).to_pixels(window.rem_size());
+                let right_inset = rpx(24.).to_pixels(window.rem_size());
+                anchor.set(Some(point(
+                    bounds.right() - right_inset,
+                    bounds.top() - gap,
+                )));
+            }
+        })
+        .children((!staged.is_empty()).then(|| super::composer::staged_row(app, staged, cx)))
+        .child(
+            div()
+                .relative()
+                .flex()
+                .items_start()
+                .gap_1()
+                .min_h(rpx(44.))
+                .pl(rpx(12.))
+                .pr(rpx(8.))
+                .map(|this| {
+                    if staged.is_empty() {
+                        this.rounded(rpx(8.))
+                    } else {
+                        this.rounded_b(rpx(8.))
+                    }
+                })
+                .bg(rgb(theme::ELEVATED))
+                .border_1()
+                .border_color(rgba(theme::BORDER))
+                .child(
+                    div().my(rpx(10.)).child(
+                        theme::icon_button("pane-attach", "circle-plus", 24., theme::MUTED)
+                            .when(!can_send, |this| this.opacity(0.5))
+                            .when(can_send, |this| {
+                                this.on_click(move |_, window, cx| {
+                                    attach
+                                        .update(cx, |app, cx| app.pick_files_for(id, window, cx))
+                                        .ok();
+                                })
+                            }),
+                    ),
+                )
+                .child(
+                    div()
+                        .relative()
+                        .flex_1()
+                        .min_w_0()
+                        .ml_2()
+                        .child(
+                            flush_textarea(Textarea::new(&pane.composer))
+                                .disabled(!can_send)
+                                .py(rpx(11.))
+                                .text_size(rpx(16.))
+                                .line_height(rpx(22.))
+                                .text_color(rgb(theme::TEXT)),
+                        )
+                        .child(emoji_token_overlay(&pane.composer)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap_1()
+                        .my(rpx(10.))
+                        .child(
+                            theme::icon_button("pane-gif", "image-play", 24., theme::MUTED)
+                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                    let Some(position) = gif_anchor.get() else {
+                                        return;
+                                    };
+                                    gif.update(cx, |app, cx| {
+                                        app.toggle_gif_picker_for(true, position, window, cx)
+                                    })
+                                    .ok();
+                                }),
+                        )
+                        .child(
+                            theme::icon_button("pane-emoji", "smile", 24., theme::MUTED)
+                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                    let Some(position) = emoji_anchor.get() else {
+                                        return;
+                                    };
+                                    emoji
+                                        .update(cx, |app, cx| {
+                                            app.toggle_emoji_picker(
+                                                PickerTarget::Pane,
+                                                position,
+                                                window,
+                                                cx,
+                                            )
+                                        })
+                                        .ok();
+                                }),
+                        ),
+                ),
+        )
 }
 
-pub(crate) fn render_thread_pane(app: &DiscordApp) -> AnyElement {
+pub(crate) fn render_thread_pane(app: &DiscordApp, cx: &App) -> AnyElement {
     let Some((pane, thread)) = app
         .thread_pane
         .as_ref()
@@ -474,8 +993,12 @@ pub(crate) fn render_thread_pane(app: &DiscordApp) -> AnyElement {
         .min_h_0()
         .border_l_1()
         .border_color(rgba(theme::BORDER))
-        .child(header(app, pane.id, &thread.name))
+        .child(if app.store.forum_post(pane.id).is_some() {
+            post_header(app, pane, &thread.name).into_any_element()
+        } else {
+            header(app, pane.id, &thread.name).into_any_element()
+        })
         .child(body(app, pane, thread))
-        .child(composer_box(app, pane))
+        .child(composer_box(app, pane, cx))
         .into_any_element()
 }

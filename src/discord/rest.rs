@@ -224,6 +224,7 @@ mod tests {
     use super::profiles::profile_query;
     use super::*;
     use crate::discord::OutgoingReply;
+    use crate::discord::{ForumQuery, ForumSort};
     use std::sync::atomic::Ordering;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -450,14 +451,31 @@ mod tests {
 
     #[test]
     fn forum_search_query_matches_the_user_client() {
-        let query = forum_search_query(25)
-            .into_iter()
-            .map(|(key, value)| format!("{key}={value}"))
-            .collect::<Vec<_>>()
-            .join("&");
+        let query = forum_search_query(&ForumQuery {
+            offset: 25,
+            ..ForumQuery::default()
+        })
+        .into_iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join("&");
         assert_eq!(
             query,
             "sort_by=last_message_time&sort_order=desc&limit=25&tag_setting=match_some&offset=25"
+        );
+        let query = forum_search_query(&ForumQuery {
+            sort: ForumSort::Created,
+            tags: vec![7, 9],
+            match_all: true,
+            offset: 0,
+        })
+        .into_iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join("&");
+        assert_eq!(
+            query,
+            "sort_by=creation_time&sort_order=desc&limit=25&tag=7&tag=9&tag_setting=match_all&offset=0"
         );
     }
 

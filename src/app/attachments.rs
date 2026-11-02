@@ -257,7 +257,15 @@ impl DiscordApp {
     }
 
     pub(crate) fn stage_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        let channel_id = self.selected_channel_id;
+        self.stage_paths_in(self.selected_channel_id, paths, cx);
+    }
+
+    pub(crate) fn stage_paths_in(
+        &mut self,
+        channel_id: u64,
+        paths: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
         let staged = self.staged.get(&channel_id).map_or(0, Vec::len);
         let limit = self.store.upload_limit(channel_id);
         if let Err(refusal) = refusal(&paths, staged, limit) {
@@ -288,6 +296,15 @@ impl DiscordApp {
     }
 
     pub(crate) fn pick_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pick_files_for(self.selected_channel_id, window, cx);
+    }
+
+    pub(crate) fn pick_files_for(
+        &mut self,
+        channel_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -296,7 +313,7 @@ impl DiscordApp {
         });
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(paths))) = paths.await {
-                this.update_in(cx, |app, _, cx| app.stage_paths(paths, cx))
+                this.update_in(cx, |app, _, cx| app.stage_paths_in(channel_id, paths, cx))
                     .ok();
             }
         })
@@ -371,8 +388,18 @@ impl DiscordApp {
         .detach();
     }
 
+    /// Staged ids are unique across channels, so the main and thread pane composers share this.
+    fn staged_channel(&self, id: u64) -> Option<u64> {
+        self.staged
+            .iter()
+            .find(|(_, files)| files.iter().any(|file| file.id == id))
+            .map(|(channel_id, _)| *channel_id)
+    }
+
     pub(crate) fn remove_staged(&mut self, id: u64, cx: &mut Context<Self>) {
-        let channel_id = self.selected_channel_id;
+        let Some(channel_id) = self.staged_channel(id) else {
+            return;
+        };
         let empty = match self.staged.get_mut(&channel_id) {
             Some(files) => {
                 let removed: Vec<_> = files.iter().filter(|file| file.id == id).cloned().collect();
@@ -389,7 +416,9 @@ impl DiscordApp {
     }
 
     pub(crate) fn toggle_staged_spoiler(&mut self, id: u64, cx: &mut Context<Self>) {
-        let channel_id = self.selected_channel_id;
+        let Some(channel_id) = self.staged_channel(id) else {
+            return;
+        };
         if let Some(file) = self
             .staged
             .get_mut(&channel_id)
@@ -434,8 +463,12 @@ impl DiscordApp {
     }
 
     pub(crate) fn staged_files(&self) -> &[StagedFile] {
+        self.staged_files_in(self.selected_channel_id)
+    }
+
+    pub(crate) fn staged_files_in(&self, channel_id: u64) -> &[StagedFile] {
         self.staged
-            .get(&self.selected_channel_id)
+            .get(&channel_id)
             .map(Vec::as_slice)
             .unwrap_or(&[])
     }

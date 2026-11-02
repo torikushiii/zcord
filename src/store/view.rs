@@ -690,6 +690,9 @@ pub struct ThreadRow {
     pub parent_id: u64,
     pub owner_id: Option<u64>,
     pub joined: bool,
+    pub muted: bool,
+    /// Thread notification level: 2 all messages, 4 only @mentions, 8 nothing; 0 when unset.
+    pub notify: u32,
     pub archived: bool,
     pub locked: bool,
     pub private: bool,
@@ -849,9 +852,30 @@ pub struct ForumPost {
     pub pinned: bool,
     pub locked: bool,
     pub archived: bool,
-    pub preview: Option<String>,
-    pub thumbnail: Option<ImageSpec>,
+    /// The starter message, which carries the post's body, media and reactions.
+    pub first_message: Option<Message>,
     pub unread: bool,
+}
+
+impl ForumPost {
+    pub fn media(&self) -> Vec<ImageSpec> {
+        let Some(message) = &self.first_message else {
+            return Vec::new();
+        };
+        let attachments = message.attachments.iter().filter_map(|attachment| {
+            attachment
+                .image_spec()
+                .or_else(|| attachment.video_poster_spec())
+        });
+        let embeds = message.embeds.iter().filter_map(|embed| {
+            embed
+                .images
+                .first()
+                .or(embed.thumbnail.as_ref())
+                .map(Media::spec)
+        });
+        attachments.chain(embeds).collect()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

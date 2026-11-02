@@ -276,6 +276,12 @@ impl Store {
                 .and_then(model::Member::id)
                 .or(thread.owner_id),
             joined: thread.member.is_some() || member_ids.contains(&self.current_user_id),
+            muted: thread
+                .member
+                .as_ref()
+                .and_then(|m| m.muted)
+                .unwrap_or(false),
+            notify: thread.member.as_ref().and_then(|m| m.flags).unwrap_or(0) & 0b1110,
             archived: thread
                 .thread_metadata
                 .as_ref()
@@ -291,6 +297,27 @@ impl Store {
             member_ids,
             recent,
             last_active,
+        }
+    }
+
+    pub fn set_thread_settings(&mut self, thread_id: u64, settings: model::ThreadSettings) {
+        let Some(thread) = self.source.as_mut().and_then(|source| {
+            source
+                .guilds
+                .iter_mut()
+                .flat_map(|guild| guild.threads.iter_mut().flatten())
+                .find(|thread| thread.id == thread_id)
+        }) else {
+            return;
+        };
+        let member = thread
+            .member
+            .get_or_insert_with(model::PartialMember::default);
+        if let Some(muted) = settings.muted {
+            member.muted = Some(muted);
+        }
+        if let Some(flags) = settings.flags {
+            member.flags = Some((member.flags.unwrap_or(0) & !0b1110) | (flags & 0b1110));
         }
     }
 
@@ -548,4 +575,71 @@ fn recent_text(content: &str) -> String {
         end -= 1;
     }
     text[..end].to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thread_settings_merge_into_the_current_member() {
+        let ready = serde_json::from_str(include_str!("../discord/fixtures/ready.json")).unwrap();
+        let mut store = Store::from_ready(ready);
+        let thread: model::Channel = serde_json::from_value(serde_json::json!({
+            "id": "2010",
+            "type": 11,
+            "guild_id": "200",
+            "parent_id": "2007",
+            "name": "post",
+            "member": {"user_id": "1", "flags": 1, "muted": false}
+        }))
+        .unwrap();
+        store.source.as_mut().unwrap().guilds[0]
+            .threads
+            .get_or_insert_with(Vec::new)
+            .push(thread);
+
+        let initial = store.source.as_ref().unwrap().guilds[0]
+            .threads
+            .as_ref()
+            .unwrap()[0]
+            .member
+            .as_ref()
+            .unwrap();
+        assert_eq!(initial.flags, Some(1));
+
+        store.set_thread_settings(
+            2010,
+            model::ThreadSettings {
+                muted: Some(true),
+                flags: Some(8),
+            },
+        );
+        let member = store.source.as_ref().unwrap().guilds[0]
+            .threads
+            .as_ref()
+            .unwrap()[0]
+            .member
+            .as_ref()
+            .unwrap();
+        assert_eq!(member.muted, Some(true));
+        assert_eq!(member.flags, Some(9));
+
+        store.set_thread_settings(
+            2010,
+            model::ThreadSettings {
+                muted: Some(false),
+                flags: Some(4),
+            },
+        );
+        let member = store.source.as_ref().unwrap().guilds[0]
+            .threads
+            .as_ref()
+            .unwrap()[0]
+            .member
+            .as_ref()
+            .unwrap();
+        assert_eq!(member.muted, Some(false));
+        assert_eq!(member.flags, Some(5));
+    }
 }

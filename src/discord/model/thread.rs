@@ -1,5 +1,5 @@
 use super::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Deserialize)]
 pub struct Pin {
@@ -60,6 +60,15 @@ pub struct ThreadMemberUpdate {
     pub join_timestamp: Option<String>,
     #[serde(default)]
     pub member: Option<Member>,
+}
+
+/// Body of `PATCH /channels/{thread}/thread-members/@me/settings`; unset fields are left out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct ThreadSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub muted: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flags: Option<u32>,
 }
 
 #[derive(Clone, Deserialize)]

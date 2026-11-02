@@ -73,6 +73,8 @@ pub(crate) struct Gifs {
     trending: HashMap<GifProvider, Load<Rc<Vec<Gif>>>>,
     frecency_loading: bool,
     favorite_writes: u64,
+    /// The picker belongs to the thread pane's composer rather than the main one.
+    pub(crate) pane: bool,
 }
 
 struct GifPicker {
@@ -202,6 +204,16 @@ impl DiscordApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.toggle_gif_picker_for(false, position, window, cx);
+    }
+
+    pub(crate) fn toggle_gif_picker_for(
+        &mut self,
+        pane: bool,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self
             .gifs
             .picker
@@ -219,6 +231,7 @@ impl DiscordApp {
             return;
         }
         self.close_emoji_picker(cx);
+        self.gifs.pane = pane;
         self.open_gif_picker(position, false, window, cx);
     }
 
@@ -524,7 +537,11 @@ impl DiscordApp {
 
     fn pick_gif(&mut self, url: String, window: &mut Window, cx: &mut Context<Self>) {
         self.close_gif_picker(cx);
-        self.send_content(url, Vec::new(), window, cx);
+        if self.gifs.pane {
+            self.send_pane_content(url, window, cx);
+        } else {
+            self.send_content(url, Vec::new(), window, cx);
+        }
     }
 
     fn toggle_favorite_gif(&mut self, item: &GifItem, cx: &mut Context<Self>) {

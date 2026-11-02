@@ -1309,7 +1309,7 @@ fn button(
         .into_any_element()
 }
 
-fn emoji_element(emoji: &ReactionEmoji, size: f32, cx: &App) -> AnyElement {
+pub(crate) fn emoji_element(emoji: &ReactionEmoji, size: f32, cx: &App) -> AnyElement {
     match emoji.id {
         Some(id) => {
             let spec = images::ImageSpec::Emoji {

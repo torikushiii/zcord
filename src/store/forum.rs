@@ -33,27 +33,9 @@ fn forum_post_from_thread(thread: &model::Channel, forum_id: u64) -> ForumPost {
             .thread_metadata
             .as_ref()
             .is_some_and(|metadata| metadata.archived),
-        preview: None,
-        thumbnail: None,
+        first_message: None,
         unread: false,
     }
-}
-
-fn forum_post_thumbnail(message: &model::Message) -> Option<ImageSpec> {
-    message
-        .attachments
-        .iter()
-        .find_map(Attachment::image_spec)
-        .or_else(|| {
-            let embeds = mapping::map_embeds(&message.embeds, message.flags);
-            embeds.iter().find_map(|embed| {
-                embed
-                    .images
-                    .first()
-                    .or(embed.thumbnail.as_ref())
-                    .map(Media::spec)
-            })
-        })
 }
 
 impl Store {
@@ -209,10 +191,38 @@ impl Store {
             .collect()
     }
 
-    pub fn forum_posts(&self, forum_id: u64) -> Vec<&ForumPost> {
-        let creation_sort = self
+    pub fn forum_post(&self, id: u64) -> Option<&ForumPost> {
+        self.forum_posts.get(&id)
+    }
+
+    pub fn forum_default_sort(&self, forum_id: u64) -> discord::ForumSort {
+        match self
             .source_channel_guild(forum_id)
-            .is_some_and(|(_, channel)| channel.default_sort_order == Some(1));
+            .and_then(|(_, channel)| channel.default_sort_order)
+        {
+            Some(1) => discord::ForumSort::Created,
+            _ => discord::ForumSort::Activity,
+        }
+    }
+
+    /// The forum's REQUIRE_TAG flag: new posts must carry at least one tag.
+    pub fn forum_requires_tag(&self, forum_id: u64) -> bool {
+        self.source_channel_guild(forum_id)
+            .is_some_and(|(_, channel)| channel.flags.unwrap_or(0) & (1 << 4) != 0)
+    }
+
+    pub fn forum_default_gallery(&self, forum_id: u64) -> bool {
+        self.source_channel_guild(forum_id)
+            .is_some_and(|(_, channel)| channel.default_forum_layout == Some(2))
+    }
+
+    #[cfg(test)]
+    pub fn forum_posts(&self, forum_id: u64) -> Vec<&ForumPost> {
+        self.forum_posts_sorted(forum_id, self.forum_default_sort(forum_id))
+    }
+
+    pub fn forum_posts_sorted(&self, forum_id: u64, sort: discord::ForumSort) -> Vec<&ForumPost> {
+        let creation_sort = sort == discord::ForumSort::Created;
         let mut posts: Vec<_> = self
             .forum_posts
             .values()
@@ -270,15 +280,28 @@ impl Store {
         Change::Structure
     }
 
-    fn apply_forum_first_message(&mut self, message: &model::Message) {
-        let Some(post) = self.forum_posts.get_mut(&message.channel_id) else {
-            return;
-        };
-        if post.preview.is_none() {
-            post.preview = Some(message.content.clone());
+    /// Fills a post whose starter message was missing from the search page.
+    pub fn apply_forum_starter(&mut self, message: &model::Message) -> bool {
+        let missing = self
+            .forum_posts
+            .get(&message.channel_id)
+            .is_some_and(|post| post.first_message.is_none());
+        // The starter shares the thread's id; an `around` fetch can return a neighbour instead.
+        if !missing || message.id != message.channel_id {
+            return false;
         }
-        if post.thumbnail.is_none() {
-            post.thumbnail = forum_post_thumbnail(message);
+        self.apply_forum_first_message(message);
+        true
+    }
+
+    fn apply_forum_first_message(&mut self, message: &model::Message) {
+        if !self.forum_posts.contains_key(&message.channel_id) {
+            return;
+        }
+        // Registers the author and their member entry so the card can name them.
+        self.map_network_message(message, false);
+        if let Some(post) = self.forum_posts.get_mut(&message.channel_id) {
+            post.first_message = mapping::map_message(message);
         }
     }
 
@@ -291,18 +314,14 @@ impl Store {
             .unwrap_or(0);
         let timestamp =
             local_timestamp(&message.timestamp).unwrap_or_else(|| timestamp_from_nonce(message.id));
-        let thumbnail = forum_post_thumbnail(message);
         let Some(post) = self.forum_posts.get_mut(&message.channel_id) else {
             return;
         };
         post.message_count = post.message_count.saturating_add(1);
         post.last_activity = timestamp;
         post.unread = message.id > read_last;
-        if post.preview.is_none() {
-            post.preview = Some(message.content.clone());
-        }
-        if post.thumbnail.is_none() {
-            post.thumbnail = thumbnail;
+        if post.first_message.is_none() {
+            post.first_message = mapping::map_message(message);
         }
     }
 }

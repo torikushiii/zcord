@@ -376,9 +376,14 @@ fn forum_posts_merge_ready_search_and_thread_events() {
         .find(|post| post.id == 3002)
         .unwrap();
     assert_eq!(post.name, "Search post");
-    assert_eq!(post.preview.as_deref(), Some("first **body**"));
+    assert_eq!(
+        post.first_message
+            .as_ref()
+            .map(|message| message.content.as_str()),
+        Some("first **body**")
+    );
     assert!(matches!(
-        post.thumbnail,
+        post.media().first(),
         Some(ImageSpec::Attachment {
             id: 77,
             width: 400,
@@ -402,8 +407,9 @@ fn forum_posts_merge_ready_search_and_thread_events() {
             .iter()
             .find(|post| post.id == 3002)
             .unwrap()
-            .preview
-            .as_deref(),
+            .first_message
+            .as_ref()
+            .map(|message| message.content.as_str()),
         Some("first **body**")
     );
 
@@ -494,9 +500,14 @@ fn thread_message_create_bumps_forum_post_and_thread_channel_loads() {
         post.last_activity,
         local_timestamp("2026-10-22T12:00:00Z").unwrap()
     );
-    assert_eq!(post.preview.as_deref(), Some("the post body"));
+    assert_eq!(
+        post.first_message
+            .as_ref()
+            .map(|message| message.content.as_str()),
+        Some("the post body")
+    );
     assert!(matches!(
-        post.thumbnail,
+        post.media().first(),
         Some(ImageSpec::Attachment { id: 88, .. })
     ));
     assert!(post.unread);

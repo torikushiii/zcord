@@ -82,6 +82,8 @@ pub struct Channel {
     pub available_tags: Option<Vec<ForumTag>>,
     #[serde(default)]
     pub default_sort_order: Option<u8>,
+    #[serde(default)]
+    pub default_forum_layout: Option<u8>,
     #[serde(default, deserialize_with = "ids")]
     pub recipient_ids: Vec<u64>,
     #[serde(default, deserialize_with = "entries")]
@@ -117,6 +119,7 @@ impl Channel {
             flags,
             available_tags,
             default_sort_order,
+            default_forum_layout,
             is_message_request,
             is_spam,
             icon

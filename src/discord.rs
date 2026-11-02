@@ -48,7 +48,7 @@ use cache::{Cache, CacheRequest, insert_bounded, insert_missing, missing_ids};
 pub use error::*;
 pub use event::*;
 pub use model::{PinPage, ThreadPage};
-pub use search::{SearchOutcome, SearchQuery, SearchScope, SearchSort};
+pub use search::{ForumQuery, ForumSort, SearchOutcome, SearchQuery, SearchScope, SearchSort};
 
 pub fn valid_friend_username(username: &str) -> bool {
     (2..=32).contains(&username.len())

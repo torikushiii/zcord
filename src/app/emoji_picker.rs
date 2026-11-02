@@ -44,6 +44,7 @@ const CATEGORY_ICONS: [(&str, &str); 8] = [
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PickerTarget {
     Composer,
+    Pane,
     Reaction(u64),
 }
 
@@ -142,14 +143,20 @@ impl DiscordApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_emoji_picker(PickerTarget::Composer, position, true, window, cx);
+        let target = if self.gifs.pane {
+            PickerTarget::Pane
+        } else {
+            PickerTarget::Composer
+        };
+        self.open_emoji_picker(target, position, true, window, cx);
     }
 
     /// Removes the composer picker at once (no exit animation) and returns its anchor.
     pub(super) fn take_emoji_picker(&mut self) -> Option<Point<Pixels>> {
-        let picker = self
-            .emoji_picker
-            .take_if(|picker| picker.target == PickerTarget::Composer)?;
+        let picker = self.emoji_picker.take_if(|picker| {
+            matches!(picker.target, PickerTarget::Composer | PickerTarget::Pane)
+        })?;
+        self.gifs.pane = picker.target == PickerTarget::Pane;
         self.emoji_picker_closing = None;
         Some(picker.position)
     }
@@ -281,6 +288,7 @@ impl DiscordApp {
         };
         match target {
             PickerTarget::Composer => self.insert_emoji(choice, window, cx),
+            PickerTarget::Pane => self.insert_pane_emoji(choice, window, cx),
             PickerTarget::Reaction(message_id) => self.react(message_id, choice, cx),
         }
         if !keep_open {
@@ -569,9 +577,10 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
                 .p(rpx(12.))
                 .border_b_1()
                 .border_color(rgba(theme::BORDER))
-                .when(picker.target == PickerTarget::Composer, |this| {
-                    this.child(gif_picker::tabs(app, gif_picker::Tab::Emoji))
-                })
+                .when(
+                    matches!(picker.target, PickerTarget::Composer | PickerTarget::Pane),
+                    |this| this.child(gif_picker::tabs(app, gif_picker::Tab::Emoji)),
+                )
                 .child(
                     div()
                         .flex()
