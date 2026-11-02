@@ -261,6 +261,8 @@ fn user(
         activity: activity.map(str::to_owned),
         activity_kind,
         game: None,
+        live_stream: None,
+        on_mobile: false,
         listening: listening.map(|(name, details, state)| GameActivity {
             name: name.into(),
             application_id: None,

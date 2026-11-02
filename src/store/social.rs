@@ -14,9 +14,8 @@ pub(super) struct Social {
     pub names: HashMap<u64, String>,
     messages: HashMap<(u64, u64), MessageInfo>,
     pub revision: u64,
-    /// Server members whose presence Discord chose to send in READY_SUPPLEMENTAL; with
-    /// friends, these are who the official client's Active Now draws from.
-    pub supplemental_presences: HashSet<u64>,
+    /// Non-friends Discord ranks close enough to share the friends' Active Now column.
+    pub close_contacts: HashSet<u64>,
     /// The current user's custom status from settings; a live presence status still wins.
     own_custom_status: Option<CustomStatus>,
 }
@@ -180,6 +179,26 @@ fn playing_activity(activities: &[model::Activity]) -> Option<&model::Activity> 
     activities.iter().find(|activity| {
         activity_verb(activity.kind).is_some() && !activity_name(activity).is_empty()
     })
+}
+
+fn live_stream(activity: &model::Activity) -> LiveStream {
+    let twitch_login = activity
+        .assets
+        .as_ref()
+        .and_then(|assets| assets.large_image.as_deref()?.strip_prefix("twitch:"))
+        .filter(|login| {
+            !login.is_empty()
+                && login
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        })
+        .map(str::to_lowercase);
+    LiveStream {
+        service: activity.name.clone(),
+        title: activity_text(activity.details.as_deref()),
+        url: activity_text(activity.url.as_deref()),
+        twitch_login,
+    }
 }
 
 fn game_activity(activity: &model::Activity) -> GameActivity {
@@ -701,6 +720,9 @@ impl Store {
         if let Some(value) = &presence.status {
             user.status = status(value);
         }
+        if let Some(client_status) = &presence.client_status {
+            user.on_mobile = client_status.mobile_only();
+        }
         if let Some(activities) = &presence.activities {
             let current = activity(activities);
             let playing = current.as_ref().is_some_and(|(_, playing, _)| *playing);
@@ -716,6 +738,10 @@ impl Store {
                 .iter()
                 .find(|activity| activity.kind == 2)
                 .map(game_activity);
+            user.live_stream = activities
+                .iter()
+                .find(|activity| activity.kind == 1)
+                .map(live_stream);
             if let Some(mut custom) = custom_status_from_presence(activities) {
                 let same_as_settings = own_custom
                     .as_ref()
@@ -757,6 +783,7 @@ impl Store {
             guild_id: None,
             status: session.status.clone(),
             activities: Some(session.activities.clone()),
+            client_status: None,
         };
         self.apply_presence(&presence, None);
     }
@@ -1176,17 +1203,6 @@ impl Store {
                 {
                     self.apply_presence(presence, None);
                 }
-                self.social.supplemental_presences = update
-                    .merged_presences
-                    .guilds
-                    .iter()
-                    .flatten()
-                    .filter_map(|presence| {
-                        presence
-                            .user_id
-                            .or_else(|| presence.user.as_ref().map(|user| user.id))
-                    })
-                    .collect();
                 None
             }
             Event::PresenceUpdate(presence) => {

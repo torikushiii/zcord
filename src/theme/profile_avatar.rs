@@ -197,6 +197,22 @@ pub(super) fn indicator(geometry: Geometry, status: Status, surface: u32) -> Any
         .into_any_element()
 }
 
+/// Grows upward from the status notch, since the phone is taller than the dot it replaces.
+pub(super) fn mobile_indicator(geometry: Geometry, surface: u32) -> AnyElement {
+    let edge = geometry.center - geometry.backing / 2.;
+    let inset = (geometry.backing - geometry.icon) / 2.;
+    let height = geometry.icon * 1.5 + inset * 2.;
+    div()
+        .absolute()
+        .left(rpx(edge))
+        .top(rpx(edge + geometry.backing - height))
+        .p(rpx(inset))
+        .rounded(rpx(geometry.icon * 0.3))
+        .bg(rgb(surface))
+        .child(super::mobile_status(geometry.icon, surface))
+        .into_any_element()
+}
+
 /// Paint the status shape with transparent cutouts so it works over any row surface.
 pub fn status_icon(status: Status, size: f32) -> impl IntoElement {
     canvas(

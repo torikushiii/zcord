@@ -68,6 +68,8 @@ impl Store {
             mapped.playing = existing.playing;
             mapped.game.clone_from(&existing.game);
             mapped.listening.clone_from(&existing.listening);
+            mapped.live_stream.clone_from(&existing.live_stream);
+            mapped.on_mobile = existing.on_mobile;
             mapped.role_color = existing.role_color;
             if user.primary_guild.is_none() {
                 mapped.tag.clone_from(&existing.tag);

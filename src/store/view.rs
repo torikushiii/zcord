@@ -28,6 +28,15 @@ pub enum Status {
 }
 
 impl Status {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Online => "Online",
+            Self::Idle => "Idle",
+            Self::DoNotDisturb => "Do Not Disturb",
+            Self::Offline => "Offline",
+        }
+    }
+
     pub fn is_online(self) -> bool {
         self != Status::Offline
     }
@@ -55,6 +64,7 @@ pub struct User {
     pub name: String,
     pub initials: String,
     pub status: Status,
+    pub on_mobile: bool,
     pub bot: bool,
     pub role_color: Option<u32>,
     pub tag: Option<GuildTag>,
@@ -63,12 +73,22 @@ pub struct User {
     pub activity_kind: Option<u8>,
     pub game: Option<GameActivity>,
     pub listening: Option<GameActivity>,
+    pub live_stream: Option<LiveStream>,
     pub custom_status: Option<CustomStatus>,
     pub avatar: Option<String>,
     pub discriminator: Option<String>,
     pub decoration: Option<Decoration>,
     pub nameplate: Option<Nameplate>,
     pub name_style: Option<NameStyle>,
+}
+
+/// A stream on an outside service such as Twitch, which is presence activity type 1.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LiveStream {
+    pub service: String,
+    pub title: Option<String>,
+    pub url: Option<String>,
+    pub twitch_login: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

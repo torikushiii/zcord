@@ -6,6 +6,8 @@ pub(super) struct PrivateLocation {
     pub(super) at_present: bool,
 }
 
+const ACTIVE_NOW_MAX_RANK: u32 = 15;
+
 fn relationship_kind(kind: u8) -> Option<RelationshipKind> {
     match kind {
         1 => Some(RelationshipKind::Friend),
@@ -450,18 +452,38 @@ impl Store {
             .min(u32::MAX as usize) as u32
     }
 
-    /// People playing a game or listening to music, like Discord's Active Now column.
-    /// Besides friends, Discord draws on the server members it sent presences for.
+    pub fn personalization_consented(&self) -> bool {
+        self.source
+            .as_ref()
+            .is_some_and(|ready| ready.personalization_consented)
+    }
+
+    pub fn set_user_affinities(&mut self, affinities: &[model::UserAffinity]) {
+        self.social.close_contacts = affinities
+            .iter()
+            .filter(|affinity| affinity.communication_rank <= ACTIVE_NOW_MAX_RANK)
+            .map(|affinity| affinity.other_user_id)
+            .collect();
+    }
+
+    /// Friends and close contacts playing, streaming or listening to music, like Discord's
+    /// Active Now column.
     pub fn active_now(&self) -> Vec<u64> {
         let mut ids: Vec<u64> = self
             .friends()
             .into_iter()
-            .chain(self.social.supplemental_presences.iter().copied())
-            .filter(|id| *id != self.current_user_id)
+            .chain(self.social.close_contacts.iter().copied())
+            .filter(|id| {
+                !self.relationship(*id).is_some_and(|relationship| {
+                    relationship.kind == RelationshipKind::Blocked || relationship.ignored
+                })
+            })
             .filter(|id| {
                 self.users.get(id).is_some_and(|user| {
                     !user.bot
-                        && (user.game.is_some() || user.listening.is_some())
+                        && (user.game.is_some()
+                            || user.listening.is_some()
+                            || user.live_stream.is_some())
                         && user.status != Status::Offline
                 })
             })
@@ -631,7 +653,7 @@ mod tests {
     }
 
     #[test]
-    fn active_now_includes_supplemental_players_and_listeners() {
+    fn active_now_includes_friends_and_close_contacts() {
         let mut store = store();
         let supplemental: model::ReadySupplemental = serde_json::from_value(json!({
             "merged_presences": {
@@ -650,9 +672,18 @@ mod tests {
         }))
         .unwrap();
         store.apply(Event::ReadySupplemental(Box::new(supplemental)));
+        assert_eq!(store.active_now(), [10]);
+
+        let affinities: Vec<model::UserAffinity> = serde_json::from_value(json!([
+            {"other_user_id": "40", "communication_rank": 15},
+            {"other_user_id": "41", "communication_rank": 16},
+            {"other_user_id": "43"}
+        ]))
+        .unwrap();
+        store.set_user_affinities(&affinities);
         let mut active = store.active_now();
         active.sort_unstable();
-        assert_eq!(active, [10, 40, 41, 43]);
+        assert_eq!(active, [10, 40, 43]);
     }
 
     #[test]

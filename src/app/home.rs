@@ -14,7 +14,7 @@ use crate::{
     },
     discord::{Event, model::PublicApplication},
     media::images::{self, ImageSpec},
-    store::{GameActivity, PrivateChannel, RelationshipKind, Status, Store, User},
+    store::{GameActivity, LiveStream, PrivateChannel, RelationshipKind, Status, Store, User},
     theme::{self, WithoutTextSelection, rpx},
 };
 
@@ -26,8 +26,16 @@ const ACTIVE_NOW_WIDTH: f32 = 420.;
 const ACTIVE_ICON: f32 = 24.;
 const ACTIVE_ART: f32 = 32.;
 const ACTIVE_BADGE: f32 = 16.;
+const ACTIVE_CARD_GROUP: &str = "active-card";
+const ACTIVE_PARTY_AVATAR: f32 = 24.;
 const ACTION_SIZE: f32 = 36.;
 const SPOTIFY_GREEN: u32 = 0x1DB954;
+const AFFINITY_REFRESH: Duration = Duration::from_secs(8 * 60 * 60);
+const TWITCH_PURPLE: u32 = 0x9146FF;
+const YOUTUBE_RED: u32 = 0xFF0000;
+const TWITCH_PREVIEW_WIDTH: f32 = 354.;
+const TWITCH_PREVIEW_HEIGHT: f32 = 197.;
+const TWITCH_PREVIEW_REFRESH: u64 = 300;
 
 #[cfg(test)]
 mod tests;
@@ -198,20 +206,57 @@ impl DiscordApp {
         .detach();
     }
 
+    /// Discord keeps this list for eight hours before asking for a new one.
+    pub(super) fn load_user_affinities(&mut self, cx: &mut Context<Self>) {
+        self.affinity_refresh = None;
+        if !self.store.personalization_consented() {
+            return;
+        }
+        let Some(session) = self.session.clone().filter(|_| self.live) else {
+            return;
+        };
+        self.affinity_refresh = Some(cx.spawn(async move |this, cx| {
+            loop {
+                let session = session.clone();
+                let request = Tokio::spawn(cx, async move { session.user_affinities().await });
+                let result = request.await;
+                let alive = this.update(cx, |app, cx| match result {
+                    Ok(Ok(affinities)) => {
+                        app.store.set_user_affinities(&affinities);
+                        cx.notify();
+                    }
+                    Ok(Err(error)) => log::warn!("Could not load user affinities: {error}"),
+                    Err(error) => log::warn!("User affinities task failed: {error}"),
+                });
+                if alive.is_err() {
+                    return;
+                }
+                cx.background_executor().timer(AFFINITY_REFRESH).await;
+            }
+        }));
+    }
+
     /// Fetches app icons for Active Now; Discord shows the game's icon even when the
     /// presence carries no image of its own.
     pub(crate) fn load_active_now_apps(&mut self, cx: &mut Context<Self>) {
         if !self.showing_home_page() || self.home.page != HomePage::Friends {
             return;
         }
-        let Some(session) = self.session.clone().filter(|_| self.live) else {
-            return;
-        };
         let ids: Vec<u64> = self
             .store
             .active_now()
             .into_iter()
             .filter_map(|id| self.store.user(id)?.game.as_ref()?.application_id)
+            .collect();
+        self.load_game_apps(ids, cx);
+    }
+
+    pub(crate) fn load_game_apps(&mut self, ids: Vec<u64>, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone().filter(|_| self.live) else {
+            return;
+        };
+        let ids: Vec<u64> = ids
+            .into_iter()
             .filter(|id| self.home.applications_requested.insert(*id))
             .collect();
         if ids.is_empty() {
@@ -225,14 +270,25 @@ impl DiscordApp {
                     for application in applications {
                         app.home.applications.insert(application.id, application);
                     }
+                    app.views.channel_list.update(cx, |_, cx| cx.notify());
                     cx.notify();
                 }
-                Ok(Err(error)) => log::warn!("Could not load Active Now games: {error}"),
-                Err(error) => log::warn!("Active Now games task failed: {error}"),
+                Ok(Err(error)) => log::warn!("Could not load game applications: {error}"),
+                Err(error) => log::warn!("Game applications task failed: {error}"),
             })
             .ok();
         })
         .detach();
+    }
+
+    pub(crate) fn game_icon_spec(&self, application_id: u64) -> Option<ImageSpec> {
+        let hash = self.home.applications.get(&application_id)?.icon.clone()?;
+        Some(ImageSpec::AppImage {
+            application_id,
+            hash,
+            uploaded: false,
+            animated: false,
+        })
     }
 
     fn accept_request(&mut self, channel_id: u64, window: &mut Window, cx: &mut Context<Self>) {
@@ -1167,6 +1223,211 @@ fn active_detail_text(
         }))
 }
 
+fn active_header(
+    app: &DiscordApp,
+    id: u64,
+    user: &User,
+    headline: &str,
+    icon: Div,
+    cx: &App,
+) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(rpx(12.))
+        .p(rpx(16.))
+        .bg(rgb(theme::ELEVATED))
+        .group_hover(ACTIVE_CARD_GROUP, |style| {
+            style.bg(rgb(theme::composite(theme::HOVER, theme::ELEVATED)))
+        })
+        .child(theme::user_avatar(
+            Some(user),
+            id,
+            DM_AVATAR,
+            Some((user.status, theme::ELEVATED)),
+            false,
+            cx,
+        ))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(rpx(16.))
+                        .line_height(rpx(20.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(theme::STRONG))
+                        .child(label(("active-name", id), &app.store.friend_name(id))),
+                )
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(rpx(14.))
+                        .line_height(rpx(18.))
+                        .text_color(rgb(theme::MUTED))
+                        .child(label(("active-game", id), headline)),
+                ),
+        )
+        .child(icon)
+}
+
+fn active_card_frame() -> Div {
+    div()
+        .group(ACTIVE_CARD_GROUP)
+        .flex()
+        .flex_col()
+        .flex_none()
+        .rounded(rpx(12.))
+        .border_1()
+        .border_color(rgba(theme::BORDER))
+        .overflow_hidden()
+        .hover(|style| style.bg(rgba(theme::HOVER)))
+}
+
+fn service_icon(service: &str, size: f32) -> Div {
+    if service == "Twitch" {
+        // Icons take one color, so the white panel of the logo is its own layer.
+        return div()
+            .relative()
+            .flex_none()
+            .size(rpx(size))
+            .child(
+                theme::icon("connections/twitch-fill", size, 0xFFFFFF)
+                    .absolute()
+                    .top_0()
+                    .left_0(),
+            )
+            .child(
+                theme::icon("connections/twitch", size, TWITCH_PURPLE)
+                    .absolute()
+                    .top_0()
+                    .left_0(),
+            );
+    }
+    let (icon, color) = match service {
+        "YouTube" => ("connections/youtube", YOUTUBE_RED),
+        _ => ("monitor-up", theme::MUTED),
+    };
+    div()
+        .flex_none()
+        .size(rpx(size))
+        .child(theme::icon(icon, size, color))
+}
+
+/// Twitch rebuilds this image every few minutes, so the bucket keeps it from being cached forever.
+fn twitch_preview(login: &str, cx: &App) -> Option<Arc<std::path::Path>> {
+    let now = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let bucket = now / TWITCH_PREVIEW_REFRESH;
+    let url = format!(
+        "https://static-cdn.jtvnw.net/previews-ttv/live_user_{login}-900x500.jpg?t={bucket}"
+    );
+    images::resolve(
+        &ImageSpec::Media {
+            url,
+            width: 0,
+            height: 0,
+            animated: false,
+        },
+        theme::image_px(TWITCH_PREVIEW_WIDTH),
+        cx,
+    )
+}
+
+fn live_stream_preview(id: u64, stream: &LiveStream, cx: &App) -> Div {
+    let image = stream
+        .twitch_login
+        .as_deref()
+        .and_then(|login| twitch_preview(login, cx));
+    let url = stream.url.clone();
+    div().child(
+        div()
+            .id(("active-stream-preview", id))
+            .relative()
+            .flex()
+            .items_center()
+            .justify_center()
+            .w_full()
+            .h(rpx(TWITCH_PREVIEW_HEIGHT))
+            .rounded(rpx(8.))
+            .overflow_hidden()
+            .bg(rgba(theme::SELECTED))
+            .when_some(url, |this, url| {
+                this.cursor_pointer()
+                    .on_click(move |_, _, cx| cx.open_url(&url))
+            })
+            .children(image.map(|path| {
+                img(path)
+                    .absolute()
+                    .inset_0()
+                    .size_full()
+                    .rounded(rpx(8.))
+                    .object_fit(ObjectFit::Cover)
+            }))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(rpx(48.))
+                    .rounded_full()
+                    .bg(rgba(0x00000099))
+                    .child(theme::icon("video-play", 24., 0xFFFFFF)),
+            ),
+    )
+}
+
+fn live_stream_card(
+    app: &DiscordApp,
+    id: u64,
+    user: &User,
+    stream: &LiveStream,
+    cx: &App,
+) -> AnyElement {
+    let headline = format!("Streaming on {}", stream.service);
+    let preview = stream
+        .twitch_login
+        .is_some()
+        .then(|| live_stream_preview(id, stream, cx));
+    active_card_frame()
+        .child(active_header(
+            app,
+            id,
+            user,
+            &headline,
+            service_icon(&stream.service, ACTIVE_ICON),
+            cx,
+        ))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(rpx(12.))
+                .p(rpx(16.))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(rpx(12.))
+                        .child(service_icon(&stream.service, ACTIVE_ART))
+                        .child(active_detail_text(
+                            id,
+                            &stream.service,
+                            stream.title.as_deref(),
+                            None,
+                        )),
+                )
+                .children(preview),
+        )
+        .into_any_element()
+}
+
 fn active_card(
     app: &DiscordApp,
     id: u64,
@@ -1185,14 +1446,7 @@ fn active_card(
         }
     };
     let app_icon = |size: f32| {
-        let application_id = game.application_id?;
-        let hash = app.home.applications.get(&application_id)?.icon.clone()?;
-        let spec = ImageSpec::AppImage {
-            application_id,
-            hash,
-            uploaded: false,
-            animated: false,
-        };
+        let spec = app.game_icon_spec(game.application_id?)?;
         let path = images::resolve(&spec, theme::image_px(size), cx)?;
         Some(
             img(path)
@@ -1244,57 +1498,10 @@ fn active_card(
     );
     let detail = game.details.clone().or_else(|| game.state.clone());
     let state = game.details.as_ref().and(game.state.clone());
-    div()
-        .flex()
-        .flex_col()
-        .flex_none()
-        .rounded(rpx(12.))
-        .border_1()
-        .border_color(rgba(theme::BORDER))
-        .overflow_hidden()
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(rpx(12.))
-                .p(rpx(16.))
-                .bg(rgb(theme::ELEVATED))
-                .child(theme::user_avatar(
-                    Some(user),
-                    id,
-                    DM_AVATAR,
-                    Some((user.status, theme::ELEVATED)),
-                    false,
-                    cx,
-                ))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_w_0()
-                        .child(
-                            div()
-                                .truncate()
-                                .text_size(rpx(16.))
-                                .line_height(rpx(20.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(theme::STRONG))
-                                .child(label(("active-name", id), &app.store.friend_name(id))),
-                        )
-                        .child(
-                            div()
-                                .truncate()
-                                .text_size(rpx(14.))
-                                .line_height(rpx(18.))
-                                .text_color(rgb(theme::MUTED))
-                                .child(label(("active-game", id), &headline)),
-                        ),
-                )
-                .child(icon),
-        )
-        .children(detail.map(|detail| {
-            div()
+    active_card_frame()
+        .child(active_header(app, id, user, &headline, icon, cx))
+        .child(match detail {
+            Some(detail) => div()
                 .flex()
                 .items_center()
                 .gap(rpx(12.))
@@ -1305,8 +1512,24 @@ fn active_card(
                     &detail,
                     state.as_deref(),
                     duration.filter(|_| !listening),
-                ))
-        }))
+                )),
+            None if listening => div(),
+            None => div()
+                .flex()
+                .items_center()
+                .gap(rpx(12.))
+                .p(rpx(16.))
+                .child(art)
+                .child(active_detail_text(id, &game.name, Some("1 Person"), None))
+                .child(theme::user_avatar(
+                    Some(user),
+                    id,
+                    ACTIVE_PARTY_AVATAR,
+                    None,
+                    false,
+                    cx,
+                )),
+        })
         .into_any_element()
 }
 
@@ -1317,6 +1540,9 @@ fn active_now(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         .into_iter()
         .filter_map(|id| {
             let user = app.store.user(id)?;
+            if let Some(stream) = &user.live_stream {
+                return Some(live_stream_card(app, id, user, stream, cx));
+            }
             let activity = user.game.as_ref().or(user.listening.as_ref())?;
             Some(active_card(app, id, user, activity, cx))
         })
@@ -1337,7 +1563,8 @@ fn active_now(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         .child(
             div()
                 .text_size(rpx(20.))
-                .font_weight(FontWeight::BOLD)
+                .line_height(rpx(24.))
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(theme::STRONG))
                 .child("Active Now"),
         )

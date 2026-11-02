@@ -102,6 +102,18 @@ impl Rest {
     }
 
     /// `Ok(None)` means the user has no note; Discord answers 404 with code 10013.
+    pub async fn fetch_user_affinities(&self) -> Result<Vec<model::UserAffinity>, Error> {
+        let response = self
+            .send(|| {
+                self.client
+                    .get("https://discord.com/api/v9/users/@me/affinities/v2/users")
+                    .header(REFERER, "https://discord.com/channels/@me")
+            })
+            .await?;
+        let value = response.json::<Value>().await.map_err(|_| Error::Decode)?;
+        Ok(model::parse_entries(value["user_affinities"].clone()))
+    }
+
     pub async fn fetch_note(&self, user_id: u64) -> Result<Option<String>, Error> {
         let url = format!("https://discord.com/api/v9/users/@me/notes/{user_id}");
         let response = match self
