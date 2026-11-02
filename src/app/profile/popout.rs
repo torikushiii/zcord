@@ -863,7 +863,7 @@ pub(super) fn member_since(app: &DiscordApp, card: &ProfileCard, cx: &App) -> An
                     .flex()
                     .items_center()
                     .gap(rpx(4.))
-                    .child(theme::icon("discord", 16., palette.muted))
+                    .child(theme::logo(16.))
                     .child(format(date))
             }))
             .children(joined.zip(guild).map(|(date, guild)| {

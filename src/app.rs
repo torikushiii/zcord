@@ -1299,7 +1299,8 @@ fn connecting() -> impl IntoElement {
         .items_center()
         .justify_center()
         .gap_3()
-        .child(theme::icon("discord", 64., theme::BLURPLE))
+        .child(theme::logo(64.))
+        .child(theme::spinner(24., theme::MUTED))
         .child(
             div()
                 .text_size(rpx(14.))

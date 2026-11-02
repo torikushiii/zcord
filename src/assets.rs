@@ -4,6 +4,9 @@ use gpui::{AssetSource, Result, SharedString};
 
 pub struct AppAssets;
 
+pub const LOGO_PATH: &str = "app/zcord.png";
+const LOGO: &[u8] = include_bytes!("../assets/zcord.png");
+
 macro_rules! icons {
     ($($name:literal),* $(,)?) => {
         &[$((concat!("app/", $name, ".svg"), include_bytes!(concat!("../assets/icons/", $name, ".svg")))),*]
@@ -11,15 +14,15 @@ macro_rules! icons {
 }
 
 const ICONS: &[(&str, &[u8])] = icons![
-    "accessibility",
-    "activity",
-    "app-window",
     "paperclip",
     "chart-column",
     "monitor-share",
     "app-window",
     "arrow-up-down",
     "at-sign",
+    "accessibility",
+    "activity",
+    "app-window",
     "arrow-left",
     "arrow-right",
     "arrow-up-right",
@@ -61,7 +64,6 @@ const ICONS: &[(&str, &[u8])] = icons![
     "connections/twitter",
     "connections/xbox",
     "connections/youtube",
-    "discord",
     "ellipsis",
     "download",
     "external-link",
@@ -160,6 +162,9 @@ const ICONS: &[(&str, &[u8])] = icons![
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if path == LOGO_PATH {
+            return Ok(Some(Cow::Borrowed(LOGO)));
+        }
         match ICONS.iter().find(|(name, _)| *name == path) {
             Some((_, bytes)) => Ok(Some(Cow::Borrowed(bytes))),
             None => gpui_component_assets::Assets.load(path),
