@@ -279,7 +279,12 @@ pub(crate) fn video_box(app: &DiscordApp, video: Video<'_>, cx: &App) -> AnyElem
         .poster
         .as_ref()
         .and_then(|spec| images::resolve(spec, theme::image_px(video.width.max(video.height)), cx));
+    let poster_loading = poster.is_none()
+        && video.poster.as_ref().is_some_and(|spec| {
+            !images::failed(spec, theme::image_px(video.width.max(video.height)), cx)
+        });
     let frame = state.as_ref().and_then(|state| state.frame.clone());
+    let has_frame = frame.is_some();
     let radius = video.radius;
     let fullscreen = video.fullscreen;
     // The full-window player owns the controls while it is open.
@@ -379,13 +384,20 @@ pub(crate) fn video_box(app: &DiscordApp, video: Video<'_>, cx: &App) -> AnyElem
         .child(visual);
 
     if !active {
-        body = body.child(center_play());
+        // The play button would sit on top of the spinner, so it waits for the poster.
+        body = body.child(if poster_loading {
+            theme::media_loading().into_any_element()
+        } else {
+            center_play()
+        });
     } else if let Some(state) = &state {
         if let Some(error) = &state.error {
             body = body.child(error_overlay(error, &video.url));
         } else {
-            if state.buffering {
-                body = body.child(loading_overlay());
+            // Until the first frame arrives the player is starting up, even before it reports
+            // buffering.
+            if state.buffering || (!has_frame && !state.paused && !state.ended) {
+                body = body.child(theme::media_loading());
             }
             if state.paused || state.ended {
                 body = body.child(center_play());
@@ -415,26 +427,6 @@ fn center_play() -> AnyElement {
                 .rounded_full()
                 .bg(rgba(0x000000A6))
                 .child(theme::icon("video-play", 28., theme::STRONG)),
-        )
-        .into_any_element()
-}
-
-fn loading_overlay() -> AnyElement {
-    div()
-        .absolute()
-        .inset_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(
-            div()
-                .px(rpx(12.))
-                .py(rpx(6.))
-                .rounded_full()
-                .bg(rgba(0x000000A6))
-                .text_size(rpx(13.))
-                .text_color(rgb(theme::STRONG))
-                .child("Loading…"),
         )
         .into_any_element()
 }

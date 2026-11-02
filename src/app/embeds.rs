@@ -303,7 +303,12 @@ fn image_box(media: &Media, width: f32, height: f32, radius: f32, cx: &App) -> D
         .h(rpx(height))
         .rounded(rpx(radius))
         .overflow_hidden()
-        .when(child.is_none(), |this| this.bg(rgba(theme::BORDER)))
+        .when(child.is_none(), |this| {
+            this.bg(rgba(theme::BORDER))
+                .when(!images::failed(&spec, pixels, cx), |this| {
+                    this.child(theme::media_loading())
+                })
+        })
         .children(child)
 }
 
