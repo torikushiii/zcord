@@ -13,6 +13,7 @@ const URL: &str = "https://discord.com/api/v9/applications/detectable";
 const MAX_BODY: usize = 32 * 1024 * 1024;
 const MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const RETRY: Duration = Duration::from_secs(60 * 60);
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const CACHE_FILE: &str = "detectable-games.json";
 
 pub(crate) struct GameInfo {
@@ -284,7 +285,10 @@ async fn download(client: &reqwest::Client) -> Result<Vec<u8>, String> {
 }
 
 pub(crate) async fn run(output: watch::Sender<Option<Arc<Catalog>>>) {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(DOWNLOAD_TIMEOUT)
+        .build()
+        .unwrap_or_default();
     let path = cache_path();
     loop {
         if let Some((catalog, age)) = path.as_deref().and_then(read_cache) {
