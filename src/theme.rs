@@ -134,6 +134,8 @@ pub fn user_avatar(
         user_color(user_id),
         size,
         status,
+        user.is_some_and(|user| user.on_mobile),
+        user_id,
         image,
         user.and_then(|user| user.decoration.as_ref())
             .and_then(|data| decoration(user_id, data, size, animate, notch, cx)),
@@ -162,7 +164,16 @@ pub fn webhook_avatar(
     let spec = crate::store::avatar_spec(author_id, author.avatar.as_deref(), Some("0000"));
     let image = avatar_image(&spec, size, animate, None, cx);
     let initials: String = author.name.chars().take(2).collect();
-    avatar(&initials, user_color(author_id), size, None, image, None)
+    avatar(
+        &initials,
+        user_color(author_id),
+        size,
+        None,
+        false,
+        author_id,
+        image,
+        None,
+    )
 }
 
 /// Discord leaves avatar decorations off small avatars such as voice channel members.
@@ -198,6 +209,8 @@ fn member_avatar_with(
         user_color(user_id),
         size,
         status,
+        user.is_some_and(|user| user.on_mobile),
+        user_id,
         image,
         store
             .member_decoration(guild_id, user_id)
@@ -310,6 +323,8 @@ pub fn avatar(
     color: Hsla,
     size: f32,
     status: Option<(Status, u32)>,
+    on_mobile: bool,
+    user_id: u64,
     image: Option<AnyElement>,
     decoration: Option<AnyElement>,
 ) -> impl IntoElement + use<> {
@@ -338,8 +353,25 @@ pub fn avatar(
         })
         .children(decoration)
         .children(status.map(|(status, ring)| {
+            let phone = on_mobile && status == Status::Online;
             if let Some(notch) = notch {
-                return profile_avatar::indicator(notch, status, ring);
+                return if phone {
+                    profile_avatar::mobile_indicator(notch, ring)
+                } else {
+                    profile_avatar::indicator(notch, status, ring)
+                };
+            }
+            if phone {
+                return div()
+                    .debug_selector(|| "avatar-status".into())
+                    .absolute()
+                    .right(rpx(-2.))
+                    .bottom(rpx(-2.))
+                    .p(rpx(2.))
+                    .rounded(rpx(dot * 0.3))
+                    .bg(rgb(ring))
+                    .child(mobile_status(dot, ring))
+                    .into_any_element();
             }
             div()
                 .debug_selector(|| "avatar-status".into())
@@ -357,6 +389,72 @@ pub fn avatar(
                 .children(status_cutout(status, dot, ring))
                 .into_any_element()
         }))
+        .children(status.map(|(status, _)| StatusTooltip {
+            user_id,
+            target: (dot + 4.).min(size),
+            label: status.label(),
+        }))
+}
+
+/// A hover target over the status indicator, holding its own hover so that avatars don't need
+/// app state for it.
+#[derive(IntoElement)]
+struct StatusTooltip {
+    user_id: u64,
+    target: f32,
+    label: &'static str,
+}
+
+impl RenderOnce for StatusTooltip {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let key = ("status-tooltip", self.user_id);
+        let hovered = window.use_keyed_state(key.clone(), cx, |_, _| false);
+        let shown = *hovered.read(cx);
+        div()
+            .id(key)
+            .absolute()
+            .right(rpx(-2.))
+            .bottom(rpx(-2.))
+            .size(rpx(self.target))
+            .on_hover(move |over, _, cx| {
+                hovered.update(cx, |hovered, cx| {
+                    *hovered = *over;
+                    cx.notify();
+                });
+            })
+            .when(shown, |this| this.child(tooltip_above(self.label)))
+    }
+}
+
+/// Discord's phone mask: a body 1.5 times as tall as wide, with a screen and a home button.
+fn mobile_status(width: f32, surface: u32) -> Div {
+    let height = width * 1.5;
+    div()
+        .relative()
+        .flex_none()
+        .w(rpx(width))
+        .h(rpx(height))
+        .rounded(rpx(width * 0.1875))
+        .bg(rgb(STATUS_ONLINE))
+        .child(
+            div()
+                .absolute()
+                .left(rpx(width * 0.125))
+                .top(rpx(height / 6.))
+                .w(rpx(width * 0.75))
+                .h(rpx(height * 0.5))
+                .bg(rgb(surface)),
+        )
+        .child(
+            div()
+                .absolute()
+                .left(rpx(width * 0.375))
+                .top(rpx(height * 0.75))
+                .w(rpx(width * 0.25))
+                .h(rpx(height / 6.))
+                .rounded_full()
+                .bg(rgb(surface)),
+        )
 }
 
 fn status_cutout(status: Status, dot: f32, ring: u32) -> Option<Div> {

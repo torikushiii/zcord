@@ -50,6 +50,8 @@ impl Render for ActivityPreview {
                         rgb(theme::BG).into(),
                         TOOLTIP_AVATAR_SIZE - 4.,
                         None,
+                        false,
+                        0,
                         Some(
                             img(ImageSource::Render(image.clone()))
                                 .size_full()

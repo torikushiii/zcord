@@ -203,6 +203,15 @@ pub(crate) fn rounded_size(size: u32) -> u32 {
     size.clamp(16, 4096).next_power_of_two()
 }
 
+fn twitch_preview_url(url: &reqwest::Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str() == Some("static-cdn.jtvnw.net")
+        && url.port().is_none()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.path().starts_with("/previews-ttv/live_user_")
+}
+
 pub(crate) fn allowed_url(url: &reqwest::Url) -> bool {
     url.scheme() == "https"
         && url.host_str().is_some_and(|host| {
@@ -458,7 +467,11 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
         ImageSpec::LocalGif { .. } | ImageSpec::LocalVideo { .. } => return None,
     };
     let mut url = reqwest::Url::parse(&raw).ok()?;
-    if !allowed_url(&url) && !spotify_image_url(&url) && !gif_provider_media_url(&url) {
+    if !allowed_url(&url)
+        && !spotify_image_url(&url)
+        && !twitch_preview_url(&url)
+        && !gif_provider_media_url(&url)
+    {
         return None;
     }
     if matches!(spec, ImageSpec::Collectible { .. })

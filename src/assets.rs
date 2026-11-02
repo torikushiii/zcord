@@ -51,6 +51,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "connections/steam",
     "connections/tiktok",
     "connections/twitch",
+    "connections/twitch-fill",
     "connections/twitter",
     "connections/xbox",
     "connections/youtube",

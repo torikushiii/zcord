@@ -27,6 +27,26 @@ pub struct Presence {
     pub status: Option<String>,
     #[serde(default, deserialize_with = "optional_entries")]
     pub activities: Option<Vec<Activity>>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub client_status: Option<ClientStatus>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+pub struct ClientStatus {
+    #[serde(default, deserialize_with = "default_value")]
+    pub desktop: Option<String>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub mobile: Option<String>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub vr: Option<String>,
+}
+
+impl ClientStatus {
+    /// Discord's rule: a web session doesn't stop someone counting as on mobile.
+    pub fn mobile_only(&self) -> bool {
+        let online = |status: &Option<String>| status.as_deref() == Some("online");
+        online(&self.mobile) && !online(&self.desktop) && !online(&self.vr)
+    }
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -41,6 +61,8 @@ pub struct Activity {
     pub state: Option<String>,
     #[serde(default)]
     pub details: Option<String>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub url: Option<String>,
     #[serde(default)]
     pub emoji: Option<ActivityEmoji>,
     #[serde(default, deserialize_with = "optional_id")]
@@ -89,6 +111,15 @@ pub struct ActivityEmoji {
     pub animated: bool,
 }
 
+/// How likely the current user is to talk to someone, which Discord ranks per account.
+#[derive(Clone, Deserialize)]
+pub struct UserAffinity {
+    #[serde(deserialize_with = "snowflake")]
+    pub other_user_id: u64,
+    #[serde(default, deserialize_with = "default_value")]
+    pub communication_rank: u32,
+}
+
 #[derive(Default, Deserialize)]
 pub struct MergedPresences {
     #[serde(default, deserialize_with = "entry_groups")]
@@ -107,4 +138,29 @@ pub struct ReadySupplemental {
     pub merged_members: Vec<Vec<PartialMember>>,
     #[serde(default, deserialize_with = "default_value")]
     pub merged_presences: MergedPresences,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ClientStatus;
+    use serde_json::json;
+
+    fn mobile_only(value: serde_json::Value) -> bool {
+        serde_json::from_value::<ClientStatus>(value)
+            .unwrap()
+            .mobile_only()
+    }
+
+    #[test]
+    fn mobile_only_follows_discords_rule() {
+        assert!(mobile_only(json!({"mobile": "online"})));
+        assert!(mobile_only(json!({"mobile": "online", "web": "online"})));
+        assert!(mobile_only(json!({"mobile": "online", "desktop": "idle"})));
+        assert!(!mobile_only(
+            json!({"mobile": "online", "desktop": "online"})
+        ));
+        assert!(!mobile_only(json!({"mobile": "online", "vr": "online"})));
+        assert!(!mobile_only(json!({"mobile": "idle"})));
+        assert!(!mobile_only(json!({"desktop": "online"})));
+    }
 }

@@ -86,6 +86,8 @@ impl Store {
                 activity_kind: None,
                 game: None,
                 listening: None,
+                live_stream: None,
+                on_mobile: false,
                 custom_status: None,
                 avatar: None,
                 discriminator: None,

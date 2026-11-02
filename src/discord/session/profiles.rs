@@ -169,6 +169,11 @@ impl Session {
         Ok(wishlist)
     }
 
+    pub async fn user_affinities(&self) -> Result<Vec<model::UserAffinity>, Error> {
+        self.rest(async |rest| rest.fetch_user_affinities().await)
+            .await
+    }
+
     pub async fn note(&self, user_id: u64) -> Result<Option<String>, Error> {
         self.rest(async |rest| rest.fetch_note(user_id).await).await
     }

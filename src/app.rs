@@ -201,6 +201,7 @@ pub struct DiscordApp {
     settings_animation: u64,
     pub(crate) lightbox: Option<lightbox::Lightbox>,
     pub(crate) stream_view: Option<stream_view::StreamView>,
+    affinity_refresh: Option<Task<()>>,
     stream_nonce: u64,
     pub(crate) stream_members_shown: bool,
     pub(crate) stream_members_toggles: u64,
@@ -403,6 +404,7 @@ impl DiscordApp {
             hovered_add_reaction: None,
             hovered_upload_button: None,
             stream_view: None,
+            affinity_refresh: None,
             stream_nonce: 0,
             stream_members_shown: true,
             stream_members_toggles: 0,
@@ -646,6 +648,7 @@ impl DiscordApp {
                 }
                 self.refresh_voice_start_times();
                 self.arm_status_expiry_timer(cx);
+                self.load_user_affinities(cx);
                 self.sync_channel_rows();
                 self.screen = Screen::Chat;
                 if reconnect && self.channel().is_some() {
