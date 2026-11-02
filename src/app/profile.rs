@@ -34,6 +34,7 @@ mod loading;
 mod modal;
 mod mutuals;
 mod palette;
+pub(super) mod panel;
 mod popout;
 #[cfg(test)]
 mod scope_tests;
@@ -111,6 +112,8 @@ const ACTIVITY_PROMPTS: [ActivityPrompt; 3] = [
 
 pub(crate) struct ProfileCard {
     user_id: u64,
+    /// The DM side panel's card, stored in `dm_profile` rather than `profile`.
+    panel: bool,
     guild_id: Option<u64>,
     /// Unlike `guild_id`, kept while viewing the main profile so the menu can switch back.
     pub(crate) source_guild_id: Option<u64>,
@@ -293,7 +296,7 @@ impl ProfileCard {
         }
         let pending: HashSet<u64> = application_ids.iter().copied().collect();
         self.applications_pending.extend(pending.iter().copied());
-        let (user_id, guild_id) = (self.user_id, self.guild_id);
+        let (user_id, guild_id, panel) = (self.user_id, self.guild_id, self.panel);
         let metadata_session = session.clone();
         let request = Tokio::spawn(cx, async move {
             session.public_applications(&application_ids).await
@@ -312,8 +315,7 @@ impl ProfileCard {
             };
             this.update(cx, |app, cx| {
                 let Some(card) = app
-                    .profile
-                    .as_mut()
+                    .profile_slot(panel)
                     .filter(|card| card.user_id == user_id && card.guild_id == guild_id)
                 else {
                     return;
@@ -346,7 +348,7 @@ impl ProfileCard {
         }
         let pending: HashSet<u64> = game_ids.iter().copied().collect();
         self.games_pending.extend(pending.iter().copied());
-        let (user_id, guild_id) = (self.user_id, self.guild_id);
+        let (user_id, guild_id, panel) = (self.user_id, self.guild_id, self.panel);
         let metadata_session = session.clone();
         let request = Tokio::spawn(cx, async move { session.games(&game_ids).await });
         self._tasks.push(cx.spawn(async move |this, cx| {
@@ -363,8 +365,7 @@ impl ProfileCard {
             };
             this.update(cx, |app, cx| {
                 let Some(card) = app
-                    .profile
-                    .as_mut()
+                    .profile_slot(panel)
                     .filter(|card| card.user_id == user_id && card.guild_id == guild_id)
                 else {
                     return;
@@ -399,7 +400,7 @@ impl ProfileCard {
         }
         self.widget_configs_pending
             .extend(application_ids.iter().copied());
-        let (user_id, guild_id) = (self.user_id, self.guild_id);
+        let (user_id, guild_id, panel) = (self.user_id, self.guild_id, self.panel);
         for application_id in application_ids {
             let session = session.clone();
             let request = Tokio::spawn(
@@ -422,8 +423,7 @@ impl ProfileCard {
                 };
                 this.update(cx, |app, cx| {
                     let Some(card) = app
-                        .profile
-                        .as_mut()
+                        .profile_slot(panel)
                         .filter(|card| card.user_id == user_id && card.guild_id == guild_id)
                     else {
                         return;
@@ -509,6 +509,16 @@ impl Layout {
             // body's own 4px top padding brings the name 12px below the ring.
             header_min: 105. + 40. + 6. + 8. - inset,
             corner: if themed { 6. } else { 7. },
+        }
+    }
+
+    fn panel(themed: bool) -> Self {
+        let inset = if themed { THEME_BORDER } else { 0. };
+        Self {
+            width: panel::CARD_WIDTH - inset * 2.,
+            banner: 120.,
+            header_min: 120. + 40. + 6. + 8. - inset,
+            ..Self::popout(themed)
         }
     }
 

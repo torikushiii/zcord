@@ -213,7 +213,8 @@ pub struct DiscordApp {
     /// `(guild, channel)` to go back to when a stage's chat closes.
     stage_chat: Option<(u64, u64)>,
     affinity_refresh: Option<Task<()>>,
-    dm_profile: Option<dm_panel::DmProfile>,
+    dm_profile: Option<profile::ProfileCard>,
+    message_search: Option<search::MessageSearch>,
     forward_dialog: Option<forward_dialog::ForwardDialog>,
     stream_nonce: u64,
     pub(crate) stream_members_shown: bool,
