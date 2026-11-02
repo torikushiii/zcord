@@ -425,6 +425,7 @@ impl Render for OverlaysView {
             .children(lightbox::render(app, window, cx))
             .children(emoji_picker::render(app, window, cx))
             .children(gif_picker::render(app, window, cx))
+            .children(super::sticker_picker::render(app, window, cx))
             .children(voice::menu(app, cx))
             .children(chat::message_menu(app, cx))
             .children(voice::stream_card::render(app, cx))

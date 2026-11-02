@@ -25,6 +25,7 @@ use crate::discord::{self, model, settings_proto};
 use crate::media::images::ImageSpec;
 pub use account::Account;
 use base64::{Engine, engine::general_purpose::STANDARD};
+pub use expressions::{PickerSticker, StickerSection, sticker_matches};
 use home::PrivateLocation;
 use mapping::{
     channel_unread, forum_new_posts, local_timestamp, map_components, map_decoration, map_guild,

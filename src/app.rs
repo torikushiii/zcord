@@ -35,6 +35,7 @@ mod selection;
 mod sending;
 mod settings_page;
 mod smooth_scroll;
+mod sticker_picker;
 mod stream_view;
 mod switcher;
 mod titlebar;
@@ -242,6 +243,7 @@ pub struct DiscordApp {
     emoji_picker_closed_at: Option<Instant>,
     pub(crate) emoji_suggest: emoji_picker::Suggest,
     pub(crate) gifs: gif_picker::Gifs,
+    pub(crate) stickers: sticker_picker::Stickers,
     pub(crate) home: home::Home,
     pub(crate) quick_switcher: Option<switcher::QuickSwitcher>,
     quick_switcher_opens: u64,
@@ -406,6 +408,7 @@ impl DiscordApp {
             emoji_picker_closed_at: None,
             emoji_suggest: Default::default(),
             gifs: Default::default(),
+            stickers: Default::default(),
             home: Default::default(),
             quick_switcher: None,
             quick_switcher_opens: 0,

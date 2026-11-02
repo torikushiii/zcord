@@ -508,6 +508,7 @@ mod tests {
             nonce: 123,
             reply,
             attachments: Vec::new(),
+            sticker_ids: Vec::new(),
         }
     }
 

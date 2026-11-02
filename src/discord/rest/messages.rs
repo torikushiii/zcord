@@ -63,6 +63,8 @@ pub(super) struct CreateMessage<'a> {
     flags: u64,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     attachments: Vec<AttachmentBody<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    sticker_ids: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -136,6 +138,11 @@ pub(super) fn message_body<'a>(
                 is_spoiler: attachment.spoiler,
                 original_content_type: &attachment.content_type,
             })
+            .collect(),
+        sticker_ids: message
+            .sticker_ids
+            .iter()
+            .map(|id| id.to_string())
             .collect(),
     }
 }
@@ -608,6 +615,7 @@ impl Rest {
             nonce,
             reply: None,
             attachments: Vec::new(),
+            sticker_ids: Vec::new(),
         };
         let body = message_body(target_guild, target_channel, &message);
         let response = self
@@ -768,9 +776,37 @@ fn is_search_indexing_code(code: u64) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{AckManual, forward_body, parse_search_reply, parse_search_response};
-    use crate::discord::{Error, SearchOutcome};
+    use super::{AckManual, forward_body, message_body, parse_search_reply, parse_search_response};
+    use crate::discord::{Error, OutgoingMessage, SearchOutcome};
     use std::time::Duration;
+
+    #[test]
+    fn message_body_serializes_sticker_ids_only_when_non_empty() {
+        let message = OutgoingMessage {
+            content: String::new(),
+            nonce: 7,
+            reply: None,
+            attachments: Vec::new(),
+            sticker_ids: Vec::new(),
+        };
+        let body = serde_json::to_string(&message_body(None, 20, &message)).unwrap();
+        assert_eq!(
+            body,
+            r#"{"mobile_network_type":"unknown","content":"","nonce":"7","tts":false,"flags":0}"#
+        );
+        let message = OutgoingMessage {
+            content: String::new(),
+            nonce: 7,
+            reply: None,
+            attachments: Vec::new(),
+            sticker_ids: vec![9001, 9002],
+        };
+        let body = serde_json::to_string(&message_body(None, 20, &message)).unwrap();
+        assert_eq!(
+            body,
+            r#"{"mobile_network_type":"unknown","content":"","nonce":"7","tts":false,"flags":0,"sticker_ids":["9001","9002"]}"#
+        );
+    }
 
     #[test]
     fn forward_body_matches_discord() {

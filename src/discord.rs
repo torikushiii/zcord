@@ -109,6 +109,7 @@ pub struct OutgoingMessage {
     pub nonce: u64,
     pub reply: Option<OutgoingReply>,
     pub attachments: Vec<OutgoingAttachment>,
+    pub sticker_ids: Vec<u64>,
 }
 
 pub struct OutgoingReply {

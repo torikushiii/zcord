@@ -7,6 +7,25 @@ impl Store {
         channel_id: u64,
         content: String,
     ) -> Option<usize> {
+        self.append_local(guild_id, channel_id, content, Vec::new())
+    }
+
+    pub fn append_sticker(
+        &mut self,
+        guild_id: u64,
+        channel_id: u64,
+        sticker: Sticker,
+    ) -> Option<usize> {
+        self.append_local(guild_id, channel_id, String::new(), vec![sticker])
+    }
+
+    fn append_local(
+        &mut self,
+        guild_id: u64,
+        channel_id: u64,
+        content: String,
+        stickers: Vec<Sticker>,
+    ) -> Option<usize> {
         let channel = self
             .guilds
             .iter_mut()
@@ -30,7 +49,7 @@ impl Store {
             components: Vec::new(),
             reactions: Vec::new(),
             attachments: Vec::new(),
-            stickers: Vec::new(),
+            stickers,
             kind: 0,
             edited: false,
             reply: None,
@@ -92,6 +111,35 @@ impl Store {
         content: String,
         reply_to: Option<u64>,
         uploads: Vec<PendingUpload>,
+    ) -> Change {
+        self.queue_pending(channel_id, nonce, content, reply_to, uploads, Vec::new())
+    }
+
+    pub fn queue_sticker(
+        &mut self,
+        channel_id: u64,
+        nonce: u64,
+        reply_to: Option<u64>,
+        sticker: Sticker,
+    ) -> Change {
+        self.queue_pending(
+            channel_id,
+            nonce,
+            String::new(),
+            reply_to,
+            Vec::new(),
+            vec![sticker],
+        )
+    }
+
+    fn queue_pending(
+        &mut self,
+        channel_id: u64,
+        nonce: u64,
+        content: String,
+        reply_to: Option<u64>,
+        uploads: Vec<PendingUpload>,
+        stickers: Vec<Sticker>,
     ) -> Change {
         let reply = reply_to.map(|message_id| {
             match self
@@ -164,7 +212,7 @@ impl Store {
             components: Vec::new(),
             reactions: Vec::new(),
             attachments: Vec::new(),
-            stickers: Vec::new(),
+            stickers,
             kind: 0,
             edited: false,
             reply,

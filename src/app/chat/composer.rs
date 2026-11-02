@@ -125,7 +125,28 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                                         .ok();
                                 })
                         })
-                        // .child(theme::icon_button("stickers", "sticker", 24., theme::muted()))
+                        .child({
+                            let entity = app.entity.clone();
+                            let picker_anchor = picker_anchor.clone();
+                            theme::icon_button("stickers", "sticker", 24., theme::muted())
+                                .relative()
+                                .child(theme::hover_tooltip("stickers-tip", "Stickers"))
+                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                    let Some(position) = picker_anchor.get() else {
+                                        return;
+                                    };
+                                    entity
+                                        .update(cx, |app, cx| {
+                                            app.toggle_sticker_picker(
+                                                PickerTarget::Composer,
+                                                position,
+                                                window,
+                                                cx,
+                                            )
+                                        })
+                                        .ok();
+                                })
+                        })
                         .child({
                             let entity = app.entity.clone();
                             theme::icon_button("emoji", "smile", 24., theme::muted()).on_mouse_down(

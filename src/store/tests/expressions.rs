@@ -371,3 +371,119 @@ fn guild_discoverable_reads_ready_properties_before_legacy_features() {
     );
     assert_eq!(store.guild_discoverable(200), Some(false));
 }
+
+fn stickers_ready(nitro: bool) -> model::Ready {
+    let mut payload: serde_json::Value =
+        serde_json::from_str(include_str!("../../discord/fixtures/ready.json")).unwrap();
+    payload["user"]["premium_type"] = if nitro { json!(2) } else { json!(null) };
+    for guild in payload["guilds"].as_array_mut().unwrap() {
+        match model::id_value(&guild["id"]) {
+            Some(200) => {
+                guild["stickers"] = json!([
+                    {"id": "9201", "name": "wave", "tags": "greeting,hello",
+                     "description": "A wave", "format_type": 1, "type": 2, "available": true},
+                    {"id": "9202", "name": "dance", "format_type": 4, "available": false}
+                ]);
+                for role in guild["roles"].as_array_mut().unwrap() {
+                    if model::id_value(&role["id"]) == Some(201) {
+                        role["permissions"] = json!("2048");
+                    }
+                }
+            }
+            Some(100) => {
+                guild["stickers"] = json!([
+                    {"id": "9101", "name": "party", "tags": "fun,celebration", "format_type": 3}
+                ]);
+            }
+            _ => {}
+        }
+    }
+    serde_json::from_value(payload).unwrap()
+}
+
+#[test]
+fn sticker_sections_order_current_guild_first_and_skip_unavailable() {
+    let store = Store::from_ready(stickers_ready(false));
+    let sections = store.sticker_sections(Some(200), 2002);
+    assert_eq!(sections.len(), 2);
+    assert_eq!(sections[0].guild_id, 200);
+    assert_eq!(sections[0].name, "Second Guild Name Extra");
+    assert_eq!(
+        sections[0].stickers.len(),
+        1,
+        "available == Some(false) stickers are skipped"
+    );
+    assert_eq!(sections[0].stickers[0].id, 9201);
+    assert_eq!(sections[0].stickers[0].tags, "greeting,hello");
+    assert_eq!(
+        sections[0].stickers[0].description.as_deref(),
+        Some("A wave")
+    );
+    assert_eq!(sections[0].stickers[0].format_type, 1);
+    assert!(
+        sections[0].stickers[0].usable,
+        "current guild needs no nitro"
+    );
+    assert_eq!(sections[1].guild_id, 100);
+    assert_eq!(sections[1].stickers[0].id, 9101);
+    assert!(!sections[1].stickers[0].usable, "other guild without nitro");
+
+    let sections = store.sticker_sections(Some(100), 2002);
+    assert_eq!(sections[0].guild_id, 100, "current guild leads the order");
+    assert!(sections[0].stickers[0].usable);
+    assert_eq!(sections[1].guild_id, 200);
+    assert!(!sections[1].stickers[0].usable);
+}
+
+#[test]
+fn external_stickers_need_nitro_and_the_channel_permission() {
+    let mut store = Store::from_ready(stickers_ready(true));
+    let sections = store.sticker_sections(Some(200), 2002);
+    assert!(!sections[1].stickers[0].usable, "nitro alone is not enough");
+
+    assert_eq!(
+        role_event(
+            &mut store,
+            json!({"guild_id": "200", "role": {"id": "201", "permissions":
+                (2048u64 | (1u64 << 37)).to_string(), "position": 1}})
+        ),
+        Change::Structure
+    );
+    let sections = store.sticker_sections(Some(200), 2002);
+    assert!(sections[1].stickers[0].usable);
+}
+
+#[test]
+fn dm_stickers_need_only_nitro_for_other_guilds() {
+    let store = Store::from_ready(stickers_ready(true));
+    let sections = store.sticker_sections(None, 900);
+    assert_eq!(sections.len(), 2);
+    assert_eq!(sections[0].guild_id, 200);
+    assert!(sections[0].stickers[0].usable);
+    assert!(sections[1].stickers[0].usable);
+
+    let store = Store::from_ready(stickers_ready(false));
+    let sections = store.sticker_sections(None, 900);
+    assert!(!sections[0].stickers[0].usable);
+    assert!(!sections[1].stickers[0].usable);
+}
+
+#[test]
+fn sticker_matches_searches_name_and_tags_case_insensitively() {
+    let sticker = PickerSticker {
+        id: 1,
+        name: "Wave Hello".into(),
+        tags: "greeting, Party Time".into(),
+        description: None,
+        format_type: 1,
+        usable: true,
+    };
+    for query in [
+        "wave", "WAVE", "hello", "HELL", "greet", "party", "TIME", "",
+    ] {
+        assert!(sticker_matches(&sticker, query), "{query}");
+    }
+    for query in ["dance", "goodbye"] {
+        assert!(!sticker_matches(&sticker, query), "{query}");
+    }
+}
