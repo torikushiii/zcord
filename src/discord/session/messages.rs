@@ -158,9 +158,6 @@ impl Session {
         files: &[UploadFile],
         progress: &Arc<UploadProgress>,
     ) -> Result<model::Message, Error> {
-        let slots = self
-            .rest(async |rest| rest.create_uploads(guild_id, channel_id, files).await)
-            .await?;
         let upload_client = self
             .inner
             .rest
@@ -168,18 +165,28 @@ impl Session {
             .map_err(Clone::clone)?
             .upload_client
             .clone();
-        let mut uploaded = Vec::with_capacity(files.len());
-        for (index, file) in files.iter().enumerate() {
-            let Some(slot) = slots.iter().find(|slot| slot.id == index as u64) else {
-                self.discard_uploads(&uploaded).await;
-                return Err(Error::Decode);
-            };
-            if let Err(error) = put_upload(&upload_client, &slot.upload_url, file, progress).await {
-                self.discard_uploads(&uploaded).await;
+        // Like the official client: a slot request and an upload per file, all at once.
+        let created = std::sync::Mutex::new(Vec::new());
+        let uploads = files.iter().map(|file| async {
+            let slots = self
+                .rest(async |rest| {
+                    rest.create_uploads(guild_id, channel_id, std::slice::from_ref(file))
+                        .await
+                })
+                .await?;
+            let slot = slots.into_iter().next().ok_or(Error::Decode)?;
+            created.lock().unwrap().push(slot.clone());
+            put_upload(&upload_client, &slot.upload_url, file, progress).await?;
+            Ok::<_, Error>(slot)
+        });
+        let uploaded = match futures::future::try_join_all(uploads).await {
+            Ok(uploaded) => uploaded,
+            Err(error) => {
+                let created = std::mem::take(&mut *created.lock().unwrap());
+                self.discard_uploads(&created).await;
                 return Err(error);
             }
-            uploaded.push(slot.clone());
-        }
+        };
         message.attachments = files
             .iter()
             .zip(&uploaded)

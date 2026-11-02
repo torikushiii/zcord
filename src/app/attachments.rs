@@ -413,6 +413,24 @@ impl DiscordApp {
         cx.notify();
     }
 
+    pub(crate) fn clear_focused_staged(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
+        let channel_id = if self.composer_focused(window, cx) {
+            self.selected_channel_id
+        } else if self.thread_pane_focused(window, cx)
+            && let Some(thread) = self.thread_pane_channel()
+        {
+            thread.id
+        } else {
+            return false;
+        };
+        let Some(removed) = self.staged.remove(&channel_id) else {
+            return false;
+        };
+        remove_pasted(&removed, cx);
+        cx.notify();
+        true
+    }
+
     pub(crate) fn toggle_staged_spoiler(&mut self, id: u64, cx: &mut Context<Self>) {
         let Some(channel_id) = self.staged_channel(id) else {
             return;

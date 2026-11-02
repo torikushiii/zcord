@@ -271,6 +271,7 @@ impl DiscordApp {
             self.cancel_delete(cx);
         } else if self.editing.is_some() {
             self.cancel_edit(window, cx);
+        } else if self.clear_focused_staged(window, cx) {
         } else if self.reply.is_some() {
             self.cancel_reply(cx);
         } else if self.thread_pane_focused(window, cx) {

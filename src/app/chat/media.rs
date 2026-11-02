@@ -134,19 +134,74 @@ pub(super) fn render_sticker(
         .into_any_element()
 }
 
-pub(super) fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &App) -> AnyElement {
+/// Two or more images and videos share Discord's mosaic; other files follow as cards.
+pub(super) fn render_attachments(
+    app: &DiscordApp,
+    attachments: &[Attachment],
+    cx: &App,
+) -> Vec<AnyElement> {
+    let (visual, files): (Vec<_>, Vec<_>) = attachments.iter().partition(|attachment| {
+        if attachment.is_video() {
+            attachment.video_url().is_some()
+        } else {
+            attachment.image_spec().is_some()
+        }
+    });
+    let [lead, _, ..] = visual.as_slice() else {
+        return attachments
+            .iter()
+            .map(|attachment| render_attachment(app, attachment, cx))
+            .collect();
+    };
+    let lead = (lead.width.unwrap_or(0), lead.height.unwrap_or(0));
+    let width = MEDIA_MAX.0.min(media_limit());
+    let grid = embeds::mosaic(visual.len(), width, lead, |slot, width, height| {
+        attachment_box(app, visual[slot], width, height, 4., cx)
+    });
+    std::iter::once(div().mt_1().child(grid).into_any_element())
+        .chain(
+            files
+                .into_iter()
+                .map(|attachment| file_card(attachment).into_any_element()),
+        )
+        .collect()
+}
+
+fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &App) -> AnyElement {
+    let visual = if attachment.is_video() {
+        attachment.video_url().is_some()
+    } else {
+        attachment.image_spec().is_some()
+    };
+    if !visual {
+        return file_card(attachment).into_any_element();
+    }
+    let (width, height) = (
+        attachment.width.unwrap_or(1).max(1) as f32,
+        attachment.height.unwrap_or(1).max(1) as f32,
+    );
+    let scale = (MEDIA_MAX.0.min(media_limit()) / width)
+        .min(MEDIA_MAX.1 / height)
+        .min(1.);
+    let (width, height) = ((width * scale).round(), (height * scale).round());
+    div()
+        .mt_1()
+        .child(attachment_box(app, attachment, width, height, 8., cx))
+        .into_any_element()
+}
+
+fn attachment_box(
+    app: &DiscordApp,
+    attachment: &Attachment,
+    width: f32,
+    height: f32,
+    radius: f32,
+    cx: &App,
+) -> AnyElement {
     if attachment.is_video() {
         let Some(url) = attachment.video_url() else {
             return file_card(attachment).into_any_element();
         };
-        let (width, height) = (
-            attachment.width.unwrap_or(1).max(1) as f32,
-            attachment.height.unwrap_or(1).max(1) as f32,
-        );
-        let scale = (MEDIA_MAX.0.min(media_limit()) / width)
-            .min(MEDIA_MAX.1 / height)
-            .min(1.);
-        let (width, height) = ((width * scale).round(), (height * scale).round());
         let poster = attachment.video_poster_spec();
         if attachment.spoiler() && !app.revealed_spoilers.contains(&(attachment.id, 0)) {
             let media = poster.as_ref().map_or_else(
@@ -156,33 +211,30 @@ pub(super) fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &
                         .flex_none()
                         .w(rpx(width))
                         .h(rpx(height))
-                        .rounded(rpx(8.))
+                        .rounded(rpx(radius))
                         .overflow_hidden()
                         .bg(rgba(theme::border()))
                 },
-                |spec| embeds::blurred_box(spec, width, height, 8., cx),
+                |spec| embeds::blurred_box(spec, width, height, radius, cx),
             );
             return media
-                .mt_1()
-                .child(embeds::spoiler_overlay(app, attachment.id, 8.))
+                .child(embeds::spoiler_overlay(app, attachment.id, radius))
                 .into_any_element();
         }
-        return div()
-            .mt_1()
-            .child(crate::media::player::video_box(
-                app,
-                crate::media::player::Video {
-                    key: attachment.id,
-                    url: &url,
-                    poster,
-                    width,
-                    height,
-                    radius: 8.,
-                    fullscreen: false,
-                },
-                cx,
-            ))
-            .into_any_element();
+        return crate::media::player::video_box(
+            app,
+            crate::media::player::Video {
+                key: attachment.id,
+                url: &url,
+                poster,
+                width,
+                height,
+                radius,
+                fullscreen: false,
+            },
+            cx,
+        )
+        .into_any_element();
     }
     let Some(spec) = attachment.image_spec() else {
         return file_card(attachment).into_any_element();
@@ -191,15 +243,9 @@ pub(super) fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &
         attachment.width.unwrap_or(1).max(1),
         attachment.height.unwrap_or(1).max(1),
     );
-    let (width, height) = (original_width as f32, original_height as f32);
-    let scale = (MEDIA_MAX.0.min(media_limit()) / width)
-        .min(MEDIA_MAX.1 / height)
-        .min(1.);
-    let (width, height) = ((width * scale).round(), (height * scale).round());
     if attachment.spoiler() && !app.revealed_spoilers.contains(&(attachment.id, 0)) {
-        return embeds::blurred_box(&spec, width, height, 8., cx)
-            .mt_1()
-            .child(embeds::spoiler_overlay(app, attachment.id, 8.))
+        return embeds::blurred_box(&spec, width, height, radius, cx)
+            .child(embeds::spoiler_overlay(app, attachment.id, radius))
             .into_any_element();
     }
     let preview = theme::image_px(width.max(height));
@@ -215,7 +261,7 @@ pub(super) fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &
             animated::image(image)
                 .size_full()
                 .object_fit(ObjectFit::Cover)
-                .rounded(rpx(8.))
+                .rounded(rpx(radius))
                 .id(("animated", attachment.id))
                 .into_any_element(),
         ),
@@ -223,7 +269,7 @@ pub(super) fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &
             image
                 .size_full()
                 .object_fit(ObjectFit::Cover)
-                .rounded(rpx(8.))
+                .rounded(rpx(radius))
                 .id(("attachment-still", attachment.id))
                 .into_any_element()
         }),
@@ -239,17 +285,17 @@ pub(super) fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &
             embeds::animated(path, &attachment.url)
                 .size_full()
                 .object_fit(ObjectFit::Cover)
-                .rounded(rpx(8.))
+                .rounded(rpx(radius))
                 .into_any_element()
         })
     });
     div()
         .id(("lightbox-open", attachment.id))
         .relative()
-        .mt_1()
+        .flex_none()
         .w(rpx(width))
         .h(rpx(height))
-        .rounded(rpx(8.))
+        .rounded(rpx(radius))
         .overflow_hidden()
         .bg(rgb(theme::elevated()))
         .cursor_pointer()
@@ -323,11 +369,17 @@ fn file_card(attachment: &Attachment) -> impl IntoElement + use<> {
 pub(super) fn upload_card(
     app: &DiscordApp,
     nonce: u64,
-    upload: &PendingUpload,
-) -> impl IntoElement + use<> {
+    uploads: &[PendingUpload],
+) -> Option<impl IntoElement + use<>> {
+    let title = match uploads {
+        [] => return None,
+        [upload] => upload.name.clone(),
+        _ => format!("Uploading {} Files", uploads.len()),
+    };
+    let size: u64 = uploads.iter().map(|upload| upload.size).sum();
     let fraction = app.upload_fraction(nonce);
     let cancel = app.entity.clone();
-    div()
+    let card = div()
         .flex()
         .items_center()
         .gap_3()
@@ -346,12 +398,17 @@ pub(super) fn upload_card(
                 .flex_1()
                 .min_w_0()
                 .gap_1()
-                .child(div().truncate().child(upload.name.clone()))
                 .child(
                     div()
-                        .text_size(rpx(12.))
-                        .text_color(rgb(theme::faint()))
-                        .child(file_size(upload.size)),
+                        .flex()
+                        .min_w_0()
+                        .child(div().truncate().child(title))
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_color(rgb(theme::faint()))
+                                .child(format!(" — {}", file_size(size))),
+                        ),
                 )
                 .children(fraction.map(|fraction| {
                     div()
@@ -378,7 +435,8 @@ pub(super) fn upload_card(
                     cancel.update(cx, |app, _| app.cancel_upload(nonce)).ok();
                 }),
             )
-        })
+        });
+    Some(card)
 }
 
 pub(in crate::app) fn file_size(bytes: u64) -> String {

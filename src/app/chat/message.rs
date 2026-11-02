@@ -1,6 +1,6 @@
 use super::actions::message_actions;
 use super::composer::{emoji_token_overlay, flush_textarea};
-use super::media::{render_attachment, render_sticker};
+use super::media::{render_attachments, render_sticker};
 use super::rows::is_system;
 use super::*;
 use crate::app::display_name::{self, Surface};
@@ -463,12 +463,7 @@ fn render_forward(app: &DiscordApp, message_id: u64, forward: &Forward, cx: &App
                     )),
             )
         })
-        .children(
-            forward
-                .attachments
-                .iter()
-                .map(|attachment| render_attachment(app, attachment, cx)),
-        )
+        .children(render_attachments(app, &forward.attachments, cx))
         .children(
             forward
                 .stickers
@@ -756,18 +751,8 @@ pub(super) fn render_message(
                             cx,
                         ))
                         .children(super::invite_card::cards(app, message, cx))
-                        .children(
-                            message
-                                .attachments
-                                .iter()
-                                .map(|attachment| render_attachment(app, attachment, cx)),
-                        )
-                        .children(
-                            message
-                                .uploads
-                                .iter()
-                                .map(|upload| super::media::upload_card(app, message.id, upload)),
-                        )
+                        .children(render_attachments(app, &message.attachments, cx))
+                        .children(super::media::upload_card(app, message.id, &message.uploads))
                         .children(
                             message
                                 .stickers

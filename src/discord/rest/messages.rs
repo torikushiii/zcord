@@ -220,7 +220,6 @@ struct UploadsResponse {
 
 #[derive(Deserialize)]
 struct UploadSlot {
-    id: u64,
     upload_url: String,
     upload_filename: String,
 }
@@ -262,7 +261,6 @@ pub(super) fn parse_uploads(body: &str) -> Result<Vec<UploadTarget>, Error> {
         .attachments
         .into_iter()
         .map(|slot| UploadTarget {
-            id: slot.id,
             upload_url: slot.upload_url,
             upload_filename: slot.upload_filename,
         })
