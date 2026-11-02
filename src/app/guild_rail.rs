@@ -231,8 +231,8 @@ pub fn render(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                     } else {
                         theme::ELEVATED
                     }))
-                    .group_hover("rail-item", |style| style.bg(rgb(theme::BLURPLE)))
-                    .child(theme::icon("discord", 28., theme::STRONG)),
+                    .group_hover("rail-item", |style| style.bg(rgb(theme::SURFACE_HIGHEST)))
+                    .child(theme::logo(32.)),
                 Corners::Morph(HOME_KEY, app.is_home()),
                 app,
                 morphs,

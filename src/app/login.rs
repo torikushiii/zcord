@@ -365,12 +365,12 @@ fn qr_visual(state: &QrState, cx: &App) -> AnyElement {
                     .size(rpx(QR_LOGO))
                     .rounded(rpx(6.))
                     .bg(white())
-                    .child(theme::icon("discord", QR_LOGO - 12., theme::BLURPLE)),
+                    .child(theme::logo(QR_LOGO - 12.)),
             )
             .into_any_element(),
         QrState::Loading => frame
             .bg(white())
-            .child(theme::icon("discord", QR_LOGO - 12., theme::BLURPLE))
+            .child(theme::logo(QR_LOGO - 12.))
             .with_animation(
                 "qr-loading",
                 Animation::new(Duration::from_millis(1200))
@@ -399,7 +399,7 @@ fn qr_visual(state: &QrState, cx: &App) -> AnyElement {
         }
         QrState::Failed(_) => frame
             .bg(rgb(theme::BG))
-            .child(theme::icon("discord", QR_LOGO, theme::FAINT))
+            .child(theme::logo(QR_LOGO).opacity(0.5))
             .into_any_element(),
     }
 }

@@ -102,6 +102,10 @@ pub fn composite(overlay: u32, background: u32) -> u32 {
     (channel(color.r) << 16) | (channel(color.g) << 8) | channel(color.b)
 }
 
+pub fn logo(size: f32) -> Img {
+    img(crate::assets::LOGO_PATH).size(rpx(size)).flex_none()
+}
+
 pub fn icon(name: &str, size: f32, color: u32) -> Svg {
     svg()
         .path(SharedString::from(format!("app/{name}.svg")))
