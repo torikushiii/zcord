@@ -10,7 +10,7 @@ use crate::{
         DiscordApp,
         chat::file_size,
         emoji_picker::PickerTarget,
-        message_body::{BodyContext, render_body, wrapped_label},
+        message_body::{BodyColors, BodyContext, render_body, wrapped_label},
     },
     media::images,
     store::{Component, Embed, EmbedField, EmbedKind, GalleryItem, Media, Reaction, ReactionEmoji},
@@ -106,7 +106,10 @@ fn markdown(
         message_id: key,
         revealed: &app.revealed_spoilers,
         entity: app.entity.clone(),
-        colors: Default::default(),
+        colors: BodyColors {
+            quote: Some(theme::MUTED),
+            ..Default::default()
+        },
     };
     div()
         .w_full()
@@ -131,17 +134,29 @@ fn linked(element: Stateful<Div>, url: Option<&String>) -> Stateful<Div> {
 }
 
 fn description_text(text: &str) -> Cow<'_, str> {
-    // FxEmbed inserts unattached variation selectors after line breaks. Some native
-    // font backends give them advance width; selectors attached to real glyphs stay.
+    // FxEmbed puts unattached variation selectors at line starts, including after `> `. Some
+    // font backends give them width; selectors attached to a real glyph stay.
     let selector = |c: char| matches!(c, '\u{FE00}'..='\u{FE0F}');
-    if !text.split('\n').any(|line| line.starts_with(selector)) {
+    let unattached = |previous: Option<char>| previous.is_none_or(char::is_whitespace);
+    let mut previous = None;
+    if !text.chars().any(|c| {
+        let stray = selector(c) && unattached(previous);
+        previous = Some(c);
+        stray
+    }) {
         return Cow::Borrowed(text);
     }
-    Cow::Owned(
-        text.split_inclusive('\n')
-            .map(|line| line.trim_start_matches(selector))
-            .collect(),
-    )
+    let mut kept = String::with_capacity(text.len());
+    let mut previous = None;
+    for c in text.chars() {
+        // A dropped selector leaves `previous` alone, so a whole run of them goes.
+        if selector(c) && unattached(previous) {
+            continue;
+        }
+        kept.push(c);
+        previous = Some(c);
+    }
+    Cow::Owned(kept)
 }
 
 fn embed_card(color: Option<u32>, content_width: Option<f32>) -> Div {
@@ -200,17 +215,14 @@ fn fit(media: &Media, max: (f32, f32)) -> (f32, f32) {
     )
 }
 
-fn card_content_width(embed: &Embed, media: (f32, f32)) -> f32 {
+/// Like Discord, a card with text fits its content (up to the embed width), so neither short
+/// text beside wide media nor long text beside portrait media is forced to the media's width.
+fn card_content_width(embed: &Embed, media: (f32, f32)) -> Option<f32> {
     let has_text = embed.title.is_some()
         || embed.description.is_some()
         || embed.author.is_some()
         || !embed.fields.is_empty();
-    // Portrait or small media (a 64px site logo) must not squeeze the text into a narrow column.
-    if has_text && (media.0 < media.1 || media.0 < EMBED_MEDIA.0) {
-        EMBED_WIDTH - EMBED_HORIZONTAL_INSET
-    } else {
-        media.0
-    }
+    (!has_text).then_some(media.0)
 }
 
 fn embed_content_width(
@@ -224,7 +236,7 @@ fn embed_content_width(
     } else if side_thumbnail {
         None
     } else {
-        media.map(|dimensions| card_content_width(embed, dimensions))
+        media.and_then(|dimensions| card_content_width(embed, dimensions))
     }
 }
 

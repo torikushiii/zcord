@@ -25,6 +25,8 @@ pub struct BodyColors {
     pub muted: u32,
     pub faint: u32,
     pub link: Option<u32>,
+    /// Embeds draw quoted text muted; messages keep the surrounding colour.
+    pub quote: Option<u32>,
 }
 
 impl Default for BodyColors {
@@ -34,6 +36,7 @@ impl Default for BodyColors {
             muted: theme::MUTED,
             faint: theme::FAINT,
             link: None,
+            quote: None,
         }
     }
 }
@@ -198,6 +201,9 @@ fn render_block(
                     .flex_1()
                     .min_w_0()
                     .pl(rpx(12.))
+                    .when_some(context.colors.quote, |this, color| {
+                        this.text_color(rgb(color))
+                    })
                     .children(blocks.iter().enumerate().map(|(index, block)| {
                         let last = index + 1 == blocks.len();
                         render_block(

@@ -17,11 +17,11 @@ use crate::{
 };
 
 #[test]
-fn only_orphaned_line_start_selectors_are_removed() {
-    let source = "Beach skin! \u{1F3D6}\u{FE0F}\n\u{FE00}\u{FE00}\n\u{FE00}\u{FE00}[#ZZZ](https://example.com)\n  indented\n**bold**";
+fn only_orphaned_selectors_are_removed() {
+    let source = "Beach skin! \u{1F3D6}\u{FE0F}\n\u{FE00}\u{FE00}\n\u{FE00}\u{FE00}[#ZZZ](https://example.com)\n  indented\n**bold**\n> \u{FE00}\u{FE00}quoted";
     assert_eq!(
         description_text(source),
-        "Beach skin! \u{1F3D6}\u{FE0F}\n\n[#ZZZ](https://example.com)\n  indented\n**bold**"
+        "Beach skin! \u{1F3D6}\u{FE0F}\n\n[#ZZZ](https://example.com)\n  indented\n**bold**\n> quoted"
     );
     for source in [
         "",
@@ -215,6 +215,8 @@ fn fields_resolve_a_readable_width_with_or_without_a_thumbnail() {
         embed_content_width(&embed, false, Some((400., 225.))),
         Some(400.)
     );
+    embed.description = Some("Short text".into());
+    assert_eq!(embed_content_width(&embed, false, Some((400., 225.))), None);
 }
 
 struct InlineFieldLayout {
@@ -323,15 +325,15 @@ fn portrait_posts_keep_readable_text_without_stretching_the_media(cx: &mut TestA
     };
     let portrait = (169., 300.);
     let card_width = card_content_width(&embed, portrait);
-    assert_eq!(card_width + EMBED_HORIZONTAL_INSET, EMBED_WIDTH);
-    assert_eq!(card_content_width(&embed, (400., 225.)), 400.);
+    assert_eq!(card_width, None);
+    assert_eq!(card_content_width(&embed, (400., 225.)), None);
     embed.description = None;
-    assert_eq!(card_content_width(&embed, portrait), portrait.0);
+    assert_eq!(card_content_width(&embed, portrait), Some(portrait.0));
 
     cx.update(gpui_component::init);
     let (_, cx) = cx.add_window_view(|_, _| EmbedLayout {
         media_width: Some(portrait.0),
-        card_width: Some(card_width),
+        card_width,
         description: description.into(),
         side_thumbnail: false,
         weight: Rc::new(RefCell::new(None)),

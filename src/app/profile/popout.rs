@@ -736,6 +736,7 @@ pub(super) fn markdown(
             muted: palette.muted,
             faint: palette.faint,
             link: palette.light.then_some(0x154C8A),
+            quote: None,
         },
     };
     render_body(&parsed.blocks, false, false, &context, cx).into_any_element()
