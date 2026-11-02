@@ -89,34 +89,42 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
                         .flex()
                         .flex_col()
                         .flex_1()
-                        .gap(rpx(24.))
+                        .min_h_0()
                         .px(rpx(layout.padding))
                         .pb(rpx(layout.padding))
                         .overflow_y_scrollbar()
-                        .child(display_names(app, card, true, None, cx))
-                        .children(profile_actions(app, card, window))
-                        .children(
-                            bio(app, card, false, cx).map(|bio| section("About Me", bio, palette)),
-                        )
-                        .child(member_since(app, card, cx))
-                        .children(roles(app, card))
-                        .children(
-                            card.profile
-                                .as_deref()
-                                .and_then(|profile| connections(profile, palette)),
-                        )
-                        .children(card.note.as_ref().map(|note| {
-                            section(
-                                "Note",
-                                div()
-                                    .text_size(rpx(14.))
-                                    .line_height(rpx(18.))
-                                    .text_color(rgb(palette.text))
-                                    .child(note.clone())
-                                    .into_any_element(),
-                                palette,
-                            )
-                        })),
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_none()
+                                .gap(rpx(24.))
+                                .child(display_names(app, card, true, None, cx))
+                                .children(profile_actions(app, card, window))
+                                .children(
+                                    bio(app, card, false, cx)
+                                        .map(|bio| section("About Me", bio, palette)),
+                                )
+                                .child(member_since(app, card, cx))
+                                .children(roles(app, card))
+                                .children(
+                                    card.profile
+                                        .as_deref()
+                                        .and_then(|profile| connections(profile, palette)),
+                                )
+                                .children(card.note.as_ref().map(|note| {
+                                    section(
+                                        "Note",
+                                        div()
+                                            .text_size(rpx(14.))
+                                            .line_height(rpx(18.))
+                                            .text_color(rgb(palette.text))
+                                            .child(note.clone())
+                                            .into_any_element(),
+                                        palette,
+                                    )
+                                })),
+                        ),
                 ),
         )
         .children(effect_layers(card, card_width, layout.corner, true, cx))
