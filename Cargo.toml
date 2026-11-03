@@ -22,7 +22,7 @@ flate2 = "1"
 base64 = "0.22"
 chrono = "0.4"
 iana-time-zone = "0.1"
-keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native"] }
+keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native-sync-persistent", "crypto-rust"] }
 log = "0.4"
 env_logger = "0.11"
 anyhow = "1"
