@@ -207,6 +207,7 @@ pub enum Change {
         guild_id: Option<u64>,
     },
     FavoriteGifs,
+    Notifications,
     VoiceTimers,
     Theme,
 }
@@ -378,7 +379,7 @@ impl Store {
             Event::UserGuildSettingsUpdate(settings) => {
                 self.notification_settings
                     .insert(settings.guild_id, *settings);
-                Change::None
+                Change::Notifications
             }
             Event::MessageCreate(message) => self.message_create(message),
             Event::MessageUpdate(update) => self.message_update(update),

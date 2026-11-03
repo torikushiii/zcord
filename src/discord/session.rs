@@ -2,6 +2,7 @@ mod activity;
 mod calls;
 mod dms;
 mod expressions;
+mod guilds;
 mod messages;
 mod pins;
 mod profiles;

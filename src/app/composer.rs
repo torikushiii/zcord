@@ -227,6 +227,7 @@ impl DiscordApp {
         if self.close_message_menu(cx)
             || self.close_dm_menu(cx)
             || self.close_dm_dialog(cx)
+            || self.close_guild_menu(cx)
             || self.close_thread_menu(cx)
             || self.close_create_thread(cx)
             || self.close_channel_popout(cx)

@@ -32,9 +32,26 @@ struct MuteOverride {
 }
 
 #[derive(Serialize)]
-struct MuteConfig {
+pub(super) struct MuteConfig {
     selected_time_window: i64,
     end_time: Option<String>,
+}
+
+/// `mute` is the chosen window in seconds (`-1` until unmuted); `None` unmutes.
+pub(super) fn mute_fields(mute: Option<i64>, now: DateTime<Utc>) -> (bool, Option<MuteConfig>) {
+    match mute {
+        Some(seconds) => (
+            true,
+            Some(MuteConfig {
+                selected_time_window: seconds,
+                end_time: (seconds != -1).then(|| {
+                    (now + chrono::Duration::seconds(seconds))
+                        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                }),
+            }),
+        ),
+        None => (false, None),
+    }
 }
 
 fn channel_url(channel_id: u64) -> String {
@@ -98,19 +115,7 @@ fn set_dm_mute(
     mute: Option<i64>,
     now: DateTime<Utc>,
 ) -> RequestBuilder {
-    let (muted, mute_config) = match mute {
-        Some(seconds) => (
-            true,
-            Some(MuteConfig {
-                selected_time_window: seconds,
-                end_time: (seconds != -1).then(|| {
-                    (now + chrono::Duration::seconds(seconds))
-                        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-                }),
-            }),
-        ),
-        None => (false, None),
-    };
+    let (muted, mute_config) = mute_fields(mute, now);
     let body = ChannelOverrides {
         channel_overrides: HashMap::from([(
             channel_id.to_string(),

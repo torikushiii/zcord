@@ -291,6 +291,15 @@ fn guild_item(app: &DiscordApp, guild: &Guild, cx: &App, morphs: Option<Instant>
                 .update(cx, |this, cx| this.select_guild(id, window, cx))
                 .ok();
         })
+        .on_mouse_down(MouseButton::Right, {
+            let entity = app.entity.clone();
+            move |event, _, cx| {
+                let position = event.position;
+                entity
+                    .update(cx, |app, cx| app.open_guild_menu(id, position, cx))
+                    .ok();
+            }
+        })
         .child(guild_icon(
             guild,
             ICON,

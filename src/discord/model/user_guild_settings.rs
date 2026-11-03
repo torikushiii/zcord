@@ -22,6 +22,36 @@ impl NotificationLevel {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuildNotificationFlag {
+    SuppressEveryone,
+    SuppressRoles,
+    SuppressHighlights,
+    MuteScheduledEvents,
+    MobilePush,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GuildNotificationFlags {
+    pub suppress_everyone: bool,
+    pub suppress_roles: bool,
+    pub suppress_highlights: bool,
+    pub mute_scheduled_events: bool,
+    pub mobile_push: bool,
+}
+
+impl Default for GuildNotificationFlags {
+    fn default() -> Self {
+        Self {
+            suppress_everyone: false,
+            suppress_roles: false,
+            suppress_highlights: false,
+            mute_scheduled_events: false,
+            mobile_push: true,
+        }
+    }
+}
+
 #[derive(Clone, Default, Deserialize)]
 pub struct MuteConfig {
     #[serde(default, deserialize_with = "end_time")]
@@ -54,6 +84,12 @@ pub struct UserGuildSettings {
     pub suppress_everyone: bool,
     #[serde(default, deserialize_with = "default_value")]
     pub suppress_roles: bool,
+    #[serde(default, deserialize_with = "default_value")]
+    pub notify_highlights: u8,
+    #[serde(default, deserialize_with = "default_value")]
+    pub mute_scheduled_events: bool,
+    #[serde(default, deserialize_with = "default_value")]
+    pub mobile_push: Option<bool>,
     #[serde(default, deserialize_with = "channel_overrides")]
     pub channel_overrides: Vec<ChannelOverride>,
 }
