@@ -85,3 +85,5 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 discord.svg is from Simple Icons (https://simpleicons.org), CC0 1.0. The Discord logo is a trademark of Discord Inc.
+
+nitro.svg is Discord's Nitro wheel glyph, copied from Discord's web client. Nitro and its logo are trademarks of Discord Inc.

@@ -1,22 +1,30 @@
 use super::*;
 
 fn profile_frame(card: &ProfileCard) -> Option<(u64, &model::CollectibleItem)> {
-    let product = card.frame.as_ref()?;
+    frame_item(card.frame.as_deref()?)
+}
+
+pub(super) fn frame_item(
+    product: &model::CollectibleProduct,
+) -> Option<(u64, &model::CollectibleItem)> {
     let item = product.items.iter().find(|item| item.kind == 3)?;
     Some((product.sku_id, item))
 }
 
 /// How far the profile frame's art reaches past a card `width` wide, in CSS pixels.
 pub(super) fn frame_overflow(card: &ProfileCard, width: f32) -> Option<Edges<f32>> {
-    let (_, item) = profile_frame(card)?;
+    Some(item_overflow(profile_frame(card)?.1, width))
+}
+
+pub(super) fn item_overflow(item: &model::CollectibleItem, width: f32) -> Edges<f32> {
     let scale = width / item.inner_width.unwrap_or(1200).max(1) as f32;
     let horizontal = item.overflow_horizontal.unwrap_or(0) as f32 * scale;
-    Some(Edges {
+    Edges {
         top: item.overflow_top.unwrap_or(0) as f32 * scale,
         bottom: item.overflow_bottom.unwrap_or(0) as f32 * scale,
         left: horizontal,
         right: horizontal,
-    })
+    }
 }
 
 pub(super) fn framed(
@@ -26,11 +34,22 @@ pub(super) fn framed(
     fill: bool,
     cx: &App,
 ) -> AnyElement {
-    let frame = profile_frame(card);
+    framed_with(profile_frame(card), width, body, fill, cx)
+}
+
+/// Wraps `body` in `frame`'s art, back layers behind it and front layers over it.
+pub(super) fn framed_with(
+    frame: Option<(u64, &model::CollectibleItem)>,
+    width: f32,
+    body: AnyElement,
+    fill: bool,
+    cx: &App,
+) -> AnyElement {
     let layers = |front: bool| -> Vec<AnyElement> {
-        let (Some((sku, item)), Some(overflow)) = (frame, frame_overflow(card, width)) else {
+        let Some((sku, item)) = frame else {
             return Vec::new();
         };
+        let overflow = item_overflow(item, width);
         let overflow_x = overflow.left;
         let overflow_top = overflow.top;
         let overflow_bottom = overflow.bottom;

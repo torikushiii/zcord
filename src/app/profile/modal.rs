@@ -33,6 +33,18 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
     let css = |pixels: Pixels| pixels / window.rem_size() * theme::BASE_FONT_SIZE;
     let viewport = window.viewport_size();
     let (viewport, viewport_height) = (css(viewport.width), css(viewport.height));
+    let styles = app
+        .profile_styles
+        .as_ref()
+        .filter(|_| card.user_id == app.store.current_user_id);
+    let panel_open = styles.is_some_and(|editor| editor.expanded);
+    // The styles panel takes its width from the dialog rather than pushing it off screen.
+    let panel_width = if panel_open {
+        styles_panel::PANEL_WIDTH
+    } else {
+        0.
+    };
+    let viewport = viewport - panel_width;
     let windowed = viewport >= MODAL_MIN_VIEWPORT_WIDTH;
     let modal_width = if windowed {
         MODAL_WIDTH.min(viewport - MODAL_MARGIN * 2.)
@@ -190,7 +202,13 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
         .relative()
         .w(rpx(modal_width))
         .h(rpx(modal_height))
-        .rounded(rpx(MODAL_RADIUS))
+        .map(|this| {
+            if panel_open {
+                this.rounded_r(rpx(MODAL_RADIUS))
+            } else {
+                this.rounded(rpx(MODAL_RADIUS))
+            }
+        })
         .text_color(rgb(palette.text))
         .occlude()
         .without_text_selection()
@@ -200,7 +218,13 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
             div()
                 .absolute()
                 .inset_0()
-                .rounded(rpx(MODAL_RADIUS))
+                .map(|this| {
+                    if panel_open {
+                        this.rounded_r(rpx(MODAL_RADIUS))
+                    } else {
+                        this.rounded(rpx(MODAL_RADIUS))
+                    }
+                })
                 .overflow_hidden()
                 .bg(background)
                 .children(banner_backdrop),
@@ -219,7 +243,39 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
                 .pr(rpx(16.))
                 .child(framed)
                 .child(side_panel(app, card, cx)),
+        )
+        // After the card, so its frame art can't cover the tab.
+        .children(
+            styles
+                .filter(|_| !panel_open)
+                .map(|editor| styles_panel::show_styles_tab(app, editor, background)),
         );
+    let save_bar = styles.and_then(|editor| styles_panel::save_bar(app, editor));
+    let dialog = div()
+        .id("profile-modal-shell")
+        .relative()
+        .flex()
+        // Reversed so the panel paints after the card, whose frame art reaches over it.
+        .flex_row_reverse()
+        .on_click(|_, _, cx| cx.stop_propagation())
+        .child(dialog)
+        .children(
+            styles.and_then(|editor| styles_panel::sliding_panel(app, editor, modal_height, cx)),
+        )
+        .children(styles.and_then(|editor| styles_panel::scope_menu(app, editor, cx)))
+        .children(save_bar.map(|bar| {
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom(rpx(-74.))
+                .flex()
+                .justify_center()
+                .child(bar)
+        }));
+    let overlays = styles
+        .map(|editor| styles_dialogs::style_overlays(app, editor, cx))
+        .unwrap_or_default();
     div()
         .id("profile-modal-backdrop")
         .absolute()
@@ -241,6 +297,7 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
             Animation::new(ENTER).with_easing(ease_out_quint()),
             |this, delta| this.opacity(delta).top(rpx(16. * (1. - delta))),
         ))
+        .children(overlays)
         .into_any_element()
 }
 

@@ -8,7 +8,7 @@ use crate::app::{
 use crate::store::{CustomStatus, StatusEmoji};
 
 use super::badges::badges;
-use super::frame::{frame_overflow, framed};
+use super::frame::{frame_overflow, framed, framed_with};
 use super::loading::guild_profile;
 use super::mutuals::mutuals_line;
 use super::*;
@@ -130,6 +130,81 @@ pub(super) fn popout(
     .into_any_element()
 }
 
+/// The popout the effect and frame dialogs try a choice on: your card wearing `effect` and
+/// `frame`, with an example button where its actions would be.
+pub(super) fn style_preview(
+    app: &DiscordApp,
+    card: &ProfileCard,
+    effect: Option<&model::CollectibleItem>,
+    frame: Option<(u64, &model::CollectibleItem)>,
+    clock: &RefCell<Option<Instant>>,
+    cx: &App,
+) -> AnyElement {
+    let theme = card.theme();
+    let palette = card.palette();
+    let layout = Layout::popout(theme.is_some());
+    let corner = if theme.is_some() { 6. } else { 8. };
+    let surface = theme.map_or(theme::elevated(), ProfileTheme::surface);
+    let outer_width = POPOUT_WIDTH + theme.map_or(0., |_| THEME_BORDER * 2.);
+    let button = div()
+        .mx(rpx(16.))
+        .mb(rpx(12.))
+        .h(rpx(32.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(rpx(8.))
+        .bg(rgb(theme.map_or(theme::BLURPLE, ProfileTheme::button)))
+        .text_size(rpx(14.))
+        .line_height(rpx(18.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(gpui::white())
+        .child("Example Button");
+    let inner = div()
+        .relative()
+        .flex()
+        .flex_col()
+        .rounded(rpx(corner))
+        .overflow_hidden()
+        .text_color(rgb(palette.text))
+        .map(|this| match theme {
+            Some(theme) => this.bg(theme.overlay()),
+            None => this,
+        })
+        .child(header(app, card, &layout, surface, None, cx))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(rpx(12.))
+                .px(rpx(layout.padding))
+                .pt(rpx(4.))
+                .pb(rpx(8.))
+                .child(display_names(app, card, false, None, cx))
+                .children(bio(app, card, true, cx)),
+        )
+        .child(button)
+        .children(
+            effect
+                .into_iter()
+                .flat_map(|item| effect_item_layers(item, clock, layout.width, corner, false, cx)),
+        );
+    let outer = div()
+        .relative()
+        .w(rpx(outer_width))
+        .rounded(rpx(8.))
+        .map(|this| match theme {
+            Some(theme) => this.p(rpx(THEME_BORDER)).bg(theme.outer()),
+            None => this
+                .bg(rgb(theme::elevated()))
+                .border_1()
+                .border_color(rgba(theme::border())),
+        })
+        .child(inner)
+        .into_any_element();
+    framed_with(frame, outer_width, outer, false, cx)
+}
+
 pub(super) type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
 pub(super) fn header(
@@ -164,15 +239,35 @@ pub(super) fn header(
         .p(rpx(layout.ring))
         .rounded_full()
         .bg(rgb(surface))
-        .child(theme::member_avatar(
-            &app.store,
-            card.guild_id.unwrap_or(0),
-            card.user_id,
-            layout.avatar,
-            user.map(|user| (user.status, surface)),
-            true,
-            cx,
-        ))
+        .child(match editing_styles(app, card) {
+            Some(editor) => {
+                let shown = super::styles_panel::shown(app, editor);
+                let decoration = shown
+                    .decoration
+                    .and_then(|sku| super::styles_panel::decoration_of(app, editor, sku));
+                theme::preview_avatar(
+                    user,
+                    card.user_id,
+                    layout.avatar,
+                    user.map(|user| (user.status, surface)),
+                    shown.avatar,
+                    shown.avatar_file,
+                    decoration.as_ref(),
+                    cx,
+                )
+                .into_any_element()
+            }
+            None => theme::member_avatar(
+                &app.store,
+                card.guild_id.unwrap_or(0),
+                card.user_id,
+                layout.avatar,
+                user.map(|user| (user.status, surface)),
+                true,
+                cx,
+            )
+            .into_any_element(),
+        })
         .map(|this| match on_avatar {
             Some(handler) => this.cursor_pointer().on_click(handler),
             None => this,
@@ -202,6 +297,16 @@ fn active_custom_status(status: Option<&CustomStatus>, now: SystemTime) -> Optio
                     .as_deref()
                     .is_some_and(|text| !text.trim().is_empty()))
     })
+}
+
+/// The styles editor whose draft this card previews: your own full profile while it's open.
+fn editing_styles<'a>(
+    app: &'a DiscordApp,
+    card: &ProfileCard,
+) -> Option<&'a super::styles::StylesEditor> {
+    app.profile_styles
+        .as_ref()
+        .filter(|_| card.modal && card.user_id == app.store.current_user_id)
 }
 
 pub(super) fn banner_spec(card: &ProfileCard) -> Option<ImageSpec> {
@@ -457,7 +562,16 @@ pub(super) fn display_names(
         // collapse to spaces there.
         .map(|p| p.split_whitespace().collect::<Vec<_>>().join(" "))
         .filter(|p| !p.is_empty());
-    let name_style = app.store.member_name_style(guild_id, card.user_id);
+    let edited_style = editing_styles(app, card).map(|editor| {
+        super::styles_panel::shown(app, editor)
+            .name_style
+            .as_ref()
+            .map(super::styles_panel::shown_name_style)
+    });
+    let name_style = match &edited_style {
+        Some(style) => style.as_ref(),
+        None => app.store.member_name_style(guild_id, card.user_id),
+    };
     let dot = || {
         div()
             .size(rpx(4.))
@@ -596,9 +710,9 @@ fn account_menu(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &App)
             .flex()
             .items_center()
             .gap(rpx(12.))
-            .min_h(rpx(48.))
+            .min_h(rpx(36.))
             .px(rpx(12.))
-            .py(rpx(12.))
+            .py(rpx(8.))
             .rounded(rpx(8.))
             .cursor_pointer()
             .text_size(rpx(14.))
@@ -620,8 +734,8 @@ fn account_menu(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &App)
                 .bg(palette.panel)
                 .child(row(
                     "account-view-profile",
-                    "user",
-                    "View Profile",
+                    "pencil",
+                    "Edit Profile",
                     AccountAction::ViewProfile,
                 ))
                 .child(div().h(rpx(1.)).mx(rpx(12.)).bg(palette.border))
