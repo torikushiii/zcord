@@ -1,6 +1,8 @@
 use super::*;
 
 #[test]
+// Timing budgets assume an optimized build; run with `cargo test --release`.
+#[cfg_attr(debug_assertions, ignore)]
 fn thousand_message_creates_with_large_ready_are_fast() {
     let mut ready = ready();
     ready.guilds = (0..100u64)

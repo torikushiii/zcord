@@ -176,8 +176,14 @@ fn activity_cards_compute_live_streak_and_most_played() {
             None,
         ),
     ];
-    store.set_content_inbox(Some(inbox(entries)));
-    let cards = store.activity_cards(200, NOW_MS);
+    // One entry at a time, so the sidebar's card limit doesn't hide any of them.
+    let cards: Vec<_> = entries
+        .into_iter()
+        .flat_map(|entry| {
+            store.set_content_inbox(Some(inbox(vec![entry])));
+            store.activity_cards(200, NOW_MS)
+        })
+        .collect();
     let card = |name: &str| cards.iter().find(|card| card.game_name == name).unwrap();
     assert_eq!(
         card("Live").live_since_ms,

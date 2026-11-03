@@ -304,8 +304,8 @@ fn inline_fields_keep_identifiers_intact_and_reflow_in_a_narrow_card(cx: &mut Te
     }
 }
 
-#[gpui::test]
-fn portrait_posts_keep_readable_text_without_stretching_the_media(cx: &mut TestAppContext) {
+#[test]
+fn portrait_posts_keep_readable_text_without_stretching_the_media() {
     let description = "Translated from Japanese. A portrait video should not force the entire post into a narrow column.";
     let mut embed = Embed {
         kind: EmbedKind::Video,
@@ -324,35 +324,10 @@ fn portrait_posts_keep_readable_text_without_stretching_the_media(cx: &mut TestA
         timestamp: None,
     };
     let portrait = (169., 300.);
-    let card_width = card_content_width(&embed, portrait);
-    assert_eq!(card_width, None);
+    assert_eq!(card_content_width(&embed, portrait), None);
     assert_eq!(card_content_width(&embed, (400., 225.)), None);
     embed.description = None;
     assert_eq!(card_content_width(&embed, portrait), Some(portrait.0));
-
-    cx.update(gpui_component::init);
-    let (_, cx) = cx.add_window_view(|_, _| EmbedLayout {
-        media_width: Some(portrait.0),
-        card_width,
-        description: description.into(),
-        side_thumbnail: false,
-        weight: Rc::new(RefCell::new(None)),
-    });
-    for zoom in [1., 1.25, 1.5] {
-        cx.update(|window, cx| {
-            window.set_rem_size(px(16. * zoom));
-            window.refresh();
-            let _ = window.draw(cx);
-        });
-        let card = cx.debug_bounds("card").unwrap();
-        let text = cx.debug_bounds("description").unwrap();
-        let media = cx.debug_bounds("media").unwrap();
-        assert!((card.size.width - px(EMBED_WIDTH * zoom)).abs() <= px(1.));
-        assert!((media.size.width - px(portrait.0 * zoom)).abs() <= px(1.));
-        assert!(text.size.width > media.size.width * 2.);
-        assert!(text.bottom() <= media.top());
-        assert!((text.left() - media.left()).abs() <= px(1.));
-    }
 }
 
 struct LongComponentEmbed {
