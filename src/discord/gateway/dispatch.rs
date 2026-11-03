@@ -586,6 +586,11 @@ mod tests {
             json!({
                 "guild_id":"7",
                 "message_notifications":2,
+                "suppress_everyone":true,
+                "suppress_roles":true,
+                "notify_highlights":1,
+                "mute_scheduled_events":true,
+                "mobile_push":false,
                 "channel_overrides":[{"channel_id":"8","muted":true}]
             }),
             &mut ignored,
@@ -595,6 +600,11 @@ mod tests {
             Some(Event::UserGuildSettingsUpdate(settings))
                 if settings.guild_id == Some(7)
                     && settings.message_notifications == model::NotificationLevel::Nothing
+                    && settings.suppress_everyone
+                    && settings.suppress_roles
+                    && settings.notify_highlights == 1
+                    && settings.mute_scheduled_events
+                    && settings.mobile_push == Some(false)
                     && settings.channel_overrides[0].channel_id == Some(8)
                     && settings.channel_overrides[0].muted
         ));

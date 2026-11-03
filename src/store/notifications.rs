@@ -61,6 +61,52 @@ impl Store {
             .is_some_and(|setting| mute_active(setting.muted, setting.mute_config.as_ref(), now_ms))
     }
 
+    pub fn guild_muted(&self, guild_id: u64, now_ms: u64) -> bool {
+        self.notification_settings
+            .get(&Some(guild_id))
+            .is_some_and(|settings| {
+                mute_active(settings.muted, settings.mute_config.as_ref(), now_ms)
+            })
+    }
+
+    /// When an active timed mute ends, in Unix milliseconds; `None` if unmuted or muted indefinitely.
+    pub fn guild_mute_end(&self, guild_id: u64, now_ms: u64) -> Option<u64> {
+        let settings = self.notification_settings.get(&Some(guild_id))?;
+        settings
+            .mute_config
+            .as_ref()?
+            .end_time
+            .filter(|end_time| settings.muted && *end_time > now_ms)
+    }
+
+    pub fn guild_notification_level(&self, guild_id: u64) -> model::NotificationLevel {
+        if let Some(level) = self
+            .notification_settings
+            .get(&Some(guild_id))
+            .map(|settings| settings.message_notifications)
+            .filter(|level| *level != model::NotificationLevel::Inherit)
+        {
+            return level;
+        }
+        match self.guild_notification_defaults.get(&guild_id) {
+            Some(model::NotificationLevel::Inherit) | None => model::NotificationLevel::All,
+            Some(level) => *level,
+        }
+    }
+
+    pub fn guild_notification_flags(&self, guild_id: u64) -> model::GuildNotificationFlags {
+        self.notification_settings
+            .get(&Some(guild_id))
+            .map(|settings| model::GuildNotificationFlags {
+                suppress_everyone: settings.suppress_everyone,
+                suppress_roles: settings.suppress_roles,
+                suppress_highlights: settings.notify_highlights == 1,
+                mute_scheduled_events: settings.mute_scheduled_events,
+                mobile_push: settings.mobile_push.unwrap_or(true),
+            })
+            .unwrap_or_default()
+    }
+
     pub fn message_alert(&self, message: &model::Message, now_ms: u64) -> Option<Alert> {
         if message.author.id == self.current_user_id {
             return None;
@@ -215,14 +261,8 @@ impl Store {
                     return level;
                 }
             }
-            if settings.message_notifications != model::NotificationLevel::Inherit {
-                return settings.message_notifications;
-            }
         }
-        match self.guild_notification_defaults.get(&guild_id) {
-            Some(model::NotificationLevel::Inherit) | None => model::NotificationLevel::All,
-            Some(level) => *level,
-        }
+        self.guild_notification_level(guild_id)
     }
 
     fn mentions(

@@ -20,6 +20,8 @@ mod forum_actions;
 mod forward_dialog;
 mod friends;
 mod gif_picker;
+mod guild_actions;
+mod guild_menu;
 mod guild_rail;
 mod history;
 mod home;
@@ -217,6 +219,7 @@ pub struct DiscordApp {
     pub(crate) dm_error: Option<(u64, String)>,
     dm_menu: Option<dm_menu::DmMenu>,
     dm_dialog: Option<dm_menu::DmDialog>,
+    guild_menu: Option<guild_menu::GuildMenu>,
     calls: calls::Calls,
     pub(crate) show_members: bool,
     pub(crate) composer: Entity<TextareaState>,
@@ -410,6 +413,7 @@ impl DiscordApp {
             dm_error: None,
             dm_menu: None,
             dm_dialog: None,
+            guild_menu: None,
             calls: calls::Calls::default(),
             show_members: true,
             composer,
@@ -1024,6 +1028,8 @@ impl DiscordApp {
                 if self.channel().is_none() && !self.showing_home_page() {
                     if self.is_home() {
                         self.open_friends(window, cx);
+                    } else if self.store.guild_by_id(self.selected_guild_id).is_none() {
+                        self.open_home(window, cx);
                     } else {
                         self.select_first_guild(window, cx);
                     }
@@ -1312,7 +1318,9 @@ impl Render for DiscordApp {
             .on_scroll_wheel(cx.listener(|app, _, _, cx| {
                 app.close_expression_info(cx);
             }))
-            .on_action(cx.listener(|app, _: &MarkGuildRead, _, cx| app.mark_guild_read(cx)))
+            .on_action(cx.listener(|app, _: &MarkGuildRead, _, cx| {
+                app.mark_guild_read(app.selected_guild_id, cx)
+            }))
             .on_action(cx.listener(|app, _: &ComposerUp, window, cx| app.composer_up(window, cx)))
             .on_action(cx.listener(|app, _: &QuickSwitch, window, cx| {
                 app.toggle_quick_switcher(window, cx);

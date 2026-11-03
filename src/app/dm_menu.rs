@@ -10,7 +10,7 @@ use crate::{
 const MENU_WIDTH: f32 = 220.;
 /// Discord caps a group DM at ten people, the current user included.
 const GROUP_SIZE: usize = 10;
-const MUTE_CHOICES: [(&str, i64); 6] = [
+pub(crate) const MUTE_CHOICES: [(&str, i64); 6] = [
     ("For 15 Minutes", 15 * 60),
     ("For 1 Hour", 60 * 60),
     ("For 3 Hours", 3 * 60 * 60),

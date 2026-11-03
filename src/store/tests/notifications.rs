@@ -41,6 +41,166 @@ fn store_default() -> Store {
     make_store(json!([]))
 }
 
+#[test]
+fn guild_mute_query_checks_only_the_guild_and_expires_at_the_boundary() {
+    let store = make_store(json!([
+        {"guild_id": "200", "muted": true, "mute_config": {"end_time": NOW + 1000}},
+        {"guild_id": "300", "muted": true},
+        {"guild_id": "400", "muted": true, "mute_config": {"end_time": null}},
+        {"guild_id": "500", "muted": false, "mute_config": {"end_time": NOW + 1000}},
+        {"guild_id": "600", "channel_overrides": [{"channel_id": "6001", "muted": true}]},
+        {"guild_id": null, "muted": true}
+    ]));
+    assert!(store.guild_muted(200, NOW));
+    assert!(store.guild_muted(200, NOW + 999));
+    assert!(!store.guild_muted(200, NOW + 1000));
+    assert!(!store.guild_muted(200, NOW + 1001));
+    assert!(store.guild_muted(300, NOW));
+    assert!(store.guild_muted(400, NOW));
+    for id in [500, 600, 700] {
+        assert!(!store.guild_muted(id, NOW));
+    }
+}
+
+#[test]
+fn guild_notification_query_resolves_settings_then_default_then_all() {
+    use model::NotificationLevel::{All, Mentions, Nothing};
+
+    for (wire, expected) in [(0, All), (1, Mentions), (2, Nothing)] {
+        let store = store_with(
+            json!([{
+                "guild_id": "200", "message_notifications": wire,
+                "channel_overrides": [{"channel_id": "2003", "message_notifications": 2}]
+            }]),
+            1,
+        );
+        assert_eq!(store.guild_notification_level(200), expected);
+    }
+    for entries in [
+        json!([]),
+        json!([{"guild_id": "200", "message_notifications": 3}]),
+    ] {
+        assert_eq!(
+            store_with(entries.clone(), 1).guild_notification_level(200),
+            Mentions
+        );
+        assert_eq!(
+            store_with(entries.clone(), 0).guild_notification_level(200),
+            All
+        );
+        assert_eq!(store_with(entries, 3).guild_notification_level(200), All);
+    }
+    assert_eq!(store_default().guild_notification_level(999), All);
+}
+
+#[test]
+fn guild_notification_flags_default_to_mobile_push_only() {
+    let defaults = model::GuildNotificationFlags {
+        suppress_everyone: false,
+        suppress_roles: false,
+        suppress_highlights: false,
+        mute_scheduled_events: false,
+        mobile_push: true,
+    };
+    assert_eq!(model::GuildNotificationFlags::default(), defaults);
+    assert_eq!(store_default().guild_notification_flags(200), defaults);
+    let store = make_store(json!([
+        {
+            "guild_id": "200",
+            "channel_overrides": [{
+                "channel_id": "2003", "suppress_everyone": true,
+                "suppress_roles": true, "notify_highlights": 1,
+                "mute_scheduled_events": true, "mobile_push": false
+            }]
+        },
+        {
+            "guild_id": null, "suppress_everyone": true,
+            "suppress_roles": true, "notify_highlights": 1,
+            "mute_scheduled_events": true, "mobile_push": false
+        }
+    ]));
+    assert_eq!(store.guild_notification_flags(200), defaults);
+    assert_eq!(store.guild_notification_flags(999), defaults);
+}
+
+#[test]
+fn guild_notification_flags_parse_all_fields_and_highlight_levels() {
+    for (level, suppressed) in [(0, false), (1, true), (2, false), (99, false)] {
+        let store = make_store(json!([{
+            "guild_id": "200", "suppress_everyone": true,
+            "suppress_roles": true, "notify_highlights": level,
+            "mute_scheduled_events": true, "mobile_push": false
+        }]));
+        assert_eq!(
+            store.guild_notification_flags(200),
+            model::GuildNotificationFlags {
+                suppress_everyone: true,
+                suppress_roles: true,
+                suppress_highlights: suppressed,
+                mute_scheduled_events: true,
+                mobile_push: false,
+            }
+        );
+    }
+    for mobile_push in [Value::Null, json!("invalid")] {
+        let store = make_store(json!([{
+            "guild_id": "200", "suppress_everyone": null,
+            "suppress_roles": null, "notify_highlights": null,
+            "mute_scheduled_events": null, "mobile_push": mobile_push
+        }]));
+        assert_eq!(
+            store.guild_notification_flags(200),
+            model::GuildNotificationFlags::default()
+        );
+    }
+}
+
+#[test]
+fn guild_notification_flags_follow_gateway_settings_replacement() {
+    let mut store = make_store(json!([
+        {"guild_id": "200"},
+        {"guild_id": "300", "suppress_roles": true},
+        {"guild_id": null, "channel_overrides": [{"channel_id": "900", "muted": true}]}
+    ]));
+    let other = store.guild_notification_flags(300);
+    let update = serde_json::from_value(json!({
+        "guild_id": "200", "suppress_everyone": true,
+        "suppress_roles": true, "notify_highlights": 1,
+        "mute_scheduled_events": true, "mobile_push": false
+    }))
+    .unwrap();
+    assert_eq!(
+        store.apply(Event::UserGuildSettingsUpdate(Box::new(update))),
+        Change::Notifications
+    );
+    assert_eq!(
+        store.guild_notification_flags(200),
+        model::GuildNotificationFlags {
+            suppress_everyone: true,
+            suppress_roles: true,
+            suppress_highlights: true,
+            mute_scheduled_events: true,
+            mobile_push: false,
+        }
+    );
+    let update = serde_json::from_value(json!({
+        "guild_id": "200", "suppress_everyone": false,
+        "suppress_roles": false, "notify_highlights": 2,
+        "mute_scheduled_events": false, "mobile_push": true
+    }))
+    .unwrap();
+    assert_eq!(
+        store.apply(Event::UserGuildSettingsUpdate(Box::new(update))),
+        Change::Notifications
+    );
+    assert_eq!(
+        store.guild_notification_flags(200),
+        model::GuildNotificationFlags::default()
+    );
+    assert_eq!(store.guild_notification_flags(300), other);
+    assert!(store.dm_muted(900, NOW));
+}
+
 fn message_draft(channel_id: u64, author_id: u64, content: &str) -> Value {
     json!({
         "id":"5000",
@@ -74,6 +234,9 @@ fn ready_reads_plain_and_entries_user_guild_settings_with_defaults() {
             "message_notifications":2,
             "suppress_everyone":true,
             "suppress_roles":true,
+            "notify_highlights":1,
+            "mute_scheduled_events":true,
+            "mobile_push":false,
             "channel_overrides":[{
                 "channel_id":"2003","muted":true,"message_notifications":0
             }]
@@ -96,6 +259,9 @@ fn ready_reads_plain_and_entries_user_guild_settings_with_defaults() {
         );
         assert!(guild.suppress_everyone);
         assert!(guild.suppress_roles);
+        assert_eq!(guild.notify_highlights, 1);
+        assert!(guild.mute_scheduled_events);
+        assert_eq!(guild.mobile_push, Some(false));
         assert_eq!(guild.channel_overrides[0].channel_id, Some(2003));
         assert!(guild.channel_overrides[0].muted);
         assert_eq!(
@@ -456,21 +622,56 @@ fn attachment_empty_and_system_messages_choose_the_body() {
 
 #[test]
 fn user_guild_settings_update_replaces_one_entry() {
-    let mut store = make_store(json!([{"guild_id":"200","message_notifications":0}]));
+    let mut store = make_store(json!([
+        {"guild_id":"200","message_notifications":0},
+        {"guild_id":"300","message_notifications":1,"muted":true},
+        {"guild_id":null,"channel_overrides":[{"channel_id":"900","muted":true}]}
+    ]));
     assert!(
         store
             .message_alert(&message(2003, 2, "hello"), NOW)
             .is_some()
     );
     let update: model::UserGuildSettings = serde_json::from_value(json!({
-        "guild_id":"200","message_notifications":2
+        "guild_id":"200","message_notifications":2,"muted":true,
+        "mute_config":{"end_time":NOW + 1000}
     }))
     .unwrap();
-    store.apply(Event::UserGuildSettingsUpdate(Box::new(update)));
+    assert_eq!(
+        store.apply(Event::UserGuildSettingsUpdate(Box::new(update))),
+        Change::Notifications
+    );
+    assert_eq!(
+        store.guild_notification_level(200),
+        model::NotificationLevel::Nothing
+    );
+    assert!(store.guild_muted(200, NOW));
+    assert!(!store.guild_muted(200, NOW + 1000));
+    assert_eq!(
+        store.guild_notification_level(300),
+        model::NotificationLevel::Mentions
+    );
+    assert!(store.guild_muted(300, NOW));
+    assert!(store.dm_muted(900, NOW));
     assert!(
         store
             .message_alert(&message(2003, 2, "hello"), NOW)
             .is_none()
+    );
+    let unmute = serde_json::from_value(json!({
+        "guild_id":"200","message_notifications":0,"muted":false
+    }))
+    .unwrap();
+    store.apply(Event::UserGuildSettingsUpdate(Box::new(unmute)));
+    assert!(!store.guild_muted(200, NOW));
+    assert_eq!(
+        store.guild_notification_level(200),
+        model::NotificationLevel::All
+    );
+    assert!(
+        store
+            .message_alert(&message(2003, 2, "hello"), NOW)
+            .is_some()
     );
 }
 

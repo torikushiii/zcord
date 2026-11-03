@@ -108,17 +108,15 @@ impl DiscordApp {
         .detach();
     }
 
-    pub(super) fn mark_guild_read(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn mark_guild_read(&mut self, guild_id: u64, cx: &mut Context<Self>) {
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;
         };
-        if !matches!(self.screen, Screen::Chat) {
-            return;
+        if guild_id == self.selected_guild_id {
+            self.unread_since = None;
+            self.unread_bar = false;
+            self.manual_unread = None;
         }
-        let guild_id = self.selected_guild_id;
-        self.unread_since = None;
-        self.unread_bar = false;
-        self.manual_unread = None;
         cx.notify();
         let acks = self.store.unread_acks(guild_id, now_snowflake());
         if acks.is_empty() {
@@ -130,7 +128,11 @@ impl DiscordApp {
                 message_id,
             });
         }
-        let channel_id = self.selected_channel_id;
+        let channel_id = if guild_id == self.selected_guild_id {
+            self.selected_channel_id
+        } else {
+            acks[0].0
+        };
         let request = Tokio::spawn(cx, async move {
             session.ack_bulk(Some(guild_id), channel_id, acks).await
         });
