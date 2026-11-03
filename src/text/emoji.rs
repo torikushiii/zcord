@@ -687,6 +687,8 @@ mod tests {
     }
 
     #[test]
+    // Timing budgets assume an optimized build; run with `cargo test --release`.
+    #[cfg_attr(debug_assertions, ignore)]
     fn emoji_performance_4000_char_messages_1000_times() {
         let pattern = "hello \u{4E2D}\u{6587} \u{1F3E0} \u{1F44D}\u{1F3FD} \u{1F1F7}\u{1F1FA} \u{2764}\u{FE0F} 1\u{FE0F}\u{20E3} #1 \u{00A9} 2026\u{2122} ";
         let value: String = pattern.chars().cycle().take(4000).collect();
