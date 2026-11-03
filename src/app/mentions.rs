@@ -423,15 +423,51 @@ pub(super) fn suggestions(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
     ))
 }
 
-const SUGGESTION_WIDTH: f32 = 430.;
+const EDITOR_SUGGESTION_WIDTH: f32 = 430.;
 const SUGGESTION_MAX_HEIGHT: f32 = 200.;
 
-/// Deferred and anchored so a message being edited near the top of the chat doesn't clip it.
+/// Spans the composer like Discord's. In the narrower message editor it keeps a fixed width and
+/// is deferred and anchored, so a message being edited near the top of the chat doesn't clip it.
 pub(super) fn suggestion_popup(
     app: &DiscordApp,
     title: SharedString,
     rows: impl IntoIterator<Item = Stateful<Div>>,
 ) -> AnyElement {
+    let panel = div()
+        .id("suggestion-popup")
+        .flex()
+        .flex_col()
+        .max_h(rpx(SUGGESTION_MAX_HEIGHT))
+        .overflow_y_scroll()
+        .track_scroll(&app.suggest_scroll)
+        .py(rpx(8.))
+        .rounded(rpx(8.))
+        .border_1()
+        .border_color(rgba(theme::border()))
+        .bg(rgb(theme::elevated()))
+        .shadow_lg()
+        .occlude()
+        .child(
+            div()
+                .flex_none()
+                .px(rpx(16.))
+                .pb(rpx(6.))
+                .text_size(rpx(12.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(theme::muted()))
+                .child(title),
+        )
+        .children(rows.into_iter().map(|row| row.flex_none()));
+    if app.editing.is_none() {
+        return div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom(relative(1.))
+            .mb(rpx(8.))
+            .child(panel)
+            .into_any_element();
+    }
     div()
         .absolute()
         .top_0()
@@ -441,36 +477,7 @@ pub(super) fn suggestion_popup(
                 anchored()
                     .anchor(Anchor::BottomLeft)
                     .snap_to_window_with_margin(px(8.))
-                    .child(
-                        div().pb(rpx(8.)).child(
-                            div()
-                                .id("suggestion-popup")
-                                .flex()
-                                .flex_col()
-                                .w(rpx(SUGGESTION_WIDTH))
-                                .max_h(rpx(SUGGESTION_MAX_HEIGHT))
-                                .overflow_y_scroll()
-                                .track_scroll(&app.suggest_scroll)
-                                .py(rpx(8.))
-                                .rounded(rpx(8.))
-                                .border_1()
-                                .border_color(rgba(theme::border()))
-                                .bg(rgb(theme::elevated()))
-                                .shadow_lg()
-                                .occlude()
-                                .child(
-                                    div()
-                                        .flex_none()
-                                        .px(rpx(16.))
-                                        .pb(rpx(6.))
-                                        .text_size(rpx(12.))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(rgb(theme::muted()))
-                                        .child(title),
-                                )
-                                .children(rows.into_iter().map(|row| row.flex_none())),
-                        ),
-                    ),
+                    .child(div().pb(rpx(8.)).child(panel.w(rpx(EDITOR_SUGGESTION_WIDTH)))),
             )
             .with_priority(1),
         )
