@@ -371,6 +371,7 @@ impl DiscordApp {
             TextareaState::new(window, cx)
                 .auto_grow(1, 15)
                 .submit_on_enter(true)
+                .context_menu(false)
         });
         let messages = ListState::new(0, ListAlignment::Bottom, px(800.));
         let last_cursor = Rc::new(Cell::new(0));
