@@ -84,8 +84,11 @@ mod platform {
             .iter()
             .position(|character| *character == 0)
             .unwrap_or(data.len());
-        // Older versions registered the bare executable path.
-        let matches = |command: &[u16]| data[..length] == command[..command.len() - 1];
+        // Windows paths are case-insensitive; older versions registered the bare executable path.
+        let stored = String::from_utf16_lossy(&data[..length]).to_lowercase();
+        let matches = |command: &[u16]| {
+            String::from_utf16_lossy(&command[..command.len() - 1]).to_lowercase() == stored
+        };
         matches(&expected) || matches(&minimized)
     }
 
