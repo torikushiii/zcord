@@ -401,7 +401,7 @@ impl DiscordApp {
         let (game_enabled, game_enabled_rx) = watch::channel(false);
         let app_entity = cx.entity();
         let views = views::PanelViews::new(&app_entity, cx);
-        let mut app = Self {
+        let app = Self {
             screen: Screen::Connecting,
             store: Store::seed(),
             account_theme: None,
@@ -677,10 +677,39 @@ impl DiscordApp {
             })
             .ok();
         });
-        match credentials::load() {
-            Some(token) => app.connect(token, window, cx),
-            None => app.screen = Screen::Login(LoginForm::new(window, cx)),
-        }
+        let credential_load = cx
+            .background_executor()
+            .spawn(async { credentials::load() });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = credential_load.await;
+            this.update_in(cx, |app, window, cx| {
+                if !matches!(app.screen, Screen::Connecting)
+                    || app.session.is_some()
+                    || app.pending_token.is_some()
+                {
+                    return;
+                }
+                match result {
+                    Ok(Some(token)) => {
+                        // Re-save after Ready to persist keyutils-only tokens from older builds.
+                        app.pending_token = Some(token.clone());
+                        app.connect(token, window, cx);
+                    }
+                    result => {
+                        let mut form = LoginForm::new(window, cx);
+                        if let Err(error) = result {
+                            log::warn!("{error}");
+                            form.error =
+                                Some(format!("{error}. Your token may not be saved.").into());
+                        }
+                        app.screen = Screen::Login(form);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         app
     }
 
