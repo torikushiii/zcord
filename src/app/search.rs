@@ -415,7 +415,16 @@ impl DiscordApp {
         };
         let insert = match row {
             Row::Filter(filter) => {
-                let spaced = if text.is_empty() || text.ends_with(char::is_whitespace) {
+                let start = last_token_start(&text);
+                let token = &text[start..];
+                let completes_typed_key = !token.is_empty()
+                    && filter
+                        .key
+                        .get(..token.len())
+                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(token));
+                let spaced = if completes_typed_key {
+                    text[..start].to_owned()
+                } else if text.is_empty() || text.ends_with(char::is_whitespace) {
                     text.clone()
                 } else {
                     format!("{text} ")
