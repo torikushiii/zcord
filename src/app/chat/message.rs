@@ -711,7 +711,7 @@ pub(super) fn render_message(
                             )
                         })
                         .map(|this| match editing {
-                            Some(editing) => this.child(message_editor(app, editing)),
+                            Some(editing) => this.child(message_editor(app, editing, cx)),
                             None if show_body => this.child(
                                 div()
                                     .w_full()
@@ -794,7 +794,7 @@ pub(super) fn render_message(
         .into_any_element()
 }
 
-fn message_editor(app: &DiscordApp, editing: &Editing) -> impl IntoElement {
+fn message_editor(app: &DiscordApp, editing: &Editing, cx: &App) -> impl IntoElement {
     let cancel = app.entity.clone();
     let save = app.entity.clone();
     let link = |id: &'static str, text: &'static str| {
@@ -825,7 +825,9 @@ fn message_editor(app: &DiscordApp, editing: &Editing) -> impl IntoElement {
                         .line_height(rpx(22.))
                         .text_color(rgb(theme::text())),
                 )
-                .child(emoji_token_overlay(&editing.input)),
+                .child(emoji_token_overlay(&editing.input))
+                .children(crate::app::mentions::suggestions(app, cx))
+                .children(crate::app::emoji_picker::suggestions(app, cx)),
         )
         .child(
             div()

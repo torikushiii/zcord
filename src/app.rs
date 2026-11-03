@@ -170,7 +170,7 @@ pub(crate) struct Editing {
     pub message_id: u64,
     pub input: Entity<TextareaState>,
     mentions: HashMap<String, u64>,
-    _subscription: Subscription,
+    _subscriptions: [Subscription; 2],
 }
 
 pub(crate) struct FailedSend {
@@ -269,6 +269,7 @@ pub struct DiscordApp {
     emoji_picker_closed_at: Option<Instant>,
     pub(crate) emoji_suggest: emoji_picker::Suggest,
     mention_suggest: mentions::Suggest,
+    suggest_scroll: ScrollHandle,
     mention_names: HashMap<String, u64>,
     pub(crate) gifs: gif_picker::Gifs,
     pub(crate) stickers: sticker_picker::Stickers,
@@ -450,6 +451,7 @@ impl DiscordApp {
             emoji_picker_closed_at: None,
             emoji_suggest: Default::default(),
             mention_suggest: Default::default(),
+            suggest_scroll: ScrollHandle::new(),
             mention_names: HashMap::new(),
             gifs: Default::default(),
             stickers: Default::default(),
@@ -1328,7 +1330,7 @@ impl Render for DiscordApp {
             .on_action(cx.listener(|app, _: &ComposerDown, window, cx| {
                 if !(app.move_search(1, cx)
                     || app.move_quick_switcher(1, cx)
-                    || app.composer_focused(window, cx)
+                    || app.suggest_input_focused(window, cx)
                         && (app.move_mention_suggestion(1, cx) || app.move_emoji_suggestion(1, cx)))
                 {
                     cx.propagate();
@@ -1339,7 +1341,7 @@ impl Render for DiscordApp {
             }))
             .on_action(cx.listener(|app, _: &ComposerTab, window, cx| {
                 if !(app.accept_search(window, cx)
-                    || app.composer_focused(window, cx)
+                    || app.suggest_input_focused(window, cx)
                         && (app.accept_mention_suggestion(None, window, cx)
                             || app.accept_emoji_suggestion(None, window, cx)))
                 {

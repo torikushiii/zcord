@@ -28,7 +28,7 @@ pub(crate) struct Suggest {
 
 impl DiscordApp {
     fn mention_query(&self, cx: &App) -> Option<(Range<usize>, String)> {
-        let input = self.composer.read(cx);
+        let input = self.suggest_input().read(cx);
         if !input.selected_range().is_empty() {
             return None;
         }
@@ -76,12 +76,17 @@ impl DiscordApp {
         (!choices.is_empty()).then_some((query, choices))
     }
 
+    pub(super) fn reveal_suggestion(&self, index: usize) {
+        // The popup's title is child 0.
+        self.suggest_scroll.scroll_to_item(index + 1);
+    }
+
     pub(crate) fn mention_suggest_index(&self) -> usize {
         self.mention_suggest.index
     }
 
     pub(super) fn reset_mention_suggest(&mut self, cx: &mut Context<Self>) {
-        if self.composer.read(cx).value().is_empty() {
+        if self.editing.is_none() && self.composer.read(cx).value().is_empty() {
             self.mention_names.clear();
             self.mention_suggest.requested.clear();
         }
@@ -137,6 +142,7 @@ impl DiscordApp {
         self.mention_suggest.index = (self.mention_suggest.index.min(choices.len() - 1) as isize
             + delta)
             .rem_euclid(choices.len() as isize) as usize;
+        self.reveal_suggestion(self.mention_suggest.index);
         cx.notify();
         true
     }
@@ -156,8 +162,12 @@ impl DiscordApp {
         let index = index
             .unwrap_or(self.mention_suggest.index)
             .min(choices.len() - 1);
-        let text = mention_insertion(&choices[index], &mut self.mention_names);
-        self.composer.update(cx, |input, cx| {
+        let names = match &mut self.editing {
+            Some(editing) => &mut editing.mentions,
+            None => &mut self.mention_names,
+        };
+        let text = mention_insertion(&choices[index], names);
+        self.suggest_input().clone().update(cx, |input, cx| {
             input.set_selected_range(range, cx);
             input.replace(text, window, cx);
             input.focus(window, cx);
@@ -326,116 +336,145 @@ pub(super) fn suggestions(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
     let (_, choices) = app.mention_suggestions(cx)?;
     let selected = app.mention_suggest_index().min(choices.len() - 1);
     let guild_id = app.request_guild();
-    Some(
-        div()
-            .absolute()
-            .left_0()
-            .right_0()
-            .bottom(relative(1.))
-            .mb(rpx(8.))
-            .flex()
-            .flex_col()
-            .py(rpx(8.))
-            .rounded(rpx(8.))
-            .border_1()
-            .border_color(rgba(theme::border()))
-            .bg(rgb(theme::elevated()))
-            .shadow_lg()
-            .occlude()
-            .child(
-                div()
-                    .px(rpx(12.))
-                    .pb(rpx(6.))
-                    .text_size(rpx(12.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(theme::muted()))
-                    .child("MEMBERS"),
-            )
-            .children(choices.iter().enumerate().map(|(index, choice)| {
-                let hover = app.entity.clone();
-                let click = app.entity.clone();
-                let (icon, label, detail) = match choice {
-                    MentionChoice::User { id, name, username } => (
-                        match guild_id {
-                            Some(guild_id) => theme::member_avatar(
-                                &app.store, guild_id, *id, 24., None, false, cx,
-                            )
-                            .into_any_element(),
-                            None => {
-                                theme::user_avatar(app.store.user(*id), *id, 24., None, false, cx)
-                                    .into_any_element()
-                            }
-                        },
-                        name.clone(),
-                        username.clone(),
-                    ),
-                    MentionChoice::Everyone => (
-                        theme::icon("at-sign", 20., theme::muted()).into_any_element(),
-                        "@everyone".to_owned(),
-                        "Notify everyone who can see this channel.".to_owned(),
-                    ),
-                    MentionChoice::Here => (
-                        theme::icon("at-sign", 20., theme::muted()).into_any_element(),
-                        "@here".to_owned(),
-                        "Notify everyone online who can see this channel.".to_owned(),
-                    ),
-                };
-                div()
-                    .id(("mention-suggestion", index))
-                    .flex()
-                    .items_center()
-                    .gap(rpx(10.))
-                    .mx(rpx(8.))
-                    .px(rpx(8.))
-                    .h(rpx(36.))
-                    .rounded(rpx(4.))
-                    .cursor_pointer()
-                    .when(index == selected, |this| this.bg(rgba(theme::selected())))
-                    .on_hover(move |hovered, _, cx| {
-                        if *hovered {
-                            hover
-                                .update(cx, |app, cx| app.hover_mention_suggestion(index, cx))
-                                .ok();
+    Some(suggestion_popup(
+        app,
+        "Members".into(),
+        choices.iter().enumerate().map(|(index, choice)| {
+            let hover = app.entity.clone();
+            let click = app.entity.clone();
+            let (icon, label, detail) = match choice {
+                MentionChoice::User { id, name, username } => (
+                    match guild_id {
+                        Some(guild_id) => {
+                            theme::member_avatar(&app.store, guild_id, *id, 24., None, false, cx)
+                                .into_any_element()
                         }
-                    })
-                    .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
-                    .on_click(move |_, window, cx| {
-                        click
-                            .update(cx, |app, cx| {
-                                app.accept_mention_suggestion(Some(index), window, cx)
-                            })
+                        None => theme::user_avatar(app.store.user(*id), *id, 24., None, false, cx)
+                            .into_any_element(),
+                    },
+                    name.clone(),
+                    username.clone(),
+                ),
+                MentionChoice::Everyone => (
+                    theme::icon("at-sign", 20., theme::muted()).into_any_element(),
+                    "@everyone".to_owned(),
+                    "Notify everyone who can see this channel.".to_owned(),
+                ),
+                MentionChoice::Here => (
+                    theme::icon("at-sign", 20., theme::muted()).into_any_element(),
+                    "@here".to_owned(),
+                    "Notify everyone online who can see this channel.".to_owned(),
+                ),
+            };
+            div()
+                .id(("mention-suggestion", index))
+                .flex()
+                .items_center()
+                .gap(rpx(10.))
+                .mx(rpx(8.))
+                .px(rpx(8.))
+                .h(rpx(36.))
+                .rounded(rpx(4.))
+                .cursor_pointer()
+                .when(index == selected, |this| this.bg(rgba(theme::selected())))
+                .on_hover(move |hovered, _, cx| {
+                    if *hovered {
+                        hover
+                            .update(cx, |app, cx| app.hover_mention_suggestion(index, cx))
                             .ok();
-                    })
+                    }
+                })
+                .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+                .on_click(move |_, window, cx| {
+                    click
+                        .update(cx, |app, cx| {
+                            app.accept_mention_suggestion(Some(index), window, cx)
+                        })
+                        .ok();
+                })
+                .child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .justify_center()
+                        .size(rpx(24.))
+                        .child(icon),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(rpx(15.))
+                        .text_color(rgb(theme::strong()))
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .max_w(rpx(280.))
+                        .truncate()
+                        .text_size(rpx(12.))
+                        .text_color(rgb(theme::muted()))
+                        .child(detail),
+                )
+        }),
+    ))
+}
+
+const SUGGESTION_WIDTH: f32 = 430.;
+const SUGGESTION_MAX_HEIGHT: f32 = 200.;
+
+/// Deferred and anchored so a message being edited near the top of the chat doesn't clip it.
+pub(super) fn suggestion_popup(
+    app: &DiscordApp,
+    title: SharedString,
+    rows: impl IntoIterator<Item = Stateful<Div>>,
+) -> AnyElement {
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .child(
+            deferred(
+                anchored()
+                    .anchor(Anchor::BottomLeft)
+                    .snap_to_window_with_margin(px(8.))
                     .child(
-                        div()
-                            .flex()
-                            .flex_none()
-                            .items_center()
-                            .justify_center()
-                            .size(rpx(24.))
-                            .child(icon),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(rpx(15.))
-                            .text_color(rgb(theme::strong()))
-                            .child(label),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .max_w(rpx(280.))
-                            .truncate()
-                            .text_size(rpx(12.))
-                            .text_color(rgb(theme::muted()))
-                            .child(detail),
-                    )
-            }))
-            .into_any_element(),
-    )
+                        div().pb(rpx(8.)).child(
+                            div()
+                                .id("suggestion-popup")
+                                .flex()
+                                .flex_col()
+                                .w(rpx(SUGGESTION_WIDTH))
+                                .max_h(rpx(SUGGESTION_MAX_HEIGHT))
+                                .overflow_y_scroll()
+                                .track_scroll(&app.suggest_scroll)
+                                .py(rpx(8.))
+                                .rounded(rpx(8.))
+                                .border_1()
+                                .border_color(rgba(theme::border()))
+                                .bg(rgb(theme::elevated()))
+                                .shadow_lg()
+                                .occlude()
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .px(rpx(16.))
+                                        .pb(rpx(6.))
+                                        .text_size(rpx(12.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(rgb(theme::muted()))
+                                        .child(title),
+                                )
+                                .children(rows.into_iter().map(|row| row.flex_none())),
+                        ),
+                    ),
+            )
+            .with_priority(1),
+        )
+        .into_any_element()
 }
 
 #[cfg(test)]
