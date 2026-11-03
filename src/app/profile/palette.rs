@@ -55,6 +55,17 @@ impl ProfileTheme {
         hsla(0., 0., if self.is_light() { 1. } else { 0. }, THEME_OVERLAY)
     }
 
+    /// Discord darkens and saturates the primary color for profile buttons. Fitted to one
+    /// capture: #B2563E gives #7E2916.
+    pub(super) fn button(self) -> u32 {
+        let channel = |shift: u32| ((self.primary >> shift) & 0xFF) as f32 / 255.;
+        let mut hsl = Hsl::from_color(Srgb::new(channel(16), channel(8), channel(0)));
+        hsl.saturation = (hsl.saturation * 1.45).min(1.);
+        hsl.lightness *= 0.62;
+        let out: Srgb<u8> = Srgb::from_color(hsl).into_format();
+        (u32::from(out.red) << 16) | (u32::from(out.green) << 8) | u32::from(out.blue)
+    }
+
     pub(super) fn surface_color(self, color: u32) -> u32 {
         blend(
             color,

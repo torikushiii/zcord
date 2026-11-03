@@ -5,6 +5,7 @@ mod expressions;
 mod guilds;
 mod messages;
 mod pins;
+mod profile_styles;
 mod profiles;
 mod relationships;
 mod settings;

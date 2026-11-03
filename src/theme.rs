@@ -274,6 +274,63 @@ pub fn webhook_avatar(
     )
 }
 
+/// A local `file` wins over `spec`; profile style previews show edits before they're uploaded.
+pub fn preview_avatar(
+    user: Option<&User>,
+    user_id: u64,
+    size: f32,
+    status: Option<(Status, u32)>,
+    spec: Option<ImageSpec>,
+    file: Option<std::path::PathBuf>,
+    decorated_with: Option<&Decoration>,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    let notch = profile_avatar::Geometry::for_avatar(size, status.is_some());
+    let image = match file {
+        Some(path) => Some(img(path).size_full().rounded_full().into_any_element()),
+        None => spec
+            .or_else(|| user.map(User::avatar_spec))
+            .and_then(|spec| avatar_image(&spec, size, true, notch, cx)),
+    };
+    avatar(
+        user.map_or("?", |user| &user.initials),
+        user_color(user_id),
+        size,
+        status,
+        user.is_some_and(|user| user.on_mobile),
+        user_id,
+        image,
+        decorated_with.and_then(|data| decoration(user_id, data, size, true, notch, cx)),
+    )
+}
+
+/// Discord's grey stand-in avatar, which style previews use to show decorations on their own.
+pub fn placeholder_avatar(
+    size: f32,
+    decorated_with: Option<&Decoration>,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    let image = div()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .bg(rgb(0x5C5E66))
+        .child(icon("discord", size * 0.6, 0x3B3D44))
+        .into_any_element();
+    avatar(
+        "",
+        hsla(0., 0., 0., 0.),
+        size,
+        None,
+        false,
+        0,
+        Some(image),
+        decorated_with.and_then(|data| decoration(0, data, size, true, None, cx)),
+    )
+}
+
 /// Discord leaves avatar decorations off small avatars such as voice channel members.
 pub fn undecorated_member_avatar(
     store: &Store,

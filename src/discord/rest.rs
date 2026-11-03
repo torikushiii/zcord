@@ -18,6 +18,7 @@ mod gifs;
 mod guilds;
 mod messages;
 mod pins;
+mod profile_styles;
 mod profiles;
 mod rate_limits;
 mod requests;

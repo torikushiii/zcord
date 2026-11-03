@@ -46,6 +46,12 @@ pub enum ImageSpec {
     DefaultAvatar {
         index: u8,
     },
+    /// One of your earlier uploads, from `/users/@me/avatars`.
+    ArchivedAvatar {
+        user_id: u64,
+        avatar_id: u64,
+        hash: String,
+    },
     Attachment {
         id: u64,
         url: String,
@@ -354,6 +360,18 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
                 _ => "avatars",
             };
             format!("https://cdn.discordapp.com/{route}/{guild_id}/{hash}.png?size={size}")
+        }
+        ImageSpec::ArchivedAvatar {
+            user_id,
+            avatar_id,
+            hash,
+        } => {
+            if !valid_hash(hash) {
+                return None;
+            }
+            format!(
+                "https://cdn.discordapp.com/avatars/{user_id}/archived/{avatar_id}/{hash}.png?size={size}"
+            )
         }
         ImageSpec::DefaultAvatar { index } => {
             if *index > 5 {
@@ -995,6 +1013,51 @@ impl Service {
         self.frames_directory.join(file_name(spec, size))
     }
 
+    pub(crate) async fn load_gif_provider_media(
+        &self,
+        raw: &str,
+        max_bytes: u64,
+    ) -> Result<PathBuf, String> {
+        let url = reqwest::Url::parse(raw)
+            .ok()
+            .filter(gif_provider_media_url)
+            .ok_or_else(|| "Choose a GIF from Tenor, Giphy, or Klipy.".to_owned())?;
+        if !self.initialize().await {
+            return Err("Could not prepare the GIF cache.".into());
+        }
+        let _permit = self
+            .permits
+            .acquire()
+            .await
+            .map_err(|_| "Could not download this GIF.".to_owned())?;
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|_| "Could not download this GIF.".to_owned())?;
+        let bytes = gif_provider_bytes(response, max_bytes).await?;
+        let extension = match image::guess_format(&bytes) {
+            Ok(ImageFormat::Gif) => "gif",
+            Ok(ImageFormat::WebP) => "webp",
+            _ => return Err("This GIF format is not supported.".into()),
+        };
+        let path = self.directory.join(format!(
+            "profile-gif-{:016x}.{extension}",
+            rand::random::<u64>()
+        ));
+        atomic_write(&path, &bytes)
+            .await
+            .map_err(|_| "Could not cache this GIF.".to_owned())?;
+        self.record(
+            &self.image_written,
+            &self.directory,
+            MAX_CACHE,
+            bytes.len() as u64,
+        );
+        Ok(path)
+    }
+
     /// The original bytes of a file on Discord's CDN, unlike the sized copies `load` caches.
     pub(crate) async fn fetch_original(&self, url: &str) -> Option<Vec<u8>> {
         let url = reqwest::Url::parse(url).ok().filter(allowed_url)?;
@@ -1122,6 +1185,33 @@ impl Service {
     }
 }
 
+async fn gif_provider_bytes(
+    mut response: reqwest::Response,
+    max_bytes: u64,
+) -> Result<Vec<u8>, String> {
+    if !response.status().is_success() {
+        return Err("Could not download this GIF.".into());
+    }
+    if response
+        .content_length()
+        .is_some_and(|size| size >= max_bytes)
+    {
+        return Err("Choose a GIF smaller than 10 MB.".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "Could not download this GIF.".to_owned())?
+    {
+        if bytes.len().saturating_add(chunk.len()) as u64 >= max_bytes {
+            return Err("Choose a GIF smaller than 10 MB.".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
 fn download_bytes(spec: &ImageSpec, bytes: &[u8]) -> bool {
     if matches!(spec, ImageSpec::Video { .. }) {
         bytes.get(4..8) == Some(b"ftyp")
@@ -1218,6 +1308,100 @@ fn prune_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn profile_styles_gif_upload_rejects_non_provider_urls_without_cache_writes() {
+        let root = temp_directory("profile-gif-hosts");
+        let service = Service {
+            client: reqwest::Client::new(),
+            directory: root.join("images"),
+            video_directory: root.join("videos"),
+            frames_directory: root.join("frames"),
+            permits: Semaphore::new(1),
+            video_permits: Semaphore::new(1),
+            initialized: OnceCell::new(),
+            image_written: AtomicU64::new(0),
+            video_written: AtomicU64::new(0),
+            frames_written: AtomicU64::new(0),
+            pruning: Arc::new(AtomicBool::new(false)),
+        };
+        for url in [
+            "not a URL",
+            "https://127.0.0.1/gif",
+            "https://cdn.discordapp.com/gif",
+            "http://media.tenor.com/gif",
+            "https://media.tenor.com.evil.test/gif",
+            "https://user:pass@media.giphy.com/gif",
+            "https://static.klipy.com:8443/gif",
+        ] {
+            assert_eq!(
+                service
+                    .load_gif_provider_media(url, 10 * 1024 * 1024)
+                    .await
+                    .unwrap_err(),
+                "Choose a GIF from Tenor, Giphy, or Klipy.",
+                "{url}"
+            );
+        }
+        assert!(!root.exists());
+    }
+
+    #[tokio::test]
+    async fn profile_styles_gif_download_limits_declared_and_streamed_bytes() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (reply, limit, expected) in [
+            (
+                "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nabcd",
+                5,
+                Ok(b"abcd".to_vec()),
+            ),
+            (
+                "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nabcd",
+                4,
+                Err("Choose a GIF smaller than 10 MB.".to_owned()),
+            ),
+            (
+                "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n2\r\nab\r\n2\r\ncd\r\n0\r\n\r\n",
+                4,
+                Err("Choose a GIF smaller than 10 MB.".to_owned()),
+            ),
+            (
+                "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n2\r\nab\r\n2\r\ncd\r\n0\r\n\r\n",
+                5,
+                Ok(b"abcd".to_vec()),
+            ),
+            (
+                "HTTP/1.1 302 Found\r\nContent-Length: 0\r\nLocation: https://evil.test/gif\r\nConnection: close\r\n\r\n",
+                5,
+                Err("Could not download this GIF.".to_owned()),
+            ),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/gif", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut headers = Vec::new();
+                let mut buffer = [0; 1024];
+                while !headers.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                    let read = stream.read(&mut buffer).await.unwrap();
+                    assert!(read > 0);
+                    headers.extend_from_slice(&buffer[..read]);
+                }
+                let _ = stream.write_all(reply.as_bytes()).await;
+            });
+            let response = reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap()
+                .get(url)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(gif_provider_bytes(response, limit).await, expected);
+            server.await.unwrap();
+        }
+    }
 
     fn temp_directory(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(

@@ -19,6 +19,8 @@ const ROW_PADDING: f32 = 8.;
 const AVATAR: f32 = 32.;
 const AVATAR_GAP: f32 = 12.;
 const NAMEPLATE_OPACITY: f32 = 0.6;
+/// Rows clip rectangularly, so nameplate art inside them is rounded to this too.
+pub(crate) const ROW_RADIUS: f32 = 8.;
 pub(crate) const NAMEPLATE_DIM: u32 = 0xB3;
 const NAMEPLATE_FADE: f32 = 50.;
 const NAMEPLATE_TEXT_MARGIN: f32 = 10.;
@@ -218,7 +220,9 @@ pub(super) fn member_row(
     let nameplate = app
         .store
         .nameplate(Some(guild_id), user.id)
-        .and_then(|nameplate| nameplate_layer(nameplate, user.id, ROW_HEIGHT, hovered, cx));
+        .and_then(|nameplate| {
+            member_nameplate_layer(nameplate, user.id, ROW_HEIGHT, hovered, ROW_RADIUS, cx)
+        });
     let plated = nameplate.is_some();
     let row_background = if hovered {
         theme::composite(theme::hover(), theme::base_lower())
@@ -237,7 +241,7 @@ pub(super) fn member_row(
         .w_full()
         .h(rpx(ROW_HEIGHT))
         .px(rpx(ROW_PADDING))
-        .rounded(rpx(8.))
+        .rounded(rpx(ROW_RADIUS))
         .overflow_hidden()
         .cursor_pointer()
         .when(!online, |this| this.opacity(0.35))
@@ -277,6 +281,7 @@ pub(super) fn member_row(
                     .top_0()
                     .bottom_0()
                     .w(rpx(ROW_PADDING + AVATAR + AVATAR_GAP))
+                    .rounded_l(rpx(ROW_RADIUS))
                     .bg(dim),
             )
         })
@@ -428,23 +433,77 @@ pub(crate) fn nameplate_layer(
     hovered: bool,
     cx: &App,
 ) -> Option<AnyElement> {
-    let image = nameplate_image(&nameplate.asset, user_id, height, hovered, cx)?;
+    member_nameplate_layer(nameplate, user_id, height, hovered, 0., cx)
+}
+
+/// A nameplate as the member list shows it, dimmed under a soft tint, on a row with
+/// rounded corners.
+pub(crate) fn member_nameplate_layer(
+    nameplate: &Nameplate,
+    user_id: u64,
+    height: f32,
+    hovered: bool,
+    radius: f32,
+    cx: &App,
+) -> Option<AnyElement> {
+    let image = nameplate_image(
+        &nameplate.asset,
+        user_id,
+        height,
+        hovered,
+        radius,
+        NAMEPLATE_OPACITY,
+        cx,
+    )?;
     let wash = nameplate
         .palette
         .as_deref()
         .and_then(palette_color)
-        .map(|color| palette_wash(color, hovered));
-    Some(
-        div()
-            .absolute()
-            .inset_0()
-            .children(wash)
-            .child(image)
-            .into_any_element(),
-    )
+        .map(|color| palette_wash(color, hovered, radius));
+    Some(plate_stack(wash, image))
 }
 
-fn palette_wash(color: u32, hovered: bool) -> impl IntoElement {
+/// A nameplate as collectible previews show it: undimmed art over a stronger, even tint.
+/// Clipping is rectangular, so a row with rounded corners rounds the art itself.
+pub(crate) fn rounded_nameplate_layer(
+    nameplate: &Nameplate,
+    user_id: u64,
+    height: f32,
+    hovered: bool,
+    radius: f32,
+    cx: &App,
+) -> Option<AnyElement> {
+    let image = nameplate_image(&nameplate.asset, user_id, height, hovered, radius, 1., cx)?;
+    let wash = nameplate
+        .palette
+        .as_deref()
+        .and_then(palette_color)
+        .map(|color| {
+            let tint = |alpha: u32| rgba(color << 8 | alpha);
+            div()
+                .absolute()
+                .inset_0()
+                .rounded(rpx(radius))
+                .bg(linear_gradient(
+                    90.,
+                    linear_color_stop(tint(0x1A), 0.),
+                    linear_color_stop(tint(0x66), 1.),
+                ))
+                .into_any_element()
+        });
+    Some(plate_stack(wash, image))
+}
+
+fn plate_stack(wash: Option<AnyElement>, image: AnyElement) -> AnyElement {
+    div()
+        .absolute()
+        .inset_0()
+        .children(wash)
+        .child(image)
+        .into_any_element()
+}
+
+fn palette_wash(color: u32, hovered: bool, radius: f32) -> AnyElement {
     let tint = |alpha: u32| rgba(color << 8 | alpha);
     let flat = tint(0x14);
     let end = tint(if hovered { 0x4D } else { 0x33 });
@@ -452,17 +511,30 @@ fn palette_wash(color: u32, hovered: bool) -> impl IntoElement {
         .absolute()
         .inset_0()
         .flex()
-        .child(div().h_full().w(relative(0.2)).bg(linear_gradient(
-            90.,
-            linear_color_stop(tint(0), 0.),
-            linear_color_stop(flat, 1.),
-        )))
+        .child(
+            div()
+                .h_full()
+                .w(relative(0.2))
+                .rounded_l(rpx(radius))
+                .bg(linear_gradient(
+                    90.,
+                    linear_color_stop(tint(0), 0.),
+                    linear_color_stop(flat, 1.),
+                )),
+        )
         .child(div().h_full().w(relative(0.3)).bg(flat))
-        .child(div().h_full().flex_1().bg(linear_gradient(
-            90.,
-            linear_color_stop(flat, 0.),
-            linear_color_stop(end, 1.),
-        )))
+        .child(
+            div()
+                .h_full()
+                .flex_1()
+                .rounded_r(rpx(radius))
+                .bg(linear_gradient(
+                    90.,
+                    linear_color_stop(flat, 0.),
+                    linear_color_stop(end, 1.),
+                )),
+        )
+        .into_any_element()
 }
 
 /// Dims the art behind a name. Its row has to clip, since this reaches a row's height past it.
@@ -497,6 +569,8 @@ fn nameplate_image(
     user_id: u64,
     height: f32,
     animate: bool,
+    radius: f32,
+    opacity: f32,
     cx: &App,
 ) -> Option<AnyElement> {
     let spec = |animated| ImageSpec::Nameplate {
@@ -510,10 +584,12 @@ fn nameplate_image(
     {
         Some(image) => animated::image(image)
             .h(rpx(height))
+            .rounded_r(rpx(radius))
             .id(("nameplate", user_id))
             .into_any_element(),
         None => img(images::resolve(&spec(false), pixels, cx)?)
             .h(rpx(height))
+            .rounded_r(rpx(radius))
             .into_any_element(),
     };
     Some(
@@ -521,7 +597,7 @@ fn nameplate_image(
             .absolute()
             .top_0()
             .right_0()
-            .opacity(NAMEPLATE_OPACITY)
+            .opacity(opacity)
             .child(image)
             .into_any_element(),
     )

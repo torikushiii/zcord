@@ -5,7 +5,7 @@ use gpui::{prelude::*, *};
 use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::{
-    app::{DiscordApp, profile},
+    app::DiscordApp,
     theme::{self, rpx},
 };
 
@@ -386,7 +386,14 @@ fn sidebar(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> impl IntoElem
         .rounded(rpx(8.))
         .cursor_pointer()
         .hover(|style| style.bg(rgba(theme::hover())))
-        .on_click(profile::opener(app, user_id, Anchor::TopLeft))
+        .on_click({
+            let entity = app.entity.clone();
+            move |_, _, cx| {
+                entity
+                    .update(cx, |app, cx| app.open_full_profile_for(user_id, cx))
+                    .ok();
+            }
+        })
         .child(theme::user_avatar(user, user_id, 48., None, false, cx))
         .child(
             div()
@@ -412,7 +419,7 @@ fn sidebar(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> impl IntoElem
                         .line_height(rpx(18.))
                         .font_weight(FontWeight::NORMAL)
                         .text_color(rgb(theme::muted()))
-                        .child("View Profile")
+                        .child("Edit Profile")
                         .child(theme::icon("pencil", 12., theme::muted())),
                 ),
         );

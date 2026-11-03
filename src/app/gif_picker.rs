@@ -11,7 +11,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_tokio::Tokio;
 
 use crate::{
-    app::{DiscordApp, emoji_picker},
+    app::{DiscordApp, emoji_picker, profile::styles::ImageTarget},
     discord::{
         gifs::{Gif, GifCategories, GifCategory, GifProvider},
         settings_proto::{self, FavoriteGif},
@@ -39,6 +39,7 @@ const SEARCH_DELAY: Duration = Duration::from_millis(300);
 /// Tiles this far outside the viewport still render, so a fast scroll doesn't flash empty cells.
 const OVERSCAN: f32 = 240.;
 const PICKER_RISE: f32 = 8.;
+const MODAL_MARGIN: f32 = 40.;
 const PICKER_ENTER: Duration = Duration::from_millis(150);
 const PICKER_EXIT: Duration = Duration::from_millis(100);
 /// A press that closed the picker via mouse-down-outside must not reopen it from
@@ -75,6 +76,8 @@ pub(crate) struct Gifs {
     favorite_writes: u64,
     /// The picker belongs to the thread pane's composer rather than the main one.
     pub(crate) pane: bool,
+    /// The picker is the profile editor's Choose GIF dialog, picking this image.
+    style_target: Option<ImageTarget>,
 }
 
 struct GifPicker {
@@ -233,7 +236,31 @@ impl DiscordApp {
         self.close_emoji_picker(cx);
         self.take_sticker_picker();
         self.gifs.pane = pane;
+        self.gifs.style_target = None;
         self.open_gif_picker(position, false, window, cx);
+    }
+
+    /// Opens the picker as a centered dialog whose pick becomes the draft avatar or banner.
+    pub(crate) fn open_style_gif_picker(
+        &mut self,
+        target: ImageTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_emoji_picker(cx);
+        self.take_sticker_picker();
+        self.gifs.pane = false;
+        self.gifs.style_target = Some(target);
+        self.open_gif_picker(Point::default(), false, window, cx);
+    }
+
+    /// Starts loading the provider's categories, whose previews tile the Choose GIF option.
+    pub(crate) fn preload_gif_categories(&mut self, cx: &mut Context<Self>) {
+        let provider = settings::get(cx).gif_provider;
+        self.gifs
+            .categories
+            .retain(|_, load| !matches!(load, Load::Failed));
+        self.load_gif_categories(provider, cx);
     }
 
     /// `swapped` opens in place of the emoji picker's tab, without the entry animation.
@@ -536,9 +563,11 @@ impl DiscordApp {
         }
     }
 
-    fn pick_gif(&mut self, url: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn pick_gif(&mut self, url: String, src: String, window: &mut Window, cx: &mut Context<Self>) {
         self.close_gif_picker(cx);
-        if self.gifs.pane {
+        if let Some(target) = self.gifs.style_target {
+            self.pick_style_gif(target, src, cx);
+        } else if self.gifs.pane {
             self.send_pane_content(url, window, cx);
         } else {
             self.send_content(url, Vec::new(), window, cx);
@@ -605,24 +634,24 @@ impl DiscordApp {
     }
 }
 
+/// `favorite` is `None` where the Favorites tile doesn't belong, as in Choose GIF.
 fn home_tiles(
     categories: Option<&Load<Rc<GifCategories>>>,
-    favorite: Option<&FavoriteGif>,
+    favorite: Option<Option<&FavoriteGif>>,
 ) -> Vec<Tile> {
-    let favorite = favorite.map(GifItem::from_favorite);
-    let mut tiles = Vec::new();
+    let mut tiles: Vec<Tile> = favorite
+        .map(|favorite| Tile::Favorites(favorite.map(GifItem::from_favorite)))
+        .into_iter()
+        .collect();
     match categories {
         Some(Load::Ready(categories)) => {
-            tiles.push(Tile::Favorites(favorite.clone()));
             tiles.push(Tile::Trending(categories.trending_preview.clone()));
             tiles.extend(categories.categories.iter().cloned().map(Tile::Category));
         }
         Some(Load::Failed) => {
-            tiles.push(Tile::Favorites(favorite.clone()));
             tiles.push(Tile::Trending(None));
         }
         Some(Load::Loading) | None => {
-            tiles.push(Tile::Favorites(favorite.clone()));
             tiles.push(Tile::Trending(None));
             tiles.extend((0..6).map(|_| Tile::Placeholder));
         }
@@ -697,10 +726,13 @@ fn body(app: &DiscordApp, picker: &GifPicker, provider: GifProvider) -> Body {
     };
     match &picker.view {
         View::Home => {
-            let (placed, height) = grid_layout(home_tiles(
-                app.gifs.categories.get(&provider),
-                random_favorite(app.store.favorite_gifs(), picker.favorite_pick),
-            ));
+            let favorite = app
+                .gifs
+                .style_target
+                .is_none()
+                .then(|| random_favorite(app.store.favorite_gifs(), picker.favorite_pick));
+            let (placed, height) =
+                grid_layout(home_tiles(app.gifs.categories.get(&provider), favorite));
             Body::Tiles(placed, height)
         }
         View::Trending => gifs(
@@ -745,17 +777,30 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
     };
     let animation = Animation::new(if closing { PICKER_EXIT } else { PICKER_ENTER })
         .with_easing(ease_out_quint());
+    let modal = app.gifs.style_target.is_some();
+    let height = if modal {
+        let rem = window.rem_size();
+        rpx(HEIGHT)
+            .to_pixels(rem)
+            .min(window.viewport_size().height - px(2. * MODAL_MARGIN))
+    } else {
+        panel_height(picker.position, window)
+    };
     let panel = div()
         .id("gif-picker")
         .relative()
         .flex()
         .flex_col()
         .w(rpx(WIDTH))
-        .h(panel_height(picker.position, window))
-        .rounded(rpx(8.))
+        .h(height)
+        .rounded(rpx(if modal { 12. } else { 8. }))
         .border_1()
         .border_color(rgba(theme::border()))
-        .bg(rgb(theme::elevated()))
+        .bg(rgb(if modal {
+            theme::surface_high()
+        } else {
+            theme::elevated()
+        }))
         .shadow_lg()
         .overflow_hidden()
         .when(!closing, |this| {
@@ -778,6 +823,12 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
         });
     let panel = if picker.swapped && !closing {
         panel.into_any_element()
+    } else if modal {
+        panel
+            .with_animation((key, picker.animation), animation, move |this, delta| {
+                this.opacity(if closing { 1. - delta } else { delta })
+            })
+            .into_any_element()
     } else {
         panel
             .with_animation((key, picker.animation), animation, move |this, delta| {
@@ -787,6 +838,24 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
             })
             .into_any_element()
     };
+    if modal {
+        // The panel's outside press closes it; the scrim only dims what's behind.
+        return Some(
+            deferred(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(!closing, |this| this.occlude())
+                    .bg(rgba(theme::SCRIM).opacity(if closing { 0. } else { 1. }))
+                    .child(panel),
+            )
+            .with_priority(2)
+            .into_any_element(),
+        );
+    }
     Some(
         deferred(
             anchored()
@@ -916,7 +985,31 @@ fn header(
         .p(rpx(HEADER_PADDING))
         .border_b_1()
         .border_color(rgba(theme::border()))
-        .child(tabs(app, Tab::Media))
+        .child(match app.gifs.style_target {
+            // As tall as the tabs it replaces, so the provider menu still lines up.
+            Some(_) => div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .h(rpx(TAB))
+                .child(
+                    div()
+                        .text_size(rpx(20.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(theme::strong()))
+                        .child("Choose GIF"),
+                )
+                .child(
+                    theme::icon_button("gif-dialog-close", "x", 24., theme::muted()).on_click({
+                        let entity = entity.clone();
+                        move |_, _, cx| {
+                            entity.update(cx, |app, cx| app.close_gif_picker(cx)).ok();
+                        }
+                    }),
+                )
+                .into_any_element(),
+            None => tabs(app, Tab::Media).into_any_element(),
+        })
         .child(
             div()
                 .flex()
@@ -1028,6 +1121,7 @@ impl DiscordApp {
             return;
         };
         self.gifs.closing = None;
+        self.gifs.style_target = None;
         match tab {
             Tab::Media => self.open_gif_picker(position, true, window, cx),
             Tab::Stickers => self.open_sticker_tab(position, window, cx),
@@ -1255,7 +1349,7 @@ fn tile(app: &DiscordApp, index: usize, placed: Placed, animate: bool, cx: &App)
         Tile::Gif(item) => {
             let favorite = app.store.is_favorite_gif(&item.url);
             let can_favorite = app.store.frecency().is_some() && app.live;
-            let url = item.url.clone();
+            let (url, src) = (item.url.clone(), item.src.clone());
             let star = can_favorite.then(|| {
                 let entity = entity.clone();
                 let item = item.clone();
@@ -1299,9 +1393,9 @@ fn tile(app: &DiscordApp, index: usize, placed: Placed, animate: bool, cx: &App)
                     cx,
                 ))
                 .on_click(move |_, window, cx| {
-                    let url = url.clone();
+                    let (url, src) = (url.clone(), src.clone());
                     entity
-                        .update(cx, |app, cx| app.pick_gif(url, window, cx))
+                        .update(cx, |app, cx| app.pick_gif(url, src, window, cx))
                         .ok();
                 })
                 .children(star)
@@ -1404,6 +1498,62 @@ fn media(
             .into_any_element(),
         None => div().into_any_element(),
     }
+}
+
+pub(crate) fn category_previews(app: &DiscordApp, count: usize, cx: &App) -> Vec<String> {
+    match app.gifs.categories.get(&settings::get(cx).gif_provider) {
+        Some(Load::Ready(categories)) => categories
+            .categories
+            .iter()
+            .take(count)
+            .map(|category| category.src.clone())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A playing provider GIF filling its parent, with corner radii `[tl, tr, br, bl]` since
+/// clipping alone won't round it. Shows a still frame until the animation decodes.
+pub(crate) fn gif_cell(src: &str, size: f32, [tl, tr, br, bl]: [f32; 4], cx: &App) -> AnyElement {
+    let pixels = theme::image_px(size);
+    let spec = ImageSpec::Media {
+        url: src.to_owned(),
+        width: 0,
+        height: 0,
+        animated: true,
+    };
+    fn fill<E: Styled>(this: E, [tl, tr, br, bl]: [f32; 4]) -> E {
+        this.absolute()
+            .inset_0()
+            .size_full()
+            .rounded_tl(rpx(tl))
+            .rounded_tr(rpx(tr))
+            .rounded_br(rpx(br))
+            .rounded_bl(rpx(bl))
+    }
+    let corners = [tl, tr, br, bl];
+    if let Some(frames) = animated::resolve(&spec, pixels, cx) {
+        let key = {
+            let mut hasher = std::hash::DefaultHasher::new();
+            std::hash::Hash::hash(src, &mut hasher);
+            std::hash::Hasher::finish(&hasher)
+        };
+        return fill(
+            animated::image(frames).object_fit(ObjectFit::Cover),
+            corners,
+        )
+        .id(("gif-cell", key))
+        .into_any_element();
+    }
+    animated::poster(&spec, pixels, cx)
+        .map(|image| fill(image.object_fit(ObjectFit::Cover), corners).into_any_element())
+        .or_else(|| {
+            let fallback = animated::fallback(&spec, pixels, cx)?;
+            crate::media::images::resolve(&fallback, pixels, cx).map(|path| {
+                fill(img(path).object_fit(ObjectFit::Cover), corners).into_any_element()
+            })
+        })
+        .unwrap_or_else(|| div().into_any_element())
 }
 
 fn scrim(color: u32, hovered: u32) -> impl IntoElement {

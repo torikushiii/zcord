@@ -740,7 +740,14 @@ fn dm_row(
             )
     });
     let nameplate = user.zip(recipient).and_then(|(user, user_id)| {
-        member_list::nameplate_layer(user.nameplate.as_ref()?, user_id, DM_HEIGHT, hovered, cx)
+        member_list::member_nameplate_layer(
+            user.nameplate.as_ref()?,
+            user_id,
+            DM_HEIGHT,
+            hovered,
+            member_list::ROW_RADIUS,
+            cx,
+        )
     });
     let plated = nameplate.is_some();
     let dim = rgba(
@@ -813,6 +820,7 @@ fn dm_row(
                     .top_0()
                     .bottom_0()
                     .w(rpx(8. + DM_AVATAR + 12.))
+                    .rounded_l(rpx(member_list::ROW_RADIUS))
                     .bg(dim),
             )
         })

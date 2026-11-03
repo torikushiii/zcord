@@ -4,6 +4,7 @@ use super::*;
 pub(super) enum CacheRequest {
     Profile(u64, Option<u64>),
     Product(u64),
+    CollectibleCatalog,
     Outbox(u64),
     Wishlist(u64),
     Invite(String),
@@ -27,7 +28,9 @@ pub(crate) struct ProfileDetails {
 #[derive(Default)]
 pub(super) struct Cache {
     pub(super) profiles: HashMap<(u64, Option<u64>), CachedProfile>,
+    pub(super) profile_revision: u64,
     pub(super) products: HashMap<u64, Arc<model::CollectibleProduct>>,
+    pub(super) collectible_catalog: Option<Arc<Vec<Arc<model::CollectibleProduct>>>>,
     pub(super) outboxes: HashMap<u64, Cached<model::Outbox>>,
     pub(super) wishlists: HashMap<u64, Cached<model::Wishlist>>,
     pub(super) invites: HashMap<String, CachedInvite>,
@@ -658,6 +661,34 @@ mod tests {
         let (full, popout) = tokio::join!(full, popout);
         assert!(Arc::ptr_eq(&full.unwrap(), &profile));
         assert!(Arc::ptr_eq(&popout.unwrap(), &profile));
+    }
+
+    #[tokio::test]
+    async fn profile_styles_catalog_reuses_session_cache_for_overlapping_loads() {
+        let session = offline_session();
+        let fetching = session
+            .request_lock(CacheRequest::CollectibleCatalog)
+            .lock_owned()
+            .await;
+        let first = session.collectible_catalog();
+        let second = session.collectible_catalog();
+        tokio::pin!(first, second);
+        assert!(futures::poll!(&mut first).is_pending());
+        assert!(futures::poll!(&mut second).is_pending());
+        let product = serde_json::from_value(
+            serde_json::json!({"sku_id": "1", "type": 1, "items": [{"sku_id": "1", "type": 1}]}),
+        )
+        .unwrap();
+        let catalog = Arc::new(vec![Arc::new(product)]);
+        session.cache().collectible_catalog = Some(catalog.clone());
+        drop(fetching);
+        let (first, second) = tokio::join!(first, second);
+        assert!(Arc::ptr_eq(&first.unwrap(), &catalog));
+        assert!(Arc::ptr_eq(&second.unwrap(), &catalog));
+        assert!(Arc::ptr_eq(
+            &session.clone().collectible_catalog().await.unwrap(),
+            &catalog
+        ));
     }
 
     #[tokio::test]

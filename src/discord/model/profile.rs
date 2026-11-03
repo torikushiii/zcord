@@ -55,7 +55,7 @@ pub struct ProfileUser {
     pub bio: Option<String>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 pub struct UserProfile {
     #[serde(default, deserialize_with = "default_value")]
     pub bio: Option<String>,
@@ -220,7 +220,7 @@ pub struct MutualGuild {
     pub nick: Option<String>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 pub struct ProfileMember {
     #[serde(flatten)]
     pub member: PartialMember,
@@ -237,7 +237,9 @@ pub struct CollectibleProduct {
     #[serde(default, deserialize_with = "default_value")]
     pub name: String,
     #[serde(default, rename = "type", deserialize_with = "default_value")]
-    pub kind: u8,
+    pub kind: u16,
+    #[serde(default, deserialize_with = "default_value")]
+    pub premium_type: Option<u8>,
     #[serde(default, deserialize_with = "entries")]
     pub items: Vec<CollectibleItem>,
 }
@@ -252,6 +254,14 @@ pub struct CollectibleItem {
     pub asset: Option<String>,
     #[serde(default, deserialize_with = "default_value")]
     pub label: Option<String>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub title: Option<String>,
+    #[serde(
+        default,
+        rename = "thumbnailPreviewSrc",
+        deserialize_with = "default_value"
+    )]
+    pub thumbnail_preview_src: Option<String>,
     #[serde(default, deserialize_with = "default_value")]
     pub palette: Option<String>,
     #[serde(

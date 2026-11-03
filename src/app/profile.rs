@@ -38,6 +38,9 @@ pub(super) mod panel;
 mod popout;
 #[cfg(test)]
 mod scope_tests;
+pub(crate) mod styles;
+mod styles_dialogs;
+pub(crate) mod styles_panel;
 pub(crate) use account_logic::StatusChange;
 pub(crate) use account_logic::{AccountAction, account_action};
 pub(crate) use board::presence_art;
@@ -729,6 +732,19 @@ fn effect_layers(
     else {
         return Vec::new();
     };
+    effect_item_layers(item, &card.effect_started, width, corner, top_only, cx)
+}
+
+/// `item`'s layers over a card `width` wide, timed from `clock`, which starts once all of
+/// them have decoded.
+fn effect_item_layers(
+    item: &model::CollectibleItem,
+    clock: &RefCell<Option<Instant>>,
+    width: f32,
+    corner: f32,
+    top_only: bool,
+    cx: &App,
+) -> Vec<AnyElement> {
     let height = width * EFFECT_HEIGHT_RATIO;
     let size = theme::image_px(height).min(EFFECT_MAX_PX);
     let states = item.effects.iter().enumerate().map(|(index, layer)| {
@@ -748,7 +764,7 @@ fn effect_layers(
         return Vec::new();
     };
     let now = cx.background_executor().now();
-    let started = effect_start(&mut card.effect_started.borrow_mut(), now);
+    let started = effect_start(&mut clock.borrow_mut(), now);
     let mut layers: Vec<_> = images
         .into_iter()
         .filter_map(|(index, image, plays)| {

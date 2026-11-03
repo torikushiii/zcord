@@ -8,11 +8,41 @@ impl Session {
         channel_id: Option<u64>,
         kind: ProfileKind,
     ) -> Result<Arc<model::Profile>, Error> {
+        self.profile_request(user_id, guild_id, channel_id, kind, false)
+            .await
+    }
+
+    pub(crate) async fn refresh_profile(
+        &self,
+        user_id: u64,
+        guild_id: Option<u64>,
+        channel_id: Option<u64>,
+        kind: ProfileKind,
+    ) -> Result<Arc<model::Profile>, Error> {
+        self.profile_request(user_id, guild_id, channel_id, kind, true)
+            .await
+    }
+
+    async fn profile_request(
+        &self,
+        user_id: u64,
+        guild_id: Option<u64>,
+        channel_id: Option<u64>,
+        kind: ProfileKind,
+        refresh: bool,
+    ) -> Result<Arc<model::Profile>, Error> {
         let _request = self
             .request_lock(CacheRequest::Profile(user_id, guild_id))
             .lock_owned()
             .await;
         let key = (user_id, guild_id);
+        if refresh {
+            let mut cache = self.cache();
+            cache.profiles.remove(&key);
+            cache
+                .failures
+                .remove(&CacheRequest::Profile(user_id, guild_id));
+        }
         if let Some(profile) = self.cached_profile(user_id, guild_id, kind) {
             return Ok(profile);
         }
@@ -22,6 +52,7 @@ impl Session {
         {
             return Err(error);
         }
+        let revision = self.cache().profile_revision;
         let profile = match self
             .rest(async |rest| {
                 rest.fetch_profile(user_id, guild_id, channel_id, kind)
@@ -31,17 +62,22 @@ impl Session {
         {
             Ok(profile) => profile,
             Err(error) => {
-                self.cache().remember_failure(
-                    CacheRequest::Profile(user_id, guild_id),
-                    &error,
-                    Instant::now(),
-                );
+                let mut cache = self.cache();
+                if cache.profile_revision == revision {
+                    cache.remember_failure(
+                        CacheRequest::Profile(user_id, guild_id),
+                        &error,
+                        Instant::now(),
+                    );
+                }
                 return Err(error);
             }
         };
         let profile = Arc::new(profile);
-        self.cache()
-            .insert_profile(key, kind, profile.clone(), Instant::now());
+        let mut cache = self.cache();
+        if cache.profile_revision == revision {
+            cache.insert_profile(key, kind, profile.clone(), Instant::now());
+        }
         Ok(profile)
     }
 
