@@ -1,4 +1,4 @@
-use super::actions::message_actions;
+use super::actions::{has_actions, message_actions};
 use super::composer::{emoji_token_overlay, flush_textarea};
 use super::media::{render_attachments, render_sticker};
 use super::rows::is_system;
@@ -534,6 +534,7 @@ pub(super) fn render_message(
             .as_ref()
             .is_some_and(|reply| reply.message_id == message.id);
     let entity = app.entity.clone();
+    let menu_entity = app.entity.clone();
     let id = message.id;
     div()
         .id(("message", message.id))
@@ -549,6 +550,14 @@ pub(super) fn render_message(
             this.on_hover(move |hovered, _, cx| {
                 entity
                     .update(cx, |app, cx| app.set_message_hover(id, *hovered, false, cx))
+                    .ok();
+            })
+        })
+        .when(!preview && has_actions(message), |this| {
+            this.on_mouse_down(MouseButton::Right, move |event, _, cx| {
+                let position = event.position;
+                menu_entity
+                    .update(cx, |app, cx| app.open_message_menu_at(id, position, cx))
                     .ok();
             })
         })
