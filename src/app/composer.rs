@@ -108,7 +108,7 @@ impl DiscordApp {
         };
         let text = format!("{text} ");
         let range = {
-            let input = self.composer.read(cx);
+            let input = self.suggest_input().read(cx);
             let value = input.text().to_string();
             let cursor = input.cursor().min(value.len());
             let start = if query_len == 0 {
@@ -122,7 +122,7 @@ impl DiscordApp {
             };
             start..cursor
         };
-        self.composer.update(cx, |input, cx| {
+        self.suggest_input().clone().update(cx, |input, cx| {
             input.set_selected_range(range, cx);
             input.replace(text, window, cx);
             input.focus(window, cx);
@@ -131,8 +131,21 @@ impl DiscordApp {
         cx.notify();
     }
 
+    pub(crate) fn suggest_input(&self) -> &Entity<TextareaState> {
+        self.editing
+            .as_ref()
+            .map_or(&self.composer, |editing| &editing.input)
+    }
+
+    pub(super) fn suggest_input_focused(&self, window: &Window, cx: &App) -> bool {
+        self.suggest_input()
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+    }
+
     pub(crate) fn emoji_query(&self, cx: &App) -> Option<String> {
-        let input = self.composer.read(cx);
+        let input = self.suggest_input().read(cx);
         let value = input.text().to_string();
         let cursor = input.cursor().min(value.len());
         let prefix = &value[..cursor];
@@ -293,7 +306,7 @@ impl DiscordApp {
         if self.move_search(-1, cx) || self.move_quick_switcher(-1, cx) {
             return;
         }
-        if self.composer_focused(window, cx)
+        if self.suggest_input_focused(window, cx)
             && (self.move_mention_suggestion(-1, cx) || self.move_emoji_suggestion(-1, cx))
         {
             return;

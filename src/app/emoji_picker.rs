@@ -349,6 +349,7 @@ impl DiscordApp {
         let index =
             (self.emoji_suggest.index.min(choices.len() - 1) as isize + delta).rem_euclid(len);
         self.emoji_suggest.index = index as usize;
+        self.reveal_suggestion(self.emoji_suggest.index);
         cx.notify();
         true
     }
@@ -866,96 +867,73 @@ fn footer(app: &DiscordApp, picker: &EmojiPicker, cx: &App) -> impl IntoElement 
 pub(super) fn suggestions(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
     let (query, choices) = app.emoji_suggestions(cx)?;
     let selected = app.emoji_suggest.index.min(choices.len() - 1);
-    Some(
-        div()
-            .absolute()
-            .left_0()
-            .right_0()
-            .bottom(relative(1.))
-            .mb(rpx(8.))
-            .flex()
-            .flex_col()
-            .py(rpx(8.))
-            .rounded(rpx(8.))
-            .border_1()
-            .border_color(rgba(theme::border()))
-            .bg(rgb(theme::elevated()))
-            .shadow_lg()
-            .occlude()
-            .child(
-                div()
-                    .px(rpx(12.))
-                    .pb(rpx(6.))
-                    .text_size(rpx(12.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(theme::muted()))
-                    .child(format!("EMOJI MATCHING :{}", query.to_uppercase())),
-            )
-            .children(choices.iter().enumerate().map(|(index, choice)| {
-                let hover = app.entity.clone();
-                let click = app.entity.clone();
-                let source = match choice {
-                    EmojiChoice::Custom(custom) => app
-                        .store
-                        .guilds
-                        .iter()
-                        .find(|guild| guild.id == custom.guild_id)
-                        .map(|guild| guild.name.clone()),
-                    EmojiChoice::Unicode { .. } => None,
-                };
-                div()
-                    .id(("emoji-suggestion", index))
-                    .flex()
-                    .items_center()
-                    .gap(rpx(10.))
-                    .mx(rpx(8.))
-                    .px(rpx(8.))
-                    .h(rpx(36.))
-                    .rounded(rpx(4.))
-                    .cursor_pointer()
-                    .when(index == selected, |this| this.bg(rgba(theme::selected())))
-                    .on_hover(move |hovered, _, cx| {
-                        if *hovered {
-                            hover
-                                .update(cx, |app, cx| app.hover_emoji_suggestion(index, cx))
-                                .ok();
-                        }
-                    })
-                    .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
-                    .on_click(move |_, window, cx| {
-                        click
-                            .update(cx, |app, cx| {
-                                app.accept_emoji_suggestion(Some(index), window, cx)
-                            })
+    Some(super::mentions::suggestion_popup(
+        app,
+        format!("Emoji matching :{query}").into(),
+        choices.iter().enumerate().map(|(index, choice)| {
+            let hover = app.entity.clone();
+            let click = app.entity.clone();
+            let source = match choice {
+                EmojiChoice::Custom(custom) => app
+                    .store
+                    .guilds
+                    .iter()
+                    .find(|guild| guild.id == custom.guild_id)
+                    .map(|guild| guild.name.clone()),
+                EmojiChoice::Unicode { .. } => None,
+            };
+            div()
+                .id(("emoji-suggestion", index))
+                .flex()
+                .items_center()
+                .gap(rpx(10.))
+                .mx(rpx(8.))
+                .px(rpx(8.))
+                .h(rpx(36.))
+                .rounded(rpx(4.))
+                .cursor_pointer()
+                .when(index == selected, |this| this.bg(rgba(theme::selected())))
+                .on_hover(move |hovered, _, cx| {
+                    if *hovered {
+                        hover
+                            .update(cx, |app, cx| app.hover_emoji_suggestion(index, cx))
                             .ok();
-                    })
-                    .child(emoji_preview_image(
-                        choice,
-                        24.,
-                        crate::settings::emoji_animation(),
-                        cx,
-                    ))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(rpx(15.))
-                            .text_color(rgb(theme::strong()))
-                            .child(format!(":{}:", choice_name(choice))),
-                    )
-                    .children(source.map(|source| {
-                        div()
-                            .flex_none()
-                            .max_w(rpx(200.))
-                            .truncate()
-                            .text_size(rpx(12.))
-                            .text_color(rgb(theme::muted()))
-                            .child(source)
-                    }))
-            }))
-            .into_any_element(),
-    )
+                    }
+                })
+                .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+                .on_click(move |_, window, cx| {
+                    click
+                        .update(cx, |app, cx| {
+                            app.accept_emoji_suggestion(Some(index), window, cx)
+                        })
+                        .ok();
+                })
+                .child(emoji_preview_image(
+                    choice,
+                    24.,
+                    crate::settings::emoji_animation(),
+                    cx,
+                ))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(rpx(15.))
+                        .text_color(rgb(theme::strong()))
+                        .child(format!(":{}:", choice_name(choice))),
+                )
+                .children(source.map(|source| {
+                    div()
+                        .flex_none()
+                        .max_w(rpx(200.))
+                        .truncate()
+                        .text_size(rpx(12.))
+                        .text_color(rgb(theme::muted()))
+                        .child(source)
+                }))
+        }),
+    ))
 }
 
 #[cfg(test)]

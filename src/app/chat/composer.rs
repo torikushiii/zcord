@@ -73,8 +73,10 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 .bg(rgb(theme::elevated()))
                 .border_1()
                 .border_color(rgba(theme::border()))
-                .children(mentions::suggestions(app, cx))
-                .children(emoji_picker::suggestions(app, cx))
+                .when(app.editing.is_none(), |this| {
+                    this.children(mentions::suggestions(app, cx))
+                        .children(emoji_picker::suggestions(app, cx))
+                })
                 .child(div().my(rpx(12.)).child({
                     let entity = app.entity.clone();
                     app.upload_tip(

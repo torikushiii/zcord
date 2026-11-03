@@ -691,16 +691,27 @@ impl DiscordApp {
                 &input,
                 window,
                 move |app, _, event, window, cx| match event {
-                    InputEvent::PressEnter { shift: false, .. } => app.save_edit(window, cx),
-                    InputEvent::Change => app.remeasure_message(message_id),
+                    InputEvent::PressEnter { shift: false, .. } => {
+                        if !(app.accept_mention_suggestion(None, window, cx)
+                            || app.accept_emoji_suggestion(None, window, cx))
+                        {
+                            app.save_edit(window, cx);
+                        }
+                    }
+                    InputEvent::Change => {
+                        app.remeasure_message(message_id);
+                        app.reset_emoji_suggest(cx);
+                        app.reset_mention_suggest(cx);
+                    }
                     _ => {}
                 },
             );
+        let cursor = cx.observe(&input, |app, _, cx| app.reset_mention_suggest(cx));
         self.editing = Some(Editing {
             message_id,
             input,
             mentions,
-            _subscription: subscription,
+            _subscriptions: [subscription, cursor],
         });
         self.remeasure_message(message_id);
         cx.notify();
@@ -733,7 +744,7 @@ impl DiscordApp {
         self.focus_composer(window, cx);
         cx.notify();
         if content.is_empty() {
-            self.confirm_delete = Some(message_id);
+            self.request_delete(message_id, false, window, cx);
             return;
         }
         let channel_id = self.selected_channel_id;
