@@ -270,9 +270,10 @@ impl Rows {
     /// position starts in the current top item, which jumps the list even for rows already in view.
     pub(crate) fn reveal_if_hidden(&self, ix: usize) {
         let viewport = self.state.viewport_bounds();
-        let visible = self.state.bounds_for_item(ix).is_some_and(|item| {
-            item.top() >= viewport.top() && item.bottom() <= viewport.bottom()
-        });
+        let visible = self
+            .state
+            .bounds_for_item(ix)
+            .is_some_and(|item| item.top() >= viewport.top() && item.bottom() <= viewport.bottom());
         if !visible {
             self.state.scroll_to_reveal_item(ix);
         }
