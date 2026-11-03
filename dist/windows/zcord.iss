@@ -52,6 +52,9 @@ RestartApplications=no
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+; Offered only on a first install, so an upgrade never re-enables a startup entry the user
+; turned off in zcord's settings.
+Name: "startup"; Description: "Start zcord in the tray when I sign in to Windows"; Check: IsFreshInstall
 
 [Files]
 Source: "{#PackageDir}\zcord.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -66,6 +69,16 @@ Name: "{autodesktop}\zcord"; Filename: "{app}\zcord.exe"; Tasks: desktopicon
 ; The launch-on-startup setting (src/startup.rs) writes this value; remove it on uninstall
 ; without creating it on install.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "zcord"; Flags: uninsdeletevalue dontcreatekey
+; Must match what src/startup.rs writes, or the settings switch reads as off.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "zcord"; ValueData: """{app}\zcord.exe"" --minimized"; Tasks: startup
+
+[Code]
+function IsFreshInstall: Boolean;
+begin
+  Result := not RegValueExists(HKCU,
+    'Software\Microsoft\Windows\CurrentVersion\Uninstall\{756456F8-EFB7-4F9C-90AF-7A0DA1F66902}_is1',
+    'UninstallString');
+end;
 
 [Run]
 Filename: "{app}\zcord.exe"; Description: "{cm:LaunchProgram,zcord}"; Flags: nowait postinstall skipifsilent
