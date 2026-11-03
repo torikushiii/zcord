@@ -20,6 +20,8 @@ static EMOJI_ANIMATION: AtomicBool = AtomicBool::new(true);
 static LINK_PREVIEWS: AtomicBool = AtomicBool::new(true);
 static NOTIFICATIONS: AtomicBool = AtomicBool::new(true);
 static NOTIFICATION_SOUND: AtomicBool = AtomicBool::new(true);
+#[cfg(windows)]
+static CLOSE_TO_TRAY: AtomicBool = AtomicBool::new(true);
 static GAME_ACTIVITY: AtomicBool = AtomicBool::new(false);
 static CHAT_FONT_SIZE: AtomicU32 = AtomicU32::new(16.0f32.to_bits());
 
@@ -73,6 +75,9 @@ pub struct Settings {
     pub notifications_off: bool,
     #[serde(default)]
     pub notification_sound_off: bool,
+    #[cfg(windows)]
+    #[serde(default)]
+    pub close_to_tray_off: bool,
     #[serde(default)]
     pub chat_font_size: Option<f32>,
     #[serde(default)]
@@ -240,6 +245,18 @@ pub fn set_notification_sound(cx: &mut App, on: bool) {
 
 pub fn notification_sound() -> bool {
     NOTIFICATION_SOUND.load(Ordering::Relaxed)
+}
+
+#[cfg(windows)]
+pub fn set_close_to_tray(cx: &mut App, on: bool) {
+    CLOSE_TO_TRAY.store(on, Ordering::Relaxed);
+    update(cx, |settings| settings.close_to_tray_off = !on);
+    cx.refresh_windows();
+}
+
+#[cfg(windows)]
+pub fn close_to_tray() -> bool {
+    CLOSE_TO_TRAY.load(Ordering::Relaxed)
 }
 
 pub fn set_game_activity(cx: &mut App, on: bool) {

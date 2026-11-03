@@ -48,6 +48,8 @@ chacha20poly1305 = "0.10"
 windows-capture = "=2.0.1"
 windows-core = "0.62.2"
 tauri-winrt-notification = "0.8"
+tray-icon = "0.26.1"
+raw-window-handle = "0.6.2"
 windows = { version = "0.62.2", features = [
     "Win32_Media_MediaFoundation",
     "Win32_System_Com",
@@ -63,6 +65,9 @@ windows = { version = "0.62.2", features = [
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Threading",
+    "Win32_Security",
 ] }
 
 [profile.dev]

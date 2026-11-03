@@ -60,6 +60,9 @@ impl DiscordApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(windows)]
+        crate::tray::show(window);
+        #[cfg(not(windows))]
         window.activate_window();
         let guild_id = self
             .store
