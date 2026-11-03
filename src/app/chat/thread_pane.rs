@@ -89,6 +89,7 @@ impl DiscordApp {
             TextareaState::new(window, cx)
                 .auto_grow(1, 8)
                 .submit_on_enter(true)
+                .context_menu(false)
         });
         composer.update(cx, |input, cx| {
             input.set_placeholder(placeholder, window, cx);

@@ -684,6 +684,7 @@ impl DiscordApp {
             TextareaState::new(window, cx)
                 .auto_grow(1, 20)
                 .submit_on_enter(true)
+                .context_menu(false)
         });
         input.update(cx, |input, cx| set_text(input, content, window, cx));
         let subscription =
