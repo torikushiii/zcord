@@ -477,7 +477,11 @@ pub(super) fn suggestion_popup(
                 anchored()
                     .anchor(Anchor::BottomLeft)
                     .snap_to_window_with_margin(px(8.))
-                    .child(div().pb(rpx(8.)).child(panel.w(rpx(EDITOR_SUGGESTION_WIDTH)))),
+                    .child(
+                        div()
+                            .pb(rpx(8.))
+                            .child(panel.w(rpx(EDITOR_SUGGESTION_WIDTH))),
+                    ),
             )
             .with_priority(1),
         )
