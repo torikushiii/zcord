@@ -4,7 +4,41 @@ connections/*.svg, other than connections/domain.svg and connections/xbox.svg, a
 connections/xbox.svg is from Font Awesome Free 7.3.1 (https://fontawesome.com), CC BY 4.0
 (https://creativecommons.org/licenses/by/4.0/). The Xbox logo is a trademark of Microsoft.
 
-The remaining icons, other than discord.svg, are from Lucide (https://lucide.dev), ISC License:
+accessibility.svg, app-window.svg, award.svg, badge-check.svg, bell.svg, calendar.svg,
+chart-column.svg, circle-plus.svg, circle-question-mark.svg, clock.svg, compass.svg, copy.svg,
+download.svg, ellipsis.svg, eye-off.svg, eye.svg, file.svg, flame.svg, folder.svg, forward.svg,
+gamepad-2.svg, gem.svg, headphone-off.svg, headphones.svg, id-badge.svg, image.svg, inbox.svg,
+languages.svg, library.svg, link.svg, lock.svg, log-out.svg, mail.svg, megaphone.svg,
+message-circle.svg, message-square.svg, messages-square.svg, mic-off.svg, mic.svg, monitor-up.svg,
+monitor-x.svg, music.svg, paperclip.svg, pencil.svg, phone.svg, pin.svg, reply.svg, search.svg,
+settings.svg, shapes.svg, smile-plus.svg, smile.svg, store.svg, thumbs-down.svg, thumbs-up.svg,
+timer.svg, trash-2.svg, user-check.svg, user-plus.svg, users.svg, user.svg, video.svg, volume-2.svg,
+zap.svg are the filled style of Keyline Icons
+(https://keylineicons.com), MIT License:
+
+MIT License
+
+Copyright (c) 2026 Keyline Icons
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+The remaining icons, other than discord.svg and the Keyline icons above, are from Lucide (https://lucide.dev), ISC License:
 
 ISC License
 
