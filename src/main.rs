@@ -14,6 +14,7 @@ mod startup;
 mod store;
 mod text;
 mod theme;
+mod tray;
 
 use gpui::{
     AppContext, KeyBinding, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions,
@@ -35,6 +36,10 @@ fn main() {
         .filter_module("keyring", log::LevelFilter::Off)
         .init();
     notify::init();
+    #[cfg(windows)]
+    if tray::activate_existing_instance() {
+        return;
+    }
     gpui_platform::application()
         .with_assets(assets::AppAssets)
         .run(|cx| {
@@ -45,6 +50,8 @@ fn main() {
             theme::init(cx);
             fonts::init(cx);
             settings::init(cx);
+            #[cfg(windows)]
+            tray::init(cx);
             let saved = settings::get(cx);
             settings::set_clock_24h(cx, saved.clock_24h);
             settings::set_reduce_motion(cx, saved.reduce_motion);
@@ -54,6 +61,8 @@ fn main() {
             settings::set_link_previews(cx, !saved.link_previews_off);
             settings::set_notifications(cx, !saved.notifications_off);
             settings::set_notification_sound(cx, !saved.notification_sound_off);
+            #[cfg(windows)]
+            settings::set_close_to_tray(cx, !saved.close_to_tray_off);
             settings::set_game_activity(cx, saved.share_game_activity);
             settings::set_chat_font_size(cx, saved.chat_font_size.unwrap_or(16.0));
             theme::set_light(saved.light_theme, cx);
@@ -88,6 +97,16 @@ fn main() {
             let min_size = size(px(940.), px(560.));
             let window_bounds = settings::initial_window_bounds(min_size, cx)
                 .unwrap_or_else(|| WindowBounds::centered(size(px(1440.), px(900.)), cx));
+            #[cfg(windows)]
+            let start_minimized =
+                tray::available(cx) && std::env::args().any(|arg| arg == "--minimized");
+            #[cfg(windows)]
+            if start_minimized {
+                tray::start_hidden(matches!(
+                    window_bounds,
+                    WindowBounds::Maximized(_) | WindowBounds::Fullscreen(_)
+                ));
+            }
             let options = WindowOptions {
                 window_bounds: Some(window_bounds),
                 window_min_size: Some(min_size),
@@ -97,15 +116,32 @@ fn main() {
                     ..Default::default()
                 }),
                 window_decorations: cfg!(target_os = "linux").then_some(WindowDecorations::Client),
+                #[cfg(windows)]
+                show: !start_minimized,
                 ..Default::default()
             };
 
             cx.spawn(async move |cx| {
-                cx.open_window(options, |window, cx| {
-                    let view = cx.new(|cx| app::DiscordApp::new(window, cx));
-                    cx.new(|cx| Root::new(view, window, cx))
-                })
-                .expect("Failed to open the Discord window");
+                let handle = cx
+                    .open_window(options, |window, cx| {
+                        #[cfg(windows)]
+                        window.on_window_should_close(cx, |window, cx| {
+                            if crate::settings::close_to_tray() && crate::tray::available(cx) {
+                                crate::settings::flush(cx);
+                                crate::tray::hide(window);
+                                false
+                            } else {
+                                true
+                            }
+                        });
+                        let view = cx.new(|cx| app::DiscordApp::new(window, cx));
+                        cx.new(|cx| Root::new(view, window, cx))
+                    })
+                    .expect("Failed to open the Discord window");
+                #[cfg(windows)]
+                cx.update(|cx| tray::set_main_window(cx, handle.into()));
+                #[cfg(not(windows))]
+                let _ = handle;
             })
             .detach();
         });

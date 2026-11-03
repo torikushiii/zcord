@@ -510,8 +510,22 @@ fn advanced(app: &DiscordApp, settings: &SettingsPage) -> AnyElement {
         vec![
             row(
                 "Launch zcord when Windows starts",
-                Some("Starts zcord when you sign in to Windows."),
+                Some(if cfg!(windows) {
+                    "Starts zcord in the tray when you sign in to Windows."
+                } else {
+                    "Starts zcord when you sign in to Windows."
+                }),
                 startup.into_any_element(),
+            ),
+            #[cfg(windows)]
+            toggle_row(
+                app,
+                settings,
+                "settings-close-to-tray",
+                "Close to system tray",
+                "Closing the window keeps zcord running in the tray so notifications keep arriving.",
+                crate::settings::close_to_tray(),
+                crate::settings::set_close_to_tray,
             ),
             row(
                 "Image Cache",

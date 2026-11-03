@@ -29,12 +29,23 @@ mod platform {
         Ok(value)
     }
 
+    fn startup_command() -> Result<Vec<u16>, String> {
+        let mut value = quoted_exe()?;
+        value.pop();
+        value.extend(" --minimized".encode_utf16());
+        value.push(0);
+        Ok(value)
+    }
+
     fn registry_error(status: WIN32_ERROR, action: &str) -> String {
         format!("{action} failed (Windows error {})", status.0)
     }
 
     pub fn enabled() -> bool {
         let Ok(expected) = quoted_exe() else {
+            return false;
+        };
+        let Ok(minimized) = startup_command() else {
             return false;
         };
         let subkey = wide(RUN_KEY);
@@ -73,11 +84,13 @@ mod platform {
             .iter()
             .position(|character| *character == 0)
             .unwrap_or(data.len());
-        data[..length] == expected[..expected.len() - 1]
+        // Older versions registered the bare executable path.
+        let matches = |command: &[u16]| data[..length] == command[..command.len() - 1];
+        matches(&expected) || matches(&minimized)
     }
 
     pub fn set_enabled(on: bool) -> Result<(), String> {
-        let data = on.then(quoted_exe).transpose()?;
+        let data = on.then(startup_command).transpose()?;
         let subkey = wide(RUN_KEY);
         let value = wide(VALUE_NAME);
         let mut key = HKEY::default();
