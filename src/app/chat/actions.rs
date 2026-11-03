@@ -12,6 +12,7 @@ const SUBMENU_HEIGHT: f32 = 360.;
 pub(in crate::app) struct MessageMenu {
     message_id: u64,
     position: Point<Pixels>,
+    anchor: Anchor,
     reactions_open: bool,
 }
 
@@ -28,6 +29,22 @@ impl DiscordApp {
         self.message_menu = (!open).then_some(MessageMenu {
             message_id,
             position,
+            anchor: Anchor::TopRight,
+            reactions_open: false,
+        });
+        cx.notify();
+    }
+
+    pub(super) fn open_message_menu_at(
+        &mut self,
+        message_id: u64,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        self.message_menu = Some(MessageMenu {
+            message_id,
+            position,
+            anchor: Anchor::TopLeft,
             reactions_open: false,
         });
         cx.notify();
@@ -52,6 +69,10 @@ impl DiscordApp {
 
     fn copy_message_id(&self, message_id: u64, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(message_id.to_string()));
+    }
+
+    fn copy_message_text(&self, text: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 
     fn copy_message_link(&self, message_id: u64, cx: &mut Context<Self>) {
@@ -217,12 +238,15 @@ fn reaction_submenu(app: &DiscordApp, message_id: u64, cx: &App) -> Div {
         )
 }
 
+pub(super) fn has_actions(message: &Message) -> bool {
+    message.delivery == Delivery::Sent && (!is_system(message.kind) || matches!(message.kind, 19))
+}
+
 pub(super) fn message_actions(app: &DiscordApp, message: &Message, cx: &App) -> Option<AnyElement> {
     let id = message.id;
     let menu_open = app.message_menu.is_some_and(|menu| menu.message_id == id);
     if !(app.hovered_message == Some(id) || app.hovered_actions == Some(id) || menu_open)
-        || message.delivery != Delivery::Sent
-        || is_system(message.kind) && !matches!(message.kind, 19)
+        || !has_actions(message)
     {
         return None;
     }
@@ -475,6 +499,7 @@ pub(in crate::app) fn message_menu(app: &DiscordApp, cx: &App) -> Option<AnyElem
         .iter()
         .find(|message| message.id == id)?;
     let allowed = permissions(app, message);
+    let copy_text = message.content.clone();
     let close = app.entity.clone();
     let reactions: Vec<_> = app
         .live
@@ -589,9 +614,33 @@ pub(in crate::app) fn message_menu(app: &DiscordApp, cx: &App) -> Option<AnyElem
                 move |app, _, window, cx| app.open_create_thread(Some(id), window, cx),
             ))
         })
-        .when(allowed.edit || allowed.reply || allowed.thread, |this| {
-            this.child(menu_divider())
+        .when(
+            allowed.edit || allowed.reply || allowed.forward || allowed.thread,
+            |this| this.child(menu_divider()),
+        )
+        .when(!copy_text.is_empty(), |this| {
+            this.child(menu_entry(
+                app,
+                "menu-copy-text",
+                "copy",
+                "Copy Text",
+                text,
+                move |app, _, _, cx| app.copy_message_text(copy_text.clone(), cx),
+            ))
         })
+        .when(
+            app.store.can_manage_messages(app.selected_channel_id),
+            |this| {
+                this.child(menu_entry(
+                    app,
+                    "menu-pin",
+                    "pin",
+                    "Pin Message",
+                    text,
+                    move |app, _, _, cx| app.pin_message(id, cx),
+                ))
+            },
+        )
         .when(allowed.unread, |this| {
             this.child(menu_entry(
                 app,
@@ -610,19 +659,6 @@ pub(in crate::app) fn message_menu(app: &DiscordApp, cx: &App) -> Option<AnyElem
             text,
             move |app, _, _, cx| app.copy_message_link(id, cx),
         ))
-        .when(
-            app.store.can_manage_messages(app.selected_channel_id),
-            |this| {
-                this.child(menu_entry(
-                    app,
-                    "menu-pin",
-                    "pin",
-                    "Pin Message",
-                    text,
-                    move |app, _, _, cx| app.pin_message(id, cx),
-                ))
-            },
-        )
         .when(allowed.delete, |this| {
             this.child(menu_divider()).child(menu_entry(
                 app,
@@ -649,7 +685,7 @@ pub(in crate::app) fn message_menu(app: &DiscordApp, cx: &App) -> Option<AnyElem
         deferred(
             anchored()
                 .position(menu.position)
-                .anchor(Anchor::TopRight)
+                .anchor(menu.anchor)
                 .snap_to_window_with_margin(px(8.))
                 .child(body),
         )
