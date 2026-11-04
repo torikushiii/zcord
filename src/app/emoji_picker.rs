@@ -315,19 +315,12 @@ impl DiscordApp {
         if self.emoji_suggest.dismissed.as_deref() == Some(query.as_str()) {
             return None;
         }
-        let choices: Vec<_> = self
-            .store
-            .search_emoji(
-                &query,
-                self.selected_guild_id,
-                self.selected_channel_id,
-                SUGGESTIONS * 3,
-            )
-            .into_iter()
-            .filter(|(_, access)| *access == EmojiAccess::Usable)
-            .map(|(choice, _)| choice)
-            .take(SUGGESTIONS)
-            .collect();
+        let choices = self.store.search_usable_emoji(
+            &query,
+            self.selected_guild_id,
+            self.selected_channel_id,
+            SUGGESTIONS,
+        );
         (!choices.is_empty()).then_some((query, choices))
     }
 

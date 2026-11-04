@@ -20,9 +20,11 @@ impl Store {
             if !self.has_nitro() {
                 return EmojiAccess::NeedsNitro;
             }
-            let external = self
-                .permissions(channel_id)
-                .is_some_and(|permissions| permissions & discord::USE_EXTERNAL_EMOJIS != 0);
+            // DMs (guild 0) have no permission overwrites; Nitro covers every server's emoji.
+            let external = guild_id == 0
+                || self
+                    .permissions(channel_id)
+                    .is_some_and(|permissions| permissions & discord::USE_EXTERNAL_EMOJIS != 0);
             if !external {
                 return EmojiAccess::NoExternalPermission;
             }
@@ -36,6 +38,34 @@ impl Store {
         guild_id: u64,
         channel_id: u64,
         limit: usize,
+    ) -> Vec<(EmojiChoice, EmojiAccess)> {
+        self.search_emoji_where(query, guild_id, channel_id, limit, |_| true)
+    }
+
+    /// Like `search_emoji`, but only usable matches count toward `limit`, so custom emoji the
+    /// user can't send (every one in a DM without Nitro) never crowd out Unicode matches.
+    pub fn search_usable_emoji(
+        &self,
+        query: &str,
+        guild_id: u64,
+        channel_id: u64,
+        limit: usize,
+    ) -> Vec<EmojiChoice> {
+        self.search_emoji_where(query, guild_id, channel_id, limit, |access| {
+            access == EmojiAccess::Usable
+        })
+        .into_iter()
+        .map(|(choice, _)| choice)
+        .collect()
+    }
+
+    fn search_emoji_where(
+        &self,
+        query: &str,
+        guild_id: u64,
+        channel_id: u64,
+        limit: usize,
+        keep: impl Fn(EmojiAccess) -> bool,
     ) -> Vec<(EmojiChoice, EmojiAccess)> {
         if query.is_empty() || limit == 0 {
             return Vec::new();
@@ -57,11 +87,12 @@ impl Store {
                 break;
             };
             for emoji in &guild.emojis {
-                if rank(&emoji.name) == Some(prefix) {
-                    output.push((
-                        EmojiChoice::Custom(emoji.clone()),
-                        self.emoji_access(emoji, guild_id, channel_id),
-                    ));
+                if rank(&emoji.name) != Some(prefix) {
+                    continue;
+                }
+                let access = self.emoji_access(emoji, guild_id, channel_id);
+                if keep(access) {
+                    output.push((EmojiChoice::Custom(emoji.clone()), access));
                     if output.len() >= limit {
                         return output;
                     }
@@ -74,11 +105,12 @@ impl Store {
                     continue;
                 }
                 for emoji in &guild.emojis {
-                    if rank(&emoji.name) == Some(prefix) {
-                        output.push((
-                            EmojiChoice::Custom(emoji.clone()),
-                            self.emoji_access(emoji, guild_id, channel_id),
-                        ));
+                    if rank(&emoji.name) != Some(prefix) {
+                        continue;
+                    }
+                    let access = self.emoji_access(emoji, guild_id, channel_id);
+                    if keep(access) {
+                        output.push((EmojiChoice::Custom(emoji.clone()), access));
                         if output.len() >= limit {
                             return output;
                         }

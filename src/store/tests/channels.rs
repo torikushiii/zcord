@@ -645,6 +645,36 @@ fn emoji_api_access_rules() {
         store.emoji_access(&external, 200, 2002),
         EmojiAccess::NoExternalPermission
     );
+    // DMs have no guild (0) and no permission overwrites; Nitro covers every server's emoji.
+    assert_eq!(store.emoji_access(&external, 0, 2002), EmojiAccess::Usable);
+    assert_eq!(store.emoji_access(&animated, 0, 2002), EmojiAccess::Usable);
+}
+
+#[test]
+fn emoji_api_usable_search_skips_locked_custom_emoji() {
+    let mut ready = ready();
+    ready
+        .guilds
+        .iter_mut()
+        .find(|guild| guild.id == 100)
+        .unwrap()
+        .emojis = Some(
+        (1..=40)
+            .map(|id| guild_emoji(id, &format!("wave{id}")))
+            .collect(),
+    );
+    let store = Store::from_ready(ready);
+    assert!(!store.has_nitro());
+
+    // Without Nitro every custom emoji is locked in a DM; Unicode must still come through.
+    let choices = store.search_usable_emoji("wave", 0, 2002, 10);
+    assert!(!choices.is_empty());
+    assert!(
+        choices
+            .iter()
+            .all(|choice| matches!(choice, EmojiChoice::Unicode { .. }))
+    );
+    assert!(!store.search_usable_emoji("rai", 0, 2002, 10).is_empty());
 }
 
 #[test]
