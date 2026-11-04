@@ -320,11 +320,92 @@ pub struct FrameLayer {
     pub responsive: bool,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct ProfileWidget {
-    #[serde(deserialize_with = "snowflake")]
     pub id: u64,
     pub data: WidgetData,
+    /// The widget's `data` as Discord sent it. Saving replaces the whole list, so widgets this
+    /// client can't fully model are sent back exactly as they came.
+    pub raw: Value,
+}
+
+impl<'de> Deserialize<'de> for ProfileWidget {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Id {
+            #[serde(deserialize_with = "snowflake")]
+            id: u64,
+        }
+        let value = Value::deserialize(d)?;
+        let Id { id } = Id::deserialize(&value).map_err(serde::de::Error::custom)?;
+        let raw = value.get("data").cloned().unwrap_or(Value::Null);
+        // A widget whose data no longer parses must still survive a save, so it falls back to
+        // `Unknown` rather than being dropped from the list.
+        let data = WidgetData::deserialize(&raw).unwrap_or(WidgetData::Unknown);
+        Ok(Self { id, data, raw })
+    }
+}
+
+impl ProfileWidget {
+    /// The `{id, data}` entry Discord's `PUT /users/@me/widgets` takes for this widget. Only an
+    /// edited game list is rewritten, and each game keeps the fields Discord sent for it.
+    pub fn body(&self) -> Value {
+        let mut data = self.raw.clone();
+        let original = WidgetData::deserialize(&self.raw).ok();
+        if let Some(games) = self.data.games()
+            && original.as_ref().and_then(WidgetData::games) != Some(games)
+            && let Some(object) = data.as_object_mut()
+        {
+            let sent = object
+                .get("games")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let games: Vec<Value> = games
+                .iter()
+                .map(|game| {
+                    let mut entry = sent
+                        .iter()
+                        .find(|entry| match entry.get("game_id") {
+                            Some(Value::String(id)) => id.parse() == Ok(game.game_id),
+                            Some(id) => id.as_u64() == Some(game.game_id),
+                            None => false,
+                        })
+                        .cloned()
+                        .filter(Value::is_object)
+                        .unwrap_or_else(|| serde_json::json!({}));
+                    entry["game_id"] = game.game_id.to_string().into();
+                    entry["comment"] = serde_json::json!(game.comment);
+                    entry["tags"] = serde_json::json!(game.tags);
+                    entry
+                })
+                .collect();
+            object.insert("games".into(), Value::Array(games));
+        }
+        serde_json::json!({ "id": self.id.to_string(), "data": data })
+    }
+}
+
+impl WidgetData {
+    pub fn games(&self) -> Option<&Vec<WidgetGame>> {
+        match self {
+            Self::FavoriteGames { games }
+            | Self::CurrentGames { games }
+            | Self::PlayedGames { games }
+            | Self::WantToPlayGames { games } => Some(games),
+            _ => None,
+        }
+    }
+
+    pub fn games_mut(&mut self) -> Option<&mut Vec<WidgetGame>> {
+        match self {
+            Self::FavoriteGames { games }
+            | Self::CurrentGames { games }
+            | Self::PlayedGames { games }
+            | Self::WantToPlayGames { games } => Some(games),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -402,7 +483,7 @@ pub struct PersonalImage {
     pub is_animated: bool,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct WidgetGame {
     #[serde(deserialize_with = "snowflake")]
     pub game_id: u64,

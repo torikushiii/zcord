@@ -18,15 +18,6 @@ pub(super) fn profile_close_button(palette: ProfilePalette) -> Stateful<Div> {
     theme::icon_button_with_hover("profile-close", "x", 18., palette.text, hover).bg(background)
 }
 
-pub(super) fn modal_backdrop_corners(rem_size: Pixels) -> Corners<Pixels> {
-    let radius = rpx(MODAL_RADIUS).to_pixels(rem_size);
-    Corners {
-        top_left: radius,
-        top_right: radius,
-        ..Corners::default()
-    }
-}
-
 pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &App) -> AnyElement {
     let theme = card.theme();
     let palette = card.palette();
@@ -94,7 +85,7 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
                     Some(theme) => this.bg(theme.overlay()),
                     None => this,
                 })
-                .child(header(app, card, &layout, surface, None, cx))
+                .child(header(app, card, &layout, surface, None, true, cx))
                 .child(
                     div()
                         .id("profile-modal-body")
@@ -142,59 +133,8 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
         .children(effect_layers(card, card_width, layout.corner, true, cx))
         .into_any_element();
     let framed = framed(card, card_width, profile_card, true, cx);
-    let banner_backdrop = banner_spec(card)
-        .and_then(|spec| {
-            let sigma = BACKDROP_BLUR * BACKDROP_SOURCE as f32 / modal_width;
-            images::blurred_with(&spec, BACKDROP_SOURCE, sigma, BACKDROP_SATURATION, cx)
-        })
-        .map(|image| {
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .right_0()
-                .h(rpx(BACKDROP_HEIGHT))
-                .overflow_hidden()
-                .opacity(BACKDROP_OPACITY)
-                .child(
-                    canvas(
-                        move |_, _, _| image,
-                        |bounds, image, window, _| {
-                            if bounds.is_empty() {
-                                return;
-                            }
-                            let fitted = ObjectFit::Cover.get_bounds(bounds, image.size(0));
-                            // Fade the image itself, leaving the profile theme visible underneath.
-                            let fade = EdgeFade {
-                                bounds,
-                                band: bounds.size.height,
-                                band_top: None,
-                                band_bottom: None,
-                                band_left: None,
-                                band_right: None,
-                                top: false,
-                                bottom: true,
-                                left: false,
-                                right: false,
-                            };
-                            window.with_edge_fade(Some(fade), |window| {
-                                if let Err(error) = window.paint_image_fitted(
-                                    bounds,
-                                    fitted,
-                                    // Parent overflow clipping is rectangular, so round the image too.
-                                    modal_backdrop_corners(window.rem_size()),
-                                    image,
-                                    0,
-                                    false,
-                                ) {
-                                    log::warn!("Could not paint profile backdrop: {error}");
-                                }
-                            });
-                        },
-                    )
-                    .size_full(),
-                )
-        });
+    let banner_backdrop =
+        banner_spec(card).and_then(|spec| banner_backdrop(&spec, modal_width, MODAL_RADIUS, cx));
     let close = app.entity.clone();
     let dismiss = app.entity.clone();
     let dialog = div()
@@ -273,9 +213,11 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
                 .justify_center()
                 .child(bar)
         }));
-    let overlays = styles
+    let mut overlays = styles
         .map(|editor| styles_dialogs::style_overlays(app, editor, cx))
         .unwrap_or_default();
+    overlays.extend(styles.and_then(|editor| super::widget_editor::manage_menu(app, card, editor)));
+    overlays.extend(styles.and_then(|editor| super::widget_editor::tag_menu(app, card, editor)));
     div()
         .id("profile-modal-backdrop")
         .absolute()
@@ -320,7 +262,9 @@ fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &App) -> AnyElement {
         .filter(|count| *count > 0)
         .map(|count| count as usize)
         .or_else(|| (!mutual_friends.is_empty()).then_some(mutual_friends.len()));
-    let has_board = board::has_board(card);
+    // Your own Board stays open while styling, so widgets can be added back to an empty one.
+    let editing = app.profile_styles.as_ref().filter(|_| own_profile);
+    let has_board = board::has_board(card) || editing.is_some();
     let has_wishlist = WISHLIST_TAB && board::has_wishlist(card);
     let current = match card.tab {
         Tab::Board if !has_board => Tab::Activity,
@@ -357,7 +301,10 @@ fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &App) -> AnyElement {
             .child(title)
     };
     let panel = match current {
-        Tab::Board => board::board_panel(app, card, cx),
+        Tab::Board => match editing {
+            Some(editor) => super::widget_editor::panel(app, card, editor, cx),
+            None => board::board_panel(app, card, cx),
+        },
         Tab::Activity => activity_panel(app, card, cx),
         Tab::Wishlist => board::wishlist_panel(app, card, cx),
         Tab::Servers => servers_panel(app, &mutual_guilds, palette, cx),
@@ -406,7 +353,11 @@ fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &App) -> AnyElement {
                     }
                 })),
         )
-        .child(tab_panel(panel))
+        .child(
+            tab_panel(panel).when(editing.is_some() && current == Tab::Board, |this| {
+                this.ml(rpx(-super::widget_editor::HANDLE_GUTTER))
+            }),
+        )
         .into_any_element()
 }
 

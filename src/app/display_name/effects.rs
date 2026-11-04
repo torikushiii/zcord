@@ -169,10 +169,21 @@ fn glyph(
         let _ = window.paint_glyph(origin, glyph.font, glyph.id, font_size, color);
     } else {
         let _ = window.paint_glyph_transformed(
-            origin, glyph.font, glyph.id, font_size, color, transform, blur,
+            origin,
+            glyph.font,
+            glyph.id,
+            font_size,
+            color,
+            transform,
+            blur.max(TILE_CLAMP_BLUR),
         );
     }
 }
+
+/// A scaled glyph samples the atlas with linear filtering, which bleeds the neighboring glyph's
+/// edge in as a faint column. gpui only clamps sampling to the glyph's own tile on its blur
+/// path, so a blur this small takes that path without visibly softening anything.
+const TILE_CLAMP_BLUR: Pixels = px(0.01);
 
 fn stroke(
     line: &Line,
@@ -183,18 +194,29 @@ fn stroke(
     window: &mut Window,
 ) {
     for item in line.glyphs.iter().filter(|glyph| !glyph.emoji) {
-        for index in 0..16 {
-            let angle = index as f32 * TAU / 16.;
-            glyph(
-                item,
-                origin + point(radius * angle.cos(), radius * angle.sin()),
-                font_size,
-                color,
-                TransformationMatrix::unit(),
-                px(0.),
-                window,
-            );
-        }
+        stroke_glyph(item, origin, font_size, color, radius, window);
+    }
+}
+
+fn stroke_glyph(
+    item: &Glyph,
+    origin: Point<Pixels>,
+    font_size: Pixels,
+    color: Hsla,
+    radius: Pixels,
+    window: &mut Window,
+) {
+    for index in 0..16 {
+        let angle = index as f32 * TAU / 16.;
+        glyph(
+            item,
+            origin + point(radius * angle.cos(), radius * angle.sin()),
+            font_size,
+            color,
+            TransformationMatrix::unit(),
+            px(0.),
+            window,
+        );
     }
 }
 
@@ -485,17 +507,33 @@ pub(super) fn paint(
                     (0.7, main),
                     (1., main),
                 ];
+                let shadow_at = |point: Point<Pixels>| {
+                    gradient(
+                        &stops,
+                        (1. - point.x / width + point.y / height + pop_position) / 4.,
+                    )
+                };
+                let stroke_radius = (unit * 1.2 + metrics.size * 0.04) / 2.;
+                // Discord gives the shadow a transparent stroke that its gradient still fills,
+                // so it's a stroke fatter than the letters and shows beneath their outline.
+                // One color per glyph keeps this to a ring of plain glyphs.
+                for item in line.glyphs.iter().filter(|item| !item.emoji) {
+                    let color = shadow_at(item.center);
+                    stroke_glyph(
+                        item,
+                        shadow_origin,
+                        metrics.size,
+                        color,
+                        stroke_radius,
+                        window,
+                    );
+                }
                 gradient_line(
                     line,
                     shadow_origin,
                     metrics,
                     Axis::Diagonal,
-                    |point| {
-                        gradient(
-                            &stops,
-                            (1. - point.x / width + point.y / height + pop_position) / 4.,
-                        )
-                    },
+                    shadow_at,
                     window,
                 );
                 let origin = bounds.origin + point(px(0.), metrics.size * pop_y);
@@ -504,7 +542,7 @@ pub(super) fn paint(
                     origin,
                     metrics.size,
                     shade(main, 0.2),
-                    (unit * 1.2 + metrics.size * 0.04) / 2.,
+                    stroke_radius,
                     window,
                 );
                 for item in &line.glyphs {

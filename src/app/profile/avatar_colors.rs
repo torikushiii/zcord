@@ -1,16 +1,104 @@
-use std::path::Path;
+use std::{
+    io::{BufRead, Cursor, Seek},
+    path::Path,
+};
 
 use color_thief::{ColorFormat, get_palette};
 use image::{ImageReader, Limits, RgbaImage};
 
 pub(crate) fn load(path: &Path) -> Option<[u32; 2]> {
-    let mut reader = ImageReader::open(path).ok()?.with_guessed_format().ok()?;
+    palette(&decode(ImageReader::open(path).ok()?)?)
+}
+
+/// The theme colors Discord's color picker suggests for an avatar: its two main colors, then
+/// the main one lightened and saturated (tinycolor's `lighten(15).saturate(30)`) at the other
+/// three corners of a tetrad. `bytes` is the image Discord samples, the avatar at 96px.
+pub(crate) fn suggestions(bytes: &[u8]) -> Option<[u32; 5]> {
+    let [primary, secondary] = palette(&decode(ImageReader::new(Cursor::new(bytes)))?)?;
+    let [a, b, c] = tetrad(primary);
+    Some([primary, secondary, a, b, c])
+}
+
+/// `primary` brightened, turned 270°, 180° and 90°.
+fn tetrad(primary: u32) -> [u32; 3] {
+    let [hue, saturation, lightness] = rgb_to_hsl(primary);
+    let (saturation, lightness) = ((saturation + 0.3).min(1.), (lightness + 0.15).min(1.));
+    [270., 180., 90.].map(|turn| hsl_to_rgb([(hue + turn) % 360., saturation, lightness]))
+}
+
+/// The first frame, for animated images.
+fn decode<R: BufRead + Seek>(reader: ImageReader<R>) -> Option<RgbaImage> {
+    let mut reader = reader.with_guessed_format().ok()?;
     let mut limits = Limits::default();
     limits.max_image_width = Some(4096);
     limits.max_image_height = Some(4096);
     limits.max_alloc = Some(64 * 1024 * 1024);
     reader.limits(limits);
-    palette(&reader.decode().ok()?.to_rgba8())
+    Some(reader.decode().ok()?.to_rgba8())
+}
+
+/// Hue in degrees, saturation and lightness in 0..=1, unrounded like tinycolor's.
+fn rgb_to_hsl(color: u32) -> [f64; 3] {
+    let [r, g, b] = [16, 8, 0].map(|shift| f64::from((color >> shift) & 0xFF) / 255.);
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let lightness = (max + min) / 2.;
+    if max == min {
+        return [0., 0., lightness];
+    }
+    let delta = max - min;
+    let saturation = if lightness > 0.5 {
+        delta / (2. - max - min)
+    } else {
+        delta / (max + min)
+    };
+    let hue = if max == r {
+        (g - b) / delta + if g < b { 6. } else { 0. }
+    } else if max == g {
+        (b - r) / delta + 2.
+    } else {
+        (r - g) / delta + 4.
+    };
+    [hue * 60., saturation, lightness]
+}
+
+fn hsl_to_rgb([hue, saturation, lightness]: [f64; 3]) -> u32 {
+    let hue = hue / 360.;
+    let channel = |p: f64, q: f64, mut t: f64| {
+        if t < 0. {
+            t += 1.;
+        }
+        if t > 1. {
+            t -= 1.;
+        }
+        if t < 1. / 6. {
+            p + (q - p) * 6. * t
+        } else if t < 0.5 {
+            q
+        } else if t < 2. / 3. {
+            p + (q - p) * (2. / 3. - t) * 6.
+        } else {
+            p
+        }
+    };
+    let [r, g, b] = if saturation == 0. {
+        [lightness; 3]
+    } else {
+        let q = if lightness < 0.5 {
+            lightness * (1. + saturation)
+        } else {
+            lightness + saturation - lightness * saturation
+        };
+        let p = 2. * lightness - q;
+        [
+            channel(p, q, hue + 1. / 3.),
+            channel(p, q, hue),
+            channel(p, q, hue - 1. / 3.),
+        ]
+    };
+    [r, g, b]
+        .map(|value| (value * 255.).round() as u32)
+        .into_iter()
+        .fold(0, |color, value| (color << 8) | value)
 }
 
 fn palette(image: &RgbaImage) -> Option<[u32; 2]> {
@@ -59,6 +147,15 @@ mod tests {
                 .is_light(),
                 light
             );
+        }
+    }
+
+    #[test]
+    fn suggestions_brighten_the_main_color_around_a_tetrad() {
+        // Discord's picker, for an avatar whose main colors are #21333c and #7c93a1.
+        assert_eq!(tetrad(0x21333C), [0x338723, 0x874423, 0x762387]);
+        for color in [0x21333C, 0xFFFFFF, 0x000000, 0x5865F2] {
+            assert_eq!(hsl_to_rgb(rgb_to_hsl(color)), color);
         }
     }
 

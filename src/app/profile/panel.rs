@@ -154,6 +154,7 @@ pub(in crate::app) fn render(app: &DiscordApp, card: &ProfileCard, cx: &App) -> 
                     &layout,
                     surface,
                     Some(open_full(app)),
+                    true,
                     cx,
                 ))
                 .child(body),

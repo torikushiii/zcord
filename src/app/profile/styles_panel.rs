@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use super::image_editor::ImageEdit;
 use super::styles::{
     CollectibleKind, ImageChange, ImageTarget, NameStyle, StyleDraft, StyleScope, StylesEditor,
 };
@@ -38,7 +39,21 @@ pub(crate) struct PanelUi {
     pub(crate) preview_effect: (Cell<Option<u64>>, RefCell<Option<Instant>>),
     /// Show/Hide Styles presses, which restart the panel's slide.
     pub(crate) panel_toggles: u64,
+    /// Bumped on every open, so each dialog pops in afresh.
+    pub(crate) dialog_opens: u64,
+    /// Set while the dialog pops out; `dialog` clears once it finishes.
+    pub(crate) dialog_closing: Option<Task<()>>,
+    /// The dialog replaced one still on screen, so the scrim is already up.
+    pub(crate) dialog_swapped: bool,
+    pub(crate) name_preview_light: bool,
+    pub(crate) widgets: super::widget_editor::WidgetsUi,
+    /// The theme color picker's suggestions and the avatar they came from; `None` while the
+    /// avatar is still being sampled.
+    pub(crate) theme_suggestions: Option<(AvatarSource, Option<[u32; 5]>)>,
 }
+
+/// `Shown`'s avatar: a CDN image, or a picked file not yet uploaded.
+type AvatarSource = (Option<ImageSpec>, Option<PathBuf>);
 
 /// The open dialog and its working copy, applied to the draft only on Apply.
 #[derive(Clone)]
@@ -50,6 +65,17 @@ pub(crate) enum StyleDialog {
     },
     NameStyle(NameStyle),
     Image(ImageTarget),
+    /// Cropping a picked avatar or banner before it goes in the draft.
+    ImageEdit(ImageEdit),
+}
+
+impl StyleDialog {
+    /// Frees the editor's preview from gpui's atlas, which otherwise keeps it until exit.
+    fn release(self, cx: &mut App) {
+        if let StyleDialog::ImageEdit(edit) = self {
+            super::image_editor::drop_image_later(edit.preview, cx);
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -66,8 +92,9 @@ pub(crate) enum ColorSlot {
     Accent,
     /// The single banner color of profiles without Nitro.
     Banner,
-    /// A custom display name color, from the name style dialog.
-    Name,
+    /// A custom display name color from the name style dialog: the stop it edits in a
+    /// Gradient or Prism, otherwise 0.
+    Name(usize),
 }
 
 /// Where the picker's saturation square and hue bar were last painted, for mapping drags.
@@ -138,10 +165,12 @@ pub(super) fn shown(app: &DiscordApp, editor: &StylesEditor) -> Shown {
     let main_avatar = main.avatar.clone().map(|hash| avatar_hash(hash, false));
     let main_banner = main.banner.clone().map(|hash| banner_hash(hash, false));
     let (avatar, avatar_file) = match &draft.avatar {
-        Some(ImageChange::Upload { path, .. }) => (None, Some(path.clone())),
-        Some(ImageChange::Recent { storage_hash, .. }) => (
-            Some(ImageSpec::Avatar {
+        Some(ImageChange::Upload { preview, .. }) => (None, Some(preview.clone())),
+        // Earlier uploads live under the archive, not beside the current avatar.
+        Some(ImageChange::Recent { id, storage_hash }) => (
+            Some(ImageSpec::ArchivedAvatar {
                 user_id,
+                avatar_id: *id,
                 hash: storage_hash.to_string(),
             }),
             None,
@@ -157,7 +186,7 @@ pub(super) fn shown(app: &DiscordApp, editor: &StylesEditor) -> Shown {
         ),
     };
     let (banner, banner_file) = match &draft.banner {
-        Some(ImageChange::Upload { path, .. }) => (None, Some(path.clone())),
+        Some(ImageChange::Upload { preview, .. }) => (None, Some(preview.clone())),
         Some(ImageChange::Remove) => (main_banner, None),
         Some(ImageChange::Recent { .. }) | None => (
             saved
@@ -277,12 +306,26 @@ impl DiscordApp {
         if matches!(dialog, StyleDialog::Image(_)) {
             self.preload_gif_categories(cx);
         }
+        let (replaced, swapped) = self
+            .profile_styles
+            .as_mut()
+            .map(|editor| {
+                let swapped = editor.ui.dialog.is_some() && editor.ui.dialog_closing.is_none();
+                (editor.ui.dialog.take(), swapped)
+            })
+            .unwrap_or_default();
+        if let Some(replaced) = replaced {
+            replaced.release(cx);
+        }
         self.update_styles_ui(
             |ui| {
                 ui.scope_menu = false;
                 ui.collectible_list =
                     collectible.then(|| ListState::new(0, ListAlignment::Top, px(400.)));
                 ui.dialog = Some(dialog);
+                ui.dialog_opens += 1;
+                ui.dialog_closing = None;
+                ui.dialog_swapped = swapped;
             },
             cx,
         );
@@ -299,24 +342,45 @@ impl DiscordApp {
         self.toggle_styles_panel(cx);
     }
 
+    /// Plays the pop-out, then drops the dialog.
     pub(crate) fn close_style_dialog(&mut self, cx: &mut Context<Self>) {
-        self.update_styles_ui(
-            |ui| {
-                ui.dialog = None;
-                ui.hovered_collectible = None;
-            },
-            cx,
-        );
+        let Some(editor) = &mut self.profile_styles else {
+            return;
+        };
+        let ui = &mut editor.ui;
+        if ui.dialog.is_none() || ui.dialog_closing.is_some() {
+            return;
+        }
+        ui.hovered_collectible = None;
+        ui.dialog_closing = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(crate::app::DIALOG_EXIT)
+                .await;
+            this.update(cx, |app, cx| {
+                let Some(editor) = &mut app.profile_styles else {
+                    return;
+                };
+                editor.ui.dialog_closing = None;
+                if let Some(dialog) = editor.ui.dialog.take() {
+                    dialog.release(cx);
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
     }
 
     pub(crate) fn apply_style_dialog(&mut self, cx: &mut Context<Self>) {
         let Some(dialog) = self
             .profile_styles
-            .as_mut()
-            .and_then(|editor| editor.ui.dialog.take())
+            .as_ref()
+            .filter(|editor| editor.ui.dialog_closing.is_none())
+            .and_then(|editor| editor.ui.dialog.clone())
         else {
             return;
         };
+        self.close_style_dialog(cx);
         self.update_style_draft(
             |draft: &mut StyleDraft| match dialog {
                 StyleDialog::Collectible { kind, selected } => {
@@ -329,7 +393,7 @@ impl DiscordApp {
                     *field = Some(selected);
                 }
                 StyleDialog::NameStyle(style) => draft.name_style = Some(Some(style)),
-                StyleDialog::Image(_) => {}
+                StyleDialog::Image(_) | StyleDialog::ImageEdit(_) => {}
             },
             cx,
         );
@@ -353,6 +417,69 @@ impl DiscordApp {
             },
             cx,
         );
+        if !matches!(slot, ColorSlot::Name(_)) {
+            self.load_theme_suggestions(cx);
+        }
+    }
+
+    /// Samples the shown avatar for the theme picker's suggestions, once per avatar.
+    fn load_theme_suggestions(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = &self.profile_styles else {
+            return;
+        };
+        let shown = shown(self, editor);
+        let source = (shown.avatar, shown.avatar_file);
+        if editor
+            .ui
+            .theme_suggestions
+            .as_ref()
+            .is_some_and(|(loaded, _)| *loaded == source)
+        {
+            return;
+        }
+        let identity = editor.identity();
+        let service = images::download_service(cx);
+        let url = source.0.as_ref().and_then(images::avatar_sample_url);
+        let file = source.1.clone();
+        let request = Tokio::spawn(cx, async move {
+            let bytes = match (file, url) {
+                (Some(path), _) => tokio::task::spawn_blocking(move || std::fs::read(path))
+                    .await
+                    .ok()?
+                    .ok()?,
+                (None, Some(url)) => service?.fetch_original(url.as_str()).await?,
+                (None, None) => return None,
+            };
+            tokio::task::spawn_blocking(move || avatar_colors::suggestions(&bytes))
+                .await
+                .ok()
+                .flatten()
+        });
+        self.update_styles_ui(|ui| ui.theme_suggestions = Some((source.clone(), None)), cx);
+        cx.spawn(async move |this, cx| {
+            let colors = request
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_else(super::styles_dialogs::preset_suggestions);
+            this.update(cx, |app, cx| {
+                let Some(editor) = app
+                    .profile_styles
+                    .as_mut()
+                    .filter(|editor| Arc::ptr_eq(&editor.identity(), &identity))
+                else {
+                    return;
+                };
+                if let Some((loaded, slot)) = &mut editor.ui.theme_suggestions
+                    && *loaded == source
+                {
+                    *slot = Some(colors);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub(crate) fn close_color_picker(&mut self, cx: &mut Context<Self>) {
@@ -370,9 +497,17 @@ impl DiscordApp {
         picker.hsv = hsv;
         let slot = picker.slot;
         let color = hsv_to_rgb(hsv);
-        if slot == ColorSlot::Name {
+        if let ColorSlot::Name(index) = slot {
             if let Some(StyleDialog::NameStyle(style)) = &mut editor.ui.dialog {
-                style.colors = vec![color; style.colors.len().max(1)];
+                // Blended effects edit one stop; the rest take a single custom color throughout.
+                match style
+                    .colors
+                    .get_mut(index)
+                    .filter(|_| matches!(style.effect_id, 2 | 7))
+                {
+                    Some(stop) => *stop = color,
+                    None => style.colors = vec![color; style.colors.len().max(1)],
+                }
             }
             cx.notify();
             return;
@@ -392,7 +527,7 @@ impl DiscordApp {
                     colors[usize::from(slot == ColorSlot::Accent)] = color;
                     draft.theme_colors = Some(Some(colors));
                 }
-                ColorSlot::Name => {}
+                ColorSlot::Name(_) => {}
             },
             cx,
         );
@@ -428,9 +563,18 @@ fn heading(title: &'static str, nitro: bool) -> Div {
         })
 }
 
+/// Hovering a tile reveals its remove button.
+const TILE_GROUP: &str = "styles-tile";
+
 fn tile(id: &'static str, width: f32, height: f32) -> Stateful<Div> {
+    plain_tile(id, width, height).hover(|style| style.bg(rgba(theme::control_selected())))
+}
+
+/// A tile without the grey hover fill; gpui allows only one hover style per element.
+fn plain_tile(id: &'static str, width: f32, height: f32) -> Stateful<Div> {
     div()
         .id(id)
+        .group(TILE_GROUP)
         .relative()
         .w(rpx(width))
         .h(rpx(height))
@@ -441,7 +585,56 @@ fn tile(id: &'static str, width: f32, height: f32) -> Stateful<Div> {
         .rounded(rpx(TILE_RADIUS))
         .bg(rgba(theme::control_bg()))
         .cursor_pointer()
-        .hover(|style| style.bg(rgba(theme::control_selected())))
+}
+
+/// Whether the scope sets its own value, as opposed to the default or the main profile's
+/// showing through, which a reset would leave in place.
+fn removable<T>(draft: &Option<Option<T>>, saved: &Option<T>) -> bool {
+    match draft {
+        Some(value) => value.is_some(),
+        None => saved.is_some(),
+    }
+}
+
+fn image_removable(draft: &Option<ImageChange>, saved: &Option<SharedString>) -> bool {
+    match draft {
+        Some(ImageChange::Remove) => false,
+        Some(_) => true,
+        None => saved.is_some(),
+    }
+}
+
+/// The trash button in a tile's top-right corner, which resets that style to its default.
+/// Hidden until the tile is hovered, as the nameplate's is.
+fn remove_button(
+    app: &DiscordApp,
+    id: &'static str,
+    update: impl Fn(&mut StyleDraft) + 'static,
+) -> AnyElement {
+    div()
+        .id(id)
+        .absolute()
+        .top(rpx(4.))
+        .right(rpx(4.))
+        .size(rpx(24.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(rpx(6.))
+        .bg(rgba(0x00000099))
+        .opacity(0.)
+        .group_hover(TILE_GROUP, |style| style.opacity(1.))
+        .cursor_pointer()
+        .hover(|style| style.bg(rgba(0x000000CC)))
+        .on_click(on_app(app, move |app, cx| {
+            app.update_style_draft(|draft| update(draft), cx)
+        }))
+        .child(theme::icon("trash-2", 16., 0xFFFFFF))
+        .child(theme::hover_tooltip(
+            SharedString::from(format!("{id}-tooltip")),
+            "Remove",
+        ))
+        .into_any_element()
 }
 
 fn group(title: &'static str, nitro: bool, tiles: impl IntoIterator<Item = AnyElement>) -> Div {
@@ -455,12 +648,15 @@ fn group(title: &'static str, nitro: bool, tiles: impl IntoIterator<Item = AnyEl
 
 pub(super) fn editing_panel(app: &DiscordApp, editor: &StylesEditor, cx: &App) -> AnyElement {
     let shown = shown(app, editor);
+    let saved = app.saved_style_values();
+    let draft = &editor.draft;
     let user_id = app.store.current_user_id;
     let user = app.store.user(user_id);
     let decoration = shown
         .decoration
         .and_then(|sku| decoration_of(app, editor, sku));
     let nameplate_tile = nameplate_tile(app, editor, &shown, decoration.as_ref(), cx);
+    // Without Nitro the theme is the banner color, which only the main profile takes.
     let avatar_tile = tile("styles-avatar", TILE, TILE)
         .on_click(on_app(app, |app, cx| {
             app.open_style_dialog(StyleDialog::Image(ImageTarget::Avatar), cx)
@@ -475,6 +671,11 @@ pub(super) fn editing_panel(app: &DiscordApp, editor: &StylesEditor, cx: &App) -
             None,
             cx,
         ))
+        .when(image_removable(&draft.avatar, &saved.avatar), |this| {
+            this.child(remove_button(app, "styles-avatar-remove", |draft| {
+                draft.avatar = Some(ImageChange::Remove)
+            }))
+        })
         .into_any_element();
     let decoration_tile = tile("styles-decoration", TILE, TILE)
         .on_click(on_app(app, |app, cx| {
@@ -491,6 +692,11 @@ pub(super) fn editing_panel(app: &DiscordApp, editor: &StylesEditor, cx: &App) -
             );
         }))
         .child(theme::placeholder_avatar(72., decoration.as_ref(), cx))
+        .when(removable(&draft.decoration, &saved.decoration), |this| {
+            this.child(remove_button(app, "styles-decoration-remove", |draft| {
+                draft.decoration = Some(None)
+            }))
+        })
         .into_any_element();
     let name = own_name(app);
     let name_style = shown.name_style.as_ref().map(shown_name_style);
@@ -523,14 +729,35 @@ pub(super) fn editing_panel(app: &DiscordApp, editor: &StylesEditor, cx: &App) -
                     cx,
                 )),
         )
+        .when(removable(&draft.name_style, &saved.name_style), |this| {
+            this.child(remove_button(app, "styles-name-remove", |draft| {
+                draft.name_style = Some(None)
+            }))
+        })
         .into_any_element();
     let theme_tile = theme_tile(app, editor, &shown);
-    let banner_tile = tile("styles-banner", TILE, TILE)
+    let banner_fill = banner_color(editor, &shown);
+    // Dimmed on hover below, rather than taking the grey other tiles do.
+    let banner_tile = plain_tile("styles-banner", TILE, TILE)
         .on_click(on_app(app, |app, cx| {
             app.open_style_dialog(StyleDialog::Image(ImageTarget::Banner), cx)
         }))
-        .bg(rgb(banner_color(editor, &shown)))
+        .bg(rgb(banner_fill))
         .children(banner_image(&shown, cx))
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .rounded(rpx(TILE_RADIUS))
+                .bg(rgba(0x0000004D))
+                .opacity(0.)
+                .group_hover(TILE_GROUP, |style| style.opacity(1.)),
+        )
+        .when(image_removable(&draft.banner, &saved.banner), |this| {
+            this.child(remove_button(app, "styles-banner-remove", |draft| {
+                draft.banner = Some(ImageChange::Remove)
+            }))
+        })
         .into_any_element();
     let effect_tile = tile("styles-effect", TILE, TILE)
         .on_click(on_app(app, |app, cx| {
@@ -553,6 +780,11 @@ pub(super) fn editing_panel(app: &DiscordApp, editor: &StylesEditor, cx: &App) -
                 .mt(rpx(12.))
                 .child(effect_thumbnail(editor, shown.effect, 60., 92., true, cx)),
         )
+        .when(removable(&draft.effect, &saved.effect), |this| {
+            this.child(remove_button(app, "styles-effect-remove", |draft| {
+                draft.effect = Some(None)
+            }))
+        })
         .into_any_element();
     let frame_tile = tile("styles-frame", TILE, TILE)
         .on_click(on_app(app, |app, cx| {
@@ -569,9 +801,15 @@ pub(super) fn editing_panel(app: &DiscordApp, editor: &StylesEditor, cx: &App) -
             );
         }))
         .child(frame_thumbnail(editor, shown.frame, 60., 60., cx))
+        .when(removable(&draft.frame, &saved.frame), |this| {
+            this.child(remove_button(app, "styles-frame-remove", |draft| {
+                draft.frame = Some(None)
+            }))
+        })
         .into_any_element();
     div()
         .id("profile-styles-panel")
+        .without_text_selection()
         .flex()
         .flex_col()
         .flex_none()
@@ -676,7 +914,7 @@ fn nameplate_tile(
     let user = app.store.user(user_id);
     let hover = &editor.ui.nameplate_hover;
     let hovered = hover.hovered;
-    let has_nameplate = shown.nameplate.is_some();
+    let has_nameplate = removable(&editor.draft.nameplate, &app.saved_style_values().nameplate);
     let plate = shown
         .nameplate
         .and_then(|sku| nameplate_of(app, editor, sku))
@@ -768,6 +1006,7 @@ fn nameplate_tile(
             this.child(
                 div()
                     .id("styles-nameplate-remove")
+                    .relative()
                     .size(rpx(24.))
                     .flex()
                     .flex_none()
@@ -779,7 +1018,11 @@ fn nameplate_tile(
                     .on_click(on_app(app, |app, cx| {
                         app.update_style_draft(|draft| draft.nameplate = Some(None), cx)
                     }))
-                    .child(theme::icon("trash-2", 16., 0xFFFFFF)),
+                    .child(theme::icon("trash-2", 16., 0xFFFFFF))
+                    .child(theme::hover_tooltip(
+                        "styles-nameplate-remove-tooltip",
+                        "Remove",
+                    )),
             )
         });
     let entity = app.entity.clone();
@@ -820,15 +1063,18 @@ fn banner_image(shown: &Shown, cx: &App) -> Option<AnyElement> {
         return Some(
             img(path.clone())
                 .size_full()
+                .rounded(rpx(TILE_RADIUS))
                 .object_fit(ObjectFit::Cover)
                 .into_any_element(),
         );
     }
     let spec = shown.banner.as_ref()?;
     let path = images::resolve(spec, theme::image_px(TILE * 2.), cx)?;
+    // The tile's overflow clip is square, so the picture rounds its own corners.
     Some(
         img(path)
             .size_full()
+            .rounded(rpx(TILE_RADIUS))
             .object_fit(ObjectFit::Cover)
             .into_any_element(),
     )
@@ -876,6 +1122,9 @@ fn theme_tile(app: &DiscordApp, editor: &StylesEditor, shown: &Shown) -> AnyElem
             )
     };
     let base = div()
+        .id("styles-theme")
+        .group(TILE_GROUP)
+        .relative()
         .w(rpx(TILE))
         .h(rpx(TILE))
         .flex()
@@ -1092,6 +1341,9 @@ fn panel_header(app: &DiscordApp, editor: &StylesEditor, cx: &App) -> AnyElement
         .h(rpx(49.))
         .px(rpx(8.))
         .py(rpx(4.))
+        // Discord rules the scope picker off from the tiles below.
+        .border_b_1()
+        .border_color(rgba(theme::border_subtle()))
         .child(
             theme::icon_button_with_hover(
                 "styles-hide",
@@ -1233,6 +1485,7 @@ pub(super) fn scope_menu(app: &DiscordApp, editor: &StylesEditor, cx: &App) -> O
     Some(
         div()
             .id("styles-scope-menu")
+            .without_text_selection()
             .absolute()
             .top(rpx(48.))
             .left(rpx(8.))
@@ -1337,9 +1590,10 @@ impl Render for StylesTooltip {
     }
 }
 
-/// "Don't forget to save your changes!" under the dialog while the draft has edits.
+/// "Don't forget to save your changes!" under the dialog while the styles or widgets have
+/// unsaved edits; it saves and resets both.
 pub(super) fn save_bar(app: &DiscordApp, editor: &StylesEditor) -> Option<AnyElement> {
-    if editor.draft == StyleDraft::default() {
+    if editor.draft == StyleDraft::default() && editor.ui.widgets.draft().is_none() {
         return None;
     }
     let button = |id: &'static str, label: &'static str, primary: bool| {
@@ -1371,10 +1625,11 @@ pub(super) fn save_bar(app: &DiscordApp, editor: &StylesEditor) -> Option<AnyEle
             })
             .child(label)
     };
-    let saving = editor.saving;
+    let saving = editor.saving || editor.ui.widgets.saving;
     Some(
         div()
             .id("styles-save-bar")
+            .without_text_selection()
             .w(rpx(SAVE_BAR_WIDTH))
             .flex()
             .items_center()
@@ -1413,6 +1668,7 @@ pub(super) fn save_bar(app: &DiscordApp, editor: &StylesEditor) -> Option<AnyEle
                             .on_click(on_app(app, move |app, cx| {
                                 if !saving {
                                     app.save_style_draft(cx);
+                                    app.save_widget_draft(cx);
                                 }
                             })),
                     ),

@@ -54,6 +54,7 @@ pub(super) fn popout(
             &layout,
             surface,
             Some(Box::new(open_full)),
+            true,
             cx,
         ))
         .child(popout_body(app, card, &layout, window, cx))
@@ -132,12 +133,14 @@ pub(super) fn popout(
 
 /// The popout the effect and frame dialogs try a choice on: your card wearing `effect` and
 /// `frame`, with an example button where its actions would be.
+/// `compact` stops after the names, as the name style dialog's card does.
 pub(super) fn style_preview(
     app: &DiscordApp,
     card: &ProfileCard,
     effect: Option<&model::CollectibleItem>,
     frame: Option<(u64, &model::CollectibleItem)>,
     clock: &RefCell<Option<Instant>>,
+    compact: bool,
     cx: &App,
 ) -> AnyElement {
     let theme = card.theme();
@@ -171,7 +174,8 @@ pub(super) fn style_preview(
             Some(theme) => this.bg(theme.overlay()),
             None => this,
         })
-        .child(header(app, card, &layout, surface, None, cx))
+        // Discord's name style card has no status bubble.
+        .child(header(app, card, &layout, surface, None, !compact, cx))
         .child(
             div()
                 .flex()
@@ -181,9 +185,9 @@ pub(super) fn style_preview(
                 .pt(rpx(4.))
                 .pb(rpx(8.))
                 .child(display_names(app, card, false, None, cx))
-                .children(bio(app, card, true, cx)),
+                .when(!compact, |this| this.children(bio(app, card, true, cx))),
         )
-        .child(button)
+        .when(!compact, |this| this.child(button))
         .children(
             effect
                 .into_iter()
@@ -213,6 +217,7 @@ pub(super) fn header(
     layout: &Layout,
     surface: u32,
     on_avatar: Option<ClickHandler>,
+    show_status: bool,
     cx: &App,
 ) -> AnyElement {
     let user = app.store.user(card.user_id);
@@ -279,10 +284,12 @@ pub(super) fn header(
         .flex_none()
         .w_full()
         .min_h(rpx(layout.header_min))
-        .child(banner(card, layout, cx))
+        .child(banner(app, card, layout, cx))
         .child(avatar)
         .children(
-            status.map(|status| status_bubble(card.user_id, &status, prompt, layout, palette, cx)),
+            status
+                .filter(|_| show_status)
+                .map(|status| status_bubble(card.user_id, &status, prompt, layout, palette, cx)),
         )
         .into_any_element()
 }
@@ -326,27 +333,43 @@ pub(super) fn banner_spec(card: &ProfileCard) -> Option<ImageSpec> {
     })
 }
 
-fn banner(card: &ProfileCard, layout: &Layout, cx: &App) -> AnyElement {
+fn banner(app: &DiscordApp, card: &ProfileCard, layout: &Layout, cx: &App) -> AnyElement {
     let profile = card.profile.as_deref();
-    let spec = banner_spec(card);
     let pixels = BANNER_SOURCE;
     let corner = rpx(layout.corner);
-    let image = spec.and_then(|spec| {
-        let animated = spec
-            .animated()
-            .and_then(|animated| animated::resolve(&animated, pixels, cx));
-        Some(match animated {
-            Some(image) => animated::image(image)
-                .size_full()
-                .rounded_t(corner)
-                .object_fit(ObjectFit::Cover)
-                .id("profile-banner")
-                .into_any_element(),
-            None => img(images::resolve(&spec, pixels, cx)?)
-                .size_full()
-                .rounded_t(corner)
-                .object_fit(ObjectFit::Cover)
-                .into_any_element(),
+    // While styling, the draft's banner, which may be a picked file not yet uploaded.
+    let (spec, file) = match editing_styles(app, card) {
+        Some(editor) => {
+            let shown = super::styles_panel::shown(app, editor);
+            (shown.banner, shown.banner_file)
+        }
+        None => (banner_spec(card), None),
+    };
+    let file = file.map(|path| {
+        img(path)
+            .size_full()
+            .rounded_t(corner)
+            .object_fit(ObjectFit::Cover)
+            .into_any_element()
+    });
+    let image = file.or_else(|| {
+        spec.and_then(|spec| {
+            let animated = spec
+                .animated()
+                .and_then(|animated| animated::resolve(&animated, pixels, cx));
+            Some(match animated {
+                Some(image) => animated::image(image)
+                    .size_full()
+                    .rounded_t(corner)
+                    .object_fit(ObjectFit::Cover)
+                    .id("profile-banner")
+                    .into_any_element(),
+                None => img(images::resolve(&spec, pixels, cx)?)
+                    .size_full()
+                    .rounded_t(corner)
+                    .object_fit(ObjectFit::Cover)
+                    .into_any_element(),
+            })
         })
     });
     let color = profile
@@ -562,11 +585,15 @@ pub(super) fn display_names(
         // collapse to spaces there.
         .map(|p| p.split_whitespace().collect::<Vec<_>>().join(" "))
         .filter(|p| !p.is_empty());
-    let edited_style = editing_styles(app, card).map(|editor| {
-        super::styles_panel::shown(app, editor)
+    // The name style dialog's working copy previews before it reaches the draft.
+    let edited_style = editing_styles(app, card).map(|editor| match &editor.ui.dialog {
+        Some(super::styles_panel::StyleDialog::NameStyle(style)) => {
+            Some(super::styles_panel::shown_name_style(style))
+        }
+        _ => super::styles_panel::shown(app, editor)
             .name_style
             .as_ref()
-            .map(super::styles_panel::shown_name_style)
+            .map(super::styles_panel::shown_name_style),
     });
     let name_style = match &edited_style {
         Some(style) => style.as_ref(),

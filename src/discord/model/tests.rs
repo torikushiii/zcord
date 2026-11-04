@@ -559,7 +559,9 @@ fn profile_widgets_decode_per_entry() {
         ]
     }))
     .unwrap();
-    assert_eq!(profile.widgets.len(), 4);
+    // Only the entry without an id is dropped; a widget whose data doesn't parse is kept as
+    // `Unknown` so saving the list can't delete it.
+    assert_eq!(profile.widgets.len(), 5);
     let WidgetData::FavoriteGames { games } = &profile.widgets[0].data else {
         panic!("wrong widget kind");
     };
@@ -571,13 +573,71 @@ fn profile_widgets_decode_per_entry() {
         WidgetData::Application { application_id: 30 }
     ));
     assert!(matches!(profile.widgets[2].data, WidgetData::Unknown));
-    let WidgetData::PlayedGames { games } = &profile.widgets[3].data else {
+    assert_eq!(profile.widgets[2].raw["application_id"], "not-an-id");
+    assert!(matches!(profile.widgets[3].data, WidgetData::Unknown));
+    let WidgetData::PlayedGames { games } = &profile.widgets[4].data else {
         panic!("Games I Like was not decoded");
     };
     assert_eq!(
         games.iter().map(|game| game.game_id).collect::<Vec<_>>(),
         [21, 22]
     );
+}
+
+#[test]
+fn profile_widget_bodies_resend_unmodeled_data_and_write_edited_games() {
+    let profile: Profile = serde_json::from_value(json!({
+        "user": {"id": "1", "username": "synthetic"},
+        "widgets": [
+            {
+                "id": "10",
+                "data": {
+                    "type": "favorite_games",
+                    "games": [{"game_id": "20", "comment": null, "tags": [], "future": 1}]
+                }
+            },
+            {"id": "11", "data": {"type": "brand_new_widget", "payload": {"nested": [1, 2]}}}
+        ]
+    }))
+    .unwrap();
+    let mut widgets = profile.widgets;
+    let games = widgets[0].data.games_mut().unwrap();
+    games[0].comment = Some("same 3 stones".into());
+    games[0].tags.push("open_to_play".into());
+    assert_eq!(
+        widgets[0].body(),
+        json!({
+            "id": "10",
+            "data": {
+                "type": "favorite_games",
+                "games": [{
+                    "game_id": "20",
+                    "comment": "same 3 stones",
+                    "tags": ["open_to_play"],
+                    "future": 1
+                }]
+            }
+        })
+    );
+    // A widget this client can't model goes back exactly as Discord sent it.
+    assert_eq!(
+        widgets[1].body(),
+        json!({"id": "11", "data": {"type": "brand_new_widget", "payload": {"nested": [1, 2]}}})
+    );
+}
+
+#[test]
+fn profile_widget_bodies_keep_unedited_games_that_fail_to_decode() {
+    let data = json!({
+        "type": "played_games",
+        "games": [{"game_id": "20", "tags": []}, {"game_id": null}]
+    });
+    let profile: Profile = serde_json::from_value(json!({
+        "user": {"id": "1", "username": "synthetic"},
+        "widgets": [{"id": "10", "data": data}]
+    }))
+    .unwrap();
+    assert_eq!(profile.widgets[0].body(), json!({"id": "10", "data": data}));
 }
 
 #[test]

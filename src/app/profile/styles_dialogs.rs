@@ -1,3 +1,4 @@
+use super::image_editor::{ImageEdit, MAX_ZOOM, STAGE};
 use super::styles::{
     CollectibleKind, ImageChange, ImageTarget, NameStyle, StyleScope, StylesEditor,
 };
@@ -47,7 +48,7 @@ const EFFECTS: [(&str, u32); 7] = [
     ("Prism", 7),
 ];
 
-const COLOR_PRESETS: [[u32; 4]; 7] = [
+const GUMMY_PRESETS: [[u32; 4]; 7] = [
     [0xE9A9D5, 0xA9DDF0, 0xB9A7EE, 0xB9EACB],
     [0xFF6FC2, 0xF54FA8, 0xFF9BD6, 0xD96AB7],
     [0xFFB57A, 0xFF936F, 0xFF7C78, 0xF06B8A],
@@ -57,6 +58,44 @@ const COLOR_PRESETS: [[u32; 4]; 7] = [
     [0xD83A5F, 0xC94BCB, 0x8B5CFF, 0xB06CFF],
 ];
 
+/// The picker's suggestions for a name color, and for theme colors without an avatar to sample.
+pub(super) fn preset_suggestions() -> [u32; 5] {
+    std::array::from_fn(|index| GUMMY_PRESETS[index][0])
+}
+
+const GRADIENT_PRESETS: [[u32; 2]; 5] = [
+    [0x2AAEA6, 0xFFC490],
+    [0xE45EFF, 0x267DE0],
+    [0x7E4FCB, 0x67CB98],
+    [0xEFB4AA, 0xE46CE2],
+    [0xF5983C, 0xE55AE7],
+];
+
+const PRISM_PRESETS: [[u32; 5]; 3] = [
+    [0xFE9242, 0x35ED7E, 0xFFE047, 0xFF4CD2, 0x5865F2],
+    [0x7EE7D8, 0x7CCBFF, 0x7F8CFF, 0xB56DFF, 0xF38AD8],
+    [0x7A0906, 0xC81E12, 0xF45A18, 0xFF9500, 0xFFD447],
+];
+
+/// Every one-color effect shares these swatches, after a default of its own.
+const SINGLE_PRESETS: [[u32; 1]; 6] = [
+    [0x24E36D],
+    [0x1C98EB],
+    [0xC32AFF],
+    [0xDA0149],
+    [0xF93722],
+    [0xC6A615],
+];
+
+fn single_default(effect_id: u32) -> &'static [u32] {
+    match effect_id {
+        SOLID_EFFECT => &[0xD4D5D8],
+        3 => &[0x691DED],
+        4 => &[0xF42098],
+        _ => &[0x0FCF86],
+    }
+}
+
 const HUE_STOPS: [u32; 7] = [
     0xFF0000, 0xFFFF00, 0x00FF00, 0x00FFFF, 0x0000FF, 0xFF00FF, 0xFF0000,
 ];
@@ -64,35 +103,132 @@ const HUE_STOPS: [u32; 7] = [
 /// How many colors Discord stores for each name effect.
 fn effect_colors(effect_id: u32) -> usize {
     match effect_id {
-        SOLID_EFFECT => 1,
-        7 | 8 => 4,
+        SOLID_EFFECT | 3 | 4 | 5 => 1,
+        7 => 5,
+        8 => 4,
         _ => 2,
     }
 }
 
+/// Keeps the palette when it has enough colors for `effect_id`, else starts from the effect's
+/// first preset, so a single color doesn't become a flat gradient.
 fn with_effect(style: &NameStyle, effect_id: u32) -> NameStyle {
-    let palette = if style.colors.is_empty() {
-        COLOR_PRESETS[2].to_vec()
+    let count = effect_colors(effect_id);
+    let palette = if style.colors.len() >= count {
+        &style.colors[..]
     } else {
-        style.colors.clone()
+        presets(effect_id)[0]
     };
     NameStyle {
         font_id: style.font_id,
         effect_id,
-        colors: palette
-            .iter()
-            .copied()
-            .cycle()
-            .take(effect_colors(effect_id))
-            .collect(),
+        colors: palette.iter().copied().cycle().take(count).collect(),
     }
 }
 
-fn with_preset(style: &NameStyle, preset: &[u32; 4]) -> NameStyle {
+fn with_preset(style: &NameStyle, preset: &[u32]) -> NameStyle {
     NameStyle {
-        colors: preset[..effect_colors(style.effect_id)].to_vec(),
+        colors: preset
+            .iter()
+            .copied()
+            .cycle()
+            .take(effect_colors(style.effect_id))
+            .collect(),
         ..style.clone()
     }
+}
+
+/// Gradient and Prism blend their colors in the swatches and custom tile.
+fn blends(effect_id: u32) -> bool {
+    matches!(effect_id, 2 | 7)
+}
+
+fn presets(effect_id: u32) -> Vec<&'static [u32]> {
+    match effect_id {
+        2 => GRADIENT_PRESETS.iter().map(|preset| &preset[..]).collect(),
+        SOLID_EFFECT | 3..=5 => std::iter::once(single_default(effect_id))
+            .chain(SINGLE_PRESETS.iter().map(|preset| &preset[..]))
+            .collect(),
+        7 => PRISM_PRESETS.iter().map(|preset| &preset[..]).collect(),
+        _ => GUMMY_PRESETS.iter().map(|preset| &preset[..]).collect(),
+    }
+}
+
+/// `colors` across a swatch: blended left to right, or in hard stripes. gpui clips to a
+/// rectangle, so the ends round themselves to `radius`.
+fn color_fill(colors: &[u32], blend: bool, radius: f32) -> Div {
+    let segments: Vec<(u32, u32)> = if blend && colors.len() > 1 {
+        colors.windows(2).map(|pair| (pair[0], pair[1])).collect()
+    } else {
+        colors.iter().map(|color| (*color, *color)).collect()
+    };
+    let last = segments.len().saturating_sub(1);
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .children(segments.into_iter().enumerate().map(|(index, (from, to))| {
+            div()
+                .flex_1()
+                .h_full()
+                .bg(linear_gradient(
+                    90.,
+                    linear_color_stop(rgb(from), 0.),
+                    linear_color_stop(rgb(to), 1.),
+                ))
+                .when(index == 0, |this| this.rounded_l(rpx(radius)))
+                .when(index == last, |this| this.rounded_r(rpx(radius)))
+        }))
+}
+
+/// Discord's custom tile for blended effects: the current colors with a handle on each stop.
+fn custom_gradient(app: &DiscordApp, style: &NameStyle, selected: bool) -> AnyElement {
+    let count = style.colors.len();
+    let handles = style.colors.iter().enumerate().map(|(index, &color)| {
+        let bounds = Rc::new(Cell::new(None));
+        let label: SharedString = match (style.effect_id, index) {
+            (2, 0) => "Custom Gradient Start Color".into(),
+            (2, _) => "Custom Gradient End Color".into(),
+            _ => format!("Custom Gradient Color {}", index + 1).into(),
+        };
+        div()
+            .id(("name-color-stop", index))
+            .relative()
+            .size(rpx(28.))
+            .rounded(rpx(8.))
+            .border_2()
+            .border_color(gpui::white())
+            .bg(rgb(color))
+            .cursor_pointer()
+            .child(measure_into(bounds.clone()))
+            .on_click(on_app(app, move |app, cx| {
+                app.open_color_picker(ColorSlot::Name(index), color, bounds.get(), cx)
+            }))
+            .child(theme::hover_tooltip(
+                ("name-color-stop-tooltip", index),
+                label,
+            ))
+    });
+    div()
+        .id("name-color-custom")
+        .relative()
+        .flex_none()
+        .w(rpx(if count > 2 { 232. } else { 136. }))
+        .h(rpx(40.))
+        .px(rpx(10.))
+        .flex()
+        .items_center()
+        .justify_between()
+        .rounded(rpx(8.))
+        .border_2()
+        .border_color(if selected {
+            rgb(theme::BLURPLE)
+        } else {
+            rgba(0)
+        })
+        .child(color_fill(&style.colors, true, 6.))
+        .children(handles)
+        .into_any_element()
 }
 
 /// "Acquired October 2026" from an ISO purchase time.
@@ -159,27 +295,50 @@ fn section_title(title: &'static str) -> Div {
         .child(title)
 }
 
-/// A dialog over a scrim; clicking the scrim or the close button cancels it.
+/// A dialog over a scrim; clicking the scrim or the close button cancels it. It pops in on
+/// open and back out while `close_style_dialog` waits to drop it.
+///
+/// Without a `title` the body lays out its own heading, edge to edge, under a corner close
+/// button.
 fn shell(
     app: &DiscordApp,
-    title: &'static str,
+    editor: &StylesEditor,
+    title: Option<&'static str>,
     width: f32,
     body: AnyElement,
     footer: Div,
 ) -> AnyElement {
+    let closing = editor.ui.dialog_closing.is_some();
+    let (key, duration) = if closing {
+        ("style-dialog-out", crate::app::DIALOG_EXIT)
+    } else {
+        ("style-dialog-in", ENTER)
+    };
+    let animation = Animation::new(duration).with_easing(ease_out_quint());
+    let progress = move |delta: f32| if closing { 1. - delta } else { delta };
+    let scrim_progress = {
+        let swapped = editor.ui.dialog_swapped && !closing;
+        move |delta: f32| if swapped { 1. } else { progress(delta) }
+    };
+    let opens = editor.ui.dialog_opens;
     div()
         .id("style-dialog-scrim")
+        // Their clicks stop here, so a selection they began would never see its mouse-up.
+        .without_text_selection()
         .absolute()
         .inset_0()
         .flex()
         .items_center()
         .justify_center()
-        .bg(rgba(theme::SCRIM))
         .occlude()
         .on_click(on_app(app, |app, cx| app.close_style_dialog(cx)))
+        .with_animation((key, opens), animation.clone(), move |this, delta| {
+            this.bg(rgba(theme::SCRIM).opacity(scrim_progress(delta)))
+        })
         .child(
             div()
                 .id("style-dialog")
+                .relative()
                 .flex()
                 .flex_col()
                 .w(rpx(width))
@@ -193,25 +352,25 @@ fn shell(
                 ])
                 .text_color(rgb(theme::strong()))
                 .on_click(|_, _, cx| cx.stop_propagation())
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .pt(rpx(16.))
-                        .px(rpx(24.))
-                        .child(
-                            div()
-                                .text_size(rpx(20.))
-                                .line_height(rpx(24.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(title),
-                        )
-                        .child(
-                            theme::icon_button("style-dialog-close", "x", 24., theme::strong())
-                                .on_click(on_app(app, |app, cx| app.close_style_dialog(cx))),
-                        ),
-                )
+                .map(|this| match title {
+                    Some(title) => this.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .pt(rpx(16.))
+                            .px(rpx(24.))
+                            .child(
+                                div()
+                                    .text_size(rpx(20.))
+                                    .line_height(rpx(24.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(title),
+                            )
+                            .child(close_button(app)),
+                    ),
+                    None => this.overflow_hidden(),
+                })
                 .child(body)
                 .child(
                     footer
@@ -221,9 +380,27 @@ fn shell(
                         .py(rpx(16.))
                         .px(rpx(24.))
                         .rounded_b(rpx(12.)),
-                ),
+                )
+                .when(title.is_none(), |this| {
+                    this.child(
+                        div()
+                            .absolute()
+                            .top(rpx(12.))
+                            .right(rpx(12.))
+                            .child(close_button(app)),
+                    )
+                })
+                .with_animation((key, opens), animation, move |this, delta| {
+                    let shown = progress(delta);
+                    this.opacity(shown).top(rpx(16. * (1. - shown)))
+                }),
         )
         .into_any_element()
+}
+
+fn close_button(app: &DiscordApp) -> Stateful<Div> {
+    theme::icon_button("style-dialog-close", "x", 24., theme::strong())
+        .on_click(on_app(app, |app, cx| app.close_style_dialog(cx)))
 }
 
 /// The open dialog and color picker, drawn over the whole window.
@@ -234,6 +411,7 @@ pub(super) fn style_overlays(app: &DiscordApp, editor: &StylesEditor, cx: &App) 
         }
         StyleDialog::NameStyle(style) => name_style_dialog(app, editor, style, cx),
         StyleDialog::Image(target) => image_dialog(app, editor, *target, cx),
+        StyleDialog::ImageEdit(edit) => image_edit_dialog(app, editor, edit),
     });
     let picker = editor
         .ui
@@ -735,7 +913,7 @@ fn collectible_dialog(
             button("collectible-cancel", "Cancel", false, 100.)
                 .on_click(on_app(app, |app, cx| app.close_style_dialog(cx))),
         );
-    shell(app, title, width, body, footer)
+    shell(app, editor, Some(title), width, body, footer)
 }
 
 fn collectible_preview(
@@ -908,7 +1086,7 @@ fn collectible_preview(
                 .pt(rpx(overflow.top.max(16.)))
                 .pb(rpx(overflow.bottom))
                 .children(app.profile.as_ref().map(|card| {
-                    super::popout::style_preview(app, card, effect_item, frame, clock, cx)
+                    super::popout::style_preview(app, card, effect_item, frame, clock, false, cx)
                 }))
                 .into_any_element()
         }
@@ -1015,11 +1193,30 @@ fn set_name_style(
     })
 }
 
+/// A font or effect tile: Discord's 4-column grid in the 384px options column.
+const NAME_TILE: [f32; 2] = [90., 68.];
+const NEW_FONTS: [u32; 2] = [15, 16];
+
+/// Discord's own colors on each effect's tile, whatever colors the user picked.
+fn effect_sample(effect_id: u32) -> Vec<u32> {
+    match effect_id {
+        SOLID_EFFECT => vec![0xD4D5D8],
+        2 => vec![0x2AAEA6, 0xFFC490],
+        3 => vec![0x7935EF],
+        4 => vec![0xF42098],
+        5 => vec![0x0FCF86],
+        8 => GUMMY_PRESETS[0].to_vec(),
+        _ => PRISM_PRESETS[0].to_vec(),
+    }
+}
+
 fn option_tile(id: ElementId, selected: bool) -> Stateful<Div> {
     div()
         .id(id)
-        .w(rpx(100.))
-        .h(rpx(76.))
+        .relative()
+        .flex_none()
+        .w(rpx(NAME_TILE[0]))
+        .h(rpx(NAME_TILE[1]))
         .flex()
         .items_center()
         .justify_center()
@@ -1029,11 +1226,28 @@ fn option_tile(id: ElementId, selected: bool) -> Stateful<Div> {
         .border_color(if selected {
             rgb(theme::BLURPLE)
         } else {
-            rgba(theme::border_subtle())
+            rgba(0x97979F1F)
         })
         .bg(rgba(0x97979F14))
+        .shadow(vec![
+            BoxShadow::new(px(0.), px(1.), hsla(0., 0., 0., 0.14)).blur_radius(px(4.)),
+        ])
         .cursor_pointer()
-        .hover(|style| style.bg(rgba(theme::control_bg())))
+        .hover(|style| style.bg(rgba(0x97979F1F)))
+}
+
+fn selector_heading(title: &'static str) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(rpx(6.))
+        .mb(rpx(8.))
+        .text_size(rpx(16.))
+        .line_height(rpx(20.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(rgb(theme::strong()))
+        .child(title)
+        .child(theme::icon("nitro", 16., theme::strong()))
 }
 
 fn name_style_dialog(
@@ -1048,49 +1262,69 @@ fn name_style_dialog(
             effect_id: None,
             colors: Vec::new(),
         };
-        option_tile(
-            ("name-font", font_id as u64).into(),
-            style.font_id == font_id,
-        )
-        .on_click(set_name_style(
-            app,
-            NameStyle {
-                font_id,
-                ..style.clone()
-            },
-        ))
-        .child(
-            div()
-                .text_size(rpx(24.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::strong()))
-                .child(display_name::render(
-                    ("name-font-sample", font_id as u64),
-                    "Gg",
-                    Some(&sample),
-                    Surface::FontOnly,
-                    cx,
-                )),
-        )
-        .tooltip(move |_, cx| cx.new(|_| Tooltip(font)).into())
-        .into_any_element()
+        let selected = style.font_id == font_id;
+        option_tile(("name-font", font_id as u64).into(), selected)
+            .on_click(set_name_style(
+                app,
+                NameStyle {
+                    font_id,
+                    ..style.clone()
+                },
+            ))
+            .child(
+                div()
+                    .text_size(rpx(22.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(if selected {
+                        theme::strong()
+                    } else {
+                        theme::text()
+                    }))
+                    .child(display_name::render(
+                        ("name-font-sample", font_id as u64),
+                        "Gg",
+                        Some(&sample),
+                        Surface::FontOnly,
+                        cx,
+                    )),
+            )
+            .when(NEW_FONTS.contains(&font_id), |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top(rpx(4.))
+                        .right(rpx(4.))
+                        .size(rpx(4.))
+                        .rounded_full()
+                        .bg(rgb(theme::BLURPLE))
+                        .shadow(vec![
+                            BoxShadow::new(px(0.), px(0.), rgb(theme::BLURPLE).into())
+                                .blur_radius(px(4.)),
+                        ]),
+                )
+            })
+            .child(theme::hover_tooltip(
+                ("name-font-tooltip", font_id as usize),
+                font,
+            ))
+            .into_any_element()
     });
     let effects = EFFECTS.iter().map(|&(label, effect_id)| {
-        let next = with_effect(style, effect_id);
         let sample = ShownNameStyle {
             font_id: None,
-            ..shown_name_style(&next)
+            effect_id: Some(effect_id),
+            colors: effect_sample(effect_id),
         };
         option_tile(
             ("name-effect", effect_id as u64).into(),
             style.effect_id == effect_id,
         )
-        .on_click(set_name_style(app, next))
+        .on_click(set_name_style(app, with_effect(style, effect_id)))
         .child(
             div()
                 .text_size(rpx(16.))
+                .line_height(rpx(16.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(theme::strong()))
                 .child(display_name::render(
                     ("name-effect-sample", effect_id as u64),
                     label,
@@ -1108,14 +1342,16 @@ fn name_style_dialog(
             rgba(0)
         }
     };
-    let custom = style.colors.first().copied().unwrap_or(COLOR_PRESETS[2][0]);
-    let custom_selected = !COLOR_PRESETS
-        .iter()
-        .any(|preset| preset.starts_with(&style.colors));
-    let presets = COLOR_PRESETS.iter().enumerate().map(|(index, preset)| {
-        let selected = !style.colors.is_empty() && preset.starts_with(&style.colors);
+    let presets = presets(style.effect_id);
+    let custom_selected = !style.colors.is_empty()
+        && !presets
+            .iter()
+            .any(|preset| with_preset(style, preset).colors == style.colors);
+    let swatches = presets.iter().enumerate().map(|(index, preset)| {
+        let selected = with_preset(style, preset).colors == style.colors;
         div()
             .id(("name-color", index))
+            .flex_none()
             .size(rpx(40.))
             .flex()
             .overflow_hidden()
@@ -1124,77 +1360,93 @@ fn name_style_dialog(
             .border_color(swatch_border(selected))
             .cursor_pointer()
             .on_click(set_name_style(app, with_preset(style, preset)))
-            .children(
-                preset
-                    .iter()
-                    .map(|color| div().flex_1().h_full().bg(rgb(*color))),
-            )
+            .child(color_fill(preset, blends(style.effect_id), 6.))
             .into_any_element()
     });
-    let custom_bounds = Rc::new(Cell::new(None));
+    let custom = if blends(style.effect_id) {
+        custom_gradient(app, style, custom_selected)
+    } else {
+        let color = style.colors.first().copied().unwrap_or(GUMMY_PRESETS[2][0]);
+        let bounds = Rc::new(Cell::new(None));
+        div()
+            .id("name-color-custom")
+            .relative()
+            .flex_none()
+            .size(rpx(40.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(rpx(8.))
+            .map(|this| {
+                if custom_selected {
+                    this.border_2()
+                        .border_color(rgb(theme::BLURPLE))
+                        .bg(rgb(color))
+                } else {
+                    this.border_1()
+                        .border_color(rgba(0x97979F3D))
+                        .bg(rgba(0x97979F1F))
+                }
+            })
+            .cursor_pointer()
+            .child(measure_into(bounds.clone()))
+            .on_click(on_app(app, move |app, cx| {
+                app.open_color_picker(ColorSlot::Name(0), color, bounds.get(), cx)
+            }))
+            .child(theme::icon("pipette", 14., 0xFFFFFF))
+            .into_any_element()
+    };
     let colors = div()
         .flex()
+        .items_center()
         .gap(rpx(8.))
-        .child(
-            div()
-                .id("name-color-custom")
-                .relative()
-                .size(rpx(40.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(rpx(8.))
-                .border_2()
-                .border_color(swatch_border(custom_selected))
-                .bg(rgba(theme::control_bg()))
-                .cursor_pointer()
-                .child(measure_into(custom_bounds.clone()))
-                .on_click(on_app(app, move |app, cx| {
-                    app.open_color_picker(ColorSlot::Name, custom, custom_bounds.get(), cx)
-                }))
-                .child(theme::icon("pipette", 16., theme::strong())),
-        )
-        .children(presets);
-    let section = |title: &'static str, content: AnyElement| {
-        div()
-            .flex()
-            .flex_col()
-            .gap(rpx(12.))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(rpx(4.))
-                    .child(section_title(title))
-                    .child(theme::icon("nitro", 16., theme::strong())),
-            )
-            .child(content)
-    };
+        .child(custom)
+        .children(swatches);
     let grid = |tiles: Vec<AnyElement>| {
         div()
             .flex()
             .flex_wrap()
             .gap(rpx(8.))
+            .w(rpx(384.))
             .children(tiles)
-            .into_any_element()
     };
-    let left = div()
+    let section = |title: &'static str, content: Div| {
+        div()
+            .flex()
+            .flex_col()
+            .mt(rpx(24.))
+            .child(selector_heading(title))
+            .child(content)
+    };
+    let options = div()
         .id("name-style-options")
         .flex()
         .flex_col()
-        .gap(rpx(24.))
+        .flex_none()
         .w(rpx(424.))
-        .p(rpx(24.))
-        .pt(rpx(16.))
+        .h_full()
         .overflow_y_scroll()
+        .pt(rpx(24.))
+        .pb(rpx(24.))
+        .pl(rpx(24.))
+        .pr(rpx(16.))
+        .child(
+            div()
+                .mb(rpx(8.))
+                .text_size(rpx(20.))
+                .line_height(rpx(24.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(theme::strong()))
+                .child("Change Display Name Style"),
+        )
         .child(section("Choose Font", grid(fonts.collect())))
         .child(section("Choose Effect", grid(effects.collect())))
-        .child(section("Choose Color", colors.into_any_element()));
+        .child(section("Choose Color", colors));
     let body = div()
         .flex()
         .min_h_0()
-        .h(rpx(560.))
-        .child(left)
+        .h(rpx(631.))
+        .child(options)
         .child(name_style_preview(app, editor, style, cx))
         .into_any_element();
     let footer = div()
@@ -1213,7 +1465,7 @@ fn name_style_dialog(
                     app.update_styles_ui(|ui| ui.dialog = Some(StyleDialog::NameStyle(next)), cx)
                 }))
         });
-    shell(app, "Change Display Name Style", 836., body, footer)
+    shell(app, editor, None, 836., body, footer)
 }
 
 /// A random font, effect and preset, never the current combination.
@@ -1223,7 +1475,8 @@ fn surprise(current: &NameStyle) -> NameStyle {
         .map_or(0, |elapsed| elapsed.subsec_nanos() as usize);
     let font = FONTS[seed % FONTS.len()].1;
     let effect = EFFECTS[(seed / FONTS.len()) % EFFECTS.len()].1;
-    let preset = &COLOR_PRESETS[(seed / 97) % COLOR_PRESETS.len()];
+    let presets = presets(effect);
+    let preset = presets[(seed / 97) % presets.len()];
     let next = with_preset(
         &NameStyle {
             font_id: font,
@@ -1246,6 +1499,10 @@ fn surprise(current: &NameStyle) -> NameStyle {
     }
 }
 
+const NAME_PREVIEW_WIDTH: f32 = 410.;
+/// Discord's preview: the profile card, a chat message and a member row overlapping down the
+/// right of the dialog, over the profile's theme and a faded banner, with a toggle that shows
+/// the message and member row in light mode.
 fn name_style_preview(
     app: &DiscordApp,
     editor: &StylesEditor,
@@ -1257,6 +1514,7 @@ fn name_style_preview(
     let current = shown(app, editor);
     let name = own_name(app);
     let shown_style = shown_name_style(style);
+    let light = editor.ui.name_preview_light;
     let decoration = current
         .decoration
         .and_then(|sku| decoration_of(app, editor, sku));
@@ -1272,61 +1530,74 @@ fn name_style_preview(
             cx,
         )
     };
-    let [primary, accent] = current
-        .theme_colors
-        .unwrap_or(super::styles_panel::DEFAULT_THEME);
-    let card = div()
-        .w(rpx(340.))
-        .flex()
-        .flex_col()
-        .overflow_hidden()
-        .rounded(rpx(12.))
-        .border_2()
-        .border_color(rgb(accent))
-        .bg(rgb(primary))
-        .child(div().h(rpx(80.)).bg(rgba(0x0000004D)))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(rpx(8.))
-                .px(rpx(16.))
-                .pb(rpx(16.))
-                .bg(rgba(0x00000099))
-                .child(div().mt(rpx(-40.)).child(avatar(80., true)))
-                .child(
-                    div()
-                        .text_size(rpx(20.))
-                        .line_height(rpx(24.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(gpui::white())
-                        .child(display_name::render(
-                            "name-style-preview-card",
-                            &name,
-                            Some(&shown_style),
-                            Surface::Profile,
-                            cx,
-                        )),
-                ),
-        );
+    let card = app.profile.as_ref();
+    let backdrop = card
+        .and_then(|card| card.theme())
+        .map_or_else(|| rgb(theme::bg()).into(), |theme| theme.modal_background());
+    let banner = current
+        .banner_file
+        .clone()
+        .map(|path| ImageSpec::LocalGif { path })
+        .or_else(|| current.banner.clone())
+        .and_then(|spec| super::banner_backdrop(&spec, NAME_PREVIEW_WIDTH, 0., cx));
+    let frame = current
+        .frame
+        .and_then(|sku| editor.find_collectible(sku))
+        .map(|owned| owned.product.clone());
+    let profile = card.map(|card| {
+        super::popout::style_preview(
+            app,
+            card,
+            None,
+            frame.as_deref().and_then(super::frame::frame_item),
+            &editor.ui.preview_effect.1,
+            true,
+            cx,
+        )
+    });
+    let (surface, border, text, muted) = if light {
+        (0xFFFFFF, rgba(0x0000001F), 0x313338, 0x5C5E66)
+    } else {
+        (
+            theme::surface_high(),
+            rgba(theme::border_subtle()),
+            theme::text(),
+            theme::muted(),
+        )
+    };
+    let now = chrono::Local::now().timestamp();
     let message = div()
-        .flex()
-        .gap(rpx(12.))
-        .w(rpx(360.))
-        .p(rpx(12.))
+        .relative()
+        .ml(rpx(25.))
+        .mt(rpx(-10.))
+        .mb(rpx(-5.))
+        .min_w(rpx(320.))
+        .py(rpx(20.))
+        .pl(rpx(70.))
+        .pr(rpx(20.))
         .rounded(rpx(8.))
         .border_1()
-        .border_color(rgba(theme::border_subtle()))
-        .bg(rgb(theme::surface_high()))
-        .child(avatar(40., true))
+        .border_color(border)
+        .bg(rgb(surface))
+        .child(
+            div()
+                .absolute()
+                .left(rpx(16.))
+                .top(rpx(22.))
+                .child(avatar(40., true)),
+        )
         .child(
             div()
                 .flex()
-                .flex_col()
+                .items_baseline()
+                .gap(rpx(4.))
                 .child(
                     div()
+                        .max_w(rpx(180.))
                         .text_size(rpx(16.))
+                        .line_height(rpx(22.))
                         .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(if light { 0x060607 } else { theme::strong() }))
                         .child(display_name::render(
                             "name-style-preview-message",
                             &name,
@@ -1337,22 +1608,37 @@ fn name_style_preview(
                 )
                 .child(
                     div()
-                        .text_size(rpx(16.))
-                        .text_color(rgb(theme::text()))
-                        .child("does anyone read this?"),
+                        .flex_none()
+                        .text_size(rpx(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(muted))
+                        .child(crate::text::timestamp::format_timestamp(now, 't')),
                 ),
+        )
+        .child(
+            div()
+                .text_size(rpx(16.))
+                .line_height(rpx(22.))
+                .text_color(rgb(text))
+                .child("does anyone read this?"),
         );
     let plate = current
         .nameplate
         .and_then(|sku| nameplate_of(app, editor, sku))
-        .and_then(|plate| member_nameplate_layer(&plate, user_id, NAMEPLATE_ITEM[1], true, 8., cx));
-    let row = div()
+        .and_then(|plate| member_nameplate_layer(&plate, user_id, 42., true, 8., cx));
+    let member = div()
         .relative()
-        .w(rpx(316.))
-        .h(rpx(NAMEPLATE_ITEM[1]))
+        .w(rpx(280.))
+        .h(rpx(44.))
         .overflow_hidden()
         .rounded(rpx(8.))
-        .bg(rgb(theme::surface_highest()))
+        .border_1()
+        .border_color(border)
+        .bg(rgb(if light {
+            0xEBEBED
+        } else {
+            theme::surface_highest()
+        }))
         .children(plate)
         .child(
             div()
@@ -1361,12 +1647,16 @@ fn name_style_preview(
                 .flex()
                 .items_center()
                 .gap(rpx(12.))
-                .px(rpx(8.))
-                .child(avatar(32., false))
+                .pl(rpx(8.))
+                .pr(rpx(32.))
+                .child(avatar(32., true))
                 .child(
                     div()
+                        .min_w_0()
                         .text_size(rpx(16.))
+                        .line_height(rpx(20.))
                         .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(if light { 0x060607 } else { theme::strong() }))
                         .child(display_name::render(
                             "name-style-preview-row",
                             &name,
@@ -1374,29 +1664,99 @@ fn name_style_preview(
                             Surface::Account { hovered: true },
                             cx,
                         )),
+                )
+                .children(
+                    user.and_then(|user| user.tag.as_ref())
+                        .map(|tag| theme::guild_tag(tag, cx)),
                 ),
         );
+    let toggle_option = |id: &'static str, icon: &'static str, selected: bool| {
+        div()
+            .id(id)
+            .size(rpx(32.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(rpx(8.))
+            .cursor_pointer()
+            .map(|this| {
+                if selected {
+                    this.border_1()
+                        .border_color(rgba(0x97979F29))
+                        .bg(rgb(theme::surface_high()))
+                } else {
+                    this.hover(|style| style.bg(rgba(0x97979F1F)))
+                }
+            })
+            .on_click(on_app(app, move |app, cx| {
+                let light = icon == "theme-light";
+                app.update_styles_ui(|ui| ui.name_preview_light = light, cx)
+            }))
+            .child(theme::icon(
+                icon,
+                16.,
+                if selected { 0xDCDCDF } else { 0x96979E },
+            ))
+    };
+    // `min_w_0` and the clip hold it to its column; otherwise the note's unwrapped
+    // width and the frame art stretch it past the dialog's edge.
     div()
+        .relative()
         .flex()
         .flex_col()
         .flex_1()
-        .items_center()
-        .justify_center()
-        .gap(rpx(12.))
-        .p(rpx(24.))
-        .bg(rgb(theme::surface_high()))
-        .child(card)
-        .child(message)
-        .child(row)
+        .min_w_0()
+        .h_full()
+        .overflow_hidden()
+        .p(rpx(12.))
+        .bg(gpui::black())
+        .child(div().absolute().inset_0().bg(backdrop))
+        .children(banner)
         .child(
             div()
-                .w(rpx(340.))
-                .text_size(rpx(12.))
-                .line_height(rpx(16.))
-                .text_color(rgb(theme::muted()))
+                .relative()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .justify_center()
+                .mx_auto()
+                .mt(rpx(32.))
+                .pl(rpx(16.))
+                .children(profile.map(|profile| div().w(rpx(300.)).child(profile)))
+                .child(message)
+                .child(member),
+        )
+        .child(
+            div()
+                .relative()
+                .flex()
+                .items_center()
+                .justify_end()
+                .px(rpx(16.))
+                .pb(rpx(16.))
                 .child(
-                    "Note: Display name colors and effects will not appear in servers. Styles may \
-                     also look different across Discord and light/dark mode.",
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(rpx(12.))
+                        .line_height(rpx(16.))
+                        .text_color(rgb(theme::muted()))
+                        .child(
+                            "Note: Display name colors and effects will not appear in servers. \
+                             Styles may also look different across Discord and light/dark mode.",
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .gap(rpx(4.))
+                        .ml(rpx(16.))
+                        .p(rpx(4.))
+                        .rounded(rpx(12.))
+                        .bg(gpui::black())
+                        .child(toggle_option("name-preview-dark", "theme-dark", !light))
+                        .child(toggle_option("name-preview-light", "theme-light", light)),
                 ),
         )
         .into_any_element()
@@ -1457,10 +1817,9 @@ fn image_dialog(
     };
     let upload = option("image-upload", editor.nitro || !upload_premium)
         .when(editor.nitro || !upload_premium, |this| {
-            this.on_click(on_app(app, move |app, cx| {
-                app.close_style_dialog(cx);
-                app.pick_style_image(target, cx);
-            }))
+            // The dialog stays up behind the file picker; a picked image replaces it with
+            // the editor, and cancelling leaves it open.
+            this.on_click(on_app(app, move |app, cx| app.pick_style_image(target, cx)))
         })
         .child(label(
             theme::icon("image-plus", 24., theme::strong()).into_any_element(),
@@ -1531,7 +1890,28 @@ fn image_dialog(
                     avatar_id: id,
                     hash: storage_hash.to_string(),
                 };
-                let image = images::resolve(&spec, theme::image_px(RECENT_AVATAR), cx);
+                let pixels = theme::image_px(RECENT_AVATAR);
+                // Animated uploads play here, as on Discord; the still shows until they load.
+                let image = spec
+                    .animated()
+                    .and_then(|animated| animated::resolve(&animated, pixels, cx))
+                    .map(|frames| {
+                        animated::image(frames)
+                            .object_fit(ObjectFit::Cover)
+                            .id(("recent-avatar-frames", id))
+                            .size_full()
+                            .rounded_full()
+                            .into_any_element()
+                    })
+                    .or_else(|| {
+                        images::resolve(&spec, pixels, cx).map(|path| {
+                            img(path)
+                                .size_full()
+                                .rounded_full()
+                                .object_fit(ObjectFit::Cover)
+                                .into_any_element()
+                        })
+                    });
                 div()
                     .id(("recent-avatar", id))
                     .size(rpx(RECENT_AVATAR))
@@ -1540,20 +1920,12 @@ fn image_dialog(
                     .bg(rgb(theme::base_lowest()))
                     .cursor_pointer()
                     .hover(|style| style.opacity(0.8))
+                    // Like an upload, it opens in the editor; left untouched it is reused.
                     .on_click(on_app(app, move |app, cx| {
-                        let storage_hash = storage_hash.clone();
-                        app.close_style_dialog(cx);
-                        app.update_style_draft(
-                            |draft| draft.avatar = Some(ImageChange::Recent { id, storage_hash }),
-                            cx,
-                        );
+                        app.edit_recent_avatar(id, storage_hash.clone(), cx)
                     }))
-                    .children(image.map(|path| {
-                        img(path)
-                            .size_full()
-                            .rounded_full()
-                            .object_fit(ObjectFit::Cover)
-                    }))
+                    // gpui clips children square; each picture rounds itself.
+                    .children(image)
             });
             let empty = RECENT_AVATAR_SLOTS.saturating_sub(avatars.len());
             let placeholders = (0..empty).map(|_| {
@@ -1647,7 +2019,260 @@ fn image_dialog(
             )
         },
     );
-    shell(app, "Select an Image", 480., body, footer)
+    shell(app, editor, Some("Select an Image"), 480., body, footer)
+}
+
+/// Discord dims everything outside the frame with a 9999px box-shadow. gpui would paint that
+/// under the frame as well, so the dimming is a border this thick whose inner edge is the frame.
+const IMAGE_EDIT_DIM: f32 = 480.;
+const ZOOM_SLIDER: f32 = 128.;
+/// The slider's handle stops this far from either end of its bar.
+const ZOOM_TRACK_INSET: f32 = 5.;
+
+fn image_edit_dialog(app: &DiscordApp, editor: &StylesEditor, edit: &ImageEdit) -> AnyElement {
+    let [image_width, image_height] = edit.image_size();
+    let [frame_width, frame_height] = edit.frame_size();
+    let frame_left = (STAGE[0] - frame_width) / 2.;
+    let frame_top = (STAGE[1] - frame_height) / 2.;
+    let round = edit.target == ImageTarget::Avatar;
+    let (press, pan, release, release_out) = (
+        app.entity.clone(),
+        app.entity.clone(),
+        app.entity.clone(),
+        app.entity.clone(),
+    );
+    let stage = div()
+        .id("image-edit-stage")
+        .relative()
+        .flex_none()
+        .w(rpx(STAGE[0]))
+        .h(rpx(STAGE[1]))
+        .rounded(rpx(8.))
+        .overflow_hidden()
+        .bg(gpui::black())
+        .cursor(CursorStyle::OpenHand)
+        .on_mouse_down(MouseButton::Left, move |event, _, cx| {
+            let position = event.position;
+            press
+                .update(cx, |app, cx| app.start_image_drag(position, cx))
+                .ok();
+        })
+        .on_mouse_move(move |event, window, cx| {
+            if event.dragging() {
+                let (position, scale) = (
+                    event.position,
+                    f32::from(rpx(1.).to_pixels(window.rem_size())),
+                );
+                pan.update(cx, |app, cx| app.drag_image(position, scale, cx))
+                    .ok();
+            }
+        })
+        .on_mouse_up(MouseButton::Left, move |_, _, cx| {
+            release.update(cx, |app, cx| app.end_image_drag(cx)).ok();
+        })
+        .on_mouse_up_out(MouseButton::Left, move |_, _, cx| {
+            release_out
+                .update(cx, |app, cx| app.end_image_drag(cx))
+                .ok();
+        })
+        .child(
+            // Plays animated picks frame by frame; a still is one frame.
+            animated::image(edit.preview.clone())
+                .object_fit(ObjectFit::Fill)
+                .id("image-edit-preview")
+                .absolute()
+                .left(rpx((STAGE[0] - image_width) / 2. + edit.offset[0]))
+                .top(rpx((STAGE[1] - image_height) / 2. + edit.offset[1]))
+                .w(rpx(image_width))
+                .h(rpx(image_height)),
+        )
+        .child(
+            div()
+                .absolute()
+                .left(rpx(frame_left - IMAGE_EDIT_DIM))
+                .top(rpx(frame_top - IMAGE_EDIT_DIM))
+                .w(rpx(frame_width + IMAGE_EDIT_DIM * 2.))
+                .h(rpx(frame_height + IMAGE_EDIT_DIM * 2.))
+                .border(rpx(IMAGE_EDIT_DIM))
+                .border_color(rgba(0x2F313699))
+                .when(round, |this| {
+                    this.rounded(rpx(frame_width / 2. + IMAGE_EDIT_DIM))
+                }),
+        )
+        .child(
+            div()
+                .absolute()
+                .left(rpx(frame_left))
+                .top(rpx(frame_top))
+                .w(rpx(frame_width))
+                .h(rpx(frame_height))
+                .border(rpx(5.))
+                .border_color(gpui::white())
+                .when(round, |this| this.rounded_full()),
+        );
+    let slider_bounds = Rc::new(Cell::new(None::<Bounds<Pixels>>));
+    let entity = app.entity.clone();
+    let measured = slider_bounds.clone();
+    let zoom_at = move |position: Point<Pixels>, cx: &mut App| {
+        let Some(bar) = measured.get() else {
+            return;
+        };
+        let inset = bar.size.width * (ZOOM_TRACK_INSET / ZOOM_SLIDER);
+        let travel = bar.size.width - inset * 2.;
+        let t = ((position.x - bar.origin.x - inset) / travel).clamp(0., 1.);
+        entity
+            .update(cx, |app, cx| {
+                app.set_image_zoom(1. + t * (MAX_ZOOM - 1.), cx)
+            })
+            .ok();
+    };
+    let progress = (edit.zoom - 1.) / (MAX_ZOOM - 1.);
+    let zoom_slider = {
+        let (down, moved) = (zoom_at.clone(), zoom_at);
+        div()
+            .id("image-edit-zoom")
+            .relative()
+            .flex_none()
+            .w(rpx(ZOOM_SLIDER))
+            .h(rpx(24.))
+            .cursor(CursorStyle::ResizeLeftRight)
+            .child(measure_into(slider_bounds))
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top(rpx(10.))
+                    .w_full()
+                    .h(rpx(4.))
+                    .rounded(rpx(4.))
+                    .overflow_hidden()
+                    .bg(rgb(0x383940))
+                    .child(
+                        div()
+                            .h_full()
+                            .w(rpx(ZOOM_SLIDER * progress))
+                            .border_1()
+                            .border_color(rgba(0xFFFFFF1A))
+                            .bg(rgb(theme::BLURPLE)),
+                    ),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(rpx(4.))
+                    .left(rpx(ZOOM_TRACK_INSET
+                        + (ZOOM_SLIDER - ZOOM_TRACK_INSET * 2.) * progress
+                        - 8.))
+                    .size(rpx(16.))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(rgba(0x97979F3D))
+                    .bg(gpui::white())
+                    .shadow(vec![
+                        BoxShadow::new(px(0.), px(1.), hsla(0., 0., 0., 0.14)).blur_radius(px(4.)),
+                    ]),
+            )
+            .on_mouse_down(MouseButton::Left, move |event, _, cx| {
+                down(event.position, cx)
+            })
+            .on_mouse_move(move |event, _, cx| {
+                if event.pressed_button == Some(MouseButton::Left) {
+                    moved(event.position, cx);
+                }
+            })
+    };
+    let zoom_icon = |size: f32| {
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .w(rpx(24.))
+            .child(theme::icon("image-scale", size, 0x96979E))
+    };
+    let rotate = div()
+        .id("image-edit-rotate")
+        .group("image-edit-rotate")
+        .relative()
+        .flex_none()
+        .p(rpx(6.))
+        .cursor_pointer()
+        .on_click(on_app(app, |app, cx| app.rotate_image_edit(cx)))
+        .child(
+            svg()
+                .path("app/rotate-square.svg")
+                .size(rpx(24.))
+                .text_color(rgb(0x96979E))
+                .group_hover("image-edit-rotate", |style| style.text_color(rgb(0xDCDCDF))),
+        )
+        .child(theme::hover_tooltip("image-edit-rotate-tooltip", "Rotate"));
+    let tools = div()
+        .flex()
+        .items_center()
+        .mx(rpx(-6.))
+        .py(rpx(16.))
+        .pl(rpx(36.))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap(rpx(8.))
+                .mx_auto()
+                .child(zoom_icon(12.))
+                .child(zoom_slider)
+                .child(zoom_icon(24.)),
+        )
+        .child(rotate);
+    let body = div()
+        .flex()
+        .flex_col()
+        .pt(rpx(16.))
+        .px(rpx(24.))
+        .child(stage)
+        .child(tools)
+        .children(edit.error.clone().map(|error| {
+            div()
+                .pb(rpx(8.))
+                .text_size(rpx(14.))
+                .line_height(rpx(18.))
+                .text_color(rgb(theme::RED))
+                .child(error)
+        }))
+        .into_any_element();
+    let edited = edit.edited() && !edit.applying;
+    let footer = div()
+        .child(
+            button("image-edit-apply", "Apply", true, 100.)
+                .when(edit.applying, |this| this.opacity(0.5).cursor_default())
+                .when(!edit.applying, |this| {
+                    this.on_click(on_app(app, |app, cx| app.apply_image_edit(cx)))
+                }),
+        )
+        .child(
+            button("image-edit-cancel", "Cancel", false, 100.)
+                .on_click(on_app(app, |app, cx| app.close_style_dialog(cx))),
+        )
+        // The shell's footer runs right to left; this pushes Reset to the far left. An auto
+        // margin would be simpler, but Taffy misplaces it in a reversed row.
+        .child(div().flex_1())
+        .child(
+            div()
+                .id("image-edit-reset")
+                .text_size(rpx(16.))
+                .line_height(rpx(20.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(0x6374F4))
+                .when(!edited, |this| this.opacity(0.5))
+                .when(edited, |this| {
+                    this.cursor_pointer()
+                        .hover(|style| style.underline())
+                        .on_click(on_app(app, |app, cx| app.reset_image_edit(cx)))
+                })
+                .child("Reset"),
+        )
+        .items_center();
+    shell(app, editor, Some("Edit Image"), 480., body, footer)
 }
 
 fn color_picker(app: &DiscordApp, editor: &StylesEditor, picker: ColorPicker) -> AnyElement {
@@ -1765,10 +2390,19 @@ fn color_picker(app: &DiscordApp, editor: &StylesEditor, picker: ColorPicker) ->
                 }
             })
     };
-    let suggestions = COLOR_PRESETS
-        .iter()
-        .take(5)
-        .map(|preset| preset[0])
+    // Theme colors suggest from the avatar, as Discord's do; a blank row holds the space while
+    // it's sampled.
+    let suggestions = match picker.slot {
+        ColorSlot::Name(_) => Some(preset_suggestions()),
+        _ => editor
+            .ui
+            .theme_suggestions
+            .as_ref()
+            .and_then(|(_, colors)| *colors),
+    };
+    let suggestions = suggestions
+        .into_iter()
+        .flatten()
         .enumerate()
         .map(|(index, suggestion)| {
             div()
@@ -1836,10 +2470,12 @@ fn color_picker(app: &DiscordApp, editor: &StylesEditor, picker: ColorPicker) ->
                 .flex()
                 .justify_center()
                 .gap(rpx(12.))
+                .h(rpx(34.))
                 .children(suggestions),
         );
     let scrim = div()
         .id("color-picker-scrim")
+        .without_text_selection()
         .absolute()
         .inset_0()
         .occlude()
@@ -1863,20 +2499,12 @@ fn color_picker(app: &DiscordApp, editor: &StylesEditor, picker: ColorPicker) ->
     }
 }
 
-struct Tooltip(&'static str);
-
-impl Render for Tooltip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        theme::tooltip_bubble()
-            .text_size(rpx(14.))
-            .font_weight(FontWeight::SEMIBOLD)
-            .child(self.0)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{EFFECTS, NameStyle, acquired, effect_colors, with_effect};
+    use super::{
+        EFFECTS, GRADIENT_PRESETS, NameStyle, PRISM_PRESETS, SOLID_EFFECT, acquired, effect_colors,
+        with_effect,
+    };
 
     #[test]
     fn acquired_reads_the_purchase_month() {
@@ -1889,15 +2517,20 @@ mod tests {
 
     #[test]
     fn switching_effects_keeps_the_palette_and_fits_its_size() {
+        let palette = vec![0x111111, 0x222222, 0x333333, 0x444444, 0x555555];
         let style = NameStyle {
             font_id: 14,
-            effect_id: 1,
-            colors: vec![0x112233],
+            effect_id: 7,
+            colors: palette.clone(),
         };
         for (_, effect_id) in EFFECTS {
             let next = with_effect(&style, effect_id);
             assert_eq!(next.colors.len(), effect_colors(effect_id));
-            assert!(next.colors.iter().all(|color| *color == 0x112233));
+            assert!(palette.starts_with(&next.colors));
         }
+        // Too few colors start the effect from its own first swatch instead of repeating one.
+        let solid = with_effect(&style, SOLID_EFFECT);
+        assert_eq!(with_effect(&solid, 2).colors, GRADIENT_PRESETS[0]);
+        assert_eq!(with_effect(&solid, 7).colors, PRISM_PRESETS[0]);
     }
 }

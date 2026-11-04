@@ -30,6 +30,8 @@ use std::{
 pub(crate) mod stream;
 
 const MAX_IMAGE: usize = 32 * 1024 * 1024;
+/// Profile effects are long, card-sized loops; under `MAX_IMAGE` they shrink until blurry.
+const MAX_COLLECTIBLE_IMAGE: usize = 96 * 1024 * 1024;
 const MAX_TOTAL: usize = 256 * 1024 * 1024;
 const MAX_FRAMES: usize = 600;
 const MAX_DIMENSION: u32 = 4096;
@@ -1074,7 +1076,13 @@ fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
                 } else {
                     None
                 };
-                let (image, bytes) = decode(&source, request.1)?;
+                let max_image = if collectible {
+                    MAX_COLLECTIBLE_IMAGE
+                } else {
+                    MAX_IMAGE
+                };
+                let (image, bytes) =
+                    decode_with_budget(&source, request.1, MAX_SOURCE_BYTES, max_image)?;
                 if matches!(lane, Lane::Gif) {
                     match frames::save(&frames_path, &image, plays) {
                         Ok(written) => service.record_frames_write(written),
@@ -1148,8 +1156,16 @@ fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
                         }
                         (false, owned)
                     }
-                    _ => {
-                        log::warn!("Animation download or decode failed (size {})", key.1);
+                    other => {
+                        let reason = match &other {
+                            Err(error) => format!("{error:#}"),
+                            Ok(_) => "unexpected outcome".to_owned(),
+                        };
+                        log::warn!(
+                            "Animation download or decode failed for {:?} (size {}): {reason}",
+                            key.0,
+                            key.1
+                        );
                         let (spec, size) = key;
                         state
                             .entries
@@ -1235,6 +1251,17 @@ fn source_frames(bytes: &[u8]) -> Result<((u32, u32), Frames<'_>)> {
 }
 
 fn output_size(width: u32, height: u32, size: u32, frames: usize) -> Result<(u32, u32)> {
+    fitted_size(width, height, size, frames, MAX_IMAGE)
+}
+
+/// The largest size up to `size` whose `frames` fit in `max_image` bytes.
+fn fitted_size(
+    width: u32,
+    height: u32,
+    size: u32,
+    frames: usize,
+    max_image: usize,
+) -> Result<(u32, u32)> {
     ensure!(
         width > 0 && height > 0 && width <= MAX_DIMENSION && height <= MAX_DIMENSION,
         "invalid input dimensions"
@@ -1254,7 +1281,7 @@ fn output_size(width: u32, height: u32, size: u32, frames: usize) -> Result<(u32
         let side = low + (high - low).div_ceil(2);
         let (width, height) = dimensions(side);
         let bytes = u64::from(width) * u64::from(height) * 4 * frames as u64;
-        if bytes <= MAX_IMAGE as u64 {
+        if bytes <= max_image as u64 {
             low = side;
         } else {
             high = side - 1;
@@ -1329,11 +1356,17 @@ fn box_shrink(pixels: &RgbaImage, factor: u32) -> RgbaImage {
     RgbaImage::from_raw(width as u32, height as u32, output).expect("shrunk dimensions fit")
 }
 
+#[cfg(test)]
 fn decode(bytes: &[u8], size: u32) -> Result<(Arc<RenderImage>, usize)> {
-    decode_with_budget(bytes, size, MAX_SOURCE_BYTES)
+    decode_with_budget(bytes, size, MAX_SOURCE_BYTES, MAX_IMAGE)
 }
 
-fn decode_with_budget(bytes: &[u8], size: u32, budget: u64) -> Result<(Arc<RenderImage>, usize)> {
+fn decode_with_budget(
+    bytes: &[u8],
+    size: u32,
+    budget: u64,
+    max_image: usize,
+) -> Result<(Arc<RenderImage>, usize)> {
     let (dimensions, source) = source_frames(bytes)?;
     valid_dimensions(dimensions)?;
     // The target size depends on the real frame count, so hold decoded source frames only
@@ -1350,7 +1383,7 @@ fn decode_with_budget(bytes: &[u8], size: u32, budget: u64) -> Result<(Arc<Rende
             .checked_mul(frame_bytes)
             .context("animation size overflow")?;
         if held > budget {
-            return decode_streaming(bytes, size);
+            return decode_streaming(bytes, size, max_image);
         }
         let frame = frame?;
         ensure!(
@@ -1360,7 +1393,7 @@ fn decode_with_budget(bytes: &[u8], size: u32, budget: u64) -> Result<(Arc<Rende
         source_frames.push(frame);
     }
     let count = source_frames.len();
-    let target = output_size(dimensions.0, dimensions.1, size, count)?;
+    let target = fitted_size(dimensions.0, dimensions.1, size, count, max_image)?;
     let frames: Vec<_> = source_frames
         .into_iter()
         .map(|frame| process_frame(frame, target))
@@ -1369,7 +1402,11 @@ fn decode_with_budget(bytes: &[u8], size: u32, budget: u64) -> Result<(Arc<Rende
     Ok((Arc::new(RenderImage::new(frames)), bytes))
 }
 
-fn decode_streaming(bytes: &[u8], size: u32) -> Result<(Arc<RenderImage>, usize)> {
+fn decode_streaming(
+    bytes: &[u8],
+    size: u32,
+    max_image: usize,
+) -> Result<(Arc<RenderImage>, usize)> {
     let (dimensions, source) = source_frames(bytes)?;
     valid_dimensions(dimensions)?;
     let mut count = 0;
@@ -1382,7 +1419,7 @@ fn decode_streaming(bytes: &[u8], size: u32) -> Result<(Arc<RenderImage>, usize)
         );
         count += 1;
     }
-    let target = output_size(dimensions.0, dimensions.1, size, count)?;
+    let target = fitted_size(dimensions.0, dimensions.1, size, count, max_image)?;
     let (source_dimensions, source) = source_frames(bytes)?;
     ensure!(source_dimensions == dimensions, "frame size changed");
     let mut frames = Vec::with_capacity(count);
@@ -1898,7 +1935,8 @@ mod tests {
         assert_eq!(&second[12..16], &[0u8; 4]);
         assert_eq!(&second[16..], &[0u8; 16]);
 
-        let (streamed, streamed_bytes) = decode_with_budget(DISPOSAL_OFFSET_WEBP, 16, 0).unwrap();
+        let (streamed, streamed_bytes) =
+            decode_with_budget(DISPOSAL_OFFSET_WEBP, 16, 0, MAX_IMAGE).unwrap();
         assert_eq!(bytes, streamed_bytes);
         assert_same_frames(&image, &streamed);
     }
@@ -2001,25 +2039,25 @@ mod tests {
     #[test]
     fn decode_falls_back_to_streaming_with_identical_output() {
         let input = apng(64, 32, &[50, 100, 120], 0);
-        let (single, single_bytes) = decode_with_budget(&input, 16, u64::MAX).unwrap();
+        let (single, single_bytes) = decode_with_budget(&input, 16, u64::MAX, MAX_IMAGE).unwrap();
         // Two 64x32 frames need 16KB, so one frame fits and the second triggers fallback.
         let budget = u64::from(64_u32 * 32 * 4);
-        let (streamed, streamed_bytes) = decode_with_budget(&input, 16, budget).unwrap();
+        let (streamed, streamed_bytes) = decode_with_budget(&input, 16, budget, MAX_IMAGE).unwrap();
         assert_eq!(single_bytes, streamed_bytes);
         assert_same_frames(&single, &streamed);
     }
 
     #[test]
     fn streaming_fallback_keeps_frame_and_dimension_limits() {
-        assert!(decode_with_budget(&apng(1, 1, &vec![50; 601], 0), 1, 0).is_err());
+        assert!(decode_with_budget(&apng(1, 1, &vec![50; 601], 0), 1, 0, MAX_IMAGE).is_err());
         assert_eq!(
-            decode_with_budget(&apng(1, 1, &vec![50; 600], 0), 1, 0)
+            decode_with_budget(&apng(1, 1, &vec![50; 600], 0), 1, 0, MAX_IMAGE)
                 .unwrap()
                 .0
                 .frame_count(),
             600
         );
-        assert!(decode_with_budget(&apng(4097, 1, &[50], 0), 16, 0).is_err());
+        assert!(decode_with_budget(&apng(4097, 1, &[50], 0), 16, 0, MAX_IMAGE).is_err());
     }
 
     #[test]

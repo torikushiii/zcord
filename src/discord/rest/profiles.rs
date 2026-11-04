@@ -228,6 +228,29 @@ impl Rest {
         Ok(applications)
     }
 
+    /// Replaces the user's whole widget list; array order is display order. Returns the list as
+    /// saved, with ids for widgets that had none.
+    pub async fn put_widgets(
+        &self,
+        widgets: &[model::ProfileWidget],
+    ) -> Result<Vec<model::ProfileWidget>, Error> {
+        let body = serde_json::json!({
+            "widgets": widgets.iter().map(model::ProfileWidget::body).collect::<Vec<_>>(),
+        });
+        let response = self
+            .send(|| {
+                self.client
+                    .put("https://discord.com/api/v9/users/@me/widgets")
+                    .header(REFERER, "https://discord.com/channels/@me")
+                    .json(&body)
+            })
+            .await?;
+        let value = response.json::<Value>().await.map_err(|_| Error::Decode)?;
+        Ok(model::parse_entries(
+            value.get("widgets").cloned().unwrap_or(Value::Null),
+        ))
+    }
+
     pub async fn fetch_featured_widget_configs(
         &self,
     ) -> Result<HashMap<u64, model::WidgetConfig>, Error> {
