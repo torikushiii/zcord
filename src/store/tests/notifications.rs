@@ -585,11 +585,16 @@ fn server_channel_category_and_thread_parent_mutes_respect_expiry() {
 fn attachment_empty_and_system_messages_choose_the_body() {
     let store = store_default();
     let mut attachment = message_draft(900, 2, "");
-    attachment["attachments"] = json!([{"id":"1"}]);
+    attachment["attachments"] = json!([{"id":"1","filename":"image-44.png"},{"id":"2"}]);
     let alert = store
+        .message_alert(&serde_json::from_value(attachment.clone()).unwrap(), NOW)
+        .expect("attachment alerts");
+    assert_eq!(alert.body, "Uploaded image-44.png");
+    attachment["attachments"] = json!([{"id":"1"}]);
+    let unnamed = store
         .message_alert(&serde_json::from_value(attachment).unwrap(), NOW)
         .expect("attachment alerts");
-    assert_eq!(alert.body, "Sent an attachment");
+    assert_eq!(unnamed.body, "Uploaded a file");
 
     let empty = store
         .message_alert(&message(900, 2, ""), NOW)

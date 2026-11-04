@@ -311,8 +311,13 @@ impl Store {
             &message.mentions,
         );
         let body = if body.is_empty() {
-            if !message.attachments.is_empty() {
-                "Sent an attachment".to_owned()
+            // Discord's own notifications name the first file.
+            if let Some(attachment) = message.attachments.first() {
+                if attachment.filename.is_empty() {
+                    "Uploaded a file".to_owned()
+                } else {
+                    format!("Uploaded {}", attachment.filename)
+                }
             } else if !matches!(message.kind, 0 | 19) {
                 return None;
             } else {
