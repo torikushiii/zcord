@@ -48,7 +48,8 @@ chacha20poly1305 = "0.10"
 windows-capture = "=2.0.1"
 windows-core = "0.62.2"
 tauri-winrt-notification = "0.8"
-tray-icon = "0.26.1"
+# Only the Windows tray is used; the default libappindicator feature pulls in gtk3 for Linux.
+tray-icon = { version = "0.26.1", default-features = false }
 raw-window-handle = "0.6.2"
 windows = { version = "0.62.2", features = [
     "Win32_Media_MediaFoundation",
