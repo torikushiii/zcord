@@ -30,6 +30,7 @@ mod badges;
 mod board;
 mod connections;
 mod frame;
+mod image_editor;
 mod loading;
 mod modal;
 mod mutuals;
@@ -41,6 +42,7 @@ mod scope_tests;
 pub(crate) mod styles;
 mod styles_dialogs;
 pub(crate) mod styles_panel;
+mod widget_editor;
 pub(crate) use account_logic::StatusChange;
 pub(crate) use account_logic::{AccountAction, account_action};
 pub(crate) use board::presence_art;
@@ -59,12 +61,11 @@ const MODAL_RADIUS: f32 = 16.;
 const MODAL_CARD_RADIUS: f32 = 16.;
 const MODAL_MIN_VIEWPORT_WIDTH: f32 = 929.;
 const MODAL_MIN_VIEWPORT_HEIGHT: f32 = 785.;
-const BACKDROP_SOURCE: u32 = 512;
 const BANNER_SOURCE: u32 = 480;
-const BACKDROP_BLUR: f32 = 4.;
+const BACKDROP_BLUR: f32 = 15.;
 const BACKDROP_SATURATION: f32 = 0.5;
 const BACKDROP_OPACITY: f32 = 0.3;
-const BACKDROP_HEIGHT: f32 = 280.;
+const BACKDROP_FADE: f32 = 280.;
 const EFFECT_TICK: Duration = Duration::from_millis(100);
 const ENTER: Duration = Duration::from_millis(180);
 /// Longest the popout shows its skeleton waiting for data before showing what it has.
@@ -795,13 +796,111 @@ fn effect_item_layers(
         .collect()
 }
 
+/// The banner behind the full profile and the name style preview, as Discord draws it: at
+/// half saturation, fitted to `width` and repeated down, faded out over its first 280px and
+/// blurred from half to fully over the same span. `None` until the banner has loaded.
+fn banner_backdrop(spec: &ImageSpec, width: f32, corner: f32, cx: &App) -> Option<AnyElement> {
+    let pixels = theme::image_px(width);
+    let sigma = BACKDROP_BLUR * pixels as f32 / width;
+    let layer =
+        |sigma: f32| images::blurred_at_width(spec, pixels, pixels, sigma, BACKDROP_SATURATION, cx);
+    let (sharp, blurred) = (layer(0.)?, layer(sigma)?);
+    // Discord's two masks multiply to (1 - t)² for the sharp copy, which is exactly gpui's
+    // edge fade over the whole span, and to 1 - t² for the blurred one, which a shorter fade
+    // under a flat top follows closely.
+    Some(
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .w_full()
+            .h(rpx(BACKDROP_FADE))
+            .child(faded_banner(
+                sharp,
+                BACKDROP_FADE,
+                corner,
+                BACKDROP_OPACITY / 2.,
+            ))
+            .child(faded_banner(
+                blurred,
+                BLURRED_BACKDROP_BAND,
+                corner,
+                BACKDROP_OPACITY / 2.,
+            ))
+            .into_any_element(),
+    )
+}
+
+/// The band over which the blurred copy fades out, ending where the sharp one does.
+const BLURRED_BACKDROP_BAND: f32 = 200.;
+
+/// `image` repeated down the backdrop at full width, fading out over the `band` above its
+/// bottom edge.
+fn faded_banner(image: Arc<RenderImage>, band: f32, corner: f32, opacity: f32) -> impl IntoElement {
+    div().absolute().inset_0().opacity(opacity).child(
+        canvas(
+            move |_, _, _| image,
+            move |bounds, image, window, _| {
+                if window.content_mask().bounds.is_empty() {
+                    return;
+                }
+                let natural = image.size(0);
+                let tile =
+                    bounds.size.width * (natural.height.0 as f32 / natural.width.0.max(1) as f32);
+                if tile <= px(0.) {
+                    return;
+                }
+                let radius = rpx(corner).to_pixels(window.rem_size());
+                let fade = EdgeFade {
+                    bounds,
+                    band: rpx(band).to_pixels(window.rem_size()),
+                    band_top: None,
+                    band_bottom: None,
+                    band_left: None,
+                    band_right: None,
+                    top: false,
+                    bottom: true,
+                    left: false,
+                    right: false,
+                };
+                window.with_edge_fade(Some(fade), |window| {
+                    let mut top = bounds.top();
+                    let mut first = true;
+                    while top < bounds.bottom() {
+                        let tile_bounds =
+                            Bounds::new(point(bounds.left(), top), size(bounds.size.width, tile));
+                        let corners = Corners {
+                            top_left: if first { radius } else { px(0.) },
+                            top_right: if first { radius } else { px(0.) },
+                            ..Corners::default()
+                        };
+                        window
+                            .paint_image_fitted(
+                                tile_bounds,
+                                tile_bounds,
+                                corners,
+                                image.clone(),
+                                0,
+                                false,
+                            )
+                            .ok();
+                        top += tile;
+                        first = false;
+                    }
+                });
+            },
+        )
+        .size_full(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         EffectLoad, THEME_OVERLAY, account_available_height, account_popout_position,
         effect_clip_geometry, effect_playback, effect_start,
         loading::outbox_application_ids,
-        modal::{modal_backdrop_corners, profile_close_button},
+        modal::profile_close_button,
         palette::{ProfilePalette, ProfileTheme, blend, contrast},
         settle_effect_layers,
     };
@@ -1062,17 +1161,6 @@ mod tests {
         ]}))
         .unwrap();
         assert_eq!(outbox_application_ids(&outbox), [7, 9]);
-    }
-
-    #[test]
-    fn blurred_banner_matches_dialog_top_corners_at_each_ui_scale() {
-        for scale in [1., 1.25, 1.5, 2.] {
-            let corners = modal_backdrop_corners(px(crate::theme::BASE_FONT_SIZE * scale));
-            assert_eq!(corners.top_left, px(16. * scale));
-            assert_eq!(corners.top_right, px(16. * scale));
-            assert_eq!(corners.bottom_left, px(0.));
-            assert_eq!(corners.bottom_right, px(0.));
-        }
     }
 
     #[test]

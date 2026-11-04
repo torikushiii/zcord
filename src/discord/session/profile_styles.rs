@@ -51,6 +51,21 @@ impl Session {
             .await
     }
 
+    pub async fn save_widgets(
+        &self,
+        user_id: u64,
+        widgets: &[model::ProfileWidget],
+    ) -> Result<Vec<model::ProfileWidget>, Error> {
+        let result = self
+            .rest(async |rest| rest.put_widgets(widgets).await)
+            .await;
+        // Every cached scope of this profile carries the old list.
+        let mut cache = self.cache();
+        cache.profile_revision = cache.profile_revision.wrapping_add(1);
+        cache.profiles.retain(|(id, _), _| *id != user_id);
+        result
+    }
+
     pub async fn save_profile_styles(
         &self,
         user_id: u64,

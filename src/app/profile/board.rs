@@ -33,7 +33,9 @@ mod wishlist;
 use super::{widget_application_ids, widget_game_ids};
 pub(super) use activity::{activity, listening, popout_playing};
 pub(crate) use art::presence_art;
-pub(super) use widgets::{board_panel, popout_widget, prefetch_images};
+pub(super) use widgets::{
+    board_panel, popout_widget, prefetch_images, tag_icon, tag_label, widget_element,
+};
 pub(super) use wishlist::wishlist_panel;
 
 const COVER_WIDTH: f32 = 88.;

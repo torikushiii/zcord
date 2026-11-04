@@ -9,48 +9,58 @@ pub(in crate::app::profile) fn board_panel(
     card: &ProfileCard,
     cx: &App,
 ) -> AnyElement {
-    let palette = card.palette();
     let widgets = card.profile.iter().flat_map(|profile| &profile.widgets);
     div()
         .flex()
         .flex_col()
         .gap(rpx(16.))
-        .children(widgets.filter_map(|widget| {
-            let (title, games) = match &widget.data {
-                WidgetData::Application { application_id } => {
-                    return Some(application_widget(app, card, *application_id, palette, cx));
-                }
-                WidgetData::FavoriteGames { games } => ("Favorite Game", games),
-                WidgetData::CurrentGames { games } => ("Games in Rotation", games),
-                // Discord shows both of these as cover grids rather than game rows.
-                WidgetData::PlayedGames { games } => {
-                    return (!games.is_empty()).then(|| {
-                        covers_widget(app, card, widget.id, "Games I Like", games, palette, cx)
-                    });
-                }
-                WidgetData::WantToPlayGames { games } => {
-                    return (!games.is_empty()).then(|| {
-                        covers_widget(app, card, widget.id, "Want to Play", games, palette, cx)
-                    });
-                }
-                WidgetData::Personal { header, sections } => {
-                    return Some(personal_widget(
-                        card,
-                        widget.id,
-                        header.as_deref(),
-                        sections,
-                        palette,
-                        cx,
-                    ));
-                }
-                WidgetData::Unknown => return None,
-            };
-            // Discord sets the favorite game's name bolder and larger than other lists.
-            let featured = matches!(widget.data, WidgetData::FavoriteGames { .. });
-            (!games.is_empty())
-                .then(|| games_widget(app, card, widget.id, title, games, featured, palette, cx))
-        }))
+        .children(widgets.filter_map(|widget| widget_element(app, card, widget, false, cx)))
         .into_any_element()
+}
+
+/// One Board widget; `editing` swaps game rows for the widget editor's controls.
+pub(in crate::app::profile) fn widget_element(
+    app: &DiscordApp,
+    card: &ProfileCard,
+    widget: &crate::discord::model::ProfileWidget,
+    editing: bool,
+    cx: &App,
+) -> Option<AnyElement> {
+    let palette = card.palette();
+    let (title, games) = match &widget.data {
+        WidgetData::Application { application_id } => {
+            return Some(application_widget(app, card, *application_id, palette, cx));
+        }
+        WidgetData::FavoriteGames { games } => ("Favorite Game", games),
+        WidgetData::CurrentGames { games } => ("Games in Rotation", games),
+        // Discord shows both of these as cover grids rather than game rows.
+        WidgetData::PlayedGames { games } => {
+            return (!games.is_empty())
+                .then(|| covers_widget(app, card, widget.id, "Games I Like", games, palette, cx));
+        }
+        WidgetData::WantToPlayGames { games } => {
+            return (!games.is_empty())
+                .then(|| covers_widget(app, card, widget.id, "Want to Play", games, palette, cx));
+        }
+        WidgetData::Personal { header, sections } => {
+            return Some(personal_widget(
+                card,
+                widget.id,
+                header.as_deref(),
+                sections,
+                palette,
+                cx,
+            ));
+        }
+        WidgetData::Unknown => return None,
+    };
+    // Discord sets the favorite game's name bolder and larger than other lists.
+    let featured = matches!(widget.data, WidgetData::FavoriteGames { .. });
+    (!games.is_empty()).then(|| {
+        games_widget(
+            app, card, widget.id, title, games, featured, editing, palette, cx,
+        )
+    })
 }
 
 fn widget_card(palette: ProfilePalette) -> Div {
@@ -263,6 +273,7 @@ pub(in crate::app::profile) fn prefetch_images(card: &ProfileCard, current: Opti
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn games_widget(
     app: &DiscordApp,
     card: &ProfileCard,
@@ -270,10 +281,12 @@ fn games_widget(
     title: &'static str,
     games: &[WidgetGame],
     featured: bool,
+    editing: bool,
     palette: ProfilePalette,
     cx: &App,
 ) -> AnyElement {
-    let expanded = card.expanded_widgets.contains(&widget_id);
+    // The editor lists every game, since each one carries its own controls.
+    let expanded = editing || card.expanded_widgets.contains(&widget_id);
     let shown = if expanded {
         games.len()
     } else {
@@ -282,7 +295,7 @@ fn games_widget(
     let toggle = show_more(
         app,
         widget_id,
-        games.len() > COLLAPSED_GAMES,
+        !editing && games.len() > COLLAPSED_GAMES,
         expanded,
         palette,
     );
@@ -298,7 +311,7 @@ fn games_widget(
         )
         .child(div().flex().flex_col().gap(rpx(16.)).mt(rpx(16.)).children(
             games[..shown].iter().enumerate().map(|(index, game)| {
-                let row = game_row(card, widget_id, game, featured, palette, cx);
+                let row = game_row(app, card, widget_id, game, featured, editing, palette, cx);
                 // Rows vary in height, so newly shown ones fade and slide in rather than
                 // growing to a precomputed height like the cover grids.
                 match card.widget_toggles.get(&widget_id) {
@@ -323,16 +336,44 @@ fn games_widget(
         .into_any_element()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn game_row(
+    app: &DiscordApp,
     card: &ProfileCard,
     widget_id: u64,
     entry: &WidgetGame,
     featured: bool,
+    editing: bool,
     palette: ProfilePalette,
     cx: &App,
-) -> impl IntoElement {
+) -> AnyElement {
     let game = card.games.get(&entry.game_id);
     let key = widget_id ^ entry.game_id;
+    let name = div()
+        .map(|this| {
+            if featured {
+                this.text_size(rpx(16.))
+                    .line_height(rpx(20.))
+                    .font_weight(FontWeight::SEMIBOLD)
+            } else {
+                this.text_size(rpx(14.)).line_height(rpx(18.))
+            }
+        })
+        .text_color(rgb(palette.strong))
+        .child(label(
+            ("profile-game", key),
+            game.map_or("Unknown game", |game| game.name.as_str()),
+        ));
+    if editing {
+        return super::super::widget_editor::game_row(
+            app,
+            widget_id,
+            entry,
+            game_cover(game.map(Arc::as_ref), palette, cx).into_any_element(),
+            name,
+            palette,
+        );
+    }
     div()
         .flex()
         .items_center()
@@ -345,23 +386,7 @@ fn game_row(
                 .flex_1()
                 .min_w_0()
                 .gap(rpx(8.))
-                .child(
-                    div()
-                        .map(|this| {
-                            if featured {
-                                this.text_size(rpx(16.))
-                                    .line_height(rpx(20.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                            } else {
-                                this.text_size(rpx(14.)).line_height(rpx(18.))
-                            }
-                        })
-                        .text_color(rgb(palette.strong))
-                        .child(label(
-                            ("profile-game", key),
-                            game.map_or("Unknown game", |game| game.name.as_str()),
-                        )),
-                )
+                .child(name)
                 .children(
                     entry
                         .comment
@@ -393,16 +418,11 @@ fn game_row(
                     )
                 }),
         )
+        .into_any_element()
 }
 
 fn tag_pill(tag: &str, palette: ProfilePalette) -> impl IntoElement {
-    let icon = match tag {
-        "open_to_play" | "open_to_teach" | "looking_for_group" | "lfg" | "looking_for_tips"
-        | "looking_to_discuss" | "looking_to_learn" => "users",
-        "love_it" | "obsessed" | "kind_of_love_it" | "like_it" | "too_easy" => "thumbs-up",
-        "kind_of_hate_it" | "rage_quitting" | "frustrated" => "thumbs-down",
-        _ => "award",
-    };
+    let icon = tag_icon(tag);
     div()
         .flex()
         .items_center()
@@ -418,8 +438,18 @@ fn tag_pill(tag: &str, palette: ProfilePalette) -> impl IntoElement {
         .child(tag_label(tag))
 }
 
+pub(in crate::app::profile) fn tag_icon(tag: &str) -> &'static str {
+    match tag {
+        "open_to_play" | "open_to_teach" | "looking_for_group" | "lfg" | "looking_for_tips"
+        | "looking_to_discuss" | "looking_to_learn" => "users",
+        "love_it" | "obsessed" | "kind_of_love_it" | "like_it" | "too_easy" => "thumbs-up",
+        "kind_of_hate_it" | "rage_quitting" | "frustrated" => "thumbs-down",
+        _ => "award",
+    }
+}
+
 /// Discord's tag ids read as sentence case ("better_than_you" → "Better than you").
-pub(super) fn tag_label(tag: &str) -> String {
+pub(in crate::app::profile) fn tag_label(tag: &str) -> String {
     if tag == "lfg" {
         return "LFG".to_owned();
     }
@@ -622,19 +652,21 @@ fn application_widget(
                         .relative()
                         .flex()
                         .items_center()
-                        .gap(rpx(4.))
+                        .gap(rpx(2.))
                         .mt(rpx(4.))
                         .text_size(rpx(14.))
                         .line_height(rpx(18.))
                         .text_color(rgb(palette.text))
                         // Apps fill subtitles with markdown, e.g. Example Music App's `[@name](profile url)`.
-                        .child(markdown(
+                        // The body fills its parent, so this wrapper sizes it to the text and
+                        // the icon follows straight after, as on Discord.
+                        .child(div().flex_initial().min_w_0().child(markdown(
                             app,
                             card,
                             key.wrapping_add(index as u64 + 1),
                             &text,
                             cx,
-                        ))
+                        )))
                         .children(
                             subtitle
                                 .icon

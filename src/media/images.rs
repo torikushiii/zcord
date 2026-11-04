@@ -164,6 +164,7 @@ impl ImageSpec {
         let hash = match self {
             ImageSpec::GuildIcon { hash, .. }
             | ImageSpec::Avatar { hash, .. }
+            | ImageSpec::ArchivedAvatar { hash, .. }
             | ImageSpec::GuildAvatar { hash, .. }
             | ImageSpec::Banner { hash, .. }
             | ImageSpec::GuildBanner { hash, .. }
@@ -297,6 +298,25 @@ fn avif_proxy_image(spec: &ImageSpec, url: &reqwest::Url) -> bool {
             .path()
             .rsplit_once('.')
             .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("avif"))
+}
+
+/// The 96px WebP of an avatar that Discord's color picker samples its suggestions from, which
+/// `image_url`'s power-of-two sizes can't request. Animated avatars sample their first frame.
+pub(crate) fn avatar_sample_url(spec: &ImageSpec) -> Option<reqwest::Url> {
+    if !matches!(
+        spec,
+        ImageSpec::Avatar { .. } | ImageSpec::GuildAvatar { .. } | ImageSpec::ArchivedAvatar { .. }
+    ) {
+        return None;
+    }
+    let mut url = image_url(spec, 96)?;
+    let path = url.path().strip_suffix(".png")?.to_owned();
+    url.set_path(&format!("{path}.webp"));
+    url.query_pairs_mut().clear().append_pair("size", "96");
+    if spec.animated().is_some() {
+        url.query_pairs_mut().append_pair("animated", "true");
+    }
+    Some(url)
 }
 
 fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
@@ -568,6 +588,9 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
 }
 
 // gpui's `img()` decodes every frame of an animated file and keeps it in its asset cache.
+/// Rewrites a download before it's cached, at a target size.
+type StillConversion = fn(&[u8], u32) -> Option<Vec<u8>>;
+
 fn first_frame_png(bytes: &[u8], size: u32) -> Option<Vec<u8>> {
     let format = image::guess_format(bytes).ok()?;
     let first = match format {
@@ -590,19 +613,55 @@ fn first_frame_png(bytes: &[u8], size: u32) -> Option<Vec<u8>> {
         }
         _ => return None,
     };
-    let mut image = first.into_buffer();
-    let target = size.max(1);
+    let image = first.into_buffer();
     let longest = image.width().max(image.height());
-    if longest > target {
-        let scaled = |side: u32| {
-            ((u64::from(side) * u64::from(target) + u64::from(longest) / 2) / u64::from(longest))
-                .max(1) as u32
-        };
-        let width = scaled(image.width());
-        let height = scaled(image.height());
-        image =
-            image::imageops::resize(&image, width, height, image::imageops::FilterType::Triangle);
+    encode_png(&shrink(image, longest, size))
+}
+
+/// Collectible stills come at full resolution and gpui's `img()` keeps each one decoded at that
+/// size, so a profile frame's layers cost tens of megabytes apiece. Shrinking the shortest side
+/// to `size` keeps every fit sharp; animated files are left whole for the frame decoder.
+fn downscaled_still(bytes: &[u8], size: u32) -> Option<Vec<u8>> {
+    let format = image::guess_format(bytes).ok()?;
+    let animated = match format {
+        ImageFormat::Png => image::codecs::png::PngDecoder::new(Cursor::new(bytes))
+            .ok()?
+            .is_apng()
+            .ok()?,
+        ImageFormat::WebP => image::codecs::webp::WebPDecoder::new(Cursor::new(bytes))
+            .ok()?
+            .has_animation(),
+        ImageFormat::Jpeg => false,
+        _ => return None,
+    };
+    if animated {
+        return None;
     }
+    let image = image::load_from_memory_with_format(bytes, format)
+        .ok()?
+        .into_rgba8();
+    let shortest = image.width().min(image.height());
+    if shortest <= size.max(1) {
+        return None;
+    }
+    encode_png(&shrink(image, shortest, size))
+}
+
+/// Scales `image` down so its `reference` side is at most `target`, keeping the aspect ratio.
+fn shrink(image: image::RgbaImage, reference: u32, target: u32) -> image::RgbaImage {
+    let target = target.max(1);
+    if reference <= target {
+        return image;
+    }
+    let scaled = |side: u32| {
+        ((u64::from(side) * u64::from(target) + u64::from(reference) / 2) / u64::from(reference))
+            .max(1) as u32
+    };
+    let (width, height) = (scaled(image.width()), scaled(image.height()));
+    image::imageops::resize(&image, width, height, image::imageops::FilterType::Triangle)
+}
+
+fn encode_png(image: &image::RgbaImage) -> Option<Vec<u8>> {
     let mut png = Vec::new();
     image::codecs::png::PngEncoder::new(&mut png)
         .write_image(
@@ -640,6 +699,11 @@ fn file_name(spec: &ImageSpec, size: u32) -> String {
     {
         // Downloads and decoded frames share this key; bypass pre-conversion cache entries.
         "avif-proxy-webp-v1".hash(&mut hasher);
+    }
+    if matches!(spec, ImageSpec::Collectible { .. }) {
+        // Bypass full-resolution stills written before `downscaled_still`, and effect frames
+        // decoded under the old 32 MB animation cap.
+        "collectible-downscaled-v2".hash(&mut hasher);
     }
     let suffix = if still_spec(spec) { "-still" } else { "" };
     format!(
@@ -885,7 +949,8 @@ const BLUR_SIGMA: f32 = 5.;
 /// A small texture stretched over a large box fades out by half a texel at its edges.
 const BLUR_MIN_TEXTURE: u32 = 384;
 const BLUR_CACHE_LIMIT: usize = 64;
-type BlurKey = (Arc<Path>, u32, u32);
+/// Path, sigma bits, saturation bits, and the width scaled to first (0 keeps the source's).
+type BlurKey = (Arc<Path>, u32, u32, u32);
 
 #[derive(Default)]
 struct BlurCache {
@@ -915,8 +980,22 @@ pub fn blurred_with(
     saturation: f32,
     cx: &App,
 ) -> Option<Arc<gpui::RenderImage>> {
+    blurred_at_width(spec, source, 0, sigma, saturation, cx)
+}
+
+/// Like `blurred_with`, but scaled to `width` pixels wide before blurring, so `sigma` is in
+/// pixels of the size it's drawn at whatever the file's own size. A zero `sigma` only scales
+/// and desaturates.
+pub fn blurred_at_width(
+    spec: &ImageSpec,
+    source: u32,
+    width: u32,
+    sigma: f32,
+    saturation: f32,
+    cx: &App,
+) -> Option<Arc<gpui::RenderImage>> {
     let path = resolve(spec, source, cx)?;
-    let key = (path, sigma.to_bits(), saturation.to_bits());
+    let key = (path, sigma.to_bits(), saturation.to_bits(), width);
     BLURRED.with(|cache| {
         let mut cache = cache.borrow_mut();
         if let Some(image) = cache.entries.get(&key) {
@@ -929,17 +1008,32 @@ pub fn blurred_with(
         {
             cache.entries.remove(&oldest);
         }
-        let image = blur_file(&key.0, sigma, saturation);
+        let image = blur_file(&key.0, width, sigma, saturation);
         cache.order.push_back(key.clone());
         cache.entries.insert(key, image.clone());
         image
     })
 }
 
-fn blur_file(path: &Path, sigma: f32, saturation: f32) -> Option<Arc<gpui::RenderImage>> {
+fn blur_file(
+    path: &Path,
+    width: u32,
+    sigma: f32,
+    saturation: f32,
+) -> Option<Arc<gpui::RenderImage>> {
     let bytes = std::fs::read(path).ok()?;
-    let image = image::load_from_memory(&bytes).ok()?.to_rgba8();
-    let mut blurred = image::imageops::fast_blur(&image, sigma);
+    let mut image = image::load_from_memory(&bytes).ok()?.to_rgba8();
+    if width > 0 && image.width() > 0 {
+        let height =
+            (u64::from(image.height()) * u64::from(width) / u64::from(image.width())).max(1) as u32;
+        image =
+            image::imageops::resize(&image, width, height, image::imageops::FilterType::Triangle);
+    }
+    let mut blurred = if sigma > 0. {
+        image::imageops::fast_blur(&image, sigma)
+    } else {
+        image
+    };
     for pixel in blurred.pixels_mut() {
         let [r, g, b, _] = pixel.0.map(f32::from);
         let gray = 0.2126 * r + 0.7152 * g + 0.0722 * b;
@@ -1132,13 +1226,21 @@ impl Service {
         if !download_bytes(spec, &bytes) {
             return None;
         }
-        let bytes = if still_spec(spec) {
-            let target = rounded_size(size);
-            tokio::task::spawn_blocking(move || first_frame_png(&bytes, target).unwrap_or(bytes))
-                .await
-                .ok()?
+        let convert: Option<StillConversion> = if still_spec(spec) {
+            Some(first_frame_png)
+        } else if matches!(spec, ImageSpec::Collectible { .. }) {
+            Some(downscaled_still)
         } else {
-            bytes
+            None
+        };
+        let bytes = match convert {
+            Some(convert) => {
+                let target = rounded_size(size);
+                tokio::task::spawn_blocking(move || convert(&bytes, target).unwrap_or(bytes))
+                    .await
+                    .ok()?
+            }
+            None => bytes,
         };
         atomic_write(&path, &bytes).await.ok()?;
         self.record_write(spec, bytes.len() as u64);

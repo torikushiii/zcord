@@ -4,7 +4,7 @@
 use std::{
     collections::HashSet,
     io::{self, Cursor, Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -19,6 +19,8 @@ use image::{
     },
 };
 
+use super::image_editor::{ImageEdit, MAX_ZOOM, STAGE, draft_previews};
+use super::styles_panel::StyleDialog;
 use crate::{
     app::DiscordApp,
     discord::{Error, model},
@@ -99,9 +101,11 @@ pub(crate) enum ImageTarget {
 
 #[derive(Clone, PartialEq)]
 pub(crate) enum ImageChange {
-    /// A local file, already validated and encoded for upload.
+    /// A local file, already validated and encoded for upload. `preview` shows what will be
+    /// uploaded (the editor's cut), while `path` names the file the user picked.
     Upload {
         path: PathBuf,
+        preview: PathBuf,
         data_uri: Arc<str>,
     },
     /// One of `/users/@me/avatars`; avatars only.
@@ -194,6 +198,11 @@ impl StylesEditor {
         }
     }
 
+    /// Tells this editor apart from one opened later, for tasks that outlive it.
+    pub(super) fn identity(&self) -> Arc<()> {
+        self.identity.clone()
+    }
+
     pub(crate) fn owned_of(&self, kind: CollectibleKind) -> Vec<&OwnedCollectible> {
         self.owned
             .iter()
@@ -269,6 +278,9 @@ impl StylesEditor {
         let mut profile = self.saved_profile.clone()?;
         if self.draft != StyleDraft::default() {
             apply_preview(Arc::make_mut(&mut profile), self);
+        }
+        if let Some(widgets) = self.ui.widgets.draft() {
+            Arc::make_mut(&mut profile).widgets = widgets.clone();
         }
         Some(profile)
     }
@@ -348,6 +360,8 @@ impl DiscordApp {
         editor.saved_profile = card.profile.clone();
         let identity = editor.identity.clone();
         self.profile_styles = Some(editor);
+        // No earlier editor's draft survives, so its previews can all go.
+        self.prune_style_previews(false);
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             if let Some(editor) = &mut self.profile_styles {
                 editor.error = Some("Connect to Discord to load your styles.".into());
@@ -470,7 +484,9 @@ impl DiscordApp {
 
     pub(super) fn drop_styles_editor(&mut self) {
         self.restore_style_profile();
-        self.profile_styles = None;
+        if self.profile_styles.take().is_some() {
+            self.prune_style_previews(false);
+        }
     }
 
     pub(super) fn rebuild_style_preview(&mut self) {
@@ -590,6 +606,7 @@ impl DiscordApp {
         editor.scope_revision += 1;
         editor.draft = StyleDraft::default();
         editor.error = None;
+        self.prune_style_previews(true);
         let changed = self
             .profile
             .as_mut()
@@ -612,10 +629,18 @@ impl DiscordApp {
         let Some(editor) = &mut self.profile_styles else {
             return;
         };
+        let before: Vec<PathBuf> = draft_previews(&editor.draft)
+            .into_iter()
+            .map(Path::to_path_buf)
+            .collect();
         update(&mut editor.draft);
         editor.draft_revision += 1;
         normalize_draft(&mut editor.draft, &saved);
         editor.error = None;
+        // Only an image change can leave a preview behind; colors change on every drag.
+        if draft_previews(&editor.draft) != before {
+            self.prune_style_previews(true);
+        }
         self.refresh_style_cosmetics(cx);
         cx.notify();
     }
@@ -624,12 +649,12 @@ impl DiscordApp {
         let Some(editor) = self.profile_styles.as_ref().filter(|editor| !editor.saving) else {
             return;
         };
-        let (identity, scope_revision, nitro) =
-            (editor.identity.clone(), editor.scope_revision, editor.nitro);
+        let (identity, scope_revision) = (editor.identity.clone(), editor.scope_revision);
         let previous = match target {
             ImageTarget::Avatar => editor.draft.avatar.clone(),
             ImageTarget::Banner => editor.draft.banner.clone(),
         };
+        let preview_px = crate::theme::image_px(STAGE[0] * MAX_ZOOM);
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -659,7 +684,7 @@ impl DiscordApp {
             };
             let result = cx
                 .background_executor()
-                .spawn(async move { prepare_style_image(path, target, nitro) })
+                .spawn(async move { ImageEdit::load(path, target, preview_px) })
                 .await;
             this.update(cx, |app, cx| {
                 let Some(editor) = app.profile_styles.as_mut().filter(|editor| {
@@ -677,13 +702,7 @@ impl DiscordApp {
                     return;
                 }
                 match result {
-                    Ok(image) => app.update_style_draft(
-                        |draft| match target {
-                            ImageTarget::Avatar => draft.avatar = Some(image),
-                            ImageTarget::Banner => draft.banner = Some(image),
-                        },
-                        cx,
-                    ),
+                    Ok(edit) => app.open_style_dialog(StyleDialog::ImageEdit(edit), cx),
                     Err(error) => {
                         editor.error = Some(error.into());
                         cx.notify();
@@ -704,8 +723,7 @@ impl DiscordApp {
         let Some(editor) = self.profile_styles.as_ref().filter(|editor| !editor.saving) else {
             return;
         };
-        let (identity, scope_revision, nitro) =
-            (editor.identity.clone(), editor.scope_revision, editor.nitro);
+        let (identity, scope_revision) = (editor.identity.clone(), editor.scope_revision);
         let previous = match target {
             ImageTarget::Avatar => editor.draft.avatar.clone(),
             ImageTarget::Banner => editor.draft.banner.clone(),
@@ -717,11 +735,12 @@ impl DiscordApp {
             }
             return;
         };
+        let preview_px = crate::theme::image_px(STAGE[0] * MAX_ZOOM);
         let request = Tokio::spawn(cx, async move {
             let path = service
                 .load_gif_provider_media(&src, STYLE_IMAGE_LIMIT)
                 .await?;
-            tokio::task::spawn_blocking(move || prepare_style_image(path, target, nitro))
+            tokio::task::spawn_blocking(move || ImageEdit::load(path, target, preview_px))
                 .await
                 .map_err(|error| {
                     log::warn!("Profile GIF preparation task failed: {error}");
@@ -749,13 +768,7 @@ impl DiscordApp {
                     return;
                 }
                 match result {
-                    Ok(image) => app.update_style_draft(
-                        |draft| match target {
-                            ImageTarget::Avatar => draft.avatar = Some(image),
-                            ImageTarget::Banner => draft.banner = Some(image),
-                        },
-                        cx,
-                    ),
+                    Ok(edit) => app.open_style_dialog(StyleDialog::ImageEdit(edit), cx),
                     Err(error) => {
                         editor.error = Some(error.into());
                         cx.notify();
@@ -768,10 +781,12 @@ impl DiscordApp {
     }
 
     pub(crate) fn reset_style_draft(&mut self, cx: &mut Context<Self>) {
+        self.reset_widget_draft();
         if let Some(editor) = &mut self.profile_styles {
             editor.draft = StyleDraft::default();
             editor.error = None;
             editor.scope_revision += 1;
+            self.prune_style_previews(true);
             self.refresh_style_cosmetics(cx);
             cx.notify();
         }
@@ -879,6 +894,7 @@ impl DiscordApp {
                             editor.error = None;
                             editor.scope_revision += 1;
                         }
+                        app.prune_style_previews(true);
                         if app
                             .profile
                             .as_ref()
@@ -1143,11 +1159,23 @@ fn style_error(error: &Error) -> SharedString {
     }
 }
 
+#[cfg(test)]
 fn prepare_style_image(
     path: PathBuf,
     target: ImageTarget,
     nitro: bool,
 ) -> Result<ImageChange, String> {
+    let bytes = read_style_file(&path)?;
+    let data_uri = encode_style_image(&bytes, target, nitro)?;
+    Ok(ImageChange::Upload {
+        preview: path.clone(),
+        path,
+        data_uri: data_uri.into(),
+    })
+}
+
+/// Reads a picked avatar or banner, refusing other formats and anything over the upload limit.
+pub(super) fn read_style_file(path: &Path) -> Result<Vec<u8>, String> {
     let extension = path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -1156,7 +1184,7 @@ fn prepare_style_image(
     if !matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp") {
         return Err("Choose a PNG, JPEG, GIF, or WebP image.".into());
     }
-    let file = std::fs::File::open(&path).map_err(|_| "Could not read the image.".to_owned())?;
+    let file = std::fs::File::open(path).map_err(|_| "Could not read the image.".to_owned())?;
     let metadata = file
         .metadata()
         .map_err(|_| "Could not read the image.".to_owned())?;
@@ -1170,14 +1198,95 @@ fn prepare_style_image(
     if bytes.len() as u64 >= STYLE_IMAGE_LIMIT {
         return Err("Choose an image smaller than 10 MB.".into());
     }
-    let data_uri = encode_style_image(&bytes, target, nitro)?;
-    Ok(ImageChange::Upload {
-        path,
-        data_uri: data_uri.into(),
-    })
+    Ok(bytes)
 }
 
-fn image_limits() -> image::Limits {
+/// Where the image editor's frame sat: the image turned `quarter_turns` clockwise, then
+/// `rect` (`[x, y, width, height]`) cut from the turned image's pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StyleCrop {
+    pub quarter_turns: u8,
+    pub rect: [u32; 4],
+}
+
+impl StyleCrop {
+    /// The largest centered cut of `target`'s shape, which uploads take without the editor.
+    pub(crate) fn centered(width: u32, height: u32, target: ImageTarget) -> Self {
+        let (ratio_width, ratio_height) = target.ratio();
+        let (crop_width, crop_height) =
+            if u64::from(width) * ratio_height > u64::from(height) * ratio_width {
+                (
+                    (u64::from(height) * ratio_width / ratio_height).max(1) as u32,
+                    height,
+                )
+            } else {
+                (
+                    width,
+                    (u64::from(width) * ratio_height / ratio_width).max(1) as u32,
+                )
+            };
+        Self {
+            quarter_turns: 0,
+            rect: [
+                (width - crop_width) / 2,
+                (height - crop_height) / 2,
+                crop_width,
+                crop_height,
+            ],
+        }
+    }
+
+    fn is_identity(&self, width: u32, height: u32) -> bool {
+        self.quarter_turns.is_multiple_of(4) && self.rect == [0, 0, width, height]
+    }
+
+    /// Turns and cuts one frame, then shrinks it to fit `target`'s upload size.
+    fn apply(
+        &self,
+        image: image::RgbaImage,
+        target: ImageTarget,
+        filter: image::imageops::FilterType,
+    ) -> image::RgbaImage {
+        let turned = match self.quarter_turns % 4 {
+            1 => image::imageops::rotate90(&image),
+            2 => image::imageops::rotate180(&image),
+            3 => image::imageops::rotate270(&image),
+            _ => image,
+        };
+        let [x, y, width, height] = self.rect;
+        let x = x.min(turned.width() - 1);
+        let y = y.min(turned.height() - 1);
+        let width = width.clamp(1, turned.width() - x);
+        let height = height.clamp(1, turned.height() - y);
+        let cropped = image::imageops::crop_imm(&turned, x, y, width, height).to_image();
+        let (max_width, max_height) = target.max_size();
+        if width <= max_width && height <= max_height {
+            return cropped;
+        }
+        let scale = (max_width as f32 / width as f32).min(max_height as f32 / height as f32);
+        let scaled = |side: u32| ((side as f32 * scale).round() as u32).max(1);
+        image::imageops::resize(&cropped, scaled(width), scaled(height), filter)
+    }
+}
+
+impl ImageTarget {
+    /// Discord's upload shape: square avatars, 17:6 banners.
+    pub(super) fn ratio(self) -> (u64, u64) {
+        match self {
+            ImageTarget::Avatar => (1, 1),
+            ImageTarget::Banner => (17, 6),
+        }
+    }
+
+    fn max_size(self) -> (u32, u32) {
+        match self {
+            ImageTarget::Avatar => (1024, 1024),
+            ImageTarget::Banner => (2400, 848),
+        }
+    }
+}
+
+pub(super) fn image_limits() -> image::Limits {
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(16_384);
     limits.max_image_height = Some(16_384);
@@ -1209,27 +1318,24 @@ impl Write for StyleGifWriter {
     }
 }
 
-fn webp_style_gif(bytes: &[u8], max_bytes: usize) -> Result<Option<Vec<u8>>, String> {
-    let mut decoder = WebPDecoder::new(Cursor::new(bytes))
-        .map_err(|_| "Could not decode this image.".to_owned())?;
-    if !decoder.has_animation() {
-        return Ok(None);
-    }
-    let mut limits = image_limits();
-    decoder
-        .set_limits(limits.clone())
-        .map_err(|_| "This GIF is too large to process.".to_owned())?;
-    let (width, height) = decoder.dimensions();
-    // WebP's animation iterator does not enforce max_alloc itself.
-    limits
-        .reserve_buffer(width, height, image::ColorType::Rgba8)
-        .map_err(|_| "This GIF is too large to process.".to_owned())?;
-    let repeat = match decoder.loop_count() {
+fn gif_repeat(count: image::metadata::LoopCount) -> Repeat {
+    match count {
         image::metadata::LoopCount::Infinite => Repeat::Infinite,
         image::metadata::LoopCount::Finite(count) => {
             Repeat::Finite(u16::try_from(count.get()).unwrap_or(u16::MAX))
         }
-    };
+    }
+}
+
+/// Re-encodes animation frames as a GIF, cutting each one to `crop` when given. Returns the
+/// GIF and how many frames it holds.
+fn encode_style_gif<'a>(
+    frames: image::Frames<'a>,
+    (width, height): (u32, u32),
+    repeat: Repeat,
+    max_bytes: usize,
+    crop: Option<(StyleCrop, ImageTarget)>,
+) -> Result<(Vec<u8>, usize), String> {
     let mut output = StyleGifWriter {
         bytes: Vec::new(),
         limit: max_bytes,
@@ -1242,7 +1348,7 @@ fn webp_style_gif(bytes: &[u8], max_bytes: usize) -> Result<Option<Vec<u8>>, Str
             .map_err(|_| "Could not convert this GIF.".to_owned())?;
         let mut count = 0;
         let mut pixels = 0u64;
-        for frame in decoder.into_frames() {
+        for frame in frames {
             if count >= 1024 {
                 return Err("This GIF has too many frames.".into());
             }
@@ -1250,8 +1356,21 @@ fn webp_style_gif(bytes: &[u8], max_bytes: usize) -> Result<Option<Vec<u8>>, Str
             if pixels > 128 * 1024 * 1024 {
                 return Err("This GIF is too large to process.".into());
             }
+            let frame = frame.map_err(|_| "Could not decode this image.".to_owned())?;
+            let frame = match crop {
+                Some((crop, target)) => {
+                    let delay = frame.delay();
+                    let buffer = crop.apply(
+                        frame.into_buffer(),
+                        target,
+                        image::imageops::FilterType::Triangle,
+                    );
+                    image::Frame::from_parts(buffer, 0, 0, delay)
+                }
+                None => frame,
+            };
             encoder
-                .encode_frame(frame.map_err(|_| "Could not decode this image.".to_owned())?)
+                .encode_frame(frame)
                 .map_err(|_| "Could not convert this GIF.".to_owned())?;
             count += 1;
         }
@@ -1260,13 +1379,61 @@ fn webp_style_gif(bytes: &[u8], max_bytes: usize) -> Result<Option<Vec<u8>>, Str
     if output.overflowed {
         return Err("This GIF exceeds the 10 MB upload limit after conversion.".into());
     }
-    Ok((encoded? > 1).then_some(output.bytes))
+    Ok((output.bytes, encoded?))
 }
 
-fn encode_style_image(bytes: &[u8], target: ImageTarget, nitro: bool) -> Result<String, String> {
-    if bytes.len() as u64 >= STYLE_IMAGE_LIMIT {
-        return Err("Choose an image smaller than 10 MB.".into());
+fn webp_style_gif(
+    bytes: &[u8],
+    max_bytes: usize,
+    crop: Option<(StyleCrop, ImageTarget)>,
+) -> Result<Option<Vec<u8>>, String> {
+    let mut decoder = WebPDecoder::new(Cursor::new(bytes))
+        .map_err(|_| "Could not decode this image.".to_owned())?;
+    if !decoder.has_animation() {
+        return Ok(None);
     }
+    let mut limits = image_limits();
+    decoder
+        .set_limits(limits.clone())
+        .map_err(|_| "This GIF is too large to process.".to_owned())?;
+    let dimensions = decoder.dimensions();
+    // WebP's animation iterator does not enforce max_alloc itself.
+    limits
+        .reserve_buffer(dimensions.0, dimensions.1, image::ColorType::Rgba8)
+        .map_err(|_| "This GIF is too large to process.".to_owned())?;
+    let repeat = gif_repeat(decoder.loop_count());
+    let (gif, frames) =
+        encode_style_gif(decoder.into_frames(), dimensions, repeat, max_bytes, crop)?;
+    Ok((frames > 1).then_some(gif))
+}
+
+/// A GIF's frames cut to `crop`; uncut GIFs upload as they are.
+fn cropped_style_gif(
+    bytes: &[u8],
+    crop: StyleCrop,
+    target: ImageTarget,
+) -> Result<Vec<u8>, String> {
+    let invalid = || "Could not decode this image.".to_owned();
+    let mut decoder = GifDecoder::new(Cursor::new(bytes)).map_err(|_| invalid())?;
+    let mut limits = image_limits();
+    decoder.set_limits(limits.clone()).map_err(|_| invalid())?;
+    let dimensions = decoder.dimensions();
+    limits
+        .reserve_buffer(dimensions.0, dimensions.1, image::ColorType::Rgba8)
+        .map_err(|_| "This GIF is too large to process.".to_owned())?;
+    let repeat = gif_repeat(decoder.loop_count());
+    let (gif, _) = encode_style_gif(
+        decoder.into_frames(),
+        dimensions,
+        repeat,
+        STYLE_IMAGE_LIMIT as usize,
+        Some((crop, target)),
+    )?;
+    Ok(gif)
+}
+
+/// The first frame of a picked image, which stills upload and the editor shows.
+pub(super) fn decode_style_still(bytes: &[u8]) -> Result<image::DynamicImage, String> {
     let invalid = || "Could not decode this image.".to_owned();
     let format = image::guess_format(bytes).map_err(|_| invalid())?;
     if !matches!(
@@ -1275,66 +1442,89 @@ fn encode_style_image(bytes: &[u8], target: ImageTarget, nitro: bool) -> Result<
     ) {
         return Err("Choose a PNG, JPEG, GIF, or WebP image.".into());
     }
-    if format == ImageFormat::WebP
-        && nitro
-        && let Some(gif) = webp_style_gif(bytes, STYLE_IMAGE_LIMIT as usize)?
-    {
-        return Ok(format!("data:image/gif;base64,{}", STANDARD.encode(gif)));
-    }
     let image = if format == ImageFormat::Gif {
         let mut decoder = GifDecoder::new(Cursor::new(bytes)).map_err(|_| invalid())?;
         decoder.set_limits(image_limits()).map_err(|_| invalid())?;
-        let mut frames = decoder.into_frames();
-        let first = frames.next().ok_or_else(invalid)?.map_err(|_| invalid())?;
-        if nitro && frames.next().transpose().map_err(|_| invalid())?.is_some() {
-            return Ok(format!("data:image/gif;base64,{}", STANDARD.encode(bytes)));
-        }
+        let first = decoder
+            .into_frames()
+            .next()
+            .ok_or_else(invalid)?
+            .map_err(|_| invalid())?;
         image::DynamicImage::ImageRgba8(first.into_buffer())
     } else {
         let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
         reader.limits(image_limits());
         reader.decode().map_err(|_| invalid())?
     };
-    let (width, height) = (image.width(), image.height());
-    if width == 0 || height == 0 {
+    if image.width() == 0 || image.height() == 0 {
         return Err(invalid());
     }
-    let (ratio_width, ratio_height, max_width, max_height) = match target {
-        ImageTarget::Avatar => (1, 1, 1024, 1024),
-        ImageTarget::Banner => (17, 6, 2400, 848),
-    };
-    let (crop_width, crop_height) =
-        if u64::from(width) * ratio_height > u64::from(height) * ratio_width {
-            (
-                (u64::from(height) * ratio_width / ratio_height).max(1) as u32,
-                height,
-            )
-        } else {
-            (
-                width,
-                (u64::from(width) * ratio_height / ratio_width).max(1) as u32,
-            )
+    Ok(image)
+}
+
+fn gif_is_animated(bytes: &[u8]) -> Result<bool, String> {
+    let invalid = || "Could not decode this image.".to_owned();
+    let mut decoder = GifDecoder::new(Cursor::new(bytes)).map_err(|_| invalid())?;
+    decoder.set_limits(image_limits()).map_err(|_| invalid())?;
+    let mut frames = decoder.into_frames();
+    frames.next().ok_or_else(invalid)?.map_err(|_| invalid())?;
+    Ok(frames.next().transpose().map_err(|_| invalid())?.is_some())
+}
+
+#[cfg(test)]
+fn encode_style_image(bytes: &[u8], target: ImageTarget, nitro: bool) -> Result<String, String> {
+    let (extension, encoded) = encode_style_bytes(bytes, target, nitro, None)?;
+    Ok(style_data_uri(extension, &encoded))
+}
+
+/// An encoded upload as the data URI Discord's profile endpoints take.
+pub(super) fn style_data_uri(extension: &str, bytes: &[u8]) -> String {
+    format!("data:image/{extension};base64,{}", STANDARD.encode(bytes))
+}
+
+/// The upload for a picked image: animated GIFs (and animated WebPs, as GIFs) for Nitro,
+/// otherwise a PNG still. `crop` is the editor's frame; without it the image is cut to
+/// `target`'s shape around its center. Returns the file extension and bytes.
+pub(super) fn encode_style_bytes(
+    bytes: &[u8],
+    target: ImageTarget,
+    nitro: bool,
+    crop: Option<StyleCrop>,
+) -> Result<(&'static str, Vec<u8>), String> {
+    if bytes.len() as u64 >= STYLE_IMAGE_LIMIT {
+        return Err("Choose an image smaller than 10 MB.".into());
+    }
+    let format =
+        image::guess_format(bytes).map_err(|_| "Could not decode this image.".to_owned())?;
+    if format == ImageFormat::WebP
+        && nitro
+        && let Some(gif) = webp_style_gif(
+            bytes,
+            STYLE_IMAGE_LIMIT as usize,
+            crop.map(|crop| (crop, target)),
+        )?
+    {
+        return Ok(("gif", gif));
+    }
+    let image = decode_style_still(bytes)?;
+    let (width, height) = (image.width(), image.height());
+    if format == ImageFormat::Gif && nitro && gif_is_animated(bytes)? {
+        return match crop.filter(|crop| !crop.is_identity(width, height)) {
+            Some(crop) => Ok(("gif", cropped_style_gif(bytes, crop, target)?)),
+            None => Ok(("gif", bytes.to_vec())),
         };
-    let cropped = image.crop_imm(
-        (width - crop_width) / 2,
-        (height - crop_height) / 2,
-        crop_width,
-        crop_height,
+    }
+    let crop = crop.unwrap_or_else(|| StyleCrop::centered(width, height, target));
+    let still = crop.apply(
+        image.into_rgba8(),
+        target,
+        image::imageops::FilterType::Lanczos3,
     );
-    let resized = if crop_width > max_width || crop_height > max_height {
-        cropped.resize(max_width, max_height, image::imageops::FilterType::Lanczos3)
-    } else {
-        cropped
-    };
     let mut png = Cursor::new(Vec::new());
-    resized
-        .into_rgba8()
+    still
         .write_to(&mut png, ImageFormat::Png)
         .map_err(|_| "Could not encode the image.".to_owned())?;
-    Ok(format!(
-        "data:image/png;base64,{}",
-        STANDARD.encode(png.into_inner())
-    ))
+    Ok(("png", png.into_inner()))
 }
 
 fn preview_decoration(editor: &StylesEditor) -> Option<Option<model::AvatarDecoration>> {
@@ -1897,7 +2087,7 @@ mod tests {
             out.extend_from_slice(tag);
             out.extend_from_slice(&u32::try_from(bytes.len()).unwrap().to_le_bytes());
             out.extend_from_slice(bytes);
-            if bytes.len() % 2 != 0 {
+            if !bytes.len().is_multiple_of(2) {
                 out.push(0);
             }
         }
@@ -1951,16 +2141,16 @@ mod tests {
     fn profile_styles_webp_conversion_rejects_oversized_output_and_invalid_input() {
         let bytes = animated_webp_bytes();
         assert_eq!(
-            webp_style_gif(&bytes, 32).unwrap_err(),
+            webp_style_gif(&bytes, 32, None).unwrap_err(),
             "This GIF exceeds the 10 MB upload limit after conversion."
         );
-        assert!(webp_style_gif(b"not a webp", STYLE_IMAGE_LIMIT as usize).is_err());
+        assert!(webp_style_gif(b"not a webp", STYLE_IMAGE_LIMIT as usize, None).is_err());
         let mut still = Cursor::new(Vec::new());
         image::RgbaImage::from_pixel(2, 2, image::Rgba([1, 2, 3, 255]))
             .write_to(&mut still, ImageFormat::WebP)
             .unwrap();
         assert!(
-            webp_style_gif(&still.into_inner(), STYLE_IMAGE_LIMIT as usize)
+            webp_style_gif(&still.into_inner(), STYLE_IMAGE_LIMIT as usize, None)
                 .unwrap()
                 .is_none()
         );
@@ -2005,6 +2195,7 @@ mod tests {
         let ImageChange::Upload {
             path: uploaded_path,
             data_uri,
+            ..
         } = image.unwrap()
         else {
             panic!("expected an upload");

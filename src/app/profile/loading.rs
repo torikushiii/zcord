@@ -281,7 +281,6 @@ impl DiscordApp {
         saved_scope: styles::StyleScope,
         cx: &mut Context<Self>,
     ) {
-        self.restore_style_profile();
         let Some(card) = &mut self.profile else {
             return;
         };
@@ -290,15 +289,27 @@ impl DiscordApp {
         } else {
             card.scope_snapshots.remove(&saved_scope.guild_id());
         }
-        card.replace_scope(card.guild_id);
-        self.capture_saved_style_profile();
-        self.rebuild_style_preview();
+        // A profile fetched before a running widget save lands would bring back the old widgets.
+        if let Some(widgets) = self
+            .profile_styles
+            .as_mut()
+            .map(|editor| &mut editor.ui.widgets)
+            .filter(|widgets| widgets.saving)
+        {
+            widgets.refresh_after_save = true;
+            return;
+        }
+        // Refresh in place: a style save leaves the board, details and cosmetics intact, and
+        // the card keeps showing the saved preview until `profile_loaded` swaps in the response.
         self.request_profile(ProfileKind::Modal, true, cx);
-        self.prefetch_profile_details(false, cx);
-        self.start_profile_game_timer(cx);
     }
 
-    fn request_profile(&mut self, kind: ProfileKind, refresh: bool, cx: &mut Context<Self>) {
+    pub(super) fn request_profile(
+        &mut self,
+        kind: ProfileKind,
+        refresh: bool,
+        cx: &mut Context<Self>,
+    ) {
         let channel_id = self.selected_channel_id;
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;
