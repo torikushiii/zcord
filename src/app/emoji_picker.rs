@@ -510,7 +510,9 @@ pub(crate) fn emoji_image(choice: &EmojiChoice, size: f32, animate: bool, cx: &A
             cx,
         )
         .map(Into::into),
-        EmojiChoice::Unicode { emoji, .. } => emoji::image(emoji).map(Into::into),
+        EmojiChoice::Unicode { emoji, .. } => {
+            emoji::image(emoji, theme::image_px(size)).map(Into::into)
+        }
     };
     div()
         .size(rpx(size))
@@ -677,7 +679,7 @@ fn sidebar(picker: &EmojiPicker, cx: &App, interactive: bool) -> impl IntoElemen
                 SectionIcon::Unicode(emoji) => div()
                     .size(rpx(22.))
                     .children(
-                        emoji::image(emoji)
+                        emoji::image(emoji, theme::image_px(22.))
                             .map(|image| img(image).size_full().object_fit(ObjectFit::Contain)),
                     )
                     .into_any_element(),

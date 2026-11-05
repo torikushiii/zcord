@@ -459,7 +459,9 @@ fn status_bubble(
 
 fn status_emoji_source(emoji: &StatusEmoji, size: f32, cx: &App) -> Option<ImageSource> {
     match emoji {
-        StatusEmoji::Unicode(sequence) => crate::text::emoji::image(sequence).map(Into::into),
+        StatusEmoji::Unicode(sequence) => {
+            crate::text::emoji::image(sequence, theme::image_px(size)).map(Into::into)
+        }
         StatusEmoji::Custom { id, animated, .. } => images::resolve(
             &ImageSpec::Emoji {
                 id: *id,

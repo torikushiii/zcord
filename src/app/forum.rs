@@ -1019,7 +1019,7 @@ fn reaction_pill(reaction: &Reaction, cx: &App) -> impl IntoElement {
 
 fn tag_emoji(emoji: &StatusEmoji, size: f32, cx: &App) -> Option<AnyElement> {
     let source: ImageSource = match emoji {
-        StatusEmoji::Unicode(sequence) => emoji::image(sequence)?.into(),
+        StatusEmoji::Unicode(sequence) => emoji::image(sequence, theme::image_px(size))?.into(),
         StatusEmoji::Custom { id, animated, .. } => images::resolve(
             &ImageSpec::Emoji {
                 id: *id,

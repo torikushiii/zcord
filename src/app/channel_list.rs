@@ -1049,7 +1049,9 @@ fn account_subtitle(user: &User, hovered: bool, animate: bool, cx: &App) -> AnyE
         Some(status) => {
             let emoji = status.emoji.as_ref().and_then(|emoji| {
                 let source: ImageSource = match emoji {
-                    StatusEmoji::Unicode(sequence) => emoji::image(sequence)?.into(),
+                    StatusEmoji::Unicode(sequence) => {
+                        emoji::image(sequence, theme::image_px(SUBTITLE_HEIGHT))?.into()
+                    }
                     StatusEmoji::Custom { id, .. } => images::resolve(
                         &ImageSpec::Emoji {
                             id: *id,

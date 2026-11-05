@@ -1380,7 +1380,7 @@ pub(crate) fn emoji_element(emoji: &ReactionEmoji, size: f32, cx: &App) -> AnyEl
                 .children(child)
                 .into_any_element()
         }
-        None => match emoji::image(&emoji.name) {
+        None => match emoji::image(&emoji.name, theme::image_px(size)) {
             Some(image) => img(image)
                 .size(rpx(size))
                 .flex_none()
