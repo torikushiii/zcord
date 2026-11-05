@@ -11,15 +11,30 @@ use tokio::{sync::watch, task::JoinHandle};
 
 const INTERVAL: Duration = Duration::from_secs(15);
 
-pub fn start(
-    enabled: tokio::sync::watch::Receiver<bool>,
-) -> tokio::sync::watch::Receiver<Option<serde_json::Value>> {
+/// What to publish as the user's activity, and the game detected running, if any. An app
+/// setting activity over RPC isn't a running game, so Discord's account panel leaves it out.
+#[derive(Clone, PartialEq)]
+pub struct GameActivity {
+    pub activity: Value,
+    pub running: Option<RunningGame>,
+}
+
+#[derive(Clone, PartialEq)]
+pub struct RunningGame {
+    pub name: String,
+    pub application_id: u64,
+}
+
+pub fn start(enabled: watch::Receiver<bool>) -> watch::Receiver<Option<GameActivity>> {
     let (output, receiver) = watch::channel(None);
     tokio::spawn(supervise(enabled, output));
     receiver
 }
 
-async fn supervise(mut enabled: watch::Receiver<bool>, output: watch::Sender<Option<Value>>) {
+async fn supervise(
+    mut enabled: watch::Receiver<bool>,
+    output: watch::Sender<Option<GameActivity>>,
+) {
     loop {
         if !*enabled.borrow() {
             output.send_replace(None);
@@ -41,7 +56,16 @@ async fn supervise(mut enabled: watch::Receiver<bool>, output: watch::Sender<Opt
             let rpc = tasks.rpc.borrow().clone();
             let detected = tasks.detected.borrow().clone();
             let catalog = tasks.catalog.borrow().clone();
-            let desired = compose(rpc.as_ref(), detected.as_ref(), catalog.as_deref());
+            let desired =
+                compose(rpc.as_ref(), detected.as_ref(), catalog.as_deref()).map(|activity| {
+                    GameActivity {
+                        activity,
+                        running: detected.as_ref().map(|game| RunningGame {
+                            name: game.name.clone(),
+                            application_id: game.application_id,
+                        }),
+                    }
+                });
             if throttle.offer(desired, Instant::now()) {
                 output.send_replace(throttle.shown().cloned());
             }
@@ -179,13 +203,13 @@ fn with_name(
     activity
 }
 
-struct Throttle {
+struct Throttle<T> {
     last: Option<Instant>,
-    shown: Option<Value>,
-    pending: Option<Value>,
+    shown: Option<T>,
+    pending: Option<T>,
 }
 
-impl Throttle {
+impl<T: PartialEq> Throttle<T> {
     fn new() -> Self {
         Self {
             last: None,
@@ -194,11 +218,11 @@ impl Throttle {
         }
     }
 
-    fn shown(&self) -> Option<&Value> {
+    fn shown(&self) -> Option<&T> {
         self.shown.as_ref()
     }
 
-    fn offer(&mut self, next: Option<Value>, now: Instant) -> bool {
+    fn offer(&mut self, next: Option<T>, now: Instant) -> bool {
         if self.shown == next && self.pending.is_none() {
             return false;
         }

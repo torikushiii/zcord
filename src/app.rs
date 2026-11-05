@@ -70,7 +70,6 @@ use gpui::{prelude::*, *};
 use gpui_component::input::{InputEvent, RopeExt, TextareaState};
 use gpui_component::slider::SliderState;
 use gpui_tokio::Tokio;
-use serde_json::Value;
 use tokio::sync::watch;
 
 use crate::{
@@ -293,7 +292,7 @@ pub struct DiscordApp {
     session: Option<Session>,
     game_enabled: watch::Sender<bool>,
     game_generation: u64,
-    current_activity: Option<Value>,
+    pub(crate) current_game_application: Option<u64>,
     pub(crate) current_game: Option<String>,
     pending_token: Option<String>,
     loading: HashSet<u64>,
@@ -479,7 +478,7 @@ impl DiscordApp {
             session: None,
             game_enabled,
             game_generation: 0,
-            current_activity: None,
+            current_game_application: None,
             current_game: None,
             self_status: profile::StatusChange::default(),
             pending_token: None,
@@ -572,16 +571,13 @@ impl DiscordApp {
                         Err(_) => break,
                     };
                 let resolved = match (value, session) {
-                    (Some(activity), Some(session)) => {
-                        let fallback = activity.clone();
-                        Some(
-                            runtime
-                                .spawn(
-                                    async move { session.resolve_activity_images(activity).await },
-                                )
-                                .await
-                                .unwrap_or(fallback),
-                        )
+                    (Some(game), Some(session)) => {
+                        let activity = game.activity.clone();
+                        let activity = runtime
+                            .spawn(async move { session.resolve_activity_images(activity).await })
+                            .await
+                            .unwrap_or(game.activity);
+                        Some(crate::games::GameActivity { activity, ..game })
                     }
                     (value, _) => value,
                 };
@@ -716,31 +712,24 @@ impl DiscordApp {
         app
     }
 
-    fn apply_game_activity(&mut self, activity: Option<Value>, cx: &mut Context<Self>) {
-        self.current_game = activity
-            .as_ref()
-            .and_then(|activity| activity.get("name"))
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        self.current_activity = activity.clone();
+    fn apply_game_activity(
+        &mut self,
+        game: Option<crate::games::GameActivity>,
+        cx: &mut Context<Self>,
+    ) {
+        let (activity, running) =
+            game.map_or((None, None), |game| (Some(game.activity), game.running));
+        self.current_game_application = running.as_ref().map(|game| game.application_id);
+        self.current_game = running.map(|game| game.name);
         if let Some(session) = &self.session {
             session.set_local_activity(activity);
         }
-        if let Some(application_id) = self.current_game_application() {
+        if let Some(application_id) = self.current_game_application {
             self.load_game_apps(vec![application_id], cx);
         }
         self.clear_stale_sharing_card();
         self.views.channel_list.update(cx, |_, cx| cx.notify());
         cx.notify();
-    }
-
-    pub(crate) fn current_game_application(&self) -> Option<u64> {
-        self.current_activity
-            .as_ref()?
-            .get("application_id")?
-            .as_str()?
-            .parse()
-            .ok()
     }
 
     pub(crate) fn update_game_activity(&mut self) {
@@ -761,7 +750,7 @@ impl DiscordApp {
         });
         if was_enabled && !enabled {
             self.game_generation = self.game_generation.wrapping_add(1);
-            self.current_activity = None;
+            self.current_game_application = None;
             self.current_game = None;
             if let Some(session) = &self.session {
                 session.set_local_activity(None);
