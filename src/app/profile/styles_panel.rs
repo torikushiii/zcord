@@ -1617,25 +1617,14 @@ pub(super) fn show_styles_tab(
         .cursor_pointer()
         .hover(|style| style.opacity(0.85))
         .on_click(on_app(app, |app, cx| app.toggle_styles_panel_animated(cx)))
-        .tooltip(|_, cx| cx.new(|_| StylesTooltip).into())
         .child(theme::icon("paintbrush", 16., theme::bright()))
+        .child(theme::hover_tooltip("styles-show-tip", "Show Styles"))
         .with_animation(
             ("styles-show-tab", toggles),
             Animation::new(PANEL_SLIDE).with_easing(ease_out_quint()),
             |tab, delta| tab.opacity(delta),
         )
         .into_any_element()
-}
-
-struct StylesTooltip;
-
-impl Render for StylesTooltip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        theme::tooltip_bubble()
-            .text_size(rpx(14.))
-            .font_weight(FontWeight::SEMIBOLD)
-            .child("Show Styles")
-    }
 }
 
 /// "Don't forget to save your changes!" under the dialog while the styles or widgets have
