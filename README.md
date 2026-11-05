@@ -119,9 +119,11 @@ Settings are kept in `%APPDATA%\zcord\settings.json`, and downloaded images are 
 
 - `src/main.rs`: startup, keyboard shortcuts, logging
 - `src/app.rs`, `src/app/`: the root view and every UI panel
-- `src/discord.rs`, `src/discord/`: the Discord protocol, including the gateway (zlib-stream,
-  heartbeat, resume), REST with rate limits, QR login (`remote_auth.rs`), payload models,
-  permissions and the settings protobuf
+- `crates/discord/` (`zcord-discord`): the Discord protocol, with no UI: the gateway
+  (zlib-stream, heartbeat, resume), REST with rate limits, QR login (`remote_auth.rs`), payload
+  models, permissions, the settings protobuf, and voice and Go Live
+- `crates/convert/` (`zcord-convert`): pixel conversion for screen sharing, its own crate so dev
+  builds can optimize it
 - `src/store.rs`, `src/store/`: the view model built from gateway events
 - `src/media/`: image cache, animated images, and video playback
 - `src/text/`: markdown, emoji, and composer tokens

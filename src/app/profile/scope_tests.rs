@@ -8,8 +8,10 @@ use super::{ProfileCard, ProfileOrigin, ProfileTheme, Tab};
 use crate::{discord::model, media::images::ImageSpec, store::Store};
 
 fn server_profile() -> Arc<model::Profile> {
-    let mut value: serde_json::Value =
-        serde_json::from_str(include_str!("../../discord/fixtures/profile_modal.json")).unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../crates/discord/src/fixtures/profile_modal.json"
+    ))
+    .unwrap();
     value["user"]["global_name"] = json!("Main name");
     value["guild_member"]["nick"] = json!("Server name");
     value["guild_member"]["avatar"] = json!("server-avatar");

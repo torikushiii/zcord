@@ -1,6 +1,7 @@
 use super::*;
 use crate::app::attachments::UploadButton;
 use crate::app::expression_info::{Expression, HoverOwner};
+use crate::store::AttachmentExt as _;
 
 const MEDIA_MAX: (f32, f32) = (550., 350.);
 

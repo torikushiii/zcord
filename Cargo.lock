@@ -10796,11 +10796,45 @@ dependencies = [
  "windows-core 0.62.2",
  "winresource",
  "zcord-convert",
+ "zcord-discord",
 ]
 
 [[package]]
 name = "zcord-convert"
 version = "0.1.0"
+
+[[package]]
+name = "zcord-discord"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "base64 0.22.1",
+ "chacha20poly1305",
+ "chrono",
+ "cpal",
+ "davey",
+ "flate2",
+ "futures",
+ "iana-time-zone",
+ "image",
+ "log",
+ "nnnoiseless",
+ "opus",
+ "qrcode",
+ "rand 0.8.8",
+ "reqwest",
+ "rsa",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sysinfo",
+ "tokio",
+ "tokio-tungstenite",
+ "windows 0.62.2",
+ "windows-capture 2.0.1",
+ "windows-core 0.62.2",
+ "zcord-convert",
+]
 
 [[package]]
 name = "zed-font-kit"

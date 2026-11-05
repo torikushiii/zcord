@@ -595,12 +595,21 @@ pub enum MemberRow {
     Member { user_id: u64 },
 }
 
-impl Attachment {
-    pub fn spoiler(&self) -> bool {
+/// What the app reads off an attachment: spoilers, and whether it shows as a video or image.
+pub trait AttachmentExt {
+    fn spoiler(&self) -> bool;
+    fn is_video(&self) -> bool;
+    fn video_url(&self) -> Option<String>;
+    fn video_poster_spec(&self) -> Option<ImageSpec>;
+    fn image_spec(&self) -> Option<ImageSpec>;
+}
+
+impl AttachmentExt for Attachment {
+    fn spoiler(&self) -> bool {
         self.flags & ATTACHMENT_IS_SPOILER != 0 || self.filename.starts_with("SPOILER_")
     }
 
-    pub fn is_video(&self) -> bool {
+    fn is_video(&self) -> bool {
         let video_type = self
             .content_type
             .as_deref()
@@ -620,7 +629,7 @@ impl Attachment {
             && self.height.is_some_and(|height| height > 0)
     }
 
-    pub fn video_url(&self) -> Option<String> {
+    fn video_url(&self) -> Option<String> {
         if !self.is_video() {
             return None;
         }
@@ -628,7 +637,7 @@ impl Attachment {
             .or_else(|| crate::media::images::trusted_video_url(&self.url))
     }
 
-    pub fn video_poster_spec(&self) -> Option<ImageSpec> {
+    fn video_poster_spec(&self) -> Option<ImageSpec> {
         if !self.is_video() || self.proxy_url.is_empty() {
             return None;
         }
@@ -640,7 +649,7 @@ impl Attachment {
         })
     }
 
-    pub fn image_spec(&self) -> Option<ImageSpec> {
+    fn image_spec(&self) -> Option<ImageSpec> {
         let image_type = self
             .content_type
             .as_deref()

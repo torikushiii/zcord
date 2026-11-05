@@ -7,6 +7,7 @@ license = "GPL-3.0-only"
 
 [dependencies]
 zcord-convert = { path = "crates/convert" }
+zcord-discord = { path = "crates/discord" }
 gpui = { git = "https://github.com/zeronsh/zui", rev = "361ff20b919fdfb80199ee6d9aed725300cb7d54" }
 gpui_platform = { git = "https://github.com/zeronsh/zui", rev = "361ff20b919fdfb80199ee6d9aed725300cb7d54", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 gpui_tokio = { git = "https://github.com/zeronsh/zui", rev = "361ff20b919fdfb80199ee6d9aed725300cb7d54" }
@@ -76,6 +77,9 @@ windows = { version = "0.62.2", features = [
     "Win32_Security",
 ] }
 
+[workspace]
+members = ["crates/convert", "crates/discord"]
+
 [profile.dev]
 debug = "line-tables-only"
 
@@ -101,6 +105,7 @@ codegen-units = 1
 winresource = "0.1"
 
 [dev-dependencies]
+zcord-discord = { path = "crates/discord", features = ["test-fixtures"] }
 gpui = { git = "https://github.com/zeronsh/zui", rev = "361ff20b919fdfb80199ee6d9aed725300cb7d54", features = ["test-support"] }
 
 [patch.crates-io]

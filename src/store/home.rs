@@ -579,7 +579,7 @@ mod tests {
     use serde_json::json;
 
     fn ready() -> model::Ready {
-        serde_json::from_str(include_str!("../discord/fixtures/home.json")).unwrap()
+        serde_json::from_str(include_str!("../../crates/discord/src/fixtures/home.json")).unwrap()
     }
 
     fn store() -> Store {

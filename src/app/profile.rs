@@ -950,7 +950,7 @@ mod tests {
     #[test]
     fn profile_effect_intro_plays_once_and_only_the_loop_restarts() {
         let products: Vec<model::CollectibleProduct> = serde_json::from_str(include_str!(
-            "../discord/fixtures/collectibles_products.json"
+            "../../crates/discord/src/fixtures/collectibles_products.json"
         ))
         .unwrap();
         let effect = products.iter().find(|product| product.kind == 1).unwrap();
@@ -1167,7 +1167,10 @@ mod tests {
     }
 
     fn profile() -> model::Profile {
-        serde_json::from_str(include_str!("../discord/fixtures/profile_modal.json")).unwrap()
+        serde_json::from_str(include_str!(
+            "../../crates/discord/src/fixtures/profile_modal.json"
+        ))
+        .unwrap()
     }
 
     #[test]
@@ -1193,7 +1196,9 @@ mod tests {
     #[test]
     fn offline_user_keeps_cosmetics_and_theme_after_profile_loading() {
         let profile = profile();
-        let ready = serde_json::from_str(include_str!("../discord/fixtures/ready.json")).unwrap();
+        let ready =
+            serde_json::from_str(include_str!("../../crates/discord/src/fixtures/ready.json"))
+                .unwrap();
         let mut store = crate::store::Store::from_ready(ready);
         store.absorb_profile(Some(1191168960364544011), &profile);
         let user = store.user(profile.user.user.id).unwrap();

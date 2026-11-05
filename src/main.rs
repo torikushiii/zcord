@@ -3,7 +3,7 @@
 mod app;
 mod assets;
 mod credentials;
-mod discord;
+use zcord_discord as discord;
 mod fonts;
 mod games;
 mod media;
@@ -25,6 +25,7 @@ use gpui_component::Root;
 actions!(zcord, [ZoomIn, ZoomOut, ResetZoom]);
 
 fn main() {
+    discord::set_identity_source(settings::discord_identity);
     env_logger::Builder::from_default_env()
         .filter_module("tungstenite", log::LevelFilter::Off)
         .filter_module("tokio_tungstenite", log::LevelFilter::Off)

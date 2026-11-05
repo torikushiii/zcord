@@ -2,8 +2,10 @@ use super::*;
 
 #[test]
 fn voice_channels_follow_text_channels_within_a_category() {
-    let mut payload: serde_json::Value =
-        serde_json::from_str(include_str!("../../discord/fixtures/ready.json")).unwrap();
+    let mut payload: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../crates/discord/src/fixtures/ready.json"
+    ))
+    .unwrap();
     let guild = &mut payload["guilds"][0];
     let owner = guild["properties"]["owner_id"].clone();
     guild["channels"] = json!([
@@ -42,8 +44,10 @@ fn voice_channels_follow_text_channels_within_a_category() {
 
 #[test]
 fn guild_banner_comes_from_ready_and_updates_and_clears() {
-    let mut payload: serde_json::Value =
-        serde_json::from_str(include_str!("../../discord/fixtures/ready.json")).unwrap();
+    let mut payload: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../crates/discord/src/fixtures/ready.json"
+    ))
+    .unwrap();
     payload["guilds"][0]["properties"]["banner"] = json!("a_ready_banner");
     let ready: model::Ready = serde_json::from_value(payload).unwrap();
     let guild_id = ready.guilds[0].id;

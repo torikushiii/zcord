@@ -6,8 +6,10 @@ const NOW: u64 = 1_800_000_000_000;
 const AFTER_2030: u64 = 1_900_000_000_000;
 
 fn ready_value() -> Value {
-    let mut value: Value =
-        serde_json::from_str(include_str!("../../discord/fixtures/ready.json")).unwrap();
+    let mut value: Value = serde_json::from_str(include_str!(
+        "../../../crates/discord/src/fixtures/ready.json"
+    ))
+    .unwrap();
     let guild = &mut value["guilds"][0];
     guild["members"] = json!([
         {"user":{"id":"1","username":"owner","global_name":"Local Owner"},"roles":["201"]}

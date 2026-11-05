@@ -38,8 +38,10 @@ fn confirmed_self_status_maps_all_choices_without_changing_custom_status_or_game
 #[test]
 fn rail_folders_ready_join_delete_and_settings_updates() {
     use base64::{Engine, engine::general_purpose::STANDARD};
-    let mut payload: serde_json::Value =
-        serde_json::from_str(include_str!("../../discord/fixtures/ready.json")).unwrap();
+    let mut payload: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../crates/discord/src/fixtures/ready.json"
+    ))
+    .unwrap();
     payload["user_settings_proto"] = settings_fixtures::fixture(true).into();
     let mut ready: model::Ready = serde_json::from_value(payload).unwrap();
     ready

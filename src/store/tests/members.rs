@@ -799,8 +799,10 @@ fn decorations_survive_partial_authors_and_guild_nameplates_override() {
 #[test]
 fn offline_profile_applies_server_cosmetics_without_replacing_global_ones() {
     let mut store = Store::from_ready(ready());
-    let mut value: serde_json::Value =
-        serde_json::from_str(include_str!("../../discord/fixtures/profile_modal.json")).unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../crates/discord/src/fixtures/profile_modal.json"
+    ))
+    .unwrap();
     value["guild_member"]["nick"] = json!("Server nickname");
     value["guild_member"]["avatar"] = json!("server-avatar");
     value["guild_member"]["avatar_decoration_data"] = json!({"asset": "a_server", "sku_id": "7"});
@@ -860,8 +862,10 @@ fn offline_profile_applies_server_cosmetics_without_replacing_global_ones() {
 #[test]
 fn profile_retains_nested_user_cosmetics_when_the_top_level_user_omits_them() {
     let mut store = Store::from_ready(ready());
-    let mut value: serde_json::Value =
-        serde_json::from_str(include_str!("../../discord/fixtures/profile_modal.json")).unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../crates/discord/src/fixtures/profile_modal.json"
+    ))
+    .unwrap();
     for key in [
         "avatar_decoration_data",
         "collectibles",

@@ -27,12 +27,15 @@ mod voice;
 mod webhooks;
 
 pub(super) fn ready() -> model::Ready {
-    serde_json::from_str(include_str!("../discord/fixtures/ready.json")).unwrap()
+    serde_json::from_str(include_str!("../../crates/discord/src/fixtures/ready.json")).unwrap()
 }
 
 pub(super) fn messages() -> Vec<model::Message> {
     model::parse_entries(
-        serde_json::from_str(include_str!("../discord/fixtures/messages.json")).unwrap(),
+        serde_json::from_str(include_str!(
+            "../../crates/discord/src/fixtures/messages.json"
+        ))
+        .unwrap(),
     )
 }
 
@@ -69,7 +72,7 @@ pub(super) fn forum_ready(
     sort: Option<u8>,
 ) -> model::Ready {
     let mut payload: serde_json::Value =
-        serde_json::from_str(include_str!("../discord/fixtures/ready.json")).unwrap();
+        serde_json::from_str(include_str!("../../crates/discord/src/fixtures/ready.json")).unwrap();
     let guild = &mut payload["guilds"][0];
     guild["roles"][1]["permissions"] = json!("274877910016");
     let channels = guild["channels"].as_array_mut().unwrap();
@@ -96,8 +99,10 @@ pub(super) fn forum_ready(
 }
 
 pub(super) fn social_fixture(key: &str) -> serde_json::Value {
-    serde_json::from_str::<serde_json::Value>(include_str!("../discord/fixtures/social.json"))
-        .unwrap()[key]
+    serde_json::from_str::<serde_json::Value>(include_str!(
+        "../../crates/discord/src/fixtures/social.json"
+    ))
+    .unwrap()[key]
         .clone()
 }
 

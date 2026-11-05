@@ -572,7 +572,9 @@ mod tests {
 
     #[test]
     fn thread_settings_merge_into_the_current_member() {
-        let ready = serde_json::from_str(include_str!("../discord/fixtures/ready.json")).unwrap();
+        let ready =
+            serde_json::from_str(include_str!("../../crates/discord/src/fixtures/ready.json"))
+                .unwrap();
         let mut store = Store::from_ready(ready);
         let thread: model::Channel = serde_json::from_value(serde_json::json!({
             "id": "2010",
