@@ -33,6 +33,7 @@ mod login;
 mod member_list;
 mod members;
 pub(crate) mod mentions;
+mod menu;
 mod message_body;
 mod notifications;
 mod profile;
@@ -237,6 +238,7 @@ pub struct DiscordApp {
     pub(crate) hovered_message: Option<u64>,
     pub(crate) hovered_actions: Option<u64>,
     pub(in crate::app) message_menu: Option<chat::MessageMenu>,
+    pub(in crate::app) composer_menu: Option<chat::ComposerMenu>,
     pub(crate) shift_held: bool,
     pub(in crate::app) channel_popout: Option<chat::ChannelPopout>,
     pub(in crate::app) popout_closed: Option<(chat::PopoutKind, Instant)>,
@@ -441,6 +443,7 @@ impl DiscordApp {
             hovered_message: None,
             hovered_actions: None,
             message_menu: None,
+            composer_menu: None,
             shift_held: false,
             channel_popout: None,
             popout_closed: None,

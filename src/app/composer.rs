@@ -247,6 +247,7 @@ impl DiscordApp {
             || self.close_search(window, cx)
             || self.close_expression_info(cx)
             || self.close_stream_menu(cx)
+            || self.close_composer_menu(cx)
             || self.close_share_picker(cx)
         {
             return;

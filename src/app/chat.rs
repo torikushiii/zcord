@@ -28,6 +28,7 @@ use crate::{
 mod actions;
 mod bars;
 mod composer;
+mod composer_menu;
 mod dialog;
 mod media;
 mod message;
@@ -40,6 +41,8 @@ use crate::app::invite_card;
 pub(super) use actions::{MessageMenu, message_menu};
 use bars::{is_detached, jump_missing_notice, new_messages_bar, older_messages_bar};
 pub(crate) use composer::{TEXTAREA_BUILTIN_INSET_X, TEXTAREA_BUILTIN_INSET_Y, composer};
+pub(in crate::app) use composer_menu::render as composer_menu;
+pub(super) use composer_menu::{ComposerMenu, ComposerTarget};
 pub(super) use dialog::delete_dialog;
 pub(in crate::app) use media::media_limit;
 pub(super) use media::{file_size, with_media_limit};

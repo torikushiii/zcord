@@ -4,10 +4,13 @@ use gpui::{prelude::*, *};
 
 use super::{
     Menu, MenuKind, Sharing,
-    stream_quality::{self, LOCKED, NITRO_PINK, checkbox, divider, panel, radio, row},
+    stream_quality::{self, LOCKED, NITRO_PINK},
 };
 use crate::{
-    app::DiscordApp,
+    app::{
+        DiscordApp,
+        menu::{checkbox, divider, panel, radio, row},
+    },
     discord::StreamQuality,
     theme::{self, rpx},
 };

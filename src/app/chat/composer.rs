@@ -23,6 +23,7 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
     let joined_top = app.reply.is_some() || !staged.is_empty();
     let paste = app.entity.clone();
     let composer_input = app.composer.clone();
+    let send_button = crate::settings::get(cx).composer_send_button;
     div()
         .relative()
         .px_2()
@@ -75,6 +76,18 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 .bg(rgb(theme::elevated()))
                 .border_1()
                 .border_color(rgba(theme::border()))
+                .on_mouse_down(MouseButton::Right, {
+                    let entity = app.entity.clone();
+                    move |event, _, cx| {
+                        cx.stop_propagation();
+                        let position = event.position;
+                        entity
+                            .update(cx, |app, cx| {
+                                app.open_composer_menu(ComposerTarget::Main, position, cx)
+                            })
+                            .ok();
+                    }
+                })
                 .when(app.editing.is_none(), |this| {
                     this.children(mentions::suggestions(app, cx))
                         .children(emoji_picker::suggestions(app, cx))
@@ -177,7 +190,15 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                                         .ok();
                                 },
                             )
-                        }),
+                        })
+                        .children(send_button.then(|| {
+                            let entity = app.entity.clone();
+                            send_icon("send", can_send).on_click(move |_, window, cx| {
+                                entity
+                                    .update(cx, |app, cx| app.send_message(window, cx))
+                                    .ok();
+                            })
+                        })),
                 )
                 .when(remaining < 200, |this| {
                     this.child(
@@ -196,6 +217,17 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 }),
         )
         .children(typing_indicator(app))
+}
+
+/// The Send Message Button, shown when the composer's right-click menu turns it on.
+pub(super) fn send_icon(key: &'static str, enabled: bool) -> Stateful<Div> {
+    theme::icon_button(key, "send", 24., theme::muted())
+        .relative()
+        .when(!enabled, |this| this.opacity(0.5))
+        .child(theme::hover_tooltip(
+            SharedString::from(format!("{key}-tip")),
+            "Send Message",
+        ))
 }
 
 /// Paints custom emoji over their invisible composer tokens (see `composer_tokens`).

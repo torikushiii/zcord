@@ -437,6 +437,7 @@ impl Render for OverlaysView {
             .children(super::sticker_picker::render(app, window, cx))
             .children(voice::menu(app, cx))
             .children(chat::message_menu(app, cx))
+            .children(chat::composer_menu(app, cx))
             .children(super::dm_menu::menu(app))
             .children(super::dm_menu::dialog(app, cx))
             .children(super::guild_menu::menu(app))
