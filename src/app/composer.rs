@@ -246,6 +246,7 @@ impl DiscordApp {
             || self.close_channel_popout(cx)
             || self.close_search(window, cx)
             || self.close_expression_info(cx)
+            || self.close_stream_menu(cx)
             || self.close_share_picker(cx)
         {
             return;

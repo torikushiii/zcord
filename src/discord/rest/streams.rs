@@ -16,7 +16,25 @@ fn parse_preview(bytes: &[u8]) -> Result<String, Error> {
         .map_err(|_| Error::Decode)
 }
 
+fn upload_preview(client: &Client, stream_key: &str, thumbnail: &str) -> RequestBuilder {
+    client
+        .post(stream_preview_url(stream_key))
+        .json(&serde_json::json!({"thumbnail": thumbnail}))
+}
+
 impl Rest {
+    /// Sets the still Discord shows of this account's live stream; `thumbnail` is a JPEG
+    /// data URI.
+    pub async fn upload_stream_preview(
+        &self,
+        stream_key: &str,
+        thumbnail: &str,
+    ) -> Result<(), Error> {
+        self.send(|| upload_preview(&self.client, stream_key, thumbnail))
+            .await?;
+        Ok(())
+    }
+
     pub async fn stream_preview(&self, stream_key: &str) -> Result<String, Error> {
         let url = stream_preview_url(stream_key);
         let response = self.send(|| self.client.get(&url)).await?;

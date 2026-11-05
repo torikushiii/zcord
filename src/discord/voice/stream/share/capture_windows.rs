@@ -102,7 +102,6 @@ pub(crate) fn sources() -> Vec<ScreenSource> {
 struct Flags {
     frames: SyncSender<RawFrame>,
     stop: Arc<AtomicBool>,
-    keyframe: Arc<AtomicBool>,
     next_frame: Instant,
     interval: Duration,
 }
@@ -170,19 +169,14 @@ impl GraphicsCaptureApiHandler for Handler {
         for row in source[..source_len].chunks_exact(stride) {
             data.extend_from_slice(&row[..row_bytes]);
         }
-        if self
-            .0
-            .frames
-            .try_send(RawFrame {
-                width,
-                height,
-                stride: row_bytes,
-                data,
-            })
-            .is_err()
-        {
-            self.0.keyframe.store(true, Ordering::Release);
-        }
+        // A full channel means the encoder is still busy; skipping a frame before it is encoded
+        // leaves the encoded stream intact, so it needs no keyframe.
+        let _ = self.0.frames.try_send(RawFrame {
+            width,
+            height,
+            stride: row_bytes,
+            data,
+        });
         Ok(())
     }
 
@@ -201,14 +195,13 @@ impl Capture {
         source: &ScreenSource,
         frames: SyncSender<RawFrame>,
         stop: Arc<AtomicBool>,
-        keyframe: Arc<AtomicBool>,
+        fps: u32,
     ) -> Result<Self, String> {
         let flags = |next_frame| Flags {
             frames,
             stop,
-            keyframe,
             next_frame,
-            interval: Duration::from_secs_f64(1. / 30.),
+            interval: Duration::from_secs_f64(1. / f64::from(fps.max(1))),
         };
         let control = match source.id {
             ScreenSourceId::Monitor(id) => {
@@ -237,8 +230,7 @@ impl Capture {
 pub(crate) fn thumbnail(source: &ScreenSource) -> Option<RawFrame> {
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     let stop = Arc::new(AtomicBool::new(false));
-    let keyframe = Arc::new(AtomicBool::new(true));
-    let capture = Capture::start(source, sender, stop.clone(), keyframe).ok()?;
+    let capture = Capture::start(source, sender, stop.clone(), 30).ok()?;
     let frame = receiver.recv_timeout(Duration::from_secs(2)).ok();
     stop.store(true, Ordering::Release);
     drop(capture);

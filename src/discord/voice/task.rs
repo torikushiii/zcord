@@ -2,7 +2,9 @@ use super::{
     audio::AudioFlags,
     emit,
     gateway::{Config, Connection, Outcome},
-    stream::{self, FrameSlot, ScreenSource, sender::SenderConfig, viewer::ViewerConfig},
+    stream::{
+        self, FrameSlot, ScreenSource, StreamQuality, sender::SenderConfig, viewer::ViewerConfig,
+    },
 };
 use crate::discord::{Event, Secret, ShareEvent, StreamEvent, VoiceEvent, commands, model};
 use futures::channel::mpsc::UnboundedSender;
@@ -54,7 +56,8 @@ struct StreamWatch {
 struct StreamShare {
     key: String,
     server_id: u64,
-    source: Option<ScreenSource>,
+    /// What's shared, which can change while live; `None` for a bare Go Live.
+    live: Option<Arc<stream::share::LiveShare>>,
     rtc_server_id: Option<u64>,
     rtc_channel_id: Option<u64>,
     token: Option<Secret>,
@@ -350,12 +353,21 @@ impl VoiceManager {
         stream::share::thumbnail(source)
     }
 
-    pub fn go_live(&self) -> Option<Value> {
-        self.begin_share(None)
+    pub fn screen_icon(&self, source: &ScreenSource) -> Option<stream::StreamFrame> {
+        stream::share::icon(source)
     }
 
-    pub fn start_share(&self, source: ScreenSource) -> Option<Value> {
-        self.begin_share(Some(source))
+    pub fn go_live(&self) -> Option<Value> {
+        self.begin_share(None, StreamQuality::STANDARD, false)
+    }
+
+    pub fn start_share(
+        &self,
+        source: ScreenSource,
+        quality: StreamQuality,
+        audio: bool,
+    ) -> Option<Value> {
+        self.begin_share(Some(source), quality, audio)
     }
 
     pub fn stop_sharing(&self) -> Option<Value> {
@@ -365,7 +377,12 @@ impl VoiceManager {
         Some(json!({"op": 19, "d": {"stream_key": key}}))
     }
 
-    fn begin_share(&self, source: Option<ScreenSource>) -> Option<Value> {
+    fn begin_share(
+        &self,
+        source: Option<ScreenSource>,
+        quality: StreamQuality,
+        audio: bool,
+    ) -> Option<Value> {
         let mut shared = self.lock();
         let (guild_id, channel_id) = shared.confirmed?;
         let user_id = shared.user_id?;
@@ -375,7 +392,7 @@ impl VoiceManager {
         shared.share = Some(StreamShare {
             key,
             server_id: server_id(guild_id, channel_id),
-            source,
+            live: source.map(|source| stream::share::LiveShare::new(source, quality, audio)),
             rtc_server_id: None,
             rtc_channel_id: None,
             token: None,
@@ -384,7 +401,7 @@ impl VoiceManager {
             ended: Arc::new(AtomicBool::new(false)),
             started: false,
             keyframe: Arc::new(AtomicBool::new(true)),
-            bitrate: Arc::new(AtomicU32::new(3_500_000)),
+            bitrate: Arc::new(AtomicU32::new(quality.initial_bitrate())),
             stop: Arc::new(AtomicBool::new(false)),
             reannounce: Arc::new(AtomicBool::new(false)),
             failure: Arc::new(Mutex::new(None)),
@@ -433,11 +450,9 @@ impl VoiceManager {
         if share.started {
             return;
         }
-        let (Some(source), Some(rtc_server_id), Some(token)) = (
-            share.source.clone(),
-            share.rtc_server_id,
-            share.token.clone(),
-        ) else {
+        let (Some(live), Some(rtc_server_id), Some(token)) =
+            (share.live.clone(), share.rtc_server_id, share.token.clone())
+        else {
             return;
         };
         let Some(endpoint) = share
@@ -461,17 +476,41 @@ impl VoiceManager {
         let reannounce = share.reannounce.clone();
         let failure = share.failure.clone();
         let (frame_sender, frame_receiver) = std::sync::mpsc::sync_channel(2);
+        let previews: stream::share::PreviewSink = {
+            let (events, stream_key) = (events.clone(), key.clone());
+            Box::new(move |thumbnail| {
+                let stream_key = stream_key.clone();
+                emit(
+                    &events,
+                    VoiceEvent::Share(ShareEvent::Preview {
+                        stream_key,
+                        thumbnail,
+                    }),
+                );
+            })
+        };
         if let Err(reason) = stream::share::spawn(
-            source,
+            live.clone(),
             bitrate.clone(),
             keyframe.clone(),
             stop.clone(),
             frame_sender,
             failure.clone(),
+            previews,
         ) {
             self.end_share(shared, Some(reason));
             return;
         }
+        // The sound is heard even while muted, so it can be unmuted live. It's optional: if
+        // Windows won't share it, the picture still goes out.
+        let (audio_sender, audio_receiver) = std::sync::mpsc::sync_channel(8);
+        let audio_frames = match stream::share::spawn_audio(audio_sender, stop.clone(), live) {
+            Ok(()) => Some(audio_receiver),
+            Err(reason) => {
+                log::warn!("Streaming without sound: {reason}");
+                None
+            }
+        };
         let (shutdown, cancel) = watch::channel(false);
         let Some(share) = shared.share.as_mut() else {
             return;
@@ -495,7 +534,7 @@ impl VoiceManager {
         };
         let manager = self.clone();
         runtime.spawn(async move {
-            let result = stream::sender::run(config, frame_receiver, cancel).await;
+            let result = stream::sender::run(config, frame_receiver, audio_frames, cancel).await;
             stop.store(true, Ordering::Release);
             let mut shared = manager.lock();
             manager.end_share_with(&mut shared, result.err(), true);
@@ -508,13 +547,38 @@ impl VoiceManager {
         }
     }
 
-    pub fn stream_updated(&self, key: &str, viewers: usize) {
-        let shared = self.lock();
-        if let Some(share) = shared.share.as_ref().filter(|share| share.key == key)
-            && viewers > 0
+    /// Switches the running stream to another source or quality without ending it.
+    pub fn change_share(&self, source: Option<ScreenSource>, quality: Option<StreamQuality>) {
+        if let Some(live) = self
+            .lock()
+            .share
+            .as_ref()
+            .and_then(|share| share.live.as_ref())
         {
+            live.change(source, quality);
+        }
+    }
+
+    pub fn set_share_audio(&self, audio: bool) {
+        if let Some(live) = self
+            .lock()
+            .share
+            .as_ref()
+            .and_then(|share| share.live.as_ref())
+        {
+            live.audio.store(audio, Ordering::Release);
+        }
+    }
+
+    pub fn stream_updated(&self, key: &str, viewers: Vec<u64>) {
+        let shared = self.lock();
+        let Some(share) = shared.share.as_ref().filter(|share| share.key == key) else {
+            return;
+        };
+        if !viewers.is_empty() {
             share.reannounce.store(true, Ordering::Release);
         }
+        self.emit_share(ShareEvent::Viewers(viewers));
     }
 
     pub fn stream_frames(&self) -> FrameSlot {
@@ -1512,11 +1576,15 @@ mod tests {
         assert!(manager.watch(2).is_some());
         assert!(
             manager
-                .start_share(ScreenSource {
-                    id: super::super::stream::ScreenSourceId::Monitor(7),
-                    name: "Display".into(),
-                    is_window: false,
-                })
+                .start_share(
+                    ScreenSource {
+                        id: super::super::stream::ScreenSourceId::Monitor(7),
+                        name: "Display".into(),
+                        is_window: false,
+                    },
+                    StreamQuality::STANDARD,
+                    false,
+                )
                 .is_some()
         );
         manager.stream_created("guild:10:20:1", 40, Some(41));

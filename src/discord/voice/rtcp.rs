@@ -312,12 +312,19 @@ mod tests {
                 .keyframe
         );
 
-        let mut remb = 9u32.to_be_bytes().to_vec();
-        remb.extend_from_slice(&42u32.to_be_bytes());
-        remb.extend_from_slice(b"REMB");
-        remb.extend_from_slice(&[0, 0x0f, 0xa0, 0]);
-        let parsed = feedback(&feedback_packet(206, 15, &remb), 42).unwrap();
-        assert_eq!(parsed.bitrate, Some(4_000));
+        // 6 Mbps for SSRC 42: exponent 5, mantissa 187500, after a count of one SSRC.
+        let remb_for = |ssrc: u32| {
+            let mut remb = 9u32.to_be_bytes().to_vec();
+            remb.extend_from_slice(&0u32.to_be_bytes());
+            remb.extend_from_slice(b"REMB");
+            remb.extend_from_slice(&[1, (5 << 2) | 0x02, 0xdc, 0x6c]);
+            remb.extend_from_slice(&ssrc.to_be_bytes());
+            feedback(&feedback_packet(206, 15, &remb), 42)
+                .unwrap()
+                .bitrate
+        };
+        assert_eq!(remb_for(42), Some(6_000_000));
+        assert_eq!(remb_for(7), None);
     }
 
     #[test]
@@ -402,13 +409,27 @@ pub(super) fn feedback(packet: &[u8], media_ssrc: u32) -> Option<Feedback> {
                 }
             }
             (206, 15) => {
+                // "REMB", then a byte counting the SSRCs listed after the bitrate, then a 6-bit
+                // exponent and 18-bit mantissa.
                 if body.len() >= 20 && body[12..16] == *b"REMB" {
                     let media = u32::from_be_bytes([body[8], body[9], body[10], body[11]]);
-                    if media == 0 || media == media_ssrc {
-                        let exponent = body[16] >> 2;
-                        let mantissa = (u32::from(body[16] & 0x03) << 16)
-                            | (u32::from(body[17]) << 8)
-                            | u32::from(body[18]);
+                    let listed = body[20..]
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .take(usize::from(body[16]))
+                        .map(|ssrc| u32::from_be_bytes(*ssrc))
+                        .collect::<Vec<_>>();
+                    let ours = if listed.is_empty() {
+                        media == 0 || media == media_ssrc
+                    } else {
+                        listed.contains(&media_ssrc)
+                    };
+                    if ours {
+                        let exponent = body[17] >> 2;
+                        let mantissa = (u32::from(body[17] & 0x03) << 16)
+                            | (u32::from(body[18]) << 8)
+                            | u32::from(body[19]);
                         let bitrate = mantissa.checked_shl(u32::from(exponent))?;
                         feedback.bitrate =
                             Some(feedback.bitrate.map_or(bitrate, |old| old.min(bitrate)));

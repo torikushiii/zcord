@@ -1,18 +1,20 @@
 use super::super::{
     crypto::{Cipher, Mode},
-    dave::Dave,
+    dave::{Dave, EncryptOutcome},
     gateway::{
         self, commit_welcome_body, parse_binary_seq, ready_on_prepare, send_binary, send_json,
         send_key_package, send_ready,
     },
     rtcp,
+    rtp::Header,
 };
 use super::{
     handshake::{self, HEARTBEAT_DEFAULT, HandshakeConfig, Socket},
     history::History,
+    max_bitrate,
     pacer::Pacer,
     packetize::{self, Packet},
-    share::EncodedFrame,
+    share::{AudioFrame, EncodedFrame},
 };
 use crate::discord::{Event, Secret, ShareEvent, VoiceEvent, model};
 use futures::{StreamExt, channel::mpsc::UnboundedSender};
@@ -33,14 +35,15 @@ use tokio::{
 };
 use tokio_tungstenite::tungstenite::Message;
 
-const WIDTH: u32 = 1280;
-const HEIGHT: u32 = 720;
-const FPS: u32 = 30;
-const CAP_BITRATE: u32 = 3_500_000;
 const MIN_BITRATE: u32 = 500_000;
 const KEYFRAME_INTERVAL: Duration = Duration::from_secs(3);
 const SENDER_REPORT: Duration = Duration::from_secs(1);
 const MAX_PACKET: usize = 2048;
+const STATS_INTERVAL: Duration = Duration::from_secs(5);
+/// Sound that pauses this long (nothing playing sends nothing) starts a new talkspurt.
+const AUDIO_GAP: Duration = Duration::from_millis(100);
+/// Op 5's flag for a stream's sound: shared sound, not a microphone.
+const SOUNDSHARE: u32 = 2;
 
 pub(crate) struct SenderConfig {
     pub user_id: u64,
@@ -60,6 +63,7 @@ pub(crate) struct SenderConfig {
 pub(crate) async fn run(
     config: SenderConfig,
     frames: Receiver<EncodedFrame>,
+    audio: Option<Receiver<AudioFrame>>,
     mut cancel: watch::Receiver<bool>,
 ) -> Result<(), String> {
     let handshake = handshake::handshake(
@@ -84,10 +88,22 @@ pub(crate) async fn run(
             }
         }
     });
+    let mut audio = audio.map(|frames| {
+        let (audio_sender, audio_receiver) = tokio::sync::mpsc::channel(8);
+        std::thread::spawn(move || {
+            while let Ok(frame) = frames.recv() {
+                if audio_sender.blocking_send(frame).is_err() {
+                    break;
+                }
+            }
+        });
+        audio_receiver
+    });
     if handshake.video_ssrc == 0 {
         return Err("Discord did not assign a stream SSRC".into());
     }
     let mut sender = Sender::new(config);
+    sender.sound = audio.is_some();
     sender.audio_ssrc = handshake.ssrc;
     sender.video_ssrc = handshake.video_ssrc;
     sender.rtx_ssrc = handshake.rtx_ssrc;
@@ -116,6 +132,10 @@ pub(crate) async fn run(
                 };
                 sender.frame(&mut socket, frame, Instant::now()).await?;
             }
+            sound = next_audio(&mut audio) => match sound {
+                Some(sound) => sender.audio(&udp, peer, sound, Instant::now()).await?,
+                None => audio = None,
+            },
             received = udp.recv_from(&mut buffer) => {
                 let Ok((size, _)) = received else { continue };
                 sender.feedback(&udp, peer, &buffer[..size], Instant::now()).await?;
@@ -143,6 +163,10 @@ struct Sender {
     pacer: Pacer,
     history: History,
     announced: bool,
+    /// Encoded size and rate of the latest frame, announced to Discord as the stream's
+    /// resolution and frame rate.
+    frame_size: (u32, u32),
+    frame_fps: u32,
     next_keyframe: Instant,
     next_report: Instant,
     next_heartbeat: Instant,
@@ -151,6 +175,52 @@ struct Sender {
     rtp_timestamp: u32,
     packets: u32,
     octets: u32,
+    stats: Stats,
+    audio_sequence: u16,
+    audio_timestamp: u32,
+    /// When the last sound went out, to tell a pause from the next 20 ms frame.
+    audio_sent: Option<Instant>,
+    /// The capture sample the last sent frame started at; the next frame's RTP time moves on
+    /// by the samples between them, dropped frames included.
+    audio_sample: u64,
+    /// When the latest frame's RTP timestamp was taken, to carry it forward to a report's time.
+    video_sent: Option<Instant>,
+    /// The sound's RTP clock starts here, at 48 kHz.
+    audio_epoch: Instant,
+    /// Whether the stream carries sound, which announcing marks as speaking.
+    sound: bool,
+    audio_packets: u32,
+    audio_octets: u32,
+}
+
+/// What the stream actually sent since the last log line, to tell a starved encoder from a
+/// slow pipeline when quality is poor.
+struct Stats {
+    since: Instant,
+    frames: u32,
+    keyframes: u32,
+    bytes: u64,
+    remb: Option<u32>,
+    audio_frames: u32,
+    received: u32,
+    dropped_insecure: u32,
+    dropped_for_keyframe: u32,
+}
+
+impl Stats {
+    fn new(now: Instant) -> Self {
+        Self {
+            since: now,
+            frames: 0,
+            keyframes: 0,
+            bytes: 0,
+            remb: None,
+            audio_frames: 0,
+            received: 0,
+            dropped_insecure: 0,
+            dropped_for_keyframe: 0,
+        }
+    }
 }
 
 impl Sender {
@@ -169,6 +239,8 @@ impl Sender {
             pacer: Pacer::default(),
             history: History::default(),
             announced: false,
+            frame_size: (0, 0),
+            frame_fps: 0,
             next_keyframe: now,
             next_report: now + SENDER_REPORT,
             next_heartbeat: now + HEARTBEAT_DEFAULT,
@@ -177,6 +249,16 @@ impl Sender {
             rtp_timestamp: 0,
             packets: 0,
             octets: 0,
+            stats: Stats::new(now),
+            audio_sequence: rand::random(),
+            audio_timestamp: 0,
+            audio_sent: None,
+            audio_sample: 0,
+            video_sent: None,
+            audio_epoch: now,
+            sound: false,
+            audio_packets: 0,
+            audio_octets: 0,
         }
     }
 
@@ -222,6 +304,9 @@ impl Sender {
                         dave.add_user(id);
                     }
                 }
+                // Tell whoever connected about the stream again, sound included, in case the
+                // server doesn't pass it on to late viewers.
+                self.config.reannounce.store(true, Ordering::Release);
                 Ok(())
             }
             13 => {
@@ -416,11 +501,14 @@ impl Sender {
         frame: EncodedFrame,
         now: Instant,
     ) -> Result<(), String> {
+        self.stats.received += 1;
         if !self.secure() {
+            self.stats.dropped_insecure += 1;
             self.config.keyframe.store(true, Ordering::Release);
             return Ok(());
         }
         if self.config.keyframe.swap(false, Ordering::AcqRel) && !frame.keyframe {
+            self.stats.dropped_for_keyframe += 1;
             self.config.keyframe.store(true, Ordering::Release);
             return Ok(());
         }
@@ -433,6 +521,7 @@ impl Sender {
             return Ok(());
         };
         self.rtp_timestamp = frame.timestamp;
+        self.video_sent = Some(now);
         let packets = packetize::packetize(
             &encrypted,
             &mut self.rtp_sequence,
@@ -441,6 +530,12 @@ impl Sender {
             self.video_ssrc,
         )
         .map_err(str::to_owned)?;
+        let size = ((frame.width, frame.height), frame.fps);
+        if self.announced && size != (self.frame_size, self.frame_fps) {
+            // A changed source or quality: tell Discord the new size once the stream is secure.
+            self.config.reannounce.store(true, Ordering::Release);
+        }
+        (self.frame_size, self.frame_fps) = size;
         if !self.announced {
             self.announce(socket).await?;
         }
@@ -448,15 +543,19 @@ impl Sender {
             self.next_keyframe = now + KEYFRAME_INTERVAL;
         }
         self.pacer.queue(packets, now);
+        self.stats.frames += 1;
+        self.stats.keyframes += u32::from(frame.keyframe);
+        self.stats.bytes += frame.data.len() as u64;
         Ok(())
     }
 
     async fn announce(&mut self, socket: &mut Socket) -> Result<(), String> {
-        let max_bitrate = self.config.bitrate.load(Ordering::Acquire).min(CAP_BITRATE);
+        let (width, height) = self.frame_size;
+        // The cap for this height, not the current target, as Discord's client announces it.
         let streams = json!([{
             "type": "video", "rid": "100", "ssrc": self.video_ssrc, "active": true,
-            "quality": 100, "rtx_ssrc": self.rtx_ssrc, "max_bitrate": max_bitrate,
-            "max_framerate": FPS, "max_resolution": {"type": "fixed", "width": WIDTH, "height": HEIGHT},
+            "quality": 100, "rtx_ssrc": self.rtx_ssrc, "max_bitrate": max_bitrate(height),
+            "max_framerate": self.frame_fps, "max_resolution": {"type": "fixed", "width": width, "height": height},
         }]);
         send_json(
             socket,
@@ -469,6 +568,14 @@ impl Sender {
         )
         .await
         .map_err(|_| "Discord stream announcement failed".to_owned())?;
+        // Viewers play the audio SSRC only once it's marked as speaking shared sound.
+        if self.sound {
+            let _ = send_json(
+                socket,
+                json!({"op": 5, "d": {"speaking": SOUNDSHARE, "delay": 0, "ssrc": self.audio_ssrc}}),
+            )
+            .await;
+        }
         // Discord creates the stream paused; the first frame exists before this is sent.
         let _ = send_json(
             socket,
@@ -488,8 +595,61 @@ impl Sender {
         Ok(())
     }
 
+    /// Sends 20 ms of sound once the picture is announced, as an Opus RTP packet on the
+    /// stream's audio SSRC, encrypted end to end like the call's.
+    async fn audio(
+        &mut self,
+        udp: &UdpSocket,
+        peer: SocketAddr,
+        sound: AudioFrame,
+        now: Instant,
+    ) -> Result<(), String> {
+        if !self.announced || !self.secure() || self.audio_ssrc == 0 {
+            return Ok(());
+        }
+        let Some(dave) = &mut self.dave else {
+            return Ok(());
+        };
+        let payload = match dave.encrypt(&sound.opus) {
+            EncryptOutcome::Plaintext(payload) | EncryptOutcome::Encrypted(payload) => payload,
+            EncryptOutcome::NotReady | EncryptOutcome::Failed => return Ok(()),
+        };
+        let talkspurt = self
+            .audio_sent
+            .is_none_or(|sent| now.duration_since(sent) > AUDIO_GAP);
+        let timestamp = if talkspurt {
+            (now.duration_since(self.audio_epoch).as_micros() * 48 / 1000) as u32
+        } else {
+            let elapsed = sound.sample.wrapping_sub(self.audio_sample);
+            self.audio_timestamp.wrapping_add(elapsed as u32)
+        };
+        self.audio_sample = sound.sample;
+        let aad =
+            Header::audio(self.audio_ssrc, self.audio_sequence, timestamp, talkspurt).encode();
+        let Some(cipher) = &mut self.cipher else {
+            return Ok(());
+        };
+        let Some(sealed) = cipher.encrypt(&aad, &payload) else {
+            return Ok(());
+        };
+        let mut wire = aad.to_vec();
+        wire.extend_from_slice(&sealed);
+        udp.send_to(&wire, peer)
+            .await
+            .map_err(|_| "Stream UDP send failed".to_owned())?;
+        self.audio_packets = self.audio_packets.wrapping_add(1);
+        self.audio_octets = self
+            .audio_octets
+            .wrapping_add(u32::try_from(payload.len()).unwrap_or(u32::MAX));
+        self.audio_sequence = self.audio_sequence.wrapping_add(1);
+        self.audio_timestamp = timestamp;
+        self.audio_sent = Some(now);
+        self.stats.audio_frames += 1;
+        Ok(())
+    }
+
     fn secure(&self) -> bool {
-        self.cipher.is_some() && self.dave.as_ref().is_some_and(Dave::is_ready)
+        self.cipher.is_some() && self.dave.as_ref().is_some_and(Dave::can_encrypt)
     }
 
     async fn flush(
@@ -578,6 +738,7 @@ impl Sender {
                 self.send_report(udp, peer).await;
                 self.next_report = now + SENDER_REPORT;
             }
+            self.log_stats(now);
             if self.announced && self.config.reannounce.load(Ordering::Acquire) && self.secure() {
                 self.announce(socket).await?;
             }
@@ -601,15 +762,27 @@ impl Sender {
         let elapsed = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default();
+        let now = Instant::now();
         let stats = rtcp::SenderStats {
             ntp_seconds: elapsed.as_secs() as u32,
             ntp_fraction: (((elapsed.subsec_nanos() as u64) << 32) / 1_000_000_000) as u32,
-            rtp_timestamp: self.rtp_timestamp,
+            rtp_timestamp: rtp_at(self.rtp_timestamp, self.video_sent, now, 90),
             packet_count: self.packets,
             octet_count: self.octets,
         };
         let clear = rtcp::sender_report(self.video_ssrc, &stats);
         self.send_rtcp(udp, peer, clear).await;
+        // The sound gets its own report, which viewers line its clock up with the picture's by.
+        if self.audio_packets > 0 {
+            let stats = rtcp::SenderStats {
+                rtp_timestamp: rtp_at(self.audio_timestamp, self.audio_sent, now, 48),
+                packet_count: self.audio_packets,
+                octet_count: self.audio_octets,
+                ..stats
+            };
+            let clear = rtcp::sender_report(self.audio_ssrc, &stats);
+            self.send_rtcp(udp, peer, clear).await;
+        }
     }
 
     async fn feedback(
@@ -641,13 +814,38 @@ impl Sender {
         Ok(())
     }
 
-    fn apply_remb(&self, bitrate: u32) {
-        let target = bitrate.min(CAP_BITRATE).max(MIN_BITRATE);
+    fn log_stats(&mut self, now: Instant) {
+        let elapsed = now.duration_since(self.stats.since);
+        if elapsed < STATS_INTERVAL {
+            return;
+        }
+        let seconds = elapsed.as_secs_f64();
+        let (width, height) = self.frame_size;
+        log::debug!(
+            "stream {width}x{height}: {} audio frames, {} frames in, {} dropped before encryption, {} dropped waiting for a keyframe; sent {:.1} fps, {} keyframes, sent {} kbps, encoder target {} kbps, cap {} kbps, last REMB {}",
+            self.stats.audio_frames,
+            self.stats.received,
+            self.stats.dropped_insecure,
+            self.stats.dropped_for_keyframe,
+            f64::from(self.stats.frames) / seconds,
+            self.stats.keyframes,
+            (self.stats.bytes as f64 * 8. / seconds / 1000.) as u64,
+            self.config.bitrate.load(Ordering::Acquire) / 1000,
+            max_bitrate(height) / 1000,
+            self.stats
+                .remb
+                .map_or("none".to_owned(), |remb| format!("{} kbps", remb / 1000)),
+        );
+        self.stats = Stats::new(now);
+    }
+
+    fn apply_remb(&mut self, bitrate: u32) {
+        self.stats.remb = Some(bitrate);
+        let target = bitrate.min(max_bitrate(self.frame_size.1)).max(MIN_BITRATE);
         let current = self.config.bitrate.load(Ordering::Acquire);
         let difference = target.abs_diff(current);
         if difference > current / 10 {
             self.config.bitrate.store(target, Ordering::Release);
-            self.config.keyframe.store(true, Ordering::Release);
         }
     }
 
@@ -675,5 +873,25 @@ impl Sender {
         let mut packet = clear[..8].to_vec();
         packet.extend_from_slice(&sealed);
         let _ = udp.send_to(&packet, peer).await;
+    }
+}
+
+/// A report pairs its RTP time with the moment it's sent, so the last packet's timestamp is
+/// carried forward to now at the clock's rate in kHz; through a pause it keeps counting.
+fn rtp_at(timestamp: u32, taken: Option<Instant>, now: Instant, khz: u128) -> u32 {
+    let Some(taken) = taken else {
+        return timestamp;
+    };
+    let ticks = now.saturating_duration_since(taken).as_micros() * khz / 1000;
+    timestamp.wrapping_add(ticks as u32)
+}
+
+/// The next sound frame, or never when the stream has no sound.
+async fn next_audio(
+    audio: &mut Option<tokio::sync::mpsc::Receiver<AudioFrame>>,
+) -> Option<AudioFrame> {
+    match audio {
+        Some(frames) => frames.recv().await,
+        None => std::future::pending().await,
     }
 }

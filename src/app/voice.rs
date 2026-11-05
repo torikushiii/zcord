@@ -9,13 +9,15 @@ use gpui::{prelude::*, *};
 use gpui_component::ElementExt;
 
 mod details;
+mod share_panel;
 pub(crate) mod share_picker;
 pub(crate) mod stream_card;
+mod stream_quality;
 
 use crate::{
     app::{DiscordApp, call_view::CallView, message_body::label},
     discord::{ShareEvent, VoiceEvent},
-    settings::SavedChannel,
+    settings::{CustomStream, SavedChannel, StreamMode},
     store::{Store, VoiceMember},
     theme::{self, rpx},
 };
@@ -54,6 +56,13 @@ pub(crate) struct Voice {
     sharing: Sharing,
     share_picker: Option<share_picker::SharePicker>,
     share_error: Option<String>,
+    share_info: Option<share_panel::ShareInfo>,
+    stream_mode: StreamMode,
+    stream_custom: CustomStream,
+    stream_preview_hidden: bool,
+    stream_audio_muted: bool,
+    /// The stream preview upload in flight; a newer preview or the share ending drops it.
+    preview_upload: Option<Task<()>>,
     stream_card: Option<stream_card::StreamCard>,
     stream_card_close: Option<Task<()>>,
     stream_card_hovered: bool,
@@ -101,6 +110,10 @@ impl Voice {
             self_mute: settings.voice_mute,
             self_deaf: settings.voice_deaf,
             noise_suppression: !settings.voice_noise_suppression_off,
+            stream_mode: settings.stream_mode,
+            stream_custom: settings.stream_custom.unwrap_or_default(),
+            stream_preview_hidden: settings.stream_preview_hidden,
+            stream_audio_muted: settings.stream_audio_muted,
             ..Self::default()
         }
     }
@@ -119,6 +132,7 @@ enum Control {
 enum MenuKind {
     NoiseSuppression,
     Details,
+    Stream,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -136,6 +150,10 @@ struct Menu {
     animation: u64,
     /// The switch only slides after a click; opening shows it at rest.
     switch_moved: bool,
+    /// The stream menu's quality flyout is showing.
+    flyout: bool,
+    /// The flyout lies outside the menu; a click there must not count as outside.
+    pointer_in_flyout: bool,
 }
 
 /// `Pending` until Discord either finishes the DAVE handshake, which yields the privacy
@@ -314,6 +332,8 @@ impl DiscordApp {
             closing: false,
             animation: voice.menu_opened,
             switch_moved: false,
+            flyout: false,
+            pointer_in_flyout: false,
         });
         cx.notify();
     }
@@ -430,6 +450,14 @@ impl DiscordApp {
     }
 
     pub(crate) fn handle_voice_event(&mut self, event: VoiceEvent, cx: &mut Context<Self>) {
+        if let VoiceEvent::Share(ShareEvent::Preview {
+            stream_key,
+            thumbnail,
+        }) = event
+        {
+            self.upload_stream_preview(stream_key, thumbnail, cx);
+            return;
+        }
         let voice = &mut self.voice;
         match event {
             VoiceEvent::Connecting {
@@ -559,7 +587,15 @@ impl DiscordApp {
                 ShareEvent::Ended { reason } => {
                     voice.sharing = Sharing::Off;
                     voice.share_error = reason;
+                    voice.preview_upload = None;
+                    self.clear_share_info(cx);
                 }
+                ShareEvent::Viewers(viewers) => {
+                    if let Some(info) = &mut voice.share_info {
+                        info.viewers = viewers;
+                    }
+                }
+                ShareEvent::Preview { .. } => {}
             },
         }
         self.sync_channel_rows();
@@ -783,7 +819,7 @@ pub(crate) fn member_row(
         .child(row)
 }
 
-pub(crate) fn panel(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
+pub(crate) fn panel(app: &DiscordApp, cx: &App) -> Option<impl IntoElement + use<>> {
     let call = app.voice.call.as_ref()?;
     let guild = app
         .store
@@ -955,19 +991,34 @@ pub(crate) fn panel(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
     };
     let sharing = app.voice.sharing != Sharing::Off;
     let share = app.entity.clone();
+    let stream_menu_open = app
+        .voice
+        .menu
+        .as_ref()
+        .is_some_and(|menu| menu.kind == MenuKind::Stream && !menu.closing);
     let screen = action("voice-screen", "monitor-up")
         .cursor_pointer()
         .when(sharing, |this| this.bg(rgb(theme::GREEN)))
-        .on_click(move |_, _, cx| {
-            share.update(cx, |app, cx| app.screen_button(cx)).ok();
+        .on_mouse_down(MouseButton::Left, move |event, _, cx| {
+            cx.stop_propagation();
+            let position = event.position;
+            share
+                .update(cx, |app, cx| {
+                    if app.voice.sharing == Sharing::Off {
+                        app.screen_button(cx);
+                    } else {
+                        app.toggle_menu(MenuKind::Stream, position, cx);
+                    }
+                })
+                .ok();
         })
-        .map(|this| {
+        .when(!stream_menu_open, |this| {
             with_tooltip(
                 this,
                 app,
                 Control::Screen,
                 if sharing {
-                    "Stop Streaming"
+                    "Stream Settings"
                 } else {
                     "Share Your Screen"
                 },
@@ -986,15 +1037,24 @@ pub(crate) fn panel(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
             action("voice-soundboard", "megaphone"),
             "Soundboard",
         ));
+    let stream = sharing
+        .then(|| share_panel::render(app, call.guild_id, cx))
+        .flatten();
     Some(
         div()
             .flex()
             .flex_col()
-            .gap_2()
-            .p(rpx(8.))
             .bg(rgb(theme::bg()))
-            .child(header)
-            .child(actions),
+            .children(stream)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .p(rpx(8.))
+                    .child(header)
+                    .child(actions),
+            ),
     )
 }
 
@@ -1045,11 +1105,23 @@ pub(crate) fn menu(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
     let card = match menu.kind {
         MenuKind::NoiseSuppression => noise_card(app, menu, cx),
         MenuKind::Details => details::card(app, call, app.voice.details_tab, menu.closing, cx),
+        MenuKind::Stream => share_panel::live_menu(app, menu),
     };
     let close = app.entity.clone();
     let card = card.when(!menu.closing, |this| {
         this.occlude().on_mouse_down_out(move |_, _, cx| {
-            close.update(cx, |app, cx| app.close_menu(cx)).ok();
+            close
+                .update(cx, |app, cx| {
+                    let in_flyout = app
+                        .voice
+                        .menu
+                        .as_ref()
+                        .is_some_and(|menu| menu.pointer_in_flyout);
+                    if !in_flyout {
+                        app.close_menu(cx);
+                    }
+                })
+                .ok();
         })
     });
     Some(popup(card, menu, cx))

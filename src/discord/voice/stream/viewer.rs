@@ -661,7 +661,7 @@ impl Viewer {
         let Some(dave) = &mut self.dave else {
             return;
         };
-        if !dave.is_ready() {
+        if !dave.can_encrypt() {
             return;
         }
         let Some(opus) = dave.decrypt(streamer_id, davey::MediaType::AUDIO, payload) else {
@@ -684,7 +684,7 @@ impl Viewer {
             self.request_keyframe();
             return Ok(());
         };
-        if !dave.is_ready() {
+        if !dave.can_encrypt() {
             self.request_keyframe();
             return Ok(());
         }

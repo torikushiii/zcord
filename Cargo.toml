@@ -6,6 +6,7 @@ publish = false
 license = "GPL-3.0-only"
 
 [dependencies]
+zcord-convert = { path = "crates/convert" }
 gpui = { git = "https://github.com/zeronsh/zui", rev = "361ff20b919fdfb80199ee6d9aed725300cb7d54" }
 gpui_platform = { git = "https://github.com/zeronsh/zui", rev = "361ff20b919fdfb80199ee6d9aed725300cb7d54", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 gpui_tokio = { git = "https://github.com/zeronsh/zui", rev = "361ff20b919fdfb80199ee6d9aed725300cb7d54" }
@@ -68,6 +69,8 @@ windows = { version = "0.62.2", features = [
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Threading",
     "Win32_Security",
@@ -79,6 +82,10 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 opt-level = 2
 debug = false
+
+# Screen sharing converts every frame here; unoptimized it takes about half a second a frame.
+[profile.dev.package.zcord-convert]
+opt-level = 3
 
 [profile.release]
 lto = "thin"

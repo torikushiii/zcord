@@ -90,6 +90,39 @@ pub struct Settings {
     pub reduce_motion: Option<bool>,
     #[serde(default)]
     pub share_game_activity: bool,
+    #[serde(default)]
+    pub stream_mode: StreamMode,
+    #[serde(default)]
+    pub stream_custom: Option<CustomStream>,
+    #[serde(default)]
+    pub stream_preview_hidden: bool,
+    #[serde(default)]
+    pub stream_audio_muted: bool,
+}
+
+/// The Go Live picker's Stream Mode, which Discord calls a preset.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StreamMode {
+    #[default]
+    Gaming,
+    Screenshare,
+    Custom,
+}
+
+/// The resolution (output height, 0 for source) and frame rate picked under Custom.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomStream {
+    pub resolution: u32,
+    pub fps: u32,
+}
+
+impl Default for CustomStream {
+    fn default() -> Self {
+        Self {
+            resolution: 720,
+            fps: 30,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]

@@ -155,6 +155,10 @@ impl Store {
         self.guild_by_id(guild_id)?.banner_spec()
     }
 
+    pub fn premium_type(&self) -> Option<u8> {
+        self.premium_type
+    }
+
     pub fn has_nitro(&self) -> bool {
         self.premium_type
             .is_some_and(|premium_type| premium_type != 0)

@@ -41,7 +41,7 @@ pub use presence::{SelfStatus, StatusDuration};
 pub use properties::user_agent;
 pub(crate) use properties::{IdentityCache, refresh_identity};
 pub use voice::{
-    AudioDevice, FrameSlot, MicTest, ScreenSource, ScreenSourceId, StreamFrame, audio_devices,
+    AudioDevice, FrameSlot, MicTest, ScreenSource, StreamFrame, StreamQuality, audio_devices,
 };
 
 pub(crate) use cache::ProfileDetails;
@@ -321,6 +321,10 @@ impl Session {
         self.inner.voice.screen_thumbnail(source)
     }
 
+    pub fn screen_icon(&self, source: &ScreenSource) -> Option<StreamFrame> {
+        self.inner.voice.screen_icon(source)
+    }
+
     pub async fn stream_preview(
         &self,
         guild_id: Option<u64>,
@@ -332,10 +336,27 @@ impl Session {
             .await
     }
 
-    pub fn start_share(&self, source: ScreenSource) {
-        if let Some(payload) = self.inner.voice.start_share(source) {
+    pub async fn upload_stream_preview(
+        &self,
+        stream_key: String,
+        thumbnail: String,
+    ) -> Result<(), Error> {
+        self.rest(async |rest| rest.upload_stream_preview(&stream_key, &thumbnail).await)
+            .await
+    }
+
+    pub fn start_share(&self, source: ScreenSource, quality: StreamQuality, audio: bool) {
+        if let Some(payload) = self.inner.voice.start_share(source, quality, audio) {
             self.voice_command(payload);
         }
+    }
+
+    pub fn change_share(&self, source: Option<ScreenSource>, quality: Option<StreamQuality>) {
+        self.inner.voice.change_share(source, quality);
+    }
+
+    pub fn set_share_audio(&self, audio: bool) {
+        self.inner.voice.set_share_audio(audio);
     }
 
     pub fn stop_share(&self) {
