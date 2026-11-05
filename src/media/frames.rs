@@ -11,7 +11,7 @@ use gpui::RenderImage;
 use image::{Delay, Frame, RgbaImage};
 use std::{
     fs::{self, File},
-    io::{self, BufWriter, Write},
+    io::{self, BufReader, BufWriter, Read, Write},
     num::NonZeroU32,
     path::Path,
     sync::Arc,
@@ -78,8 +78,8 @@ pub(crate) fn save(path: &Path, image: &RenderImage, plays: Option<NonZeroU32>) 
 }
 
 pub(crate) async fn load(path: &Path) -> Option<(Arc<RenderImage>, usize, Option<NonZeroU32>)> {
-    let bytes = match tokio::fs::read(path).await {
-        Ok(bytes) => bytes,
+    let file = match tokio::fs::File::open(path).await {
+        Ok(file) => file.into_std().await,
         Err(error) => {
             if error.kind() != io::ErrorKind::NotFound {
                 log::debug!("Could not read frame cache {}: {error}", path.display());
@@ -87,7 +87,15 @@ pub(crate) async fn load(path: &Path) -> Option<(Arc<RenderImage>, usize, Option
             return None;
         }
     };
-    match decode(&bytes) {
+    let decoded = tokio::task::spawn_blocking(move || {
+        let length = file.metadata()?.len();
+        decode(&mut BufReader::new(file), length)
+    })
+    .await;
+    let Ok(decoded) = decoded else {
+        return None;
+    };
+    match decoded {
         Ok(decoded) => {
             if let Ok(metadata) = tokio::fs::metadata(path).await
                 && let Ok(modified) = metadata.modified()
@@ -109,22 +117,29 @@ pub(crate) async fn load(path: &Path) -> Option<(Arc<RenderImage>, usize, Option
     }
 }
 
-fn decode(bytes: &[u8]) -> anyhow::Result<(Arc<RenderImage>, usize, Option<NonZeroU32>)> {
-    ensure!(bytes.len() >= HEADER_LEN, "frame cache header is truncated");
-    ensure!(bytes.starts_with(MAGIC), "invalid frame cache magic");
+/// Reads frames straight into their buffers; `length` is the file's, checked against the
+/// header before anything large is allocated.
+fn decode(
+    reader: &mut impl Read,
+    length: u64,
+) -> anyhow::Result<(Arc<RenderImage>, usize, Option<NonZeroU32>)> {
     ensure!(
-        bytes[4] == VERSION,
+        length >= HEADER_LEN as u64,
+        "frame cache header is truncated"
+    );
+    ensure!(length <= MAX_BYTES, "frame cache file is too large");
+    let mut header = [0; HEADER_LEN];
+    reader.read_exact(&mut header)?;
+    ensure!(header.starts_with(MAGIC), "invalid frame cache magic");
+    ensure!(
+        header[4] == VERSION,
         "unsupported frame cache version {}",
-        bytes[4]
+        header[4]
     );
-    ensure!(
-        bytes.len() as u64 <= MAX_BYTES,
-        "frame cache file is too large"
-    );
-    let frame_count = u32_at(bytes, 5)?;
-    let width = u32_at(bytes, 9)?;
-    let height = u32_at(bytes, 13)?;
-    let plays = NonZeroU32::new(u32_at(bytes, 17)?);
+    let frame_count = u32_at(&header, 5)?;
+    let width = u32_at(&header, 9)?;
+    let height = u32_at(&header, 13)?;
+    let plays = NonZeroU32::new(u32_at(&header, 17)?);
     ensure!(
         frame_count > 0 && frame_count <= MAX_FRAMES,
         "invalid frame count"
@@ -136,22 +151,24 @@ fn decode(bytes: &[u8]) -> anyhow::Result<(Arc<RenderImage>, usize, Option<NonZe
     let frame_bytes = u64::from(width) * u64::from(height) * 4;
     let expected = u64::from(frame_count) * (FRAME_HEADER_LEN as u64 + frame_bytes);
     ensure!(
-        bytes.len() as u64 == HEADER_LEN as u64 + expected,
+        length == HEADER_LEN as u64 + expected,
         "frame cache length mismatch"
     );
     let frame_bytes = usize::try_from(frame_bytes).context("frame cache size overflow")?;
     let mut frames = Vec::with_capacity(frame_count as usize);
-    let mut offset = HEADER_LEN;
     for _ in 0..frame_count {
-        let numerator = u32_at(bytes, offset)?;
-        let denominator = u32_at(bytes, offset + 4)?;
-        ensure!(denominator != 0, "frame delay denominator is zero");
-        offset += FRAME_HEADER_LEN;
-        let pixels = bytes
-            .get(offset..offset + frame_bytes)
+        let mut delay = [0; FRAME_HEADER_LEN];
+        reader
+            .read_exact(&mut delay)
             .context("frame cache pixel data is truncated")?;
-        offset += frame_bytes;
-        let pixels = RgbaImage::from_raw(width, height, pixels.to_vec())
+        let numerator = u32_at(&delay, 0)?;
+        let denominator = u32_at(&delay, 4)?;
+        ensure!(denominator != 0, "frame delay denominator is zero");
+        let mut pixels = vec![0; frame_bytes];
+        reader
+            .read_exact(&mut pixels)
+            .context("frame cache pixel data is truncated")?;
+        let pixels = RgbaImage::from_raw(width, height, pixels)
             .context("frame cache pixel buffer has the wrong length")?;
         frames.push(Frame::from_parts(
             pixels,
@@ -189,6 +206,10 @@ mod tests {
     use image::{Rgba, RgbaImage};
     use std::time::Duration;
 
+    fn decode_bytes(bytes: &[u8]) -> anyhow::Result<(Arc<RenderImage>, usize, Option<NonZeroU32>)> {
+        decode(&mut &bytes[..], bytes.len() as u64)
+    }
+
     fn temp_directory() -> std::path::PathBuf {
         let directory =
             std::env::temp_dir().join(format!("zcord-frames-test-{:016x}", rand::random::<u64>()));
@@ -225,7 +246,7 @@ mod tests {
             write(&image, None, &mut encoded).unwrap(),
             encoded.len() as u64
         );
-        let (decoded, bytes, plays) = decode(&encoded).unwrap();
+        let (decoded, bytes, plays) = decode_bytes(&encoded).unwrap();
 
         assert_eq!(decoded.frame_count(), 3);
         assert_eq!(bytes, 3 * 2 * 4 * 3);
@@ -250,7 +271,7 @@ mod tests {
         ] {
             let mut encoded = Vec::new();
             write(&image(), plays, &mut encoded).unwrap();
-            assert_eq!(decode(&encoded).unwrap().2, plays);
+            assert_eq!(decode_bytes(&encoded).unwrap().2, plays);
         }
     }
 
@@ -260,7 +281,7 @@ mod tests {
         write(&image(), None, &mut encoded).unwrap();
         encoded[4] = 1;
         encoded.drain(17..21);
-        assert!(decode(&encoded).is_err());
+        assert!(decode_bytes(&encoded).is_err());
 
         let directory = temp_directory();
         let path = directory.join("version-one.img");
@@ -275,7 +296,7 @@ mod tests {
         let mut encoded = Vec::new();
         write(&image(), None, &mut encoded).unwrap();
         for length in [0, 4, HEADER_LEN, encoded.len() - 1] {
-            assert!(decode(&encoded[..length]).is_err(), "length {length}");
+            assert!(decode_bytes(&encoded[..length]).is_err(), "length {length}");
         }
     }
 
@@ -284,7 +305,7 @@ mod tests {
         let mut encoded = Vec::new();
         write(&image(), None, &mut encoded).unwrap();
         encoded[0] = b'X';
-        assert!(decode(&encoded).is_err());
+        assert!(decode_bytes(&encoded).is_err());
     }
 
     #[test]
