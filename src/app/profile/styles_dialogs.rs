@@ -933,17 +933,24 @@ fn collectible_preview(
     .and_then(|sku| decoration_of(app, editor, sku));
     // The ring cuts the status out of the stage behind the avatar.
     let avatar_with = |size: f32, status: bool| {
-        theme::preview_avatar(
-            user,
-            user_id,
-            size,
-            user.filter(|_| status)
-                .map(|user| (user.status, theme::base_lowest())),
-            current.avatar.clone(),
-            current.avatar_file.clone(),
-            decoration.as_ref(),
-            cx,
-        )
+        // Each copy keeps its own animation clock; sharing one, the copies' different-sized
+        // images would keep resetting it to the first frame.
+        div()
+            .id(SharedString::from(format!(
+                "preview-avatar-{size}-{status}"
+            )))
+            .flex_none()
+            .child(theme::preview_avatar(
+                user,
+                user_id,
+                size,
+                user.filter(|_| status)
+                    .map(|user| (user.status, theme::base_lowest())),
+                current.avatar.clone(),
+                current.avatar_file.clone(),
+                decoration.as_ref(),
+                cx,
+            ))
     };
     let avatar = |size: f32| avatar_with(size, false);
     let stage = || {
