@@ -132,6 +132,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "theme-light",
     "rss",
     "search",
+    "send",
     "settings",
     "shapes",
     "smile",

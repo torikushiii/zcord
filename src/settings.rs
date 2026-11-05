@@ -98,6 +98,8 @@ pub struct Settings {
     pub stream_preview_hidden: bool,
     #[serde(default)]
     pub stream_audio_muted: bool,
+    #[serde(default)]
+    pub composer_send_button: bool,
 }
 
 /// The Go Live picker's Stream Mode, which Discord calls a preset.

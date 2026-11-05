@@ -1,4 +1,4 @@
-use super::composer::{emoji_token_overlay, flush_textarea};
+use super::composer::{emoji_token_overlay, flush_textarea, send_icon};
 use super::popouts::PopoutKind;
 use super::rows::render_pane_row;
 use super::*;
@@ -415,7 +415,11 @@ impl DiscordApp {
         cx.notify();
     }
 
-    fn send_pane_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn pane_composer(&self) -> Option<Entity<TextareaState>> {
+        self.thread_pane.as_ref().map(|pane| pane.composer.clone())
+    }
+
+    pub(super) fn send_pane_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(composer) = self.thread_pane.as_ref().map(|pane| pane.composer.clone()) else {
             return;
         };
@@ -961,6 +965,7 @@ fn composer_box(app: &DiscordApp, pane: &ThreadPane, cx: &App) -> impl IntoEleme
     let gif_anchor = picker_anchor.clone();
     let sticker_anchor = picker_anchor.clone();
     let emoji_anchor = picker_anchor.clone();
+    let send_button = crate::settings::get(cx).composer_send_button;
     div()
         .flex_none()
         .px_2()
@@ -996,6 +1001,18 @@ fn composer_box(app: &DiscordApp, pane: &ThreadPane, cx: &App) -> impl IntoEleme
                 .bg(rgb(theme::elevated()))
                 .border_1()
                 .border_color(rgba(theme::border()))
+                .on_mouse_down(MouseButton::Right, {
+                    let entity = app.entity.clone();
+                    move |event, _, cx| {
+                        cx.stop_propagation();
+                        let position = event.position;
+                        entity
+                            .update(cx, |app, cx| {
+                                app.open_composer_menu(ComposerTarget::Pane, position, cx)
+                            })
+                            .ok();
+                    }
+                })
                 .child(
                     div().my(rpx(10.)).child(
                         theme::icon_button("pane-attach", "circle-plus", 24., theme::muted())
@@ -1079,7 +1096,15 @@ fn composer_box(app: &DiscordApp, pane: &ThreadPane, cx: &App) -> impl IntoEleme
                                         })
                                         .ok();
                                 }),
-                        ),
+                        )
+                        .children(send_button.then(|| {
+                            let entity = app.entity.clone();
+                            send_icon("pane-send", can_send).on_click(move |_, window, cx| {
+                                entity
+                                    .update(cx, |app, cx| app.send_pane_message(window, cx))
+                                    .ok();
+                            })
+                        })),
                 ),
         )
 }
