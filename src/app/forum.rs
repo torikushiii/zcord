@@ -143,7 +143,7 @@ fn header_card(
 ) -> impl IntoElement {
     let start = app.entity.clone();
     let creating = header.creating;
-    let primary = |id: &'static str| {
+    let primary = |id: &'static str, enabled: bool| {
         div()
             .id(id)
             .flex()
@@ -156,8 +156,10 @@ fn header_card(
             .bg(rgb(theme::BLURPLE))
             .border_1()
             .border_color(rgba(theme::border_bright()))
-            .cursor_pointer()
-            .hover(|style| style.opacity(0.9))
+            .when(enabled, |this| {
+                this.cursor_pointer().hover(|style| style.opacity(0.9))
+            })
+            .when(!enabled, |this| this.opacity(0.5))
             .text_size(rpx(14.))
             .font_weight(FontWeight::MEDIUM)
             .text_color(white())
@@ -195,14 +197,12 @@ fn header_card(
         .when(!creating, |this| {
             let blocked = app.new_post_blocked(header.forum_id);
             this.child(
-                primary("forum-new-post")
+                primary("forum-new-post", blocked.is_none())
                     .relative()
                     .map(|this| match blocked {
-                        Some(reason) => this
-                            .opacity(0.5)
-                            .cursor_default()
-                            .hover(|style| style.opacity(0.5))
-                            .child(theme::hover_tooltip("forum-new-post-tip", reason)),
+                        Some(reason) => {
+                            this.child(theme::hover_tooltip("forum-new-post-tip", reason))
+                        }
                         None => this.on_click(move |_, window, cx| {
                             start
                                 .update(cx, |app, cx| app.start_forum_post(window, cx))
@@ -311,7 +311,7 @@ fn header_card(
                                     .child("Cancel"),
                             )
                             .child(
-                                primary("new-post-submit")
+                                primary("new-post-submit", true)
                                     .when(header.posting, |this| this.opacity(0.6))
                                     .on_click(move |_, window, cx| {
                                         submit
