@@ -31,8 +31,6 @@ mod apng;
 pub(crate) mod stream;
 
 const MAX_IMAGE: usize = 32 * 1024 * 1024;
-/// Profile effects are long, card-sized loops; under `MAX_IMAGE` they shrink until blurry.
-const MAX_COLLECTIBLE_IMAGE: usize = 96 * 1024 * 1024;
 const MAX_TOTAL: usize = 256 * 1024 * 1024;
 const MAX_FRAMES: usize = 600;
 const MAX_DIMENSION: u32 = 4096;
@@ -43,6 +41,9 @@ const SMALL_DOWNLOADS: usize = 8;
 const SMALL_DECODES: usize = 2;
 const MAX_SOURCE_BYTES: u64 = 32 * 1024 * 1024;
 const STALE_AFTER: Duration = Duration::from_secs(2);
+/// An animation not shown for this long is dropped even under budget, so memory follows what
+/// is on screen rather than filling the budget with what was. Coming back decodes it again.
+const UNSEEN_DROP: Duration = Duration::from_secs(30);
 /// A just-decoded image may still be waiting for its debounced repaint.
 const FRESH_FOR: Duration = Duration::from_secs(1);
 /// Must stay under `STALE_AFTER`, or jobs for visible tiles get cancelled between repaints.
@@ -111,7 +112,12 @@ fn still_wanted(stamp: &Mutex<Instant>) -> bool {
 
 enum DecodeOutcome {
     Decoded(Arc<RenderImage>, usize, Option<NonZeroU32>),
-    Stream(Arc<RenderImage>, std::path::PathBuf, std::path::PathBuf),
+    Stream(
+        Arc<RenderImage>,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        Option<NonZeroU32>,
+    ),
     Cancelled,
 }
 
@@ -145,6 +151,7 @@ struct Cache {
     pump_pending: bool,
     refresh_pending: bool,
     heartbeat_running: bool,
+    purge_scheduled: bool,
 }
 
 struct AnimatedCache(Rc<RefCell<Cache>>);
@@ -380,7 +387,8 @@ impl Element for AnimatedImage {
                 if bounds.intersect(&window.content_mask().bounds).is_empty() {
                     return;
                 }
-                let streamed = stream::paint(&image, animate, window, cx);
+                let clock = started_at.map(|started_at| (started_at, plays));
+                let streamed = stream::paint(&image, animate, clock, window, cx);
                 let image = streamed.as_ref().unwrap_or(&image);
                 let frame = match (started_at, global_id) {
                     _ if !animate => 0,
@@ -700,7 +708,8 @@ fn fallback_spec(spec: &ImageSpec, failed: bool) -> Option<ImageSpec> {
 /// Intrinsic APNG play counts are retained for collectibles; `None` means unbounded.
 pub(crate) fn play_count(spec: &ImageSpec, size: u32, cx: &App) -> Option<NonZeroU32> {
     let cache = cx.try_global::<AnimatedCache>()?.0.borrow();
-    match cache.entries.get(spec)?.get(&images::rounded_size(size))? {
+    let size = cache.serving_size(spec, images::rounded_size(size));
+    match cache.entries.get(spec)?.get(&size)? {
         Entry::Ready { plays, .. } => *plays,
         _ => None,
     }
@@ -713,9 +722,9 @@ pub fn state(spec: &ImageSpec, size: u32, cx: &App) -> Load {
     else {
         return Load::Failed;
     };
-    let size = images::rounded_size(size);
     {
         let mut state = cache.borrow_mut();
+        let size = state.serving_size(spec, images::rounded_size(size));
         state.clock = state.clock.saturating_add(1);
         let used = state.clock;
         if let Some(entry) = state
@@ -732,7 +741,10 @@ pub fn state(spec: &ImageSpec, size: u32, cx: &App) -> Load {
                 } => {
                     *stamp = used;
                     *seen = Instant::now();
-                    return Load::Ready(image.clone());
+                    let image = image.clone();
+                    drop(state);
+                    schedule_purge(cache, cx);
+                    return Load::Ready(image);
                 }
                 Entry::Failed => return Load::Failed,
                 Entry::Pending { .. } => {}
@@ -753,6 +765,60 @@ pub fn state(spec: &ImageSpec, size: u32, cx: &App) -> Load {
 }
 
 impl Cache {
+    /// The size `spec` is served at for a request of `size`. A profile effect without a ready
+    /// decode at that size takes the smallest ready larger one, so cards of different sizes
+    /// share one copy instead of holding one each.
+    fn serving_size(&self, spec: &ImageSpec, size: u32) -> u32 {
+        let Some(sizes) = self.entries.get(spec) else {
+            return size;
+        };
+        if !matches!(spec, ImageSpec::Collectible { .. })
+            || matches!(sizes.get(&size), Some(Entry::Ready { .. }))
+        {
+            return size;
+        }
+        sizes
+            .iter()
+            .filter(|&(&ready, entry)| ready > size && matches!(entry, Entry::Ready { .. }))
+            .map(|(&ready, _)| ready)
+            .min()
+            .unwrap_or(size)
+    }
+
+    /// Drops animations not shown for `UNSEEN_DROP`; also says whether any are left to check
+    /// again later.
+    fn purge_unseen(&mut self) -> (Vec<Arc<RenderImage>>, bool) {
+        let mut purged = Vec::new();
+        let mut remaining = false;
+        let mut freed = 0;
+        self.entries.retain(|spec, sizes| {
+            sizes.retain(|_, entry| match entry {
+                Entry::Ready {
+                    image,
+                    bytes,
+                    ready_at,
+                    seen,
+                    ..
+                } if Arc::strong_count(image) == 1 + usize::from(stream::selected(spec))
+                    && ready_at.elapsed() >= FRESH_FOR
+                    && seen.elapsed() >= UNSEEN_DROP =>
+                {
+                    freed += *bytes;
+                    purged.push(image.clone());
+                    false
+                }
+                Entry::Ready { .. } => {
+                    remaining = true;
+                    true
+                }
+                _ => true,
+            });
+            !sizes.is_empty()
+        });
+        self.bytes -= freed;
+        (purged, remaining)
+    }
+
     fn request(&mut self, spec: &ImageSpec, size: u32, now: Instant) {
         let mut found = false;
         let mut promote = false;
@@ -955,6 +1021,33 @@ pub(crate) fn drop_images(images: Vec<Arc<RenderImage>>, cx: &App) {
     .detach();
 }
 
+/// Checks for unseen animations every `UNSEEN_DROP` while any are cached.
+fn schedule_purge(cache: Rc<RefCell<Cache>>, cx: &App) {
+    {
+        let mut state = cache.borrow_mut();
+        if state.purge_scheduled {
+            return;
+        }
+        state.purge_scheduled = true;
+    }
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor().timer(UNSEEN_DROP).await;
+            let (purged, remaining) = {
+                let mut state = cache.borrow_mut();
+                let (purged, remaining) = state.purge_unseen();
+                state.purge_scheduled = remaining;
+                (purged, remaining)
+            };
+            cx.update(|cx| drop_images(purged, cx));
+            if !remaining {
+                break;
+            }
+        }
+    })
+    .detach();
+}
+
 /// Repaint while work is in flight so visible still fallbacks keep refreshing their stamps.
 fn start_heartbeat(cache: Rc<RefCell<Cache>>, cx: &App) {
     {
@@ -1026,6 +1119,15 @@ fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
             let collectible = matches!(&request.0, ImageSpec::Collectible { .. });
             let streaming = stream::selected(&request.0);
             let cached = if matches!(lane, Lane::Gif) && !streaming {
+                // A cached animation is as large in memory as a fresh decode, so it waits its
+                // turn the same way.
+                let _permit = decode_permits(lane)
+                    .acquire()
+                    .await
+                    .context("animation decode permits closed")?;
+                if !still_wanted(&job_stamp) {
+                    return Ok(DecodeOutcome::Cancelled);
+                }
                 frames::load(&service.frames_path(&request.0, request.1)).await
             } else {
                 None
@@ -1054,9 +1156,14 @@ fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
                     .frames_path(&request.0, request.1)
                     .with_extension("spool");
                 let image = stream::first(path.clone(), request.1, job_stamp.clone()).await?;
+                let plays = if collectible {
+                    source_play_count(&tokio::fs::read(&path).await?)?
+                } else {
+                    None
+                };
                 return Ok(match image {
                     Some(image) if still_wanted(&job_stamp) => {
-                        DecodeOutcome::Stream(image, path, spool)
+                        DecodeOutcome::Stream(image, path, spool, plays)
                     }
                     _ => DecodeOutcome::Cancelled,
                 });
@@ -1072,20 +1179,10 @@ fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
             let frames_path = service.frames_path(&request.0, request.1);
             let (image, bytes, plays) = tokio::task::spawn_blocking(move || {
                 let source = std::fs::read(path)?;
-                let plays = if collectible {
-                    source_play_count(&source)?
-                } else {
-                    None
-                };
-                let max_image = if collectible {
-                    MAX_COLLECTIBLE_IMAGE
-                } else {
-                    MAX_IMAGE
-                };
                 let (image, bytes) =
-                    decode_with_budget(&source, request.1, MAX_SOURCE_BYTES, max_image)?;
+                    decode_with_budget(&source, request.1, MAX_SOURCE_BYTES, MAX_IMAGE)?;
                 if matches!(lane, Lane::Gif) {
-                    match frames::save(&frames_path, &image, plays) {
+                    match frames::save(&frames_path, &image, None) {
                         Ok(written) => service.record_frames_write(written),
                         Err(error) => log::debug!(
                             "Could not cache decoded frames at {}: {error}",
@@ -1093,7 +1190,7 @@ fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
                         ),
                     }
                 }
-                Ok::<_, anyhow::Error>((image, bytes, plays))
+                Ok::<_, anyhow::Error>((image, bytes, None))
             })
             .await
             .context("decode worker failed")??;
@@ -1104,13 +1201,13 @@ fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
         cx.spawn(async move |cx| {
             let result = task.await;
             let result = cx.update(|cx| match result {
-                Ok(DecodeOutcome::Stream(image, path, spool)) => {
+                Ok(DecodeOutcome::Stream(image, path, spool, plays)) => {
                     if !still_wanted(&stamp) {
                         return Ok(DecodeOutcome::Cancelled);
                     }
                     let bytes =
                         stream::register(&key.0, key.1, path, Some(spool), image.clone(), cx);
-                    Ok(DecodeOutcome::Decoded(image, bytes, None))
+                    Ok(DecodeOutcome::Decoded(image, bytes, plays))
                 }
                 other => other,
             });
@@ -1180,6 +1277,11 @@ fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
             if success || cancelled {
                 let cache = cache.clone();
                 cx.update(|cx| schedule_refresh(cache, cx));
+            }
+            if success {
+                // It may finish after whoever asked has gone, and never be asked for again.
+                let cache = cache.clone();
+                cx.update(|cx| schedule_purge(cache, cx));
             }
             cx.update(|cx| start_next(cache, cx));
         })
@@ -1367,6 +1469,7 @@ fn decode_with_budget(
     // in two streaming passes instead of failing.
     let frame_bytes = u64::from(dimensions.0) * u64::from(dimensions.1) * 4;
     let mut source_frames = Vec::new();
+    let mut over_budget = false;
     for frame in source {
         ensure!(
             source_frames.len() < MAX_FRAMES,
@@ -1376,7 +1479,8 @@ fn decode_with_budget(
             .checked_mul(frame_bytes)
             .context("animation size overflow")?;
         if held > budget {
-            return decode_streaming(bytes, size, max_image);
+            over_budget = true;
+            break;
         }
         let frame = frame?;
         ensure!(
@@ -1384,6 +1488,11 @@ fn decode_with_budget(
             "frame size changed"
         );
         source_frames.push(frame);
+    }
+    if over_budget {
+        // The decoder went with the loop; free the frames it gave before decoding twice more.
+        drop(source_frames);
+        return decode_streaming(bytes, size, max_image);
     }
     let count = source_frames.len();
     let target = fitted_size(dimensions.0, dimensions.1, size, count, max_image)?;
@@ -2203,6 +2312,57 @@ mod tests {
         assert_eq!(evicted.len(), 1);
         assert_eq!(Arc::as_ptr(&evicted[0]), image_ptr);
         assert_eq!(Arc::strong_count(&evicted[0]), 1);
+    }
+
+    #[test]
+    fn effects_share_a_larger_ready_decode_and_unseen_animations_go() {
+        let mut cache = Cache::default();
+        let effect = ImageSpec::Collectible {
+            url: "https://cdn.discordapp.com/assets/content/effect".into(),
+        };
+        let old = Instant::now() - UNSEEN_DROP - Duration::from_secs(1);
+        assert_eq!(cache.serving_size(&effect, 600), 600);
+        // The stream player holds a registered effect's still image too.
+        let registered = blank_image();
+        put_ready(
+            &mut cache,
+            &(effect.clone(), 880),
+            registered.clone(),
+            100,
+            0,
+            old,
+        );
+        cache.bytes = 100;
+        assert_eq!(cache.serving_size(&effect, 600), 880);
+        assert_eq!(cache.serving_size(&effect, 1200), 1200);
+        let avatar = ImageSpec::DefaultAvatar { index: 1 };
+        put_ready(
+            &mut cache,
+            &(avatar.clone(), 880),
+            blank_image(),
+            10,
+            1,
+            old,
+        );
+        assert_eq!(cache.serving_size(&avatar, 600), 600);
+        let shown = ImageSpec::DefaultAvatar { index: 2 };
+        put_ready(&mut cache, &(shown.clone(), 880), blank_image(), 1, 2, old);
+        if let Some(Entry::Ready { seen, .. }) = cache
+            .entries
+            .get_mut(&shown)
+            .and_then(|sizes| sizes.get_mut(&880))
+        {
+            *seen = Instant::now();
+        }
+        cache.bytes = 111;
+
+        let (purged, remaining) = cache.purge_unseen();
+        assert_eq!(purged.len(), 2);
+        assert!(remaining);
+        assert!(!has(&cache, &(effect, 880)));
+        assert!(!has(&cache, &(avatar, 880)));
+        assert!(has(&cache, &(shown, 880)));
+        assert_eq!(cache.bytes, 1);
     }
 
     #[test]

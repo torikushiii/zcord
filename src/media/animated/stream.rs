@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Weak,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
         mpsc,
     },
     time::SystemTime,
@@ -22,12 +22,24 @@ const DECODE_SLICE: usize = 8;
 const CATCH_UP_BUDGET: Duration = Duration::from_millis(100);
 const SPOOL_HEADER: u64 = 12;
 const SPOOL_LIMIT: u64 = 256 * 1024 * 1024;
+/// Catch-up slices in a row whose frame is already past, held back for a playback on a
+/// caller's clock; after that one shows anyway, so a decoder that can't keep up still moves.
+const MAX_STALE_SKIPS: u8 = 16;
 
 pub(super) fn selected(spec: &ImageSpec) -> bool {
     matches!(
         spec,
-        ImageSpec::Media { .. } | ImageSpec::Attachment { .. } | ImageSpec::LocalGif { .. }
+        ImageSpec::Media { .. }
+            | ImageSpec::Attachment { .. }
+            | ImageSpec::LocalGif { .. }
+            | ImageSpec::Collectible { .. }
     )
+}
+
+/// Tells playbacks apart in the decode workers; two may share one still image.
+fn next_key() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 pub(super) fn source_spec(spec: &ImageSpec) -> ImageSpec {
@@ -116,6 +128,10 @@ struct Demand {
     ready: Option<Prepared>,
     terminal: bool,
     slots: Arc<AtomicUsize>,
+    /// Set for playbacks on a caller's clock: frames already past are held back while
+    /// decoding catches up, so layers sharing that clock don't each show a different moment.
+    follows_clock: bool,
+    stale_skips: u8,
 }
 
 impl Demand {
@@ -132,6 +148,8 @@ impl Demand {
             ready: None,
             terminal: false,
             slots: Arc::new(AtomicUsize::new(0)),
+            follows_clock: false,
+            stale_skips: 0,
         }
     }
 
@@ -149,6 +167,7 @@ impl Demand {
         self.ready = None;
         self.terminal = false;
         self.target = Duration::ZERO;
+        self.stale_skips = 0;
     }
 }
 
@@ -189,21 +208,57 @@ impl Drop for DisplayLease {
     }
 }
 
+/// Where a playback may spool its frames, and the cache that counts the file once written.
+#[derive(Clone)]
+struct SpoolTarget {
+    file: PathBuf,
+    service: Option<Arc<images::Service>>,
+}
+
 struct Playback {
+    key: u64,
     spec: ImageSpec,
     kind: SourceKind,
     path: PathBuf,
-    spool: Option<PathBuf>,
+    spool: Option<SpoolTarget>,
     size: u32,
     still: Rc<FrameImage>,
     current: Option<Rc<FrameImage>>,
     end: Duration,
     started: Option<Instant>,
+    /// A start time set by the caller, as for profile effect layers that play in step;
+    /// playback then follows it instead of pausing while unseen.
+    clock: Option<Instant>,
+    plays: Option<NonZeroU32>,
     shared: Arc<Mutex<Demand>>,
 }
 
 impl Playback {
+    fn clocked(&self, clock: Instant, plays: Option<NonZeroU32>) -> Self {
+        Self {
+            key: next_key(),
+            spec: self.spec.clone(),
+            kind: self.kind.clone(),
+            path: self.path.clone(),
+            spool: self.spool.clone(),
+            size: self.size,
+            still: self.still.clone(),
+            current: None,
+            end: Duration::from(self.still.image.delay(0)),
+            started: None,
+            clock: Some(clock),
+            plays,
+            shared: Arc::new(Mutex::new(Demand {
+                follows_clock: true,
+                ..Demand::new(Instant::now())
+            })),
+        }
+    }
+
     fn resume(&mut self, now: Instant) -> Duration {
+        if let Some(clock) = self.clock {
+            return now.saturating_duration_since(clock);
+        }
         let paused_since = {
             let shared = self.shared.lock().unwrap_or_else(|p| p.into_inner());
             shared.paused_since
@@ -216,7 +271,7 @@ impl Playback {
 
     fn expire(&mut self, now: Instant) -> bool {
         let mut shared = self.shared.lock().unwrap_or_else(|p| p.into_inner());
-        if self.started.is_none() || !shared.idle(now) {
+        if (self.started.is_none() && self.current.is_none()) || !shared.idle(now) {
             return false;
         }
         shared.reset();
@@ -230,7 +285,15 @@ impl Playback {
 #[derive(Default)]
 struct Streams {
     entries: HashMap<gpui::ImageId, Rc<RefCell<Playback>>>,
+    /// Playbacks of a registered image on a caller's clock, dropped once unseen.
+    clocked: HashMap<(gpui::ImageId, Instant), Rc<RefCell<Playback>>>,
     retired: Retirements,
+}
+
+impl Streams {
+    fn playbacks(&self) -> impl Iterator<Item = &Rc<RefCell<Playback>>> {
+        self.entries.values().chain(self.clocked.values())
+    }
 }
 
 struct StreamGlobal {
@@ -250,11 +313,20 @@ pub(super) fn init(cx: &mut App) {
             cx.background_executor().timer(SWEEP).await;
             let Some(state) = weak.upgrade() else { break };
             cx.update(|cx| {
+                let now = Instant::now();
+                state.borrow_mut().clocked.retain(|_, playback| {
+                    !playback
+                        .borrow()
+                        .shared
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .idle(now)
+                });
                 let state = state.borrow();
                 drain(&state.retired, cx);
                 let mut changed = false;
-                for playback in state.entries.values() {
-                    changed |= playback.borrow_mut().expire(Instant::now());
+                for playback in state.playbacks() {
+                    changed |= playback.borrow_mut().expire(now);
                 }
                 if changed {
                     cx.refresh_windows();
@@ -268,7 +340,7 @@ pub(super) fn init(cx: &mut App) {
         cx.defer(move |cx| {
             let Some(state) = weak.upgrade() else { return };
             let state = state.borrow();
-            for playback in state.entries.values() {
+            for playback in state.playbacks() {
                 playback.borrow_mut().expire(Instant::now() + IDLE);
             }
             drain(&state.retired, cx);
@@ -278,9 +350,9 @@ pub(super) fn init(cx: &mut App) {
     let quit = {
         let weak = Rc::downgrade(&state);
         cx.on_app_quit(move |_| {
-            let mut ids = Vec::new();
+            let mut keys = Vec::new();
             if let Some(state) = weak.upgrade() {
-                for (id, playback) in &state.borrow().entries {
+                for playback in state.borrow().playbacks() {
                     let playback = playback.borrow();
                     if matches!(
                         playback.spec,
@@ -291,17 +363,17 @@ pub(super) fn init(cx: &mut App) {
                             .lock()
                             .unwrap_or_else(|p| p.into_inner())
                             .reset();
-                        ids.push(*id);
+                        keys.push(playback.key);
                     }
                 }
             }
             let mut replies = Vec::new();
-            if !ids.is_empty() {
+            if !keys.is_empty() {
                 for worker in &pool().workers {
                     let (reply, receiver) = tokio::sync::oneshot::channel();
                     if worker
                         .send(Command::Release {
-                            ids: ids.clone(),
+                            keys: keys.clone(),
                             reply,
                         })
                         .is_ok()
@@ -344,9 +416,14 @@ pub(crate) fn register(
         slot: None,
         retired: state.retired.clone(),
     });
+    let spool = spool.map(|file| SpoolTarget {
+        file,
+        service: images::download_service(cx),
+    });
     state.entries.insert(
         id,
         Rc::new(RefCell::new(Playback {
+            key: next_key(),
             spec: spec.clone(),
             kind: SourceKind::of(spec),
             path,
@@ -356,6 +433,8 @@ pub(crate) fn register(
             current: None,
             end,
             started: None,
+            clock: None,
+            plays: None,
             shared: Arc::new(Mutex::new(Demand::new(Instant::now()))),
         })),
     );
@@ -366,19 +445,33 @@ pub(super) fn forget(id: gpui::ImageId, cx: &App) -> bool {
     let Some(global) = cx.try_global::<StreamGlobal>() else {
         return false;
     };
-    global.state.borrow_mut().entries.remove(&id).is_some()
+    let mut state = global.state.borrow_mut();
+    state.clocked.retain(|(image, _), _| *image != id);
+    state.entries.remove(&id).is_some()
 }
 
+/// The frame of `still`'s animation to show now. With a `clock`, it plays from that start
+/// for the given number of plays (`None` loops forever) instead of on its own clock.
 pub(super) fn paint(
     still: &Arc<RenderImage>,
     animate: bool,
+    clock: Option<(Instant, Option<NonZeroU32>)>,
     window: &mut Window,
     cx: &mut App,
 ) -> Option<Arc<RenderImage>> {
     let global = cx.try_global::<StreamGlobal>()?;
     let (playback, retired) = {
-        let state = global.state.borrow();
-        (state.entries.get(&still.id)?.clone(), state.retired.clone())
+        let mut state = global.state.borrow_mut();
+        let registered = state.entries.get(&still.id)?.clone();
+        let playback = match clock {
+            None => registered,
+            Some((start, plays)) => state
+                .clocked
+                .entry((still.id, start))
+                .or_insert_with(|| Rc::new(RefCell::new(registered.borrow().clocked(start, plays))))
+                .clone(),
+        };
+        (playback, state.retired.clone())
     };
     let mut playback = playback.borrow_mut();
     let now = Instant::now();
@@ -420,10 +513,11 @@ pub(super) fn paint(
             shared.queued = true;
             if pool()
                 .send(
-                    still.id.0,
+                    playback.key as usize,
                     Command::Advance {
-                        id: still.id,
+                        key: playback.key,
                         generation: shared.generation,
+                        plays: playback.plays,
                         path: playback.path.clone(),
                         size: playback.size,
                         kind: playback.kind.clone(),
@@ -475,7 +569,7 @@ fn pin_scene(
 
 enum Command {
     Release {
-        ids: Vec<gpui::ImageId>,
+        keys: Vec<u64>,
         reply: tokio::sync::oneshot::Sender<()>,
     },
     First {
@@ -486,12 +580,13 @@ enum Command {
         reply: tokio::sync::oneshot::Sender<Result<Option<Arc<RenderImage>>>>,
     },
     Advance {
-        id: gpui::ImageId,
+        key: u64,
         generation: u64,
+        plays: Option<NonZeroU32>,
         path: PathBuf,
         size: u32,
         kind: SourceKind,
-        spool: Option<PathBuf>,
+        spool: Option<SpoolTarget>,
         shared: Arc<Mutex<Demand>>,
     },
 }
@@ -575,7 +670,7 @@ struct Session {
 }
 
 fn worker(receiver: mpsc::Receiver<Command>) {
-    let mut sessions: HashMap<gpui::ImageId, Session> = HashMap::new();
+    let mut sessions: HashMap<u64, Session> = HashMap::new();
     loop {
         sweep_sessions(&mut sessions, Instant::now());
         let command = match receiver.recv_timeout(SWEEP) {
@@ -584,9 +679,9 @@ fn worker(receiver: mpsc::Receiver<Command>) {
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         };
         match command {
-            Command::Release { ids, reply } => {
-                for id in ids {
-                    sessions.remove(&id);
+            Command::Release { keys, reply } => {
+                for key in keys {
+                    sessions.remove(&key);
                 }
                 let _ = reply.send(());
             }
@@ -611,8 +706,9 @@ fn worker(receiver: mpsc::Receiver<Command>) {
                 let _ = reply.send(result);
             }
             Command::Advance {
-                id,
+                key,
                 generation,
+                plays,
                 path,
                 size,
                 kind,
@@ -621,8 +717,9 @@ fn worker(receiver: mpsc::Receiver<Command>) {
             } => {
                 advance(
                     &mut sessions,
-                    id,
+                    key,
                     generation,
+                    plays,
                     path,
                     size,
                     kind,
@@ -634,7 +731,7 @@ fn worker(receiver: mpsc::Receiver<Command>) {
     }
 }
 
-fn sweep_sessions(sessions: &mut HashMap<gpui::ImageId, Session>, now: Instant) {
+fn sweep_sessions(sessions: &mut HashMap<u64, Session>, now: Instant) {
     sessions.retain(|_, session| {
         session.shared.upgrade().is_some_and(|shared| {
             let shared = shared.lock().unwrap_or_else(|p| p.into_inner());
@@ -644,13 +741,14 @@ fn sweep_sessions(sessions: &mut HashMap<gpui::ImageId, Session>, now: Instant) 
 }
 
 fn advance(
-    sessions: &mut HashMap<gpui::ImageId, Session>,
-    id: gpui::ImageId,
+    sessions: &mut HashMap<u64, Session>,
+    id: u64,
     generation: u64,
+    plays: Option<NonZeroU32>,
     path: PathBuf,
     size: u32,
     kind: SourceKind,
-    spool: Option<PathBuf>,
+    spool: Option<SpoolTarget>,
     shared: &Arc<Mutex<Demand>>,
 ) {
     let (target, slot) = {
@@ -683,7 +781,13 @@ fn advance(
             sessions.insert(
                 id,
                 Session {
-                    core: Core::open_kind(path.clone(), size, kind, spool)?,
+                    core: Core::open_kind(
+                        path.clone(),
+                        size,
+                        kind,
+                        spool.as_ref().map(|spool| spool.file.clone()),
+                    )?
+                    .with_plays(plays),
                     generation,
                     shared: Arc::downgrade(shared),
                 },
@@ -694,8 +798,8 @@ fn advance(
             let demand = shared.lock().unwrap_or_else(|p| p.into_inner());
             demand.generation == generation && demand.wanted(Instant::now())
         })?;
-        let spool = session.core.wants_spool();
-        Ok::<_, anyhow::Error>((frame, session.core.terminal, spool))
+        let spool_file = session.core.wants_spool();
+        Ok::<_, anyhow::Error>((frame, session.core.terminal, spool_file))
     })();
     let mut demand = shared.lock().unwrap_or_else(|p| p.into_inner());
     if generation != demand.generation {
@@ -704,13 +808,14 @@ fn advance(
     }
     demand.queued = false;
     match result {
-        Ok((frame, terminal, spool)) => {
-            if let Some(file) = spool
+        Ok((frame, terminal, spool_file)) => {
+            if let Some(file) = spool_file
                 && spool_pool()
                     .send(SpoolJob {
                         source: path,
                         size,
                         file,
+                        service: spool.and_then(|spool| spool.service),
                         shared: Arc::downgrade(shared),
                     })
                     .is_err()
@@ -721,7 +826,14 @@ fn advance(
             if terminal {
                 sessions.remove(&id);
             }
-            if demand.wanted(Instant::now()) {
+            let stale = !terminal
+                && demand.follows_clock
+                && demand.stale_skips < MAX_STALE_SKIPS
+                && frame.as_ref().is_some_and(|(_, _, end)| *end <= target);
+            if stale {
+                demand.stale_skips += 1;
+            } else if demand.wanted(Instant::now()) {
+                demand.stale_skips = 0;
                 demand.ready = frame.map(|(image, start, end)| Prepared {
                     image,
                     start,
@@ -896,10 +1008,18 @@ impl FrameSource for SpoolFrames {
     }
 }
 
-fn write_spool(source: &Path, size: u32, file: &Path, keep_going: impl Fn() -> bool) -> Result<()> {
+/// Writes the spool and returns its size.
+fn write_spool(
+    source: &Path,
+    size: u32,
+    file: &Path,
+    keep_going: impl Fn() -> bool,
+) -> Result<u64> {
     let temp = file.with_extension("spool.tmp");
-    let result = write_spool_frames(source, size, &temp, keep_going)
-        .and_then(|()| std::fs::rename(&temp, file).context("could not publish spool"));
+    let result = write_spool_frames(source, size, &temp, keep_going).and_then(|written| {
+        std::fs::rename(&temp, file).context("could not publish spool")?;
+        Ok(written)
+    });
     if result.is_err() {
         let _ = std::fs::remove_file(&temp);
     }
@@ -911,7 +1031,7 @@ fn write_spool_frames(
     size: u32,
     file: &Path,
     keep_going: impl Fn() -> bool,
-) -> Result<()> {
+) -> Result<u64> {
     let (dimensions, frames) = self::source(source)?;
     let target = output_size(dimensions.0, dimensions.1, size, 1 + PLAYBACK_FRAMES)?;
     let frame_bytes = u64::from(target.0) * u64::from(target.1) * 4;
@@ -934,13 +1054,14 @@ fn write_spool_frames(
         count += 1;
     }
     writer.flush()?;
-    Ok(())
+    Ok(total)
 }
 
 struct SpoolJob {
     source: PathBuf,
     size: u32,
     file: PathBuf,
+    service: Option<Arc<images::Service>>,
     shared: Weak<Mutex<Demand>>,
 }
 
@@ -961,8 +1082,14 @@ fn spool_pool() -> &'static mpsc::Sender<SpoolJob> {
                                 .idle(Instant::now())
                         })
                     };
-                    if let Err(error) = write_spool(&job.source, job.size, &job.file, keep_going) {
-                        log::debug!("Could not spool GIF frames: {error}");
+                    match write_spool(&job.source, job.size, &job.file, keep_going) {
+                        // Counted like decoded frames, so the frame cache stays in budget.
+                        Ok(written) => {
+                            if let Some(service) = job.service {
+                                service.record_frames_write(written);
+                            }
+                        }
+                        Err(error) => log::debug!("Could not spool GIF frames: {error}"),
                     }
                 }
             });
@@ -978,6 +1105,9 @@ struct Core {
     count: usize,
     position: Duration,
     base: Duration,
+    /// How many times to play before holding the last frame; `None` loops forever.
+    plays: Option<NonZeroU32>,
+    cycles: u64,
     terminal: bool,
     spool: Option<PathBuf>,
     spool_requested: bool,
@@ -1080,6 +1210,8 @@ impl Core {
             count: 0,
             position: Duration::ZERO,
             base: Duration::ZERO,
+            plays: None,
+            cycles: 0,
             terminal: false,
             spool: None,
             spool_requested: false,
@@ -1087,6 +1219,11 @@ impl Core {
             #[cfg(test)]
             decoded: 0,
         }
+    }
+
+    fn with_plays(mut self, plays: Option<NonZeroU32>) -> Self {
+        self.plays = plays;
+        self
     }
 
     fn wants_spool(&mut self) -> Option<PathBuf> {
@@ -1108,6 +1245,8 @@ impl Core {
         }
         let started = Instant::now();
         let mut latest = None;
+        // Whether `latest` has been through its source's `render` already.
+        let mut rendered = false;
         for _ in 0..DECODE_SLICE {
             if !wanted() {
                 break;
@@ -1122,6 +1261,17 @@ impl Core {
                 Ok(SourceRead::End) if self.count > 1 => {
                     let cycle = self.position;
                     let loops = target.saturating_sub(self.base).as_nanos() / cycle.as_nanos();
+                    self.cycles = self
+                        .cycles
+                        .saturating_add(u64::try_from(loops.max(1)).unwrap_or(u64::MAX));
+                    if self
+                        .plays
+                        .is_some_and(|plays| self.cycles >= u64::from(plays.get()))
+                    {
+                        // Played out: the last frame shown stays.
+                        self.terminal = true;
+                        break;
+                    }
                     self.base += Duration::from_nanos(
                         (cycle.as_nanos() * loops.max(1)).min(u128::from(u64::MAX)) as u64,
                     );
@@ -1131,6 +1281,13 @@ impl Core {
                         && let Some(expected) = self.source.target()
                         && let Ok(spool) = SpoolFrames::open(file, expected)
                     {
+                        // A frame read from the old source needs that source's resize and
+                        // colour order; the spool's frames are stored done.
+                        if !rendered {
+                            latest = latest
+                                .map(|(frame, start, end)| (self.source.render(frame), start, end));
+                            rendered = true;
+                        }
                         self.source = Box::new(spool);
                         swapped = true;
                     }
@@ -1160,6 +1317,7 @@ impl Core {
             self.position += delay;
             let end = self.base + self.position;
             latest = Some((frame, start, end));
+            rendered = false;
             if end > target || started.elapsed() >= CATCH_UP_BUDGET {
                 break;
             }
@@ -1168,7 +1326,11 @@ impl Core {
             return Ok(None);
         };
         let rendering = Instant::now();
-        let frame = self.source.render(frame);
+        let frame = if rendered {
+            frame
+        } else {
+            self.source.render(frame)
+        };
         if self.spool.is_some() {
             self.spent += rendering.elapsed();
         }
@@ -1284,6 +1446,7 @@ mod tests {
 
     fn playback(path: PathBuf, retired: &Retirements) -> Playback {
         Playback {
+            key: next_key(),
             spec: spec(),
             kind: SourceKind::Image,
             path,
@@ -1297,15 +1460,13 @@ mod tests {
             current: None,
             end: Duration::from_millis(100),
             started: Some(Instant::now()),
+            clock: None,
+            plays: None,
             shared: Arc::new(Mutex::new(Demand::new(Instant::now()))),
         }
     }
 
-    fn request(
-        playback: &Playback,
-        sessions: &mut HashMap<gpui::ImageId, Session>,
-        target: Duration,
-    ) {
+    fn request(playback: &Playback, sessions: &mut HashMap<u64, Session>, target: Duration) {
         let generation = {
             let mut shared = playback.shared.lock().unwrap();
             shared.queued = true;
@@ -1315,8 +1476,9 @@ mod tests {
         };
         advance(
             sessions,
-            playback.still.image.id,
+            playback.key,
             generation,
+            playback.plays,
             playback.path.clone(),
             playback.size,
             playback.kind.clone(),
@@ -1630,8 +1792,9 @@ mod tests {
             .send(
                 id.0,
                 Command::Advance {
-                    id,
+                    key: id.0 as u64,
                     generation: 0,
+                    plays: None,
                     path: PathBuf::new(),
                     size: 8,
                     kind,
@@ -1645,7 +1808,7 @@ mod tests {
             .send(
                 id.0,
                 Command::Release {
-                    ids: vec![id],
+                    keys: vec![id.0 as u64],
                     reply,
                 },
             )
@@ -1683,6 +1846,81 @@ mod tests {
         let (frame, start, _) = core.step(target, || true).unwrap().unwrap();
         assert_eq!(start, target);
         assert_eq!(frame.as_bytes(0), eager.as_bytes(0));
+    }
+
+    #[test]
+    fn a_finite_play_count_holds_the_last_frame() {
+        let bytes = gif(4);
+        let fixture = Fixture::new(&bytes);
+        let eager = decode(&bytes, 8).unwrap().0;
+        let mut core = Core::open(fixture.0.clone(), 8)
+            .unwrap()
+            .with_plays(NonZeroU32::new(1));
+        let far = Duration::from_secs(10);
+        let mut last = None;
+        while !core.terminal {
+            if let Some((frame, _, _)) = core.step(far, || true).unwrap() {
+                last = Some(frame);
+            }
+        }
+        assert_eq!(last.unwrap().as_bytes(0), eager.as_bytes(3));
+        assert!(core.step(far, || true).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_clocked_playback_holds_back_frames_already_past_while_catching_up() {
+        let fixture = Fixture::new(&gif(100));
+        let retired = Retirements::default();
+        let registered = playback(fixture.0.clone(), &retired);
+        let both = [
+            registered.clocked(Instant::now(), None),
+            playback(fixture.0.clone(), &retired),
+        ];
+        // Far enough in that one slice of eight frames can't reach it.
+        let target = Duration::from_secs(5);
+        for playback in &both {
+            let _lease = DisplayLease::new(&playback.shared, true);
+            let mut sessions = HashMap::new();
+            request(playback, &mut sessions, target);
+            let shared = playback.shared.lock().unwrap();
+            if shared.follows_clock {
+                assert!(shared.ready.is_none());
+                assert_eq!(shared.stale_skips, 1);
+            } else {
+                assert!(shared.ready.as_ref().unwrap().end <= target);
+            }
+        }
+        let clocked = &both[0];
+        let _lease = DisplayLease::new(&clocked.shared, true);
+        let mut sessions = HashMap::new();
+        for _ in 0..MAX_STALE_SKIPS {
+            if clocked.shared.lock().unwrap().ready.is_some() {
+                break;
+            }
+            request(clocked, &mut sessions, target);
+        }
+        let shared = clocked.shared.lock().unwrap();
+        assert!(shared.ready.as_ref().unwrap().end > target);
+        assert_eq!(shared.stale_skips, 0);
+    }
+
+    #[test]
+    fn each_caller_clock_gets_its_own_playback() {
+        let fixture = Fixture::new(&gif(4));
+        let retired = Retirements::default();
+        let registered = playback(fixture.0.clone(), &retired);
+        let start = Instant::now();
+        let first = registered.clocked(start, NonZeroU32::new(1));
+        let second = registered.clocked(start + Duration::from_secs(1), None);
+        assert_ne!(first.key, second.key);
+        assert_ne!(first.key, registered.key);
+        assert!(!Arc::ptr_eq(&first.shared, &second.shared));
+        assert_eq!(first.plays, NonZeroU32::new(1));
+        let mut first = first;
+        assert_eq!(
+            first.resume(start + Duration::from_millis(250)),
+            Duration::from_millis(250)
+        );
     }
 
     struct SlowFrames {
@@ -1840,6 +2078,26 @@ mod tests {
     }
 
     #[test]
+    fn a_frame_read_before_a_spool_swap_is_still_processed() {
+        // Seven frames, then the end of the source, fill one decode slice exactly, so the
+        // slice's last frame was read from the source the swap replaces.
+        let source = gif(DECODE_SLICE - 1);
+        let fixture = Fixture::new(&source);
+        let other = Fixture::new(&gif_colored(3, [7, 8, 9, 255]));
+        let spool = TempFile::new("spool");
+        write_spool(&other.0, 8, &spool.0, || true).unwrap();
+        let expected = decode(&source, 8).unwrap().0;
+        let mut core = Core::open(fixture.0.clone(), 8).unwrap();
+        core.spool = Some(spool.0.clone());
+        let (frame, _, _) = core
+            .step(Duration::from_secs(10), || true)
+            .unwrap()
+            .unwrap();
+        assert!(core.spool.is_none());
+        assert_eq!(frame.as_bytes(0), expected.as_bytes(DECODE_SLICE - 2));
+    }
+
+    #[test]
     fn first_frame_jobs_use_the_bounded_pool_and_cancel_before_opening_stale_sources() {
         let bytes = gif(3);
         let fixture = Fixture::new(&bytes[..bytes.len() - 10]);
@@ -1911,18 +2169,18 @@ mod tests {
         assert!(sessions.is_empty());
         let lease = DisplayLease::new(&playback.shared, true);
         request(&playback, &mut sessions, playback.end);
-        let count = sessions[&playback.still.image.id].core.decoded;
+        let count = sessions[&playback.key].core.decoded;
         assert_eq!(count, 2);
         for _ in 0..100 {
             request(&playback, &mut sessions, Duration::from_secs(10));
         }
-        assert_eq!(sessions[&playback.still.image.id].core.decoded, count);
+        assert_eq!(sessions[&playback.key].core.decoded, count);
         playback.shared.lock().unwrap().ready = None;
         drop(lease);
         for _ in 0..100 {
             request(&playback, &mut sessions, Duration::from_secs(10));
         }
-        assert_eq!(sessions[&playback.still.image.id].core.decoded, count);
+        assert_eq!(sessions[&playback.key].core.decoded, count);
     }
 
     #[test]
@@ -1953,7 +2211,7 @@ mod tests {
         let _lease = DisplayLease::new(&playback.shared, true);
         request(&playback, &mut sessions, playback.end);
         adopt(&mut playback, &retired);
-        assert!(sessions.contains_key(&still_id));
+        assert!(sessions.contains_key(&playback.key));
         assert_eq!(
             playback.current.as_ref().unwrap().image.as_bytes(0),
             decode(&gif(100), 8).unwrap().0.as_bytes(1)
@@ -2030,8 +2288,9 @@ mod tests {
         playback.shared.lock().unwrap().reset();
         advance(
             &mut sessions,
-            playback.still.image.id,
+            playback.key,
             generation,
+            playback.plays,
             playback.path.clone(),
             playback.size,
             playback.kind.clone(),
@@ -2052,7 +2311,7 @@ mod tests {
         request(&playback, &mut sessions, playback.end);
         adopt(&mut playback, &retired);
         let current = playback.current.as_ref().unwrap().image.id;
-        let decoded = sessions[&playback.still.image.id].core.decoded;
+        let decoded = sessions[&playback.key].core.decoded;
         let inactive = DisplayLease::new(&playback.shared, false);
         drop(active);
         let paused = playback.shared.lock().unwrap().paused_since.unwrap();
@@ -2060,7 +2319,7 @@ mod tests {
         assert!(!playback.expire(paused + IDLE * 10));
         sweep_sessions(&mut sessions, paused + IDLE * 10);
         request(&playback, &mut sessions, playback.end);
-        assert_eq!(sessions[&playback.still.image.id].core.decoded, decoded);
+        assert_eq!(sessions[&playback.key].core.decoded, decoded);
         assert_eq!(playback.current.as_ref().unwrap().image.id, current);
         assert!(playback.shared.lock().unwrap().ready.is_none());
         let returned = paused + Duration::from_secs(10);
@@ -2112,7 +2371,6 @@ mod tests {
                 user_id: 1,
                 hash: "a_test".into(),
             },
-            ImageSpec::Collectible { url: "test".into() },
             ImageSpec::Nameplate {
                 asset: "test".into(),
                 animated: true,
@@ -2120,6 +2378,7 @@ mod tests {
         ] {
             assert!(!selected(&spec));
         }
+        assert!(selected(&ImageSpec::Collectible { url: "test".into() }));
         let still = ImageSpec::Media {
             url: "https://media.discordapp.net/test.gif".into(),
             width: 8,
@@ -2167,7 +2426,7 @@ mod tests {
             gpui::canvas(
                 |_, _, _| {},
                 move |bounds, _, window, cx| {
-                    let image = paint(&still, animate, window, cx).unwrap();
+                    let image = paint(&still, animate, None, window, cx).unwrap();
                     picked.set(Some(image.id));
                     window
                         .paint_image(bounds, gpui::Corners::default(), image, 0, false)

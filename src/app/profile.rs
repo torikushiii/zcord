@@ -639,6 +639,14 @@ fn effect_playback(
     Some((replay, started + Duration::from_millis(cycle_start)))
 }
 
+fn effect_finished(layer: &model::EffectLayer, started: Instant, now: Instant) -> bool {
+    let end = u64::from(layer.start) + u64::from(layer.duration).max(1);
+    !layer.looped
+        && now
+            .checked_duration_since(started)
+            .is_some_and(|elapsed| elapsed.as_millis() as u64 >= end)
+}
+
 enum EffectLoad<T> {
     Pending,
     Ready(T),
@@ -749,23 +757,31 @@ fn effect_item_layers(
 ) -> Vec<AnyElement> {
     let height = width * EFFECT_HEIGHT_RATIO;
     let size = theme::image_px(height).min(EFFECT_MAX_PX);
-    let states = item.effects.iter().enumerate().map(|(index, layer)| {
-        let spec = ImageSpec::Collectible {
-            url: layer.src.clone(),
-        };
-        match animated::state(&spec, size, cx) {
-            animated::Load::Pending => EffectLoad::Pending,
-            animated::Load::Ready(image) => {
-                EffectLoad::Ready((index, image, animated::play_count(&spec, size, cx)))
+    let now = cx.background_executor().now();
+    let started = *clock.borrow();
+    // Once the clock runs, a layer that has played its only time isn't asked for again, so
+    // its frames can go; an intro is often the largest layer.
+    let states = item
+        .effects
+        .iter()
+        .enumerate()
+        .filter(|(_, layer)| started.is_none_or(|started| !effect_finished(layer, started, now)))
+        .map(|(index, layer)| {
+            let spec = ImageSpec::Collectible {
+                url: layer.src.clone(),
+            };
+            match animated::state(&spec, size, cx) {
+                animated::Load::Pending => EffectLoad::Pending,
+                animated::Load::Ready(image) => {
+                    EffectLoad::Ready((index, image, animated::play_count(&spec, size, cx)))
+                }
+                animated::Load::Failed => EffectLoad::Failed,
             }
-            animated::Load::Failed => EffectLoad::Failed,
-        }
-    });
+        });
     // Showing a subset while another layer decodes makes intro layers pop in out of step.
     let Some(images) = settle_effect_layers(states) else {
         return Vec::new();
     };
-    let now = cx.background_executor().now();
     let started = effect_start(&mut clock.borrow_mut(), now);
     let mut layers: Vec<_> = images
         .into_iter()
@@ -899,7 +915,7 @@ fn faded_banner(image: Arc<RenderImage>, band: f32, corner: f32, opacity: f32) -
 mod tests {
     use super::{
         EffectLoad, THEME_OVERLAY, account_available_height, account_popout_position,
-        effect_clip_geometry, effect_playback, effect_start,
+        effect_clip_geometry, effect_finished, effect_playback, effect_start,
         loading::outbox_application_ids,
         modal::profile_close_button,
         palette::{ProfilePalette, ProfileTheme, blend, contrast},
@@ -944,9 +960,12 @@ mod tests {
         let at = |ms| started + Duration::from_millis(ms);
         for ms in [0, 1000, 4980] {
             assert_eq!(effect_playback(intro, started, at(ms)), Some((0, started)));
+            assert!(!effect_finished(intro, started, at(ms)));
         }
         for ms in [4981, 7981, 10_000, 15_961, 50_000] {
             assert_eq!(effect_playback(intro, started, at(ms)), None);
+            assert!(effect_finished(intro, started, at(ms)));
+            assert!(!effect_finished(repeat, started, at(ms)));
         }
         for ms in [0, 4981, 7980, 12_961, 15_960] {
             assert_eq!(effect_playback(repeat, started, at(ms)), None);
