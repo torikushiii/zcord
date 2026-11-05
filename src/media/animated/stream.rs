@@ -1001,16 +1001,7 @@ fn source(path: &Path) -> Result<((u32, u32), Frames<'static>)> {
             decoder.set_limits(limits())?;
             (decoder.dimensions(), decoder.into_frames())
         }
-        ImageFormat::Png => {
-            let decoder = PngDecoder::with_limits(reader, limits())?;
-            let dimensions = decoder.dimensions();
-            let frames = if decoder.is_apng()? {
-                decoder.apng()?.into_frames()
-            } else {
-                still_frames(decoder)?
-            };
-            (dimensions, frames)
-        }
+        ImageFormat::Png => apng::frames(reader)?,
         ImageFormat::WebP => {
             let mut decoder = WebPDecoder::new(reader)?;
             decoder.set_limits(limits())?;

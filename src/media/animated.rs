@@ -27,6 +27,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod apng;
 pub(crate) mod stream;
 
 const MAX_IMAGE: usize = 32 * 1024 * 1024;
@@ -1216,15 +1217,7 @@ fn source_frames(bytes: &[u8]) -> Result<((u32, u32), Frames<'_>)> {
     let format = image::guess_format(bytes)?;
     let reader = Cursor::new(bytes);
     match format {
-        ImageFormat::Png => {
-            let decoder = PngDecoder::with_limits(reader, limits())?;
-            let dimensions = decoder.dimensions();
-            if decoder.is_apng()? {
-                Ok((dimensions, decoder.apng()?.into_frames()))
-            } else {
-                Ok((dimensions, still_frames(decoder)?))
-            }
-        }
+        ImageFormat::Png => apng::frames(reader),
         ImageFormat::Gif => {
             let mut decoder = GifDecoder::new(reader)?;
             decoder.set_limits(limits())?;
@@ -1912,6 +1905,31 @@ mod tests {
             assert_eq!(&second[4..8], &expected);
             assert_eq!(&second[8..], &[255, 0, 0, 255]);
         }
+    }
+
+    #[test]
+    fn apng_previous_disposal_restores_what_background_disposal_cleared() {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = Encoder::new(&mut bytes, 1, 1);
+            encoder.set_color(ColorType::Rgba);
+            encoder.set_depth(BitDepth::Eight);
+            encoder.set_animated(3, 0).unwrap();
+            encoder.set_frame_delay(50, 1000).unwrap();
+            encoder.set_dispose_op(DisposeOp::Background).unwrap();
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&[255, 0, 0, 255]).unwrap();
+            writer.set_dispose_op(DisposeOp::Previous).unwrap();
+            writer.write_image_data(&[0, 255, 0, 255]).unwrap();
+            writer.set_dispose_op(DisposeOp::None).unwrap();
+            writer.set_blend_op(BlendOp::Over).unwrap();
+            writer.write_image_data(&[0, 0, 0, 0]).unwrap();
+            writer.finish().unwrap();
+        }
+        let (image, _) = decode(&bytes, 3).unwrap();
+        assert_eq!(image.frame_count(), 3);
+        assert_eq!(image.as_bytes(1).unwrap(), &[0, 255, 0, 255]);
+        assert_eq!(image.as_bytes(2).unwrap(), &[0, 0, 0, 0]);
     }
 
     #[test]
