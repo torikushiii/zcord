@@ -319,6 +319,10 @@ pub struct DiscordApp {
     drafts: HashMap<u64, ComposerDraft>,
     pub(crate) revealed_spoilers: HashSet<(u64, u16)>,
     pub(crate) hovered_rail: Option<u64>,
+    /// The window's height in `rpx` units, as of the last frame, for popups that must fit it.
+    pub(crate) window_height: f32,
+    /// `rpx` per pixel as of the last frame, to measure laid-out elements in `rpx`.
+    pub(crate) rpx_per_pixel: f32,
     pub(crate) hovered_add_reaction: Option<u64>,
     reaction_tips: reaction_tooltip::ReactionTips,
     pub(crate) hovered_upload_button: Option<attachments::UploadButton>,
@@ -505,6 +509,8 @@ impl DiscordApp {
             drafts: HashMap::new(),
             revealed_spoilers: HashSet::new(),
             hovered_rail: None,
+            window_height: f32::MAX,
+            rpx_per_pixel: 1.,
             hovered_add_reaction: None,
             reaction_tips: Default::default(),
             hovered_upload_button: None,
@@ -1243,6 +1249,8 @@ impl Render for DiscordApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         views::count_render(views::ViewKind::Root);
         theme::set_image_scale(window, cx);
+        self.rpx_per_pixel = theme::BASE_FONT_SIZE / f32::from(window.rem_size());
+        self.window_height = f32::from(window.viewport_size().height) * self.rpx_per_pixel;
         if matches!(self.screen, Screen::Chat) {
             self.update_member_subscription();
             self.load_active_now_apps(cx);
