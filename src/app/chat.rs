@@ -39,7 +39,7 @@ mod thread_ui;
 use crate::app::invite_card;
 pub(super) use actions::{MessageMenu, message_menu};
 use bars::{is_detached, jump_missing_notice, new_messages_bar, older_messages_bar};
-pub(crate) use composer::composer;
+pub(crate) use composer::{TEXTAREA_BUILTIN_INSET_X, TEXTAREA_BUILTIN_INSET_Y, composer};
 pub(super) use dialog::delete_dialog;
 pub(in crate::app) use media::media_limit;
 pub(super) use media::{file_size, with_media_limit};

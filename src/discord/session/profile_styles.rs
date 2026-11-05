@@ -75,15 +75,17 @@ impl Session {
         let result = self
             .rest(async |rest| rest.patch_profile_styles(guild_id, patch).await)
             .await;
-        // Either PATCH can have succeeded even if the other failed.
+        // Either PATCH can have succeeded even if the other failed. A server tag is
+        // account-wide, so saving one invalidates every scope, as a main profile save does.
+        let only_guild = guild_id.filter(|_| patch.tag_guild.is_none());
         let mut cache = self.cache();
         cache.profile_revision = cache.profile_revision.wrapping_add(1);
         cache.profiles.retain(|(id, scope), _| {
-            *id != user_id || guild_id.is_some_and(|guild| *scope != Some(guild))
+            *id != user_id || only_guild.is_some_and(|guild| *scope != Some(guild))
         });
         cache.failures.retain(|key, _| {
             !matches!(key, CacheRequest::Profile(id, scope)
-            if *id == user_id && (guild_id.is_none() || *scope == guild_id))
+            if *id == user_id && (only_guild.is_none() || *scope == only_guild))
         });
         result
     }

@@ -341,7 +341,7 @@ fn friend_button(app: &DiscordApp, card: &ProfileCard, action: FriendAction) -> 
     };
     let needs_captcha = action == FriendAction::Add;
     let busy = app.friend_busy(user_id);
-    let color = if primary { 0xFFFFFF } else { theme::muted() };
+    let color = if primary { 0xFFFFFF } else { palette.muted };
     div()
         .id("profile-friend")
         .role(Role::Button)
@@ -356,7 +356,7 @@ fn friend_button(app: &DiscordApp, card: &ProfileCard, action: FriendAction) -> 
         .font_weight(FontWeight::MEDIUM)
         .without_text_selection()
         .text_color(rgb(color))
-        .when(!primary, |this| this.bg(rgba(theme::selected())))
+        .when(!primary, |this| this.bg(palette.button))
         .when(primary, |this| this.bg(rgb(theme::BLURPLE)))
         .when(primary && (busy || needs_captcha), |this| this.opacity(0.5))
         .when(needs_captcha, |this| {

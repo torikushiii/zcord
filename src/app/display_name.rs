@@ -22,17 +22,29 @@ use effects::{Clock, Effect};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Surface {
     FontOnly,
-    Account { hovered: bool },
+    Account {
+        hovered: bool,
+    },
     Profile,
+    /// Under the profile editor's name field, whose caret can't follow letter spacing, so the
+    /// name is set without it.
+    Field,
 }
 
 impl Surface {
     fn wraps(self) -> bool {
-        self == Self::Profile
+        matches!(self, Self::Profile | Self::Field)
     }
 
     fn animates(self) -> bool {
-        matches!(self, Self::Profile | Self::Account { hovered: true })
+        matches!(
+            self,
+            Self::Profile | Self::Field | Self::Account { hovered: true }
+        )
+    }
+
+    fn tracks(self) -> bool {
+        self != Self::Field
     }
 }
 
@@ -418,7 +430,11 @@ impl Element for DisplayName {
             font,
             size,
             line_height: style.line_height_in_pixels(window.rem_size()),
-            tracking: size * self.font.map_or(0., |font| font.letter_spacing_em),
+            tracking: size
+                * self
+                    .font
+                    .filter(|_| self.surface.tracks())
+                    .map_or(0., |font| font.letter_spacing_em),
             wrap: self.surface.wraps(),
         };
         let (layouts, clock) = window.with_element_state(

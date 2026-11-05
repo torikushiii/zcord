@@ -289,8 +289,10 @@ pub(super) fn emoji_token_overlay(input: &Entity<TextareaState>) -> impl IntoEle
     .inset_0()
 }
 
-const TEXTAREA_BUILTIN_INSET_X: f32 = 10.;
-const TEXTAREA_BUILTIN_INSET_Y: f32 = 8.;
+/// The padding gpui-component's text area keeps inside itself, which `appearance(false)` and
+/// `p_0` leave in place.
+pub(crate) const TEXTAREA_BUILTIN_INSET_X: f32 = 10.;
+pub(crate) const TEXTAREA_BUILTIN_INSET_Y: f32 = 8.;
 
 pub(super) fn flush_textarea(textarea: Textarea) -> Textarea {
     textarea

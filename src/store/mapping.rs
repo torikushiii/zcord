@@ -720,6 +720,11 @@ pub(super) fn map_guild(
         member_ids: members.iter().filter_map(|m| m.id()).collect(),
         icon: guild.icon(),
         banner: guild.banner(),
+        tag: guild.tag().map(|(tag, badge)| GuildTag {
+            text: tag.to_owned(),
+            guild_id: guild.id,
+            badge: badge.map(str::to_owned),
+        }),
         emojis: guild
             .emojis
             .as_deref()

@@ -25,6 +25,7 @@ fn guild(id: u64, channels: usize) -> Guild {
         unread: false,
         mentions: 0,
         premium_tier: 0,
+        tag: None,
         categories: vec![Category {
             id: id + 1,
             name: "Channels".into(),

@@ -126,11 +126,16 @@ pub(super) fn contrast(foreground: u32, background: u32) -> f32 {
 
 #[derive(Clone, Copy)]
 pub(super) struct ProfilePalette {
+    /// The profile's custom theme is a light one.
     pub(super) light: bool,
+    /// The card is light, from a light theme or from no theme in the app's light mode.
+    pub(super) surface_light: bool,
     pub(super) strong: u32,
     pub(super) text: u32,
     pub(super) muted: u32,
     pub(super) faint: u32,
+    /// Links in the bio; `None` keeps the app's link color.
+    pub(super) link: Option<u32>,
     pub(super) panel: Hsla,
     /// Filled buttons inside a panel (Play, Get on Steam, Browse the Shop).
     pub(super) button: Hsla,
@@ -146,6 +151,15 @@ pub(super) struct ProfilePalette {
 impl ProfilePalette {
     pub(super) fn of(theme: Option<ProfileTheme>) -> Self {
         let light = theme.is_some_and(ProfileTheme::is_light);
+        // A profile without a theme follows the app, so in light mode its surfaces are light
+        // too; a custom theme picks its own mode whatever the app's.
+        let plain_light = theme.is_none() && theme::is_light();
+        let dark = theme::dark_palette();
+        let text_color = |light_color: u32, dark_color: u32, plain: fn() -> u32| match theme {
+            None => plain(),
+            Some(_) if light => light_color,
+            Some(_) => dark_color,
+        };
         let to_srgb = |color: u32| -> Srgb<f32> {
             Srgb::new(
                 ((color >> 16) & 0xFF) as u8,
@@ -186,30 +200,47 @@ impl ProfilePalette {
         };
         let mut palette = Self {
             light,
-            strong: if light { 0x18141F } else { theme::strong() },
-            text: if light { 0x2E2938 } else { theme::text() },
-            muted: if light { 0x51495E } else { theme::muted() },
-            faint: if light { 0x62596F } else { theme::faint() },
+            surface_light: light || plain_light,
+            strong: text_color(0x18141F, dark.strong, theme::strong),
+            text: text_color(0x2E2938, dark.text, theme::text),
+            muted: text_color(0x51495E, dark.muted, theme::muted),
+            faint: text_color(0x62596F, dark.faint, theme::faint),
+            link: match theme {
+                None => None,
+                Some(_) if light => Some(0x154C8A),
+                Some(_) => Some(dark.link),
+            },
             // Discord's dark profile surfaces are a faintly blue white over the card: #18181a,
-            // #2a2a2c and #2c2c30 on a black theme.
+            // #2a2a2c and #2c2c30 on a black theme. A light theme lightens its color instead,
+            // and a plain light card darkens its white.
             panel: if light {
                 hsla(0., 0., 1., 0.2)
+            } else if plain_light {
+                rgba(0x0000001A).into()
             } else {
                 rgba(0xEBEBFF1A).into()
             },
             button: if light {
                 hsla(0., 0., 1., 0.35)
+            } else if plain_light {
+                rgba(0x0000001F).into()
             } else {
                 rgba(0xEBEBFF2E).into()
             },
             raised: if light {
                 hsla(0., 0., 1., 0.3)
+            } else if plain_light {
+                rgba(0x00000024).into()
             } else {
                 rgba(0xEBEBFF30).into()
             },
-            border: hsla(0., 0., if light { 0. } else { 1. }, 0.08),
-            hover: hsla(0., 0., if light { 0. } else { 1. }, 0.04),
-            status_surface: status_color(if light { 0xFFFFFF } else { 0x17181B }),
+            border: hsla(0., 0., if light || plain_light { 0. } else { 1. }, 0.08),
+            hover: hsla(0., 0., if light || plain_light { 0. } else { 1. }, 0.04),
+            status_surface: status_color(if light || plain_light {
+                0xFFFFFF
+            } else {
+                0x17181B
+            }),
             status_border: rgba((status_border << 8) | status_border_alpha).into(),
             status_text: match (light, theme.is_some()) {
                 (false, false) => rgb(theme::text()).into(),

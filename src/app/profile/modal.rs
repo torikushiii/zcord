@@ -10,7 +10,7 @@ use gpui_component::scroll::ScrollableElement as _;
 const WISHLIST_TAB: bool = false;
 
 pub(super) fn profile_close_button(palette: ProfilePalette) -> Stateful<Div> {
-    let (background, hover) = if palette.light {
+    let (background, hover) = if palette.surface_light {
         (hsla(0., 0., 1., 0.6), hsla(0., 0., 1., 0.85))
     } else {
         (rgba(0x00000066).into(), palette.hover)
@@ -64,7 +64,7 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
             BoxShadow::new(
                 px(0.),
                 px(2.),
-                hsla(0., 0., 0., if palette.light { 0.16 } else { 0.3 }),
+                hsla(0., 0., 0., if palette.surface_light { 0.16 } else { 0.3 }),
             )
             .blur_radius(px(8.)),
         ])
@@ -218,6 +218,7 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
         .unwrap_or_default();
     overlays.extend(styles.and_then(|editor| super::widget_editor::manage_menu(app, card, editor)));
     overlays.extend(styles.and_then(|editor| super::widget_editor::tag_menu(app, card, editor)));
+    overlays.extend(styles.and_then(|editor| super::identity_editor::tag_menu(app, editor, cx)));
     div()
         .id("profile-modal-backdrop")
         .absolute()

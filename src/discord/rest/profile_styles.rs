@@ -43,6 +43,13 @@ fn user_body(patch: &model::ProfileStylePatch, guild: bool) -> Option<Value> {
     if let Some(colors) = &patch.display_name_colors {
         body.insert("display_name_colors".into(), json!(colors));
     }
+    if let Some(name) = &patch.name {
+        let name = Some(name).filter(|name| !name.is_empty());
+        body.insert(
+            if guild { "nick" } else { "global_name" }.into(),
+            json!(name),
+        );
+    }
     (!body.is_empty()).then_some(Value::Object(body))
 }
 
@@ -66,7 +73,20 @@ fn profile_body(patch: &model::ProfileStylePatch, guild: bool) -> Option<Value> 
             json!(skus.iter().map(u64::to_string).collect::<Vec<_>>()),
         );
     }
+    if let Some(pronouns) = &patch.pronouns {
+        body.insert("pronouns".into(), json!(pronouns));
+    }
     (!body.is_empty()).then_some(Value::Object(body))
+}
+
+fn clan_request(client: &Client, guild_id: Option<u64>) -> RequestBuilder {
+    client
+        .put("https://discord.com/api/v9/users/@me/clan")
+        .header(REFERER, "https://discord.com/channels/@me")
+        .json(&json!({
+            "identity_guild_id": guild_id.map(|id| id.to_string()),
+            "identity_enabled": guild_id.is_some(),
+        }))
 }
 
 fn style_request(
@@ -254,6 +274,9 @@ impl Rest {
         if let Some(body) = profile_body(patch, guild_id.is_some()) {
             self.send(|| style_request(&self.client, guild_id, true, &body))
                 .await?;
+        }
+        if let Some(tag_guild) = patch.tag_guild {
+            self.send(|| clan_request(&self.client, tag_guild)).await?;
         }
         Ok(())
     }
@@ -545,6 +568,52 @@ mod tests {
         };
         assert_eq!(user_body(&patch, false), Some(json!({"avatar_id": "42"})));
         assert_eq!(user_body(&patch, true), None);
+    }
+
+    #[test]
+    fn names_and_pronouns_go_where_discord_takes_them() {
+        let patch = model::ProfileStylePatch {
+            name: Some("New Name".into()),
+            pronouns: Some("they/them".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            user_body(&patch, false),
+            Some(json!({"global_name": "New Name"}))
+        );
+        assert_eq!(user_body(&patch, true), Some(json!({"nick": "New Name"})));
+        for guild in [false, true] {
+            assert_eq!(
+                profile_body(&patch, guild),
+                Some(json!({"pronouns": "they/them"}))
+            );
+        }
+        let cleared = model::ProfileStylePatch {
+            name: Some(String::new()),
+            ..Default::default()
+        };
+        assert_eq!(user_body(&cleared, true), Some(json!({"nick": null})));
+    }
+
+    #[test]
+    fn clan_request_wears_or_drops_a_server_tag() {
+        let wear = clan_request(&Client::new(), Some(890)).build().unwrap();
+        assert_eq!(wear.method(), reqwest::Method::PUT);
+        assert_eq!(
+            wear.url().as_str(),
+            "https://discord.com/api/v9/users/@me/clan"
+        );
+        let body: Value = serde_json::from_slice(wear.body().unwrap().as_bytes().unwrap()).unwrap();
+        assert_eq!(
+            body,
+            json!({"identity_guild_id": "890", "identity_enabled": true})
+        );
+        let drop = clan_request(&Client::new(), None).build().unwrap();
+        let body: Value = serde_json::from_slice(drop.body().unwrap().as_bytes().unwrap()).unwrap();
+        assert_eq!(
+            body,
+            json!({"identity_guild_id": null, "identity_enabled": false})
+        );
     }
 
     #[test]

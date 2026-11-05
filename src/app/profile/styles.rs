@@ -605,6 +605,7 @@ impl DiscordApp {
         editor.scope = scope;
         editor.scope_revision += 1;
         editor.draft = StyleDraft::default();
+        editor.ui.identity.leave_scope();
         editor.error = None;
         self.prune_style_previews(true);
         let changed = self
@@ -784,6 +785,7 @@ impl DiscordApp {
         self.reset_widget_draft();
         if let Some(editor) = &mut self.profile_styles {
             editor.draft = StyleDraft::default();
+            editor.ui.identity = Default::default();
             editor.error = None;
             editor.scope_revision += 1;
             self.prune_style_previews(true);
@@ -805,6 +807,11 @@ impl DiscordApp {
         if card.profile.is_none() || card.modal_request_pending || !card.board_requested {
             return;
         }
+        let identity_changes = self
+            .profile_styles
+            .as_ref()
+            .map(|editor| super::identity_editor::changes(self, editor))
+            .unwrap_or_default();
         let Some(editor) = self.profile_styles.as_mut().filter(|editor| !editor.saving) else {
             return;
         };
@@ -814,7 +821,9 @@ impl DiscordApp {
             return;
         }
         normalize_draft(&mut editor.draft, &saved);
-        if editor.draft == StyleDraft::default() {
+        if editor.draft == StyleDraft::default()
+            && identity_changes == super::identity_editor::Changes::default()
+        {
             cx.notify();
             return;
         }
@@ -856,8 +865,16 @@ impl DiscordApp {
         };
         editor.saving = true;
         editor.error = None;
+        let sent = (
+            identity_changes.name.clone(),
+            identity_changes.pronouns.clone(),
+            identity_changes.tag_guild,
+        );
         let request = Tokio::spawn(cx, async move {
             let mut patch = style_patch(&draft, &saved);
+            patch.name = identity_changes.name;
+            patch.pronouns = identity_changes.pronouns;
+            patch.tag_guild = identity_changes.tag_guild;
             if let Some(ImageChange::Recent { storage_hash, id }) = &draft.avatar {
                 if scope.guild_id().is_some() {
                     patch.avatar = Some(Some(
@@ -894,13 +911,34 @@ impl DiscordApp {
                             editor.error = None;
                             editor.scope_revision += 1;
                         }
+                        // Edits made to these while saving stay as the next ones to save.
+                        if let Some(editor) = app.profile_styles.as_mut().filter(|editor| {
+                            Arc::ptr_eq(&editor.identity, &identity) && editor.scope == scope
+                        }) {
+                            let ui = &mut editor.ui.identity;
+                            if sent.0.is_some() && ui.display_name == sent.0 {
+                                ui.display_name = None;
+                            }
+                            if sent.1.is_some() && ui.pronouns == sent.1 {
+                                ui.pronouns = None;
+                            }
+                            if sent.2.is_some() && ui.tag_guild == sent.2 {
+                                ui.tag_guild = None;
+                            }
+                        }
                         app.prune_style_previews(true);
                         if app
                             .profile
                             .as_ref()
                             .is_some_and(|card| card.user_id == user_id)
                         {
-                            app.refresh_style_profile(scope, cx);
+                            // A tag is account-wide, so every scope's profile has to reload.
+                            let refreshed = if sent.2.is_some() {
+                                StyleScope::Main
+                            } else {
+                                scope
+                            };
+                            app.refresh_style_profile(refreshed, cx);
                         }
                     }
                     Ok(Err(error)) => {

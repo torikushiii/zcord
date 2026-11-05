@@ -47,6 +47,7 @@ pub(crate) struct PanelUi {
     pub(crate) dialog_swapped: bool,
     pub(crate) name_preview_light: bool,
     pub(crate) widgets: super::widget_editor::WidgetsUi,
+    pub(crate) identity: super::identity_editor::IdentityUi,
     /// The theme color picker's suggestions and the avatar they came from; `None` while the
     /// avatar is still being sampled.
     pub(crate) theme_suggestions: Option<(AvatarSource, Option<[u32; 5]>)>,
@@ -271,10 +272,18 @@ pub(super) fn shown_name_style(style: &NameStyle) -> ShownNameStyle {
     }
 }
 
+/// Your name as the editor previews it: a rename typed into the profile, else your own.
 pub(super) fn own_name(app: &DiscordApp) -> String {
-    app.store
-        .user(app.store.current_user_id)
-        .map_or_else(String::new, |user| user.name.clone())
+    app.profile_styles
+        .as_ref()
+        .and_then(|editor| editor.ui.identity.display_name.clone())
+        .filter(|name| !name.is_empty())
+        .or_else(|| {
+            app.store
+                .user(app.store.current_user_id)
+                .map(|user| user.name.clone())
+        })
+        .unwrap_or_default()
 }
 
 impl DiscordApp {
@@ -287,6 +296,19 @@ impl DiscordApp {
             update(&mut editor.ui);
             cx.notify();
         }
+    }
+
+    pub(crate) fn open_name_style_dialog(&mut self, cx: &mut Context<Self>) {
+        let style = self
+            .profile_styles
+            .as_ref()
+            .and_then(|editor| shown(self, editor).name_style)
+            .unwrap_or(NameStyle {
+                font_id: DEFAULT_FONT,
+                effect_id: SOLID_EFFECT,
+                colors: Vec::new(),
+            });
+        self.open_style_dialog(StyleDialog::NameStyle(style), cx);
     }
 
     pub(crate) fn open_style_dialog(&mut self, dialog: StyleDialog, cx: &mut Context<Self>) {
@@ -340,6 +362,28 @@ impl DiscordApp {
             cx,
         );
         self.toggle_styles_panel(cx);
+    }
+
+    /// Closes the styles editor's topmost layer for Escape: a picker or menu, then an open
+    /// dialog. Returns false when nothing was open, so Escape can close the profile itself.
+    pub(crate) fn dismiss_styles_layer(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(editor) = &mut self.profile_styles else {
+            return false;
+        };
+        let ui = &mut editor.ui;
+        if ui.color_picker.take().is_some()
+            || ui.widgets.tag_menu.take().is_some()
+            || ui.widgets.manage_menu.take().is_some()
+            || std::mem::take(&mut ui.scope_menu)
+        {
+            cx.notify();
+            return true;
+        }
+        if ui.dialog.is_some() {
+            self.close_style_dialog(cx);
+            return true;
+        }
+        false
     }
 
     /// Plays the pop-out, then drops the dialog.
@@ -701,18 +745,7 @@ pub(super) fn editing_panel(app: &DiscordApp, editor: &StylesEditor, cx: &App) -
     let name = own_name(app);
     let name_style = shown.name_style.as_ref().map(shown_name_style);
     let name_tile = tile("styles-name", 208., BAR_TILE_HEIGHT)
-        .on_click(on_app(app, |app, cx| {
-            let style = app
-                .profile_styles
-                .as_ref()
-                .and_then(|editor| self::shown(app, editor).name_style)
-                .unwrap_or(NameStyle {
-                    font_id: DEFAULT_FONT,
-                    effect_id: SOLID_EFFECT,
-                    colors: Vec::new(),
-                });
-            app.open_style_dialog(StyleDialog::NameStyle(style), cx);
-        }))
+        .on_click(on_app(app, |app, cx| app.open_name_style_dialog(cx)))
         .child(
             div()
                 .px(rpx(8.))
@@ -890,7 +923,7 @@ impl HoverFade {
         self.from + (self.target() - self.from) * ease_in_out(progress.min(1.))
     }
 
-    fn set(&mut self, hovered: bool) {
+    pub(super) fn set(&mut self, hovered: bool) {
         if self.hovered == hovered {
             return;
         }
@@ -899,6 +932,21 @@ impl HoverFade {
         self.hovered = hovered;
         self.changes += 1;
         self.started = Some(now);
+    }
+
+    /// `layer` faded to the hover level, easing there after each change.
+    pub(super) fn fade(&self, id: &'static str, layer: Div) -> AnyElement {
+        let (from, target, duration) = (self.from, self.target(), self.duration());
+        if duration.is_zero() {
+            return layer.opacity(target).into_any_element();
+        }
+        layer
+            .with_animation(
+                (id, self.changes),
+                Animation::new(duration).with_easing(ease_in_out),
+                move |layer, delta| layer.opacity(from + (target - from) * delta),
+            )
+            .into_any_element()
     }
 }
 
@@ -1593,7 +1641,10 @@ impl Render for StylesTooltip {
 /// "Don't forget to save your changes!" under the dialog while the styles or widgets have
 /// unsaved edits; it saves and resets both.
 pub(super) fn save_bar(app: &DiscordApp, editor: &StylesEditor) -> Option<AnyElement> {
-    if editor.draft == StyleDraft::default() && editor.ui.widgets.draft().is_none() {
+    if editor.draft == StyleDraft::default()
+        && editor.ui.widgets.draft().is_none()
+        && !super::identity_editor::edited(app, editor)
+    {
         return None;
     }
     let button = |id: &'static str, label: &'static str, primary: bool| {
