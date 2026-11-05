@@ -168,7 +168,7 @@ fn game_action_button(
     palette: ProfilePalette,
 ) -> Stateful<Div> {
     // Dark profiles use Discord's Midnight hover tint; light profiles use its standard tint.
-    let hover = rgba(if palette.light {
+    let hover = rgba(if palette.surface_light {
         0x97979F29
     } else {
         0x97979F33
@@ -183,7 +183,7 @@ fn game_action_button(
         .h(rpx(32.))
         .px(rpx(12.))
         .rounded(rpx(8.))
-        .bg(rgba(theme::control_bg()))
+        .bg(palette.button)
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
         .text_size(rpx(14.))

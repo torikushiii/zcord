@@ -121,6 +121,12 @@ fn palette() -> &'static Palette {
     if is_light() { &LIGHT } else { &DARK }
 }
 
+/// The dark palette whatever the app's theme, for surfaces that stay dark in light mode, like a
+/// profile with a dark custom theme.
+pub fn dark_palette() -> &'static Palette {
+    &DARK
+}
+
 pub fn is_light() -> bool {
     LIGHT_ACTIVE.load(Ordering::Relaxed)
 }

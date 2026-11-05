@@ -36,4 +36,9 @@ pub struct ProfileStylePatch {
     pub accent_color: Option<Option<u32>>,
     /// The entire scope's effect/frame selection, not just the changed item.
     pub collectibles_sku_ids: Option<Vec<u64>>,
+    /// The display name, or the server nickname; empty resets it.
+    pub name: Option<String>,
+    pub pronouns: Option<String>,
+    /// The server whose tag to wear, or `Some(None)` to wear none. Account-wide.
+    pub tag_guild: Option<Option<u64>>,
 }

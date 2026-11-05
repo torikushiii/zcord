@@ -280,7 +280,12 @@ impl DiscordApp {
             self.set_profile_menu(false, cx);
             return;
         }
-        if self.cancel_remove_friend(cx) || self.close_profile(cx) {
+        if self.cancel_remove_friend(cx)
+            || self.finish_identity_edit(cx)
+            || self.close_tag_menu(cx)
+            || self.dismiss_styles_layer(cx)
+            || self.close_profile(cx)
+        {
             return;
         }
         if self.close_settings(cx) {

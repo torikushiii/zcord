@@ -226,6 +226,7 @@ impl Store {
                         unread,
                         mentions,
                         premium_tier: 0,
+                        tag: None,
                         categories: vec![
                             Category {
                                 id: guild_id * 10,

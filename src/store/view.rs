@@ -933,6 +933,7 @@ pub struct Guild {
     pub icon: Option<String>,
     pub banner: Option<String>,
     pub emojis: Vec<CustomEmoji>,
+    pub tag: Option<GuildTag>,
 }
 
 impl Guild {

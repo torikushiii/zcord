@@ -16,6 +16,17 @@ pub struct GuildProperties {
     pub features: Option<Vec<String>>,
     #[serde(default, deserialize_with = "optional_level")]
     pub default_message_notifications: Option<NotificationLevel>,
+    /// The server tag members can wear; `Some(None)` when an update takes it away.
+    #[serde(default, deserialize_with = "nullable")]
+    pub profile: Option<Option<GuildProfile>>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+pub struct GuildProfile {
+    #[serde(default)]
+    pub tag: Option<String>,
+    #[serde(default)]
+    pub badge: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -79,6 +90,17 @@ impl Guild {
             .as_deref()
             .or(self.legacy.features.as_deref())
     }
+    /// The server tag and its badge hash, when the server offers one.
+    pub fn tag(&self) -> Option<(&str, Option<&str>)> {
+        let profile = self
+            .properties
+            .profile
+            .as_ref()
+            .or(self.legacy.profile.as_ref())?
+            .as_ref()?;
+        let tag = profile.tag.as_deref().filter(|tag| !tag.is_empty())?;
+        Some((tag, profile.badge.as_deref()))
+    }
     pub fn notification_default(&self) -> Option<NotificationLevel> {
         self.properties
             .default_message_notifications
@@ -120,6 +142,14 @@ impl Guild {
         }
         if let Some(features) = update.features() {
             self.properties.features = Some(features.to_vec());
+        }
+        if let Some(profile) = update
+            .properties
+            .profile
+            .as_ref()
+            .or(update.legacy.profile.as_ref())
+        {
+            self.properties.profile = Some(profile.clone());
         }
         if update.channels.is_some() {
             self.channels.clone_from(&update.channels);

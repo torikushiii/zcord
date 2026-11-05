@@ -610,6 +610,14 @@ impl DiscordApp {
             }
         })
         .detach();
+        // A focused field that unmounts, like the profile editor's name field or the tag
+        // search, leaves nothing focused, and Escape and the other shortcuts would go nowhere.
+        cx.on_focus_lost(window, |app, window, cx| {
+            if matches!(app.screen, Screen::Chat) {
+                app.focus_composer(window, cx);
+            }
+        })
+        .detach();
         // The dialog unmounting (cancel, confirm or external deletion) drops its focus;
         // hand it back to the composer once the dialog is really gone.
         cx.on_blur(&app.delete_focus, window, |app, window, cx| {

@@ -404,7 +404,7 @@ fn status_bubble(
             BoxShadow::new(
                 px(0.),
                 px(1.),
-                hsla(0., 0., 0., if palette.light { 0.08 } else { 0.14 }),
+                hsla(0., 0., 0., if palette.surface_light { 0.08 } else { 0.14 }),
             )
             .blur_radius(px(4.)),
         ]
@@ -567,15 +567,25 @@ pub(super) fn display_names(
     let palette = card.palette();
     let user = app.store.user(card.user_id);
     let guild_id = card.guild_id.unwrap_or(0);
-    let name = app
+    // Edits typed into your own profile show on every card of it; the full profile also edits
+    // these lines in place.
+    let styling = editing_styles(app, card);
+    let identity = styling.filter(|_| large);
+    let username = profile
+        .map(|p| p.user.user.username.clone())
+        .filter(|username| !username.is_empty());
+    let saved_name = app
         .store
         .member_name(guild_id, card.user_id)
         .map(str::to_owned)
         .or_else(|| user.map(|user| user.name.clone()))
         .unwrap_or_else(|| "Unknown User".to_owned());
-    let username = profile
-        .map(|p| p.user.user.username.clone())
-        .filter(|username| !username.is_empty());
+    // An emptied display name falls back to the username, as on Discord.
+    let name = match styling.and_then(|editor| editor.ui.identity.display_name.clone()) {
+        Some(edited) if edited.is_empty() => username.clone().unwrap_or(saved_name.clone()),
+        Some(edited) => edited,
+        None => saved_name.clone(),
+    };
     let pronouns = profile
         .and_then(guild_profile)
         .and_then(|p| p.pronouns.clone())
@@ -585,6 +595,19 @@ pub(super) fn display_names(
         // collapse to spaces there.
         .map(|p| p.split_whitespace().collect::<Vec<_>>().join(" "))
         .filter(|p| !p.is_empty());
+    // Cleared server pronouns show the main profile's, as they will once saved.
+    let pronouns = match styling.and_then(|editor| editor.ui.identity.pronouns.clone()) {
+        Some(edited) if edited.is_empty() && card.guild_id.is_some() => {
+            Some(super::identity_editor::scope_pronouns(profile, false).0)
+                .filter(|p| !p.trim().is_empty())
+        }
+        Some(edited) => Some(edited).filter(|p| !p.is_empty()),
+        None => pronouns,
+    };
+    let tag = match styling {
+        Some(editor) => super::identity_editor::shown_tag(app, editor),
+        None => user.and_then(|user| user.tag.clone()),
+    };
     // The name style dialog's working copy previews before it reaches the draft.
     let edited_style = editing_styles(app, card).map(|editor| match &editor.ui.dialog {
         Some(super::styles_panel::StyleDialog::NameStyle(style)) => {
@@ -606,33 +629,49 @@ pub(super) fn display_names(
             .rounded_full()
             .bg(rgb(palette.text))
     };
+    let badges = profile.and_then(|profile| badges(app, card, profile, palette, cx));
+    let (inline_badges, badge_line) = if identity.is_some() {
+        (None, badges)
+    } else {
+        (badges, None)
+    };
+    let name_line = div()
+        .id("profile-display-name")
+        .map(|this| match on_name {
+            Some(handler) => this.cursor_pointer().on_click(handler),
+            None => this,
+        })
+        .text_size(rpx(if large { 24. } else { 20. }))
+        .line_height(rpx(if large { 30. } else { 24. }))
+        .font_weight(if large {
+            FontWeight::SEMIBOLD
+        } else {
+            FontWeight::BOLD
+        })
+        .text_color(rgb(palette.strong))
+        .child(crate::app::display_name::render(
+            ("profile-styled-name", card.user_id),
+            &name,
+            name_style,
+            crate::app::display_name::Surface::Profile,
+            cx,
+        ));
     div()
         .flex()
         .flex_col()
         .gap(rpx(2.))
-        .child(
-            div()
-                .id("profile-display-name")
-                .map(|this| match on_name {
-                    Some(handler) => this.cursor_pointer().on_click(handler),
-                    None => this,
-                })
-                .text_size(rpx(if large { 24. } else { 20. }))
-                .line_height(rpx(if large { 30. } else { 24. }))
-                .font_weight(if large {
-                    FontWeight::SEMIBOLD
-                } else {
-                    FontWeight::BOLD
-                })
-                .text_color(rgb(palette.strong))
-                .child(crate::app::display_name::render(
-                    ("profile-styled-name", card.user_id),
-                    &name,
-                    name_style,
-                    crate::app::display_name::Surface::Profile,
-                    cx,
-                )),
-        )
+        .child(match identity {
+            Some(editor) => super::identity_editor::name_field(
+                app,
+                editor,
+                name_line.into_any_element(),
+                name.clone(),
+                name_style,
+                palette,
+                cx,
+            ),
+            None => name_line.into_any_element(),
+        })
         .child(
             div()
                 .flex()
@@ -647,26 +686,42 @@ pub(super) fn display_names(
                 .when(user.is_some_and(|user| user.bot), |this| {
                     this.child(theme::app_tag())
                 })
-                .children(pronouns.map(|pronouns| {
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_x(rpx(6.))
-                        .child(dot())
+                .map(|this| match identity {
+                    Some(editor) => this
                         .child(
                             div()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(palette.strong))
-                                .child(pronouns),
+                                .flex()
+                                .items_center()
+                                .gap_x(rpx(2.))
+                                .child(dot())
+                                .child(super::identity_editor::pronouns_field(
+                                    app, editor, pronouns, palette, cx,
+                                )),
                         )
-                }))
-                .children(user.and_then(|user| user.tag.as_ref()).map(|tag| {
-                    theme::guild_tag(tag, cx)
-                        .bg(palette.panel)
-                        .text_color(rgb(palette.strong))
-                }))
-                .children(profile.and_then(|profile| badges(app, card, profile, palette, cx))),
+                        .child(super::identity_editor::tag_pill(app, editor, palette, cx)),
+                    None => this
+                        .children(pronouns.map(|pronouns| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_x(rpx(6.))
+                                .child(dot())
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::NORMAL)
+                                        .text_color(rgb(palette.strong))
+                                        .child(pronouns),
+                                )
+                        }))
+                        .children(tag.as_ref().map(|tag| {
+                            theme::guild_tag(tag, cx)
+                                .bg(palette.panel)
+                                .text_color(rgb(palette.strong))
+                        })),
+                })
+                .children(inline_badges),
         )
+        .children(badge_line.map(|badges| div().flex().mt(rpx(6.)).child(badges)))
         .when(
             !large && card.user_id != app.store.current_user_id,
             |this| {
@@ -731,7 +786,11 @@ pub(super) fn board_sections(
 
 fn account_menu(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &App) -> AnyElement {
     let palette = card.palette();
-    let row = |id: &'static str, icon: &'static str, text: &'static str, action: AccountAction| {
+    let row = |id: &'static str,
+               icon: &'static str,
+               icon_size: f32,
+               text: &'static str,
+               action: AccountAction| {
         div()
             .id(id)
             .flex()
@@ -748,7 +807,15 @@ fn account_menu(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &App)
             .hover(|style| style.bg(palette.hover).text_color(rgb(palette.strong)))
             .without_text_selection()
             .on_click(account_action(app, action))
-            .child(theme::icon(icon, 18., palette.muted))
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .size(rpx(18.))
+                    .child(theme::icon(icon, icon_size, palette.muted)),
+            )
             .child(div().flex_1().min_w_0().truncate().child(text))
     };
     div()
@@ -762,6 +829,7 @@ fn account_menu(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &App)
                 .child(row(
                     "account-view-profile",
                     "pencil",
+                    14.,
                     "Edit Profile",
                     AccountAction::ViewProfile,
                 ))
@@ -771,6 +839,7 @@ fn account_menu(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &App)
                 .child(row(
                     "account-settings",
                     "settings",
+                    18.,
                     "User Settings",
                     AccountAction::Settings,
                 )),
@@ -778,6 +847,7 @@ fn account_menu(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &App)
         .child(div().rounded(rpx(8.)).bg(palette.panel).child(row(
             "account-copy-user-id",
             "copy",
+            18.,
             "Copy User ID",
             AccountAction::CopyUserId,
         )))
@@ -876,7 +946,7 @@ pub(super) fn markdown(
             strong: palette.strong,
             muted: palette.muted,
             faint: palette.faint,
-            link: palette.light.then_some(0x154C8A),
+            link: palette.link,
             quote: None,
         },
     };

@@ -418,7 +418,7 @@ pub(super) fn panel(
     let rows: Vec<AnyElement> = widgets
         .filter_map(|widget| {
             let element = super::board::widget_element(app, card, widget, true, cx)?;
-            Some(widget_row(app, widget, element, ui, cx))
+            Some(widget_row(app, widget, element, ui, palette, cx))
         })
         .collect();
     let empty = rows.is_empty();
@@ -476,6 +476,7 @@ fn widget_row(
     widget: &ProfileWidget,
     element: AnyElement,
     ui: &WidgetsUi,
+    palette: ProfilePalette,
     cx: &App,
 ) -> AnyElement {
     let id = widget.id;
@@ -499,9 +500,9 @@ fn widget_row(
         .cursor_grab()
         .opacity(if menu_open || picked_up { 1. } else { 0. })
         .group_hover(group.clone(), |style| style.opacity(1.))
-        .hover(|style| style.bg(rgba(theme::hover())))
+        .hover(move |style| style.bg(palette.hover))
         .child(super::styles_panel::measure_into(bounds.clone()))
-        .child(theme::icon("drag-handle", 18., theme::muted()))
+        .child(theme::icon("drag-handle", 18., palette.muted))
         .on_drag(WidgetDrag(id), move |&WidgetDrag(id), _, _, cx| {
             if let Some(app) = entity.upgrade() {
                 app.update(cx, |app, cx| {
@@ -635,7 +636,7 @@ pub(super) fn manage_menu(
     ))
 }
 
-fn popover(
+pub(super) fn popover(
     app: &DiscordApp,
     id: &'static str,
     anchor: Option<Bounds<Pixels>>,
@@ -644,7 +645,16 @@ fn popover(
     close: impl Fn(&mut DiscordApp, &mut Context<DiscordApp>) + 'static,
     content: impl IntoElement,
 ) -> AnyElement {
-    let panel = div()
+    let panel = popover_panel(id, width, max_height).child(content);
+    anchored_popover(app, id, anchor, close, panel)
+}
+
+pub(super) fn popover_panel(
+    id: &'static str,
+    width: f32,
+    max_height: Option<f32>,
+) -> Stateful<Div> {
+    div()
         .id(id)
         .without_text_selection()
         .w(rpx(width))
@@ -666,7 +676,15 @@ fn popover(
         ])
         .occlude()
         .on_click(|_, _, cx| cx.stop_propagation())
-        .child(content);
+}
+
+pub(super) fn anchored_popover(
+    app: &DiscordApp,
+    id: &'static str,
+    anchor: Option<Bounds<Pixels>>,
+    close: impl Fn(&mut DiscordApp, &mut Context<DiscordApp>) + 'static,
+    panel: impl IntoElement,
+) -> AnyElement {
     let position = anchor.map_or_else(Point::default, |anchor| {
         point(anchor.left(), anchor.bottom() + px(4.))
     });
@@ -843,7 +861,7 @@ pub(in crate::app::profile) fn game_row(
                 .mx(rpx(-7.))
                 .rounded(rpx(8.))
                 .cursor_text()
-                .hover(|style| style.bg(rgba(theme::hover())))
+                .hover(move |style| style.bg(palette.hover))
                 .text_size(rpx(14.))
                 .line_height(rpx(18.))
                 .text_color(rgb(if empty { palette.faint } else { palette.muted }))
