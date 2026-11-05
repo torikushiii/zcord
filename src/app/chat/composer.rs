@@ -124,6 +124,8 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                                     let Some(position) = picker_anchor.get() else {
                                         return;
                                     };
+                                    // The picker focuses its search; keep the root from taking it back.
+                                    window.prevent_default();
                                     entity
                                         .update(cx, |app, cx| {
                                             app.toggle_gif_picker(position, window, cx)
@@ -141,6 +143,7 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                                     let Some(position) = picker_anchor.get() else {
                                         return;
                                     };
+                                    window.prevent_default();
                                     entity
                                         .update(cx, |app, cx| {
                                             app.toggle_sticker_picker(
@@ -161,6 +164,7 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                                     let Some(position) = picker_anchor.get() else {
                                         return;
                                     };
+                                    window.prevent_default();
                                     entity
                                         .update(cx, |app, cx| {
                                             app.toggle_emoji_picker(
