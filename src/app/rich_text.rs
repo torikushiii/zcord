@@ -38,6 +38,8 @@ pub enum Action {
         name: SharedString,
         animated: bool,
     },
+    /// A standard emoji, by its character sequence.
+    InspectDefaultEmoji(SharedString),
 }
 
 #[derive(Clone, Copy, PartialEq)]

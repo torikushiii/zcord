@@ -11,15 +11,28 @@ static BUNDLE: &[u8] = include_bytes!("../../assets/twemoji.bin");
 static SHORTCODES: &str = include_str!("../../assets/emoji_shortcodes.tsv");
 static CATEGORY_DATA: &str = include_str!("../../assets/emoji_categories.tsv");
 const MAX_SVG_SIZE: u64 = 1024 * 1024;
+/// SVG sizes each emoji can be drawn at. gpui rasterizes an SVG at twice its size and the GPU
+/// shrinks it to fit without mipmaps, so a raster much bigger than the emoji on screen comes
+/// out jagged; each size here serves emoji shown at up to twice it.
+const RASTER_SIZES: [u32; 6] = [16, 24, 32, 48, 64, 128];
+/// The size the bundle's SVGs are packed with; see `scripts/pack_twemoji.py`.
+const PACKED_SIZE: &str = r#"<svg width="128" height="128""#;
 
 struct Entry<'a> {
     compressed: &'a [u8],
-    image: OnceLock<Option<Arc<Image>>>,
+    images: [OnceLock<Option<Arc<Image>>>; RASTER_SIZES.len()],
+}
+
+fn raster_index(px: u32) -> usize {
+    RASTER_SIZES
+        .iter()
+        .position(|&size| size * 2 >= px)
+        .unwrap_or(RASTER_SIZES.len() - 1)
 }
 
 impl Entry<'_> {
-    fn image(&self) -> Option<&Arc<Image>> {
-        self.image
+    fn image(&self, index: usize) -> Option<&Arc<Image>> {
+        self.images[index]
             .get_or_init(|| {
                 let mut svg = Vec::new();
                 ZlibDecoder::new(self.compressed)
@@ -34,6 +47,12 @@ impl Entry<'_> {
                         .ends_with("</svg>")
                 {
                     return None;
+                }
+                let size = RASTER_SIZES[index];
+                if let Some(rest) = svg.strip_prefix(PACKED_SIZE.as_bytes()) {
+                    let mut sized = format!(r#"<svg width="{size}" height="{size}""#).into_bytes();
+                    sized.extend_from_slice(rest);
+                    svg = sized;
                 }
                 Some(Arc::new(Image::from_bytes(ImageFormat::Svg, svg)))
             })
@@ -114,7 +133,7 @@ impl<'a> Bundle<'a> {
         for (offset, length) in ranges {
             entries.push(Entry {
                 compressed: cursor.get(offset..offset.checked_add(length)?)?,
-                image: OnceLock::new(),
+                images: Default::default(),
             });
         }
         Some(Self {
@@ -208,7 +227,7 @@ fn segment_with_bundle<'a>(text: &'a str, bundle: Option<&Bundle<'_>>) -> Vec<Se
                     .then(|| bundle.entry(sequence))
                     .flatten()
             });
-        if entry.and_then(Entry::image).is_some() {
+        if entry.and_then(|entry| entry.image(0)).is_some() {
             if text_start < offsets[at] {
                 output.push(Segment::Text(&text[text_start..offsets[at]]));
             }
@@ -223,8 +242,9 @@ fn segment_with_bundle<'a>(text: &'a str, bundle: Option<&Bundle<'_>>) -> Vec<Se
     output
 }
 
-pub fn image(sequence: &str) -> Option<Arc<Image>> {
-    bundle()?.entry(sequence)?.image().cloned()
+/// The emoji's image, rasterized to suit `px` physical pixels on screen.
+pub fn image(sequence: &str, px: u32) -> Option<Arc<Image>> {
+    bundle()?.entry(sequence)?.image(raster_index(px)).cloned()
 }
 
 pub struct EmojiCategory {
@@ -465,7 +485,7 @@ mod tests {
                     slice
                 }
                 Segment::Emoji(slice) => {
-                    assert!(image(slice).is_some(), "unbundled emoji: {slice:?}");
+                    assert!(image(slice, 44).is_some(), "unbundled emoji: {slice:?}");
                     previous_text = false;
                     slice
                 }
@@ -540,27 +560,29 @@ mod tests {
 
     #[test]
     fn emoji_image_cache_and_fe0f_lookup() {
-        let first = image("\u{1F3E0}").unwrap();
-        assert!(Arc::ptr_eq(&first, &image("\u{1F3E0}").unwrap()));
+        let first = image("\u{1F3E0}", 44).unwrap();
+        assert!(Arc::ptr_eq(&first, &image("\u{1F3E0}", 44).unwrap()));
         assert_eq!(first.format, ImageFormat::Svg);
+        assert!(first.bytes.starts_with(b"<svg width=\"24\" height=\"24\""));
+        let large = image("\u{1F3E0}", 1000).unwrap();
         assert!(
-            first
+            large
                 .bytes
                 .starts_with(b"<svg width=\"128\" height=\"128\"")
         );
-        let heart = image("\u{2764}\u{FE0F}").unwrap();
-        assert!(Arc::ptr_eq(&heart, &image("\u{2764}").unwrap()));
+        let heart = image("\u{2764}\u{FE0F}", 44).unwrap();
+        assert!(Arc::ptr_eq(&heart, &image("\u{2764}", 44).unwrap()));
         let zwj = "\u{1F469}\u{200D}\u{2764}\u{FE0F}\u{200D}\u{1F469}";
         let unqualified = zwj.replace('\u{FE0F}', "");
         assert!(Arc::ptr_eq(
-            &image(zwj).unwrap(),
-            &image(&unqualified).unwrap()
+            &image(zwj, 44).unwrap(),
+            &image(&unqualified, 44).unwrap()
         ));
         for value in ["", "hello", "1", "#", "\u{200D}", "\u{FE0F}"] {
-            assert!(image(value).is_none(), "{value:?}");
+            assert!(image(value, 44).is_none(), "{value:?}");
         }
         for value in ["\u{1F1F7}", "\u{1F3FD}", "\u{E50A}"] {
-            assert!(image(value).is_some(), "{value:?}");
+            assert!(image(value, 44).is_some(), "{value:?}");
             assert_eq!(segments(value), vec![Segment::Text(value)]);
         }
     }
@@ -638,7 +660,7 @@ mod tests {
         let bundle = bundle().unwrap();
         assert!(bundle.entries.len() >= 3700);
         for sequence in bundle.exact.keys() {
-            assert!(image(sequence).is_some(), "{sequence:?}");
+            assert!(image(sequence, 44).is_some(), "{sequence:?}");
             if sequence
                 .chars()
                 .all(|c| matches!(c as u32, 0x1F1E6..=0x1F1FF | 0x1F3FB..=0x1F3FF | 0xE50A))
@@ -679,7 +701,7 @@ mod tests {
         let offset = compressed.as_ptr() as usize - BUNDLE.as_ptr() as usize;
         invalid[offset] ^= 0xFF;
         let corrupt = Bundle::parse(&invalid).unwrap();
-        assert!(corrupt.entry("\u{1F3E0}").unwrap().image().is_none());
+        assert!(corrupt.entry("\u{1F3E0}").unwrap().image(0).is_none());
         for data in [None, Some(&corrupt)] {
             let value = "before \u{1F3E0} after";
             assert_eq!(segment_with_bundle(value, data), vec![Segment::Text(value)]);

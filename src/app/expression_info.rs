@@ -10,6 +10,7 @@ use crate::{
         images::{self, ImageSpec},
     },
     store::{EmojiAccess, Guild, Sticker},
+    text::emoji,
     theme::{self, WithoutTextSelection, rpx},
 };
 
@@ -19,6 +20,7 @@ mod stickers;
 use stickers::source;
 
 const CACHE_LIMIT: usize = 128;
+const DEFAULT_EMOJI: &str = "A default emoji. You can use this emoji everywhere on Discord.";
 const STICKER_COLUMNS: usize = 6;
 const STICKER_CELL: f32 = 44.;
 
@@ -30,6 +32,8 @@ pub(crate) enum Expression {
         animated: bool,
     },
     Sticker(Sticker),
+    /// A standard emoji, by its character sequence.
+    Default(String),
 }
 
 impl Expression {
@@ -37,11 +41,21 @@ impl Expression {
         match self {
             Self::Emoji { id, .. } => (false, *id),
             Self::Sticker(sticker) => (true, sticker.id),
+            Self::Default(sequence) => {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                sequence.hash(&mut hasher);
+                (false, hasher.finish())
+            }
         }
     }
 
     fn label(&self) -> String {
         match self {
+            Self::Default(sequence) => match emoji::shortcode_for_emoji(sequence) {
+                Some(name) => format!(":{name}:"),
+                None => sequence.clone(),
+            },
             Self::Emoji { name, .. } if !name.is_empty() => format!(":{name}:"),
             Self::Emoji { .. } => "Custom Emoji".to_owned(),
             Self::Sticker(sticker) if !sticker.name.is_empty() => sticker.name.clone(),
@@ -435,6 +449,17 @@ fn preview(expression: &Expression, extent: f32, cx: &App) -> AnyElement {
             *animated && crate::settings::emoji_animation(),
         ),
         Expression::Sticker(sticker) => (sticker.image_spec(), matches!(sticker.format, 2 | 4)),
+        Expression::Default(sequence) => {
+            if let Some(image) = emoji::image(sequence, theme::image_px(extent)) {
+                return img(image)
+                    .id(("expression-preview", expression.key().1))
+                    .size(rpx(extent))
+                    .flex_none()
+                    .object_fit(ObjectFit::Contain)
+                    .into_any_element();
+            }
+            (None, false)
+        }
     };
     if let Some(spec) = spec {
         let animated_spec = match &spec {
@@ -499,6 +524,7 @@ fn resolved_expression(app: &DiscordApp, expression: &Expression) -> Expression 
                 });
             }
         }
+        Expression::Default(_) => {}
         Expression::Emoji { id, .. } => {
             if let Some((_, emoji)) = app.store.emoji_origin(*id) {
                 return Expression::Emoji {
@@ -539,7 +565,7 @@ fn hover_card(app: &DiscordApp, hover: &Hover, cx: &App) -> AnyElement {
                     .child(div().min_w_0().line_clamp(2).child(label)),
             )
             .child(caption()),
-        Expression::Emoji { .. } => body
+        Expression::Emoji { .. } | Expression::Default(_) => body
             .flex()
             .items_center()
             .gap(rpx(8.))
@@ -564,6 +590,7 @@ fn origin<'a>(app: &'a DiscordApp, expression: &Expression) -> Option<&'a Guild>
             let details = app.expression_info.sticker_details(sticker.id)?;
             app.store.guild_by_id(details.guild_id?)
         }),
+        Expression::Default(_) => None,
     }
 }
 
@@ -579,6 +606,7 @@ fn server_explanation(expression: &Expression, discoverable: Option<bool>) -> &'
         (Expression::Emoji { .. }, None) => {
             "This emoji is from a server that is either invite-only or unavailable."
         }
+        (Expression::Default(_), _) => DEFAULT_EMOJI,
     }
 }
 
@@ -596,6 +624,7 @@ fn explanation(
         }
     });
     match expression {
+        Expression::Default(_) => DEFAULT_EMOJI.to_owned(),
         Expression::Emoji { id, .. } => {
             let Some((guild, emoji)) = app.store.emoji_origin(*id) else {
                 return server_explanation(expression, discoverable).to_owned();

@@ -68,11 +68,9 @@ impl BodyContext<'_> {
                     .update(cx, |app, cx| app.reveal_spoiler(message_id, *index, cx))
                     .ok();
             }
-            Action::InspectEmoji { id, name, animated } => {
-                let expression = Expression::Emoji {
-                    id: *id,
-                    name: name.to_string(),
-                    animated: *animated,
+            Action::InspectEmoji { .. } | Action::InspectDefaultEmoji(_) => {
+                let Some(expression) = inspected(action) else {
+                    return;
                 };
                 entity
                     .update(cx, |app, cx| {
@@ -81,6 +79,19 @@ impl BodyContext<'_> {
                     .ok();
             }
         }
+    }
+}
+
+/// The emoji an action points at, for its hover card or info card.
+fn inspected(action: &Action) -> Option<Expression> {
+    match action {
+        Action::InspectEmoji { id, name, animated } => Some(Expression::Emoji {
+            id: *id,
+            name: name.to_string(),
+            animated: *animated,
+        }),
+        Action::InspectDefaultEmoji(sequence) => Some(Expression::Default(sequence.to_string())),
+        _ => None,
     }
 }
 
@@ -313,6 +324,8 @@ fn render_block(
 
 /// Discord indents list text 16px and hangs the marker in that gutter.
 const LIST_INDENT: f32 = 16.;
+/// An emoji in running text, before a piece's scale; rich text draws it 1.375 times the 16px font.
+const INLINE_EMOJI: f32 = 22.;
 const LIST_MARKER_GAP: f32 = 4.;
 
 /// Disc, ring, then square by nesting depth, centred on the first line's x-height.
@@ -362,18 +375,14 @@ fn inline(
         .selectable()
         .on_action(context.handler())
         .on_action_hover(move |hover, _, cx| {
-            let Action::InspectEmoji { id, name, animated } = hover.action else {
+            let Some(expression) = inspected(&hover.action) else {
                 return;
             };
             entity
                 .update(cx, |app, cx| {
                     app.set_expression_hover(
                         HoverOwner::Emoji(message_id, block, hover.piece),
-                        Expression::Emoji {
-                            id,
-                            name: name.to_string(),
-                            animated,
-                        },
+                        expression,
                         hover.bounds,
                         hover.hovered,
                         cx,
@@ -425,7 +434,10 @@ pub fn emoji_pieces(text: &str, style: &PieceStyle) -> Vec<Piece> {
     emoji::segments(text)
         .into_iter()
         .map(|segment| match segment {
-            Segment::Emoji(sequence) => match emoji::image(sequence) {
+            Segment::Emoji(sequence) => match emoji::image(
+                sequence,
+                theme::image_px(INLINE_EMOJI * style.scale.unwrap_or(1.)),
+            ) {
                 Some(image) => Piece {
                     content: Content::Emoji(
                         Some(EmojiSource::Still(image.into())),
@@ -526,7 +538,17 @@ fn span_pieces(
             if jumbo {
                 style.scale = Some(2.6);
             }
-            return emoji_pieces(text, &style);
+            let mut pieces = emoji_pieces(text, &style);
+            // Standard emoji in a message show their name on hover and open an info card, as
+            // custom ones do; a hidden spoiler gives nothing away.
+            if !hidden {
+                for piece in &mut pieces {
+                    if let Content::Emoji(_, sequence) = &piece.content {
+                        piece.style.action = Some(Action::InspectDefaultEmoji(sequence.clone()));
+                    }
+                }
+            }
+            return pieces;
         }
         SpanKind::Code(code) => {
             style.mono = true;
