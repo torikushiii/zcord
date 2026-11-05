@@ -9,7 +9,7 @@ mod task;
 mod udp;
 
 use crate::{Event, VoiceEvent};
-pub use audio::{AudioDevice, MicTest, audio_devices};
+pub use audio::{AudioDevice, AudioDeviceKind, AudioDevices, MicTest, audio_devices};
 use futures::channel::mpsc::UnboundedSender;
 pub(crate) use stream::stream_key;
 pub use stream::{FrameSlot, ScreenSource, StreamFrame, StreamQuality};

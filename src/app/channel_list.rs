@@ -10,7 +10,12 @@ use gpui::{prelude::*, *};
 use gpui_component::ElementExt;
 
 use crate::{
-    app::{DiscordApp, home, member_list, message_body::label, profile, voice},
+    app::{
+        DiscordApp, home, member_list,
+        message_body::label,
+        profile,
+        voice::{self, device_menu::DeviceKind},
+    },
     discord::{SelfStatus, StatusDuration},
     media::animated,
     media::images::{self, ImageSpec},
@@ -61,6 +66,8 @@ enum AccountControl {
     Mute,
     Deafen,
     Settings,
+    InputOptions,
+    OutputOptions,
 }
 
 struct Fold {
@@ -1155,6 +1162,50 @@ fn account_identity(user: &User, hovered: bool, animate_subtitle: bool, cx: &App
         )
 }
 
+/// A mic or headphones button with Discord's chevron beside it, which opens that device's
+/// options menu.
+fn with_options(app: &DiscordApp, button: Stateful<Div>, kind: DeviceKind) -> AnyElement {
+    let (id, control, tip) = match kind {
+        DeviceKind::Input => (
+            "input-options",
+            AccountControl::InputOptions,
+            "Input Options",
+        ),
+        DeviceKind::Output => (
+            "output-options",
+            AccountControl::OutputOptions,
+            "Output Options",
+        ),
+    };
+    let open = app.device_menu_open(kind);
+    let entity = app.entity.clone();
+    let chevron = theme::icon_button(
+        id,
+        if open { "chevron-up" } else { "chevron-down" },
+        16.,
+        theme::muted(),
+    )
+    .w(rpx(16.))
+    .h(rpx(32.))
+    .rounded(rpx(6.))
+    .when(open, |this| this.bg(rgba(theme::hover())))
+    .when(!open, |this| account_tooltip(this, app, control, tip))
+    .on_mouse_down(MouseButton::Left, move |event, _, cx| {
+        cx.stop_propagation();
+        let position = event.position;
+        entity
+            .update(cx, |app, cx| app.toggle_device_menu(kind, position, cx))
+            .ok();
+    });
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .child(button)
+        .child(chevron)
+        .into_any_element()
+}
+
 fn account_button(id: &'static str, icon: &str, color: u32) -> Stateful<Div> {
     theme::icon_button(id, icon, 20., color)
         .debug_selector(move || format!("account-{id}-button"))
@@ -1462,24 +1513,30 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         .into_any_element()
     });
     let controls = [
-        account_button("mic", mic, mic_color)
-            .map(|this| account_tooltip(this, app, AccountControl::Mute, mic_tip))
-            .on_click({
-                let entity = app.entity.clone();
-                move |_, _, cx| {
-                    entity.update(cx, |app, cx| app.toggle_self_mute(cx)).ok();
-                }
-            })
-            .into_any_element(),
-        account_button("deafen", deafen, deafen_color)
-            .map(|this| account_tooltip(this, app, AccountControl::Deafen, deafen_tip))
-            .on_click({
-                let entity = app.entity.clone();
-                move |_, _, cx| {
-                    entity.update(cx, |app, cx| app.toggle_self_deaf(cx)).ok();
-                }
-            })
-            .into_any_element(),
+        with_options(
+            app,
+            account_button("mic", mic, mic_color)
+                .map(|this| account_tooltip(this, app, AccountControl::Mute, mic_tip))
+                .on_click({
+                    let entity = app.entity.clone();
+                    move |_, _, cx| {
+                        entity.update(cx, |app, cx| app.toggle_self_mute(cx)).ok();
+                    }
+                }),
+            DeviceKind::Input,
+        ),
+        with_options(
+            app,
+            account_button("deafen", deafen, deafen_color)
+                .map(|this| account_tooltip(this, app, AccountControl::Deafen, deafen_tip))
+                .on_click({
+                    let entity = app.entity.clone();
+                    move |_, _, cx| {
+                        entity.update(cx, |app, cx| app.toggle_self_deaf(cx)).ok();
+                    }
+                }),
+            DeviceKind::Output,
+        ),
         account_button("user-settings", "settings", theme::text())
             .map(|this| account_tooltip(this, app, AccountControl::Settings, "User Settings"))
             .on_click({

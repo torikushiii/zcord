@@ -41,7 +41,8 @@ pub use presence::{SelfStatus, StatusDuration};
 pub use properties::user_agent;
 pub use properties::{IdentityCache, refresh_identity, set_identity_source};
 pub use voice::{
-    AudioDevice, FrameSlot, MicTest, ScreenSource, StreamFrame, StreamQuality, audio_devices,
+    AudioDevice, AudioDeviceKind, AudioDevices, FrameSlot, MicTest, ScreenSource, StreamFrame,
+    StreamQuality, audio_devices,
 };
 
 pub(crate) use cache::ProfileDetails;

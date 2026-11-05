@@ -100,6 +100,21 @@ pub struct Settings {
     pub stream_audio_muted: bool,
     #[serde(default)]
     pub composer_send_button: bool,
+    /// The Input Profile picked in the mic's options; `None` until one is, which shows as
+    /// Voice Isolation while noise suppression is on.
+    #[serde(default)]
+    pub voice_input_profile: Option<InputProfile>,
+}
+
+/// Discord's Input Profile presets for the microphone's processing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InputProfile {
+    /// Noise suppression on.
+    VoiceIsolation,
+    /// No processing: noise suppression off.
+    Studio,
+    /// Whatever the settings were set to by hand.
+    Custom,
 }
 
 /// The Go Live picker's Stream Mode, which Discord calls a preset.

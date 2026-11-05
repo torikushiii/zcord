@@ -42,6 +42,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "discord",
     "nitro",
     "ban",
+    "bluetooth",
     "chevron-down",
     "chevron-right",
     "chevron-up",
