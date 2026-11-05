@@ -1,7 +1,10 @@
 use super::*;
 
 fn home_ready() -> model::Ready {
-    serde_json::from_str(include_str!("../../discord/fixtures/home.json")).unwrap()
+    serde_json::from_str(include_str!(
+        "../../../crates/discord/src/fixtures/home.json"
+    ))
+    .unwrap()
 }
 
 fn call(value: serde_json::Value) -> model::PrivateCall {
@@ -46,8 +49,10 @@ fn call_lifecycle_preserves_partial_fields_and_clears_explicit_lists() {
 
 #[test]
 fn ready_calls_seed_private_state_and_unknown_channels_are_ignored() {
-    let mut payload: serde_json::Value =
-        serde_json::from_str(include_str!("../../discord/fixtures/home.json")).unwrap();
+    let mut payload: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../crates/discord/src/fixtures/home.json"
+    ))
+    .unwrap();
     payload["calls"] = json!([
         {"channel_id": "900", "ringing": ["1"]},
         {"channel_id": "99999", "ringing": ["1"]}

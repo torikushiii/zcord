@@ -6,8 +6,10 @@ fn ready_with_threads(threads: Vec<Value>) -> model::Ready {
 }
 
 fn ready_with_permissions(threads: Vec<Value>, permissions: u64) -> model::Ready {
-    let mut payload: Value =
-        serde_json::from_str(include_str!("../../discord/fixtures/ready.json")).unwrap();
+    let mut payload: Value = serde_json::from_str(include_str!(
+        "../../../crates/discord/src/fixtures/ready.json"
+    ))
+    .unwrap();
     let guild = &mut payload["guilds"][0];
     for role in guild["roles"].as_array_mut().unwrap() {
         role["permissions"] = json!(permissions.to_string());

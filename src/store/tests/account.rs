@@ -1,8 +1,10 @@
 use super::*;
 
 fn ready_with_contact(email: Option<&str>, phone: Option<&str>, mfa_enabled: bool) -> model::Ready {
-    let mut payload: serde_json::Value =
-        serde_json::from_str(include_str!("../../discord/fixtures/ready.json")).unwrap();
+    let mut payload: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../crates/discord/src/fixtures/ready.json"
+    ))
+    .unwrap();
     payload["user"]["email"] = json!(email);
     payload["user"]["phone"] = json!(phone);
     payload["user"]["mfa_enabled"] = json!(mfa_enabled);

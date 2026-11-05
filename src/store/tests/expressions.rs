@@ -71,8 +71,10 @@ fn emoji_origin_reflects_updates_removals_and_guild_deletion() {
 
 #[test]
 fn sticker_origin_uses_exact_ready_catalog_ids() {
-    let mut payload: serde_json::Value =
-        serde_json::from_str(include_str!("../../discord/fixtures/ready.json")).unwrap();
+    let mut payload: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../crates/discord/src/fixtures/ready.json"
+    ))
+    .unwrap();
     for guild in payload["guilds"].as_array_mut().unwrap() {
         let Some(guild_id) = model::id_value(&guild["id"]) else {
             continue;
@@ -340,8 +342,10 @@ fn guild_discoverable_distinguishes_known_features_from_unknown() {
 
 #[test]
 fn guild_discoverable_reads_ready_properties_before_legacy_features() {
-    let mut payload: serde_json::Value =
-        serde_json::from_str(include_str!("../../discord/fixtures/ready.json")).unwrap();
+    let mut payload: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../crates/discord/src/fixtures/ready.json"
+    ))
+    .unwrap();
     let guilds = payload["guilds"].as_array_mut().unwrap();
     let guild = guilds
         .iter_mut()
@@ -373,8 +377,10 @@ fn guild_discoverable_reads_ready_properties_before_legacy_features() {
 }
 
 fn stickers_ready(nitro: bool) -> model::Ready {
-    let mut payload: serde_json::Value =
-        serde_json::from_str(include_str!("../../discord/fixtures/ready.json")).unwrap();
+    let mut payload: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../crates/discord/src/fixtures/ready.json"
+    ))
+    .unwrap();
     payload["user"]["premium_type"] = if nitro { json!(2) } else { json!(null) };
     for guild in payload["guilds"].as_array_mut().unwrap() {
         match model::id_value(&guild["id"]) {

@@ -28,9 +28,9 @@ jobs:
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Build
-        run: cargo build --locked
+        run: cargo build --workspace --locked
       - name: Test
-        run: cargo test --locked
+        run: cargo test --workspace --locked
 
   linux:
     runs-on: ubuntu-24.04
@@ -49,6 +49,6 @@ jobs:
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Check
-        run: cargo check --locked
+        run: cargo check --workspace --locked
       - name: Test
-        run: cargo test --locked
+        run: cargo test --workspace --locked
