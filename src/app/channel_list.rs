@@ -1376,28 +1376,28 @@ fn current_game_row(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                             .text_color(rgb(theme::strong()))
                             .child(label("account-game-name", name)),
                     )
-                    .child(
-                        div()
-                            .id("account-game-sharing")
-                            .self_start()
-                            .text_size(rpx(12.))
-                            .line_height(rpx(16.))
-                            .text_color(rgb(theme::muted()))
-                            .when(invisible, |this| {
-                                this.cursor_pointer()
-                                    .hover(|style| style.underline())
-                                    .on_click(move |event, _, cx| {
-                                        let position = event.position();
-                                        entity
-                                            .update(cx, |app, cx| {
-                                                app.sharing_paused = Some(position);
-                                                cx.notify();
-                                            })
-                                            .ok();
-                                    })
-                            })
-                            .child("Not Sharing"),
-                    ),
+                    .when(invisible, |this| {
+                        this.child(
+                            div()
+                                .id("account-game-sharing")
+                                .self_start()
+                                .text_size(rpx(12.))
+                                .line_height(rpx(16.))
+                                .text_color(rgb(theme::muted()))
+                                .cursor_pointer()
+                                .hover(|style| style.underline())
+                                .on_click(move |event, _, cx| {
+                                    let position = event.position();
+                                    entity
+                                        .update(cx, |app, cx| {
+                                            app.sharing_paused = Some(position);
+                                            cx.notify();
+                                        })
+                                        .ok();
+                                })
+                                .child("Not Sharing"),
+                        )
+                    }),
             )
             .into_any_element(),
     )
