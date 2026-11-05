@@ -121,6 +121,12 @@ pub(super) fn older_messages_bar(
         return None;
     }
     let jump = entity;
+    // The typing indicator overhangs the list's bottom, so the pill rises above it.
+    let typing = if app.typing_users().is_empty() {
+        0.
+    } else {
+        super::composer::TYPING_HEIGHT
+    };
     // Floating pill centred above the composer; the full-width wrapper has no
     // listeners, so clicks beside the pill still reach the list.
     Some(
@@ -128,7 +134,7 @@ pub(super) fn older_messages_bar(
             .absolute()
             .left_0()
             .right_0()
-            .bottom(rpx(8.))
+            .bottom(rpx(8. + typing))
             .flex()
             .justify_center()
             .child(

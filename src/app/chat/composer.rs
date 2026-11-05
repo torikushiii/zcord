@@ -5,6 +5,8 @@ use crate::app::mentions;
 use gpui_component::{ActiveTheme, input::Paste};
 
 const PREVIEW_MAX_BYTES: u64 = 20 * 1024 * 1024;
+/// The typing indicator's strip, which overhangs the bottom of the message list.
+pub(super) const TYPING_HEIGHT: f32 = 24.;
 
 pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
     let can_send = app.store.can_send(app.selected_channel_id);
@@ -690,7 +692,7 @@ fn typing_indicator(app: &DiscordApp) -> Option<impl IntoElement> {
             .flex()
             .items_center()
             .gap(rpx(6.))
-            .h(rpx(24.))
+            .h(rpx(TYPING_HEIGHT))
             .pl(rpx(8.))
             .bg(rgb(theme::bg()))
             .text_size(rpx(12.))
