@@ -12,7 +12,7 @@ use windows::{
         System::{
             Com::{
                 CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
-                CoUninitialize, IPersistFile,
+                CoUninitialize, IPersistFile, STGM_READWRITE,
                 StructuredStorage::{PROPVARIANT, PropVariantClear},
             },
             Variant::VT_LPWSTR,
@@ -41,11 +41,8 @@ pub fn init() {
         log::warn!("could not locate the Start Menu folder");
         return;
     };
-    if shortcut.is_file() {
-        return;
-    }
-    if let Err(error) = create_shortcut(&shortcut) {
-        log::warn!("could not create notification shortcut: {error}");
+    if let Err(error) = ensure_shortcut(&shortcut) {
+        log::warn!("could not set up the notification shortcut: {error}");
     }
 }
 
@@ -80,7 +77,10 @@ fn shortcut_path() -> Option<PathBuf> {
     )
 }
 
-fn create_shortcut(shortcut: &Path) -> Result<(), String> {
+/// Windows drops a desktop app's toasts unless a Start Menu shortcut carries its app id.
+/// Creates the shortcut, or adds the id to one made without it, such as by an installer, while
+/// keeping what that shortcut opens.
+fn ensure_shortcut(shortcut: &Path) -> Result<(), String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let parent = shortcut
         .parent()
@@ -89,21 +89,22 @@ fn create_shortcut(shortcut: &Path) -> Result<(), String> {
     let shortcut = shortcut.to_path_buf();
     std::thread::Builder::new()
         .name("zcord-toast-identity".into())
-        .spawn(move || create_shortcut_on_sta(&executable, &shortcut))
+        .spawn(move || ensure_shortcut_on_sta(&executable, &shortcut))
         .map_err(|error| error.to_string())?
         .join()
         .map_err(|_| "notification shortcut thread panicked".to_string())?
 }
 
-fn create_shortcut_on_sta(executable: &Path, shortcut: &Path) -> Result<(), String> {
+fn ensure_shortcut_on_sta(executable: &Path, shortcut_path: &Path) -> Result<(), String> {
     let result = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
     if result.is_err() {
         return Err(format!("CoInitializeEx failed: {result:?}"));
     }
     let _guard = ComGuard;
 
+    let existing = shortcut_path.is_file();
     let executable_wide = wide(executable.as_os_str());
-    let shortcut = wide(shortcut.as_os_str());
+    let shortcut = wide(shortcut_path.as_os_str());
     let app_id = wide(OsStr::new(APP_ID));
     let description = wide(OsStr::new("zcord"));
     let working_directory = executable
@@ -114,6 +115,38 @@ fn create_shortcut_on_sta(executable: &Path, shortcut: &Path) -> Result<(), Stri
     let shell_link: IShellLinkW =
         unsafe { CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER) }
             .map_err(|error| error.to_string())?;
+    let file: IPersistFile = shell_link.cast().map_err(|error| error.to_string())?;
+    let properties: IPropertyStore = shell_link.cast().map_err(|error| error.to_string())?;
+    if existing {
+        unsafe { file.Load(PCWSTR(shortcut.as_ptr()), STGM_READWRITE) }
+            .map_err(|error| error.to_string())?;
+        if stored_app_id(&properties).as_deref() == Some(APP_ID) {
+            return Ok(());
+        }
+    } else {
+        set_target(
+            &shell_link,
+            &executable_wide,
+            &working_directory,
+            &description,
+        )?;
+    }
+    let mut app_id_value = prop_variant_from_string(&app_id)?;
+    let set_result = unsafe { properties.SetValue(&APP_USER_MODEL_ID, &app_id_value) };
+    unsafe {
+        let _ = PropVariantClear(&mut app_id_value);
+    }
+    set_result.map_err(|error| error.to_string())?;
+    unsafe { properties.Commit() }.map_err(|error| error.to_string())?;
+    unsafe { file.Save(PCWSTR(shortcut.as_ptr()), true) }.map_err(|error| error.to_string())
+}
+
+fn set_target(
+    shell_link: &IShellLinkW,
+    executable_wide: &[u16],
+    working_directory: &[u16],
+    description: &[u16],
+) -> Result<(), String> {
     unsafe {
         shell_link
             .SetPath(PCWSTR(executable_wide.as_ptr()))
@@ -126,20 +159,22 @@ fn create_shortcut_on_sta(executable: &Path, shortcut: &Path) -> Result<(), Stri
             .map_err(|error| error.to_string())?;
         shell_link
             .SetIconLocation(PCWSTR(executable_wide.as_ptr()), 0)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| error.to_string())
     }
+}
 
-    let properties: IPropertyStore = shell_link.cast().map_err(|error| error.to_string())?;
-    let mut app_id_value = prop_variant_from_string(&app_id)?;
-    let set_result = unsafe { properties.SetValue(&APP_USER_MODEL_ID, &app_id_value) };
+fn stored_app_id(properties: &IPropertyStore) -> Option<String> {
+    let mut value = unsafe { properties.GetValue(&APP_USER_MODEL_ID) }.ok()?;
+    let id = unsafe {
+        let inner = &*value.Anonymous.Anonymous;
+        (inner.vt == VT_LPWSTR && !inner.Anonymous.pwszVal.is_null())
+            .then(|| inner.Anonymous.pwszVal.to_string().ok())
+            .flatten()
+    };
     unsafe {
-        let _ = PropVariantClear(&mut app_id_value);
+        let _ = PropVariantClear(&mut value);
     }
-    set_result.map_err(|error| error.to_string())?;
-    unsafe { properties.Commit() }.map_err(|error| error.to_string())?;
-
-    let file: IPersistFile = shell_link.cast().map_err(|error| error.to_string())?;
-    unsafe { file.Save(PCWSTR(shortcut.as_ptr()), true) }.map_err(|error| error.to_string())
+    id
 }
 
 fn prop_variant_from_string(value: &[u16]) -> Result<PROPVARIANT, String> {
