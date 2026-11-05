@@ -1354,6 +1354,7 @@ impl Render for DiscordApp {
                                                 this.child(self.views.thread_pane.clone().cached(
                                                     views::thread_pane_style(
                                                         self.selected_forum().is_some(),
+                                                        self.thread_pane_is_dm(),
                                                     ),
                                                 ))
                                             },

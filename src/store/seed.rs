@@ -276,6 +276,7 @@ impl Store {
             guild_notification_defaults: HashMap::new(),
             request_previews: HashMap::new(),
             friend_suggestion_count: 0,
+            friend_suggestions: None,
             guild_indices: HashMap::new(),
             folder_layout: Some(vec![
                 settings_proto::GuildFolder {

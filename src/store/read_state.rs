@@ -137,7 +137,7 @@ impl Store {
             .map_or(0, |s| s.mention_count)
     }
 
-    pub(super) fn latest_message_id(&self, channel_id: u64) -> u64 {
+    pub fn latest_message_id(&self, channel_id: u64) -> u64 {
         self.source
             .as_ref()
             .and_then(|source| self.source_channels.get(&channel_id)?.get(source))

@@ -10,6 +10,11 @@ use crate::{
     theme::{self, WithoutTextSelection, rpx},
 };
 
+/// Discord can answer a friend request with a captcha we can't show yet, so sending one by
+/// username stays in the official client for now. Flip this once captchas are handled.
+const SEND_REQUESTS: bool = false;
+const SEND_FROM_DISCORD: &str = "Send friend requests from Discord for now";
+
 #[derive(Clone, PartialEq, Eq)]
 enum AddNote {
     Sent(String),
@@ -188,6 +193,11 @@ impl DiscordApp {
     }
 
     fn send_friend_request(&mut self, cx: &mut Context<Self>) {
+        if !SEND_REQUESTS {
+            self.home.friends.note = Some(AddNote::Failed(SEND_FROM_DISCORD));
+            cx.notify();
+            return;
+        }
         let Some(input) = &self.home.friends.username else {
             return;
         };
@@ -244,7 +254,7 @@ impl DiscordApp {
 
 pub(crate) fn add_friend_page(app: &DiscordApp) -> impl IntoElement + use<> {
     let friends = &app.home.friends;
-    let can_send = !friends.sending;
+    let can_send = SEND_REQUESTS && !friends.sending;
     let send = app.entity.clone();
     let (border, note) = match &friends.note {
         Some(AddNote::Sent(name)) => (
@@ -322,6 +332,10 @@ pub(crate) fn add_friend_page(app: &DiscordApp) -> impl IntoElement + use<> {
                                 })
                         })
                         .when(!can_send, |this| this.opacity(0.5))
+                        .when(!SEND_REQUESTS, |this| {
+                            this.relative()
+                                .child(theme::hover_tooltip("friend-send-tip", SEND_FROM_DISCORD))
+                        })
                         .child("Send Friend Request"),
                 ),
         )

@@ -453,6 +453,73 @@ impl Store {
             .min(u32::MAX as usize) as u32
     }
 
+    /// The home button's badge: DM mentions plus the friend and message requests waiting on
+    /// the user, leaving out spam, like Discord's.
+    pub fn home_badge(&self) -> u32 {
+        self.dm_mentions
+            .saturating_add(self.pending_count())
+            .saturating_add(self.message_request_count())
+    }
+
+    pub fn set_friend_suggestions(&mut self, suggestions: Vec<model::FriendSuggestion>) {
+        let mapped = suggestions
+            .iter()
+            .map(|suggestion| self.map_friend_suggestion(suggestion))
+            .collect();
+        self.friend_suggestions = Some(mapped);
+    }
+
+    fn map_friend_suggestion(&mut self, suggestion: &model::FriendSuggestion) -> FriendSuggestion {
+        self.register_author(&suggestion.suggested_user);
+        FriendSuggestion {
+            user_id: suggestion.suggested_user.id,
+            reason: suggestion
+                .reasons
+                .iter()
+                .find_map(|reason| reason.name.clone().filter(|name| !name.is_empty())),
+        }
+    }
+
+    pub(super) fn add_friend_suggestion(&mut self, suggestion: &model::FriendSuggestion) {
+        let mapped = self.map_friend_suggestion(suggestion);
+        match &mut self.friend_suggestions {
+            Some(list) => {
+                list.retain(|existing| existing.user_id != mapped.user_id);
+                list.push(mapped);
+            }
+            None => self.friend_suggestion_count = self.friend_suggestion_count.saturating_add(1),
+        }
+    }
+
+    /// Drops a suggestion that was dismissed here or elsewhere.
+    pub fn remove_friend_suggestion(&mut self, user_id: u64) {
+        match &mut self.friend_suggestions {
+            Some(list) => list.retain(|suggestion| suggestion.user_id != user_id),
+            None => self.friend_suggestion_count = self.friend_suggestion_count.saturating_sub(1),
+        }
+    }
+
+    /// Suggestions for people the user has no relationship with yet; accepting one sends a
+    /// friend request, which moves them to Pending.
+    pub fn friend_suggestions(&self) -> Vec<&FriendSuggestion> {
+        self.friend_suggestions
+            .iter()
+            .flatten()
+            .filter(|suggestion| !self.relationships.contains_key(&suggestion.user_id))
+            .collect()
+    }
+
+    pub fn friend_suggestions_loaded(&self) -> bool {
+        self.friend_suggestions.is_some()
+    }
+
+    pub fn friend_suggestion_count(&self) -> u32 {
+        match &self.friend_suggestions {
+            Some(_) => self.friend_suggestions().len().min(u32::MAX as usize) as u32,
+            None => self.friend_suggestion_count,
+        }
+    }
+
     pub fn personalization_consented(&self) -> bool {
         self.source
             .as_ref()
@@ -634,6 +701,57 @@ mod tests {
             RelationshipKind::Friend
         );
         assert!(!store.friends().contains(&13));
+    }
+
+    #[test]
+    fn home_badge_sums_dm_mentions_and_requests() {
+        let store = store();
+        assert_eq!(store.dm_mentions, 2);
+        assert_eq!(store.pending_count(), 1);
+        assert_eq!(store.message_request_count(), 1);
+        assert_eq!(store.home_badge(), 4);
+    }
+
+    #[test]
+    fn friend_suggestions_follow_fetches_events_and_relationships() {
+        let mut store = store();
+        assert!(!store.friend_suggestions_loaded());
+        assert_eq!(store.friend_suggestion_count(), 2);
+
+        let suggestion = |id: &str, reason: &str| {
+            json!({
+                "suggested_user": {"id": id, "username": format!("user{id}")},
+                "reasons": [{"type": 1, "platform_type": "steam", "name": reason}]
+            })
+        };
+        let fetched: Vec<model::FriendSuggestion> =
+            serde_json::from_value(json!([suggestion("30", "steamy"), suggestion("31", "")]))
+                .unwrap();
+        store.set_friend_suggestions(fetched);
+        assert!(store.user(30).is_some());
+        let list = store.friend_suggestions();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].reason.as_deref(), Some("steamy"));
+        assert_eq!(list[1].reason, None);
+
+        let created: model::FriendSuggestion =
+            serde_json::from_value(suggestion("32", "new")).unwrap();
+        store.apply(Event::FriendSuggestionCreate(Box::new(created)));
+        assert_eq!(store.friend_suggestion_count(), 3);
+
+        store.apply(Event::FriendSuggestionDelete { user_id: 31 });
+        assert_eq!(store.friend_suggestion_count(), 2);
+
+        // Sending a request moves the user to Pending, out of the suggestions.
+        let outgoing: model::Relationship =
+            serde_json::from_value(json!({"id": "30", "type": 4})).unwrap();
+        store.apply(Event::RelationshipAdd(Box::new(outgoing)));
+        let ids: Vec<u64> = store
+            .friend_suggestions()
+            .iter()
+            .map(|suggestion| suggestion.user_id)
+            .collect();
+        assert_eq!(ids, [32]);
     }
 
     #[test]

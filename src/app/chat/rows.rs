@@ -77,10 +77,11 @@ pub(super) fn render_pane_row(
     let (new_day, grouped) = row_grouping(messages, index);
     let start = index == 0 && app.history_complete.contains(&channel_id);
     let post = app.store.forum_post(channel_id);
-    let intro = start
-        .then_some(post)
-        .flatten()
-        .map(|post| post_intro(app, post, &channel.name, cx));
+    let intro = start.then(|| match post {
+        Some(post) => Some(post_intro(app, post, &channel.name, cx).into_any_element()),
+        None => home::dm_intro(app, channel_id, cx),
+    });
+    let intro = intro.flatten();
     let first_unread = app
         .thread_pane_unread_since(channel_id)
         .is_some_and(|since| {

@@ -1,6 +1,7 @@
 use super::*;
 
 const RELATIONSHIPS_URL: &str = "https://discord.com/api/v9/users/@me/relationships";
+const FRIEND_SUGGESTIONS_URL: &str = "https://discord.com/api/v9/friend-suggestions";
 const INSTALLATION_URL: &str = "https://discord.com/api/v9/apex/experiments?surface=2";
 // `{"location":"user profile modal v2"}`; matches the official profile modal.
 const PROFILE_CONTEXT: &str = "eyJsb2NhdGlvbiI6InVzZXIgcHJvZmlsZSBtb2RhbCB2MiJ9";
@@ -80,6 +81,18 @@ impl Rest {
         self.send(|| relationship_delete(&self.client, user_id))
             .await?;
         Ok(())
+    }
+
+    pub async fn fetch_friend_suggestions(&self) -> Result<Vec<model::FriendSuggestion>, Error> {
+        let response = self
+            .send(|| {
+                self.client
+                    .get(FRIEND_SUGGESTIONS_URL)
+                    .header(REFERER, "https://discord.com/channels/@me")
+            })
+            .await?;
+        let value = response.json::<Value>().await.map_err(|_| Error::Decode)?;
+        Ok(model::parse_entries(value))
     }
 
     pub async fn open_dm(&self, user_id: u64) -> Result<model::Channel, Error> {

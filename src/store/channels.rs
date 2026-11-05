@@ -48,11 +48,11 @@ impl Store {
         {
             return false;
         }
-        if matches!(
-            self.source_channels.get(&channel_id),
-            Some(SourceChannel::Private(_))
-        ) {
-            return true;
+        if let Some(SourceChannel::Private(_)) = self.source_channels.get(&channel_id) {
+            // Discord refuses replies until the request is accepted.
+            return !self
+                .private_channel(channel_id)
+                .is_some_and(|dm| dm.message_request);
         }
         self.permissions(channel_id).is_some_and(|permissions| {
             permissions & (discord::VIEW_CHANNEL | discord::SEND_MESSAGES)
