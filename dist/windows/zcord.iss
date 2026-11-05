@@ -62,8 +62,10 @@ Source: "{#PackageDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PackageDir}\licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\zcord"; Filename: "{app}\zcord.exe"
-Name: "{autodesktop}\zcord"; Filename: "{app}\zcord.exe"; Tasks: desktopicon
+; Windows only shows a desktop app's notifications when its Start Menu shortcut carries
+; the app id it sets for itself; keep it in step with APP_ID in src/notify/toast.rs.
+Name: "{autoprograms}\zcord"; Filename: "{app}\zcord.exe"; AppUserModelID: "zcord"
+Name: "{autodesktop}\zcord"; Filename: "{app}\zcord.exe"; Tasks: desktopicon; AppUserModelID: "zcord"
 
 [Registry]
 ; The launch-on-startup setting (src/startup.rs) writes this value; remove it on uninstall
