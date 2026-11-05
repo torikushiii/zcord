@@ -28,6 +28,9 @@ pub(crate) struct PanelViews {
     pub(crate) chat_header: Entity<ChatHeaderView>,
     pub(crate) messages: Entity<MessagesView>,
     pub(crate) composer: Entity<ComposerView>,
+    /// The composer's measured height, readable while the composer itself renders, which
+    /// reading the view then would not allow.
+    pub(crate) composer_height: Rc<Cell<Option<Pixels>>>,
     pub(crate) members: Entity<MemberListView>,
     pub(crate) thread_pane: Entity<ThreadPaneView>,
     pub(crate) overlays: Entity<OverlaysView>,
@@ -35,12 +38,14 @@ pub(crate) struct PanelViews {
 
 impl PanelViews {
     pub(crate) fn new(app: &Entity<DiscordApp>, cx: &mut Context<DiscordApp>) -> Self {
+        let composer_height = Rc::new(Cell::new(None));
         Self {
             guild_rail: cx.new(|cx| GuildRailView::new(app, cx)),
             channel_list: cx.new(|cx| ChannelListView::new(app, cx)),
             chat_header: cx.new(|cx| ChatHeaderView::new(app, cx)),
             messages: cx.new(|cx| MessagesView::new(app, cx)),
-            composer: cx.new(|cx| ComposerView::new(app, cx)),
+            composer: cx.new(|cx| ComposerView::new(app, composer_height.clone(), cx)),
+            composer_height,
             members: cx.new(|cx| MemberListView::new(app, cx)),
             thread_pane: cx.new(|cx| ThreadPaneView::new(app, cx)),
             overlays: cx.new(|cx| OverlaysView::new(app, cx)),
@@ -277,16 +282,16 @@ pub(crate) struct ComposerView {
 }
 
 impl ComposerView {
-    fn new(app: &Entity<DiscordApp>, cx: &mut Context<Self>) -> Self {
+    fn new(
+        app: &Entity<DiscordApp>,
+        height: Rc<Cell<Option<Pixels>>>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         Self {
             app: app.downgrade(),
-            height: Rc::new(Cell::new(None)),
+            height,
             _observe: observe_app(app, cx),
         }
-    }
-
-    pub(crate) fn height(&self) -> Option<Pixels> {
-        self.height.get()
     }
 }
 
