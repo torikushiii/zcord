@@ -1325,7 +1325,7 @@ impl Render for DiscordApp {
                                                 )
                                                 .child(self.views.composer.clone().cached(
                                                     views::composer_style(
-                                                        self.views.composer.read(cx).height(),
+                                                        self.views.composer_height.get(),
                                                         self.selected_forum().is_some()
                                                             || self.showing_home_page(),
                                                     ),

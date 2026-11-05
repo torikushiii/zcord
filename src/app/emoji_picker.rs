@@ -885,9 +885,8 @@ pub(super) fn suggestions(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
     let selected = app.emoji_suggest.index.min(choices.len() - 1);
     let composer = app
         .views
-        .composer
-        .read(cx)
-        .height()
+        .composer_height
+        .get()
         .map_or(70., |height| f32::from(height) * app.rpx_per_pixel);
     let room = app.window_height - SUGGESTION_RESERVED_HEIGHT - composer;
     let fits = (room / SUGGESTION_ROW).max(3.) as usize;
