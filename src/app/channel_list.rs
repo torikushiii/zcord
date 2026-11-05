@@ -1506,7 +1506,7 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         .bg(rgb(theme::elevated()))
         .border_1()
         .border_color(rgba(theme::border()))
-        .children(voice::panel(app))
+        .children(voice::panel(app, cx))
         .children(current_game_row(app, cx))
         .child(account)
 }

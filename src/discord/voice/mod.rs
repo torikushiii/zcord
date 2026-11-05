@@ -12,7 +12,7 @@ use crate::discord::{Event, VoiceEvent};
 pub use audio::{AudioDevice, MicTest, audio_devices};
 use futures::channel::mpsc::UnboundedSender;
 pub(crate) use stream::stream_key;
-pub use stream::{FrameSlot, ScreenSource, ScreenSourceId, StreamFrame};
+pub use stream::{FrameSlot, ScreenSource, StreamFrame, StreamQuality};
 
 pub(super) use task::VoiceManager;
 

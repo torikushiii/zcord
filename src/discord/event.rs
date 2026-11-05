@@ -101,7 +101,17 @@ pub enum StreamEvent {
 pub enum ShareEvent {
     Starting,
     Live,
-    Ended { reason: Option<String> },
+    Ended {
+        reason: Option<String>,
+    },
+    /// The users watching the stream, which Discord lists again on every change.
+    Viewers(Vec<u64>),
+    /// A still of the shared picture, a JPEG data URI, for Discord to show as the stream's
+    /// preview.
+    Preview {
+        stream_key: String,
+        thumbnail: String,
+    },
 }
 
 #[derive(Debug)]

@@ -10795,7 +10795,12 @@ dependencies = [
  "windows-capture 2.0.1",
  "windows-core 0.62.2",
  "winresource",
+ "zcord-convert",
 ]
+
+[[package]]
+name = "zcord-convert"
+version = "0.1.0"
 
 [[package]]
 name = "zed-font-kit"

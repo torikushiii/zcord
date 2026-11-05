@@ -17,9 +17,6 @@ use windows::{
     core::Interface,
 };
 
-const WIDTH: u32 = 1280;
-const HEIGHT: u32 = 720;
-const FPS: u32 = 30;
 const MAX_BYTES: usize = 2 * 1024 * 1024 + 64 * 1024;
 const MAX_BUFFER_BYTES: usize = 16 * 1024 * 1024;
 const UNAVAILABLE: &str = "Windows video encoding is unavailable";
@@ -66,6 +63,8 @@ pub(crate) struct Encoder {
     async_mft: bool,
     _activate: Activated,
     _runtime: Runtime,
+    width: u32,
+    height: u32,
     frame: i64,
     duration: i64,
     need_input: usize,
@@ -74,16 +73,22 @@ pub(crate) struct Encoder {
 }
 
 impl Encoder {
-    pub(crate) fn new(bitrate: u32) -> Result<Self, String> {
+    pub(crate) fn new(bitrate: u32, width: u32, height: u32, fps: u32) -> Result<Self, String> {
+        let format = Format { width, height, fps };
         let runtime = Runtime::open()?;
         let (opened, software) = match hardware_encoder() {
             Ok(activate) => (Opened::Activate(activate), false),
             Err(_) => (software_encoder()?, true),
         };
+        log::info!(
+            "stream encoder: {} H.264, {width}x{height} at {fps} fps, {} kbps",
+            if software { "software" } else { "hardware" },
+            bitrate / 1000,
+        );
         let activate = match opened {
             Opened::Activate(activate) => Some(activate),
             Opened::Transform(transform) => {
-                return Self::configure(transform, None, software, runtime, bitrate);
+                return Self::configure(transform, None, software, runtime, bitrate, format);
             }
         };
         let transform: IMFTransform = unsafe {
@@ -93,7 +98,7 @@ impl Encoder {
                 .ActivateObject()
                 .map_err(|_| UNAVAILABLE.to_owned())?
         };
-        Self::configure(transform, activate, software, runtime, bitrate)
+        Self::configure(transform, activate, software, runtime, bitrate, format)
     }
 
     fn configure(
@@ -102,6 +107,7 @@ impl Encoder {
         software: bool,
         runtime: Runtime,
         bitrate: u32,
+        format: Format,
     ) -> Result<Self, String> {
         let attributes =
             unsafe { transform.GetAttributes() }.map_err(|_| UNAVAILABLE.to_owned())?;
@@ -127,9 +133,9 @@ impl Encoder {
                 &CODECAPI_AVEncMPVDefaultBPictureCount,
                 &VARIANT::from(0_u32),
             );
-            let _ = codec.SetValue(&CODECAPI_AVEncMPVGOPSize, &VARIANT::from(FPS * 3));
+            let _ = codec.SetValue(&CODECAPI_AVEncMPVGOPSize, &VARIANT::from(format.fps * 3));
         }
-        let output = video_type(MFVideoFormat_H264)?;
+        let output = video_type(MFVideoFormat_H264, format)?;
         unsafe {
             output
                 .SetUINT32(&MF_MT_AVG_BITRATE, bitrate)
@@ -138,9 +144,9 @@ impl Encoder {
             transform
                 .SetOutputType(0, &output, 0)
                 .map_err(|_| UNAVAILABLE.to_owned())?;
-            let input = video_type(MFVideoFormat_NV12)?;
+            let input = video_type(MFVideoFormat_NV12, format)?;
             input
-                .SetUINT32(&MF_MT_DEFAULT_STRIDE, WIDTH)
+                .SetUINT32(&MF_MT_DEFAULT_STRIDE, format.width)
                 .map_err(|_| UNAVAILABLE.to_owned())?;
             transform
                 .SetInputType(0, &input, 0)
@@ -178,8 +184,10 @@ impl Encoder {
             async_mft,
             _activate: Activated(activate),
             _runtime: runtime,
+            width: format.width,
+            height: format.height,
             frame: 0,
-            duration: 10_000_000 / i64::from(FPS),
+            duration: 10_000_000 / i64::from(format.fps.max(1)),
             need_input: 0,
             have_output: 0,
             provides_samples,
@@ -199,7 +207,7 @@ impl Encoder {
         nv12: &[u8],
         force_keyframe: bool,
     ) -> Result<(Vec<u8>, bool), String> {
-        let expected = WIDTH as usize * HEIGHT as usize * 3 / 2;
+        let expected = self.width as usize * self.height as usize * 3 / 2;
         if nv12.len() != expected {
             return Err(FAILED.to_owned());
         }
@@ -412,7 +420,14 @@ fn enumerate_encoder(flags: MFT_ENUM_FLAG) -> Result<IMFActivate, String> {
     }
 }
 
-fn video_type(subtype: windows::core::GUID) -> Result<IMFMediaType, String> {
+#[derive(Clone, Copy)]
+struct Format {
+    width: u32,
+    height: u32,
+    fps: u32,
+}
+
+fn video_type(subtype: windows::core::GUID, format: Format) -> Result<IMFMediaType, String> {
     unsafe {
         let media_type = MFCreateMediaType().map_err(|_| UNAVAILABLE.to_owned())?;
         media_type
@@ -424,11 +439,11 @@ fn video_type(subtype: windows::core::GUID) -> Result<IMFMediaType, String> {
         media_type
             .SetUINT64(
                 &MF_MT_FRAME_SIZE,
-                (u64::from(WIDTH) << 32) | u64::from(HEIGHT),
+                (u64::from(format.width) << 32) | u64::from(format.height),
             )
             .map_err(|_| UNAVAILABLE.to_owned())?;
         media_type
-            .SetUINT64(&MF_MT_FRAME_RATE, u64::from(FPS) << 32 | 1)
+            .SetUINT64(&MF_MT_FRAME_RATE, u64::from(format.fps) << 32 | 1)
             .map_err(|_| UNAVAILABLE.to_owned())?;
         media_type
             .SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, 1_u64 << 32 | 1)

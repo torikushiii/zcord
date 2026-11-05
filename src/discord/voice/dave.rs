@@ -6,6 +6,8 @@ use std::{
 };
 
 pub(super) const SILENCE: [u8; 3] = [0xF8, 0xFF, 0xFE];
+/// How long the replaced group still decrypts packets sent before everyone switched.
+const RETIRED_FOR: Duration = Duration::from_secs(10);
 
 pub(super) enum EncryptOutcome {
     Plaintext(Vec<u8>),
@@ -33,6 +35,12 @@ fn encryption_plan(version: u16, ready: bool) -> EncryptPlan {
 
 pub(super) struct Dave {
     session: DaveSession,
+    /// The group a re-key (op 24) is replacing. Media goes on with it until Discord executes
+    /// the transition to the new group, as every member switches at that point, instead of
+    /// stopping for the seconds the new group takes.
+    previous: Option<DaveSession>,
+    /// The replaced group after the switch, kept until the deadline for late packets.
+    retired: Option<(DaveSession, Instant)>,
     version: u16,
     user_id: u64,
     channel_id: u64,
@@ -56,6 +64,8 @@ impl Dave {
         recognized.insert(user_id);
         Some(Self {
             session,
+            previous: None,
+            retired: None,
             version,
             user_id,
             channel_id,
@@ -75,6 +85,27 @@ impl Dave {
 
     pub fn is_ready(&self) -> bool {
         self.session.is_ready()
+    }
+
+    /// Whether media can be encrypted or decrypted: with the current group, or with the one
+    /// a re-key is replacing.
+    pub fn can_encrypt(&self) -> bool {
+        self.session.is_ready() || self.previous.is_some()
+    }
+
+    /// The session media is sent with: the replaced group until the switch, then the current.
+    fn media_session(&mut self) -> Option<&mut DaveSession> {
+        match &mut self.previous {
+            Some(previous) => Some(previous),
+            None => self.session.is_ready().then_some(&mut self.session),
+        }
+    }
+
+    /// Switches media to the new group, keeping the replaced one briefly for decrypting.
+    fn promote(&mut self) {
+        if let Some(previous) = self.previous.take() {
+            self.retired = Some((previous, Instant::now() + RETIRED_FOR));
+        }
     }
 
     pub fn transition_version(&self, transition_id: u16) -> Option<u16> {
@@ -156,6 +187,7 @@ impl Dave {
             self.version = version;
         }
         if self.session.is_ready() {
+            self.promote();
             self.active_version = version;
             if previous == 0 {
                 self.passthrough = true;
@@ -175,9 +207,14 @@ impl Dave {
             return None;
         }
         let version = NonZeroU16::new(version)?;
-        self.session
-            .reinit(version, self.user_id, self.channel_id, None)
-            .ok()?;
+        let fresh = DaveSession::new(version, self.user_id, self.channel_id, None).ok()?;
+        let replaced = std::mem::replace(&mut self.session, fresh);
+        // Keep the group media goes through until the new one's transition executes. A group
+        // replaced before its own transition never carried media, so it's only dropped, as is
+        // one that never got ready, whose keys nobody holds.
+        if self.previous.is_none() && replaced.is_ready() {
+            self.previous = Some(replaced);
+        }
         self.version = version.get();
         self.pending.clear();
         self.passthrough = false;
@@ -189,10 +226,14 @@ impl Dave {
     }
 
     pub fn encrypt(&mut self, packet: &[u8]) -> EncryptOutcome {
-        match encryption_plan(self.version, self.session.is_ready()) {
+        match encryption_plan(self.version, self.can_encrypt()) {
             EncryptPlan::Plaintext => EncryptOutcome::Plaintext(packet.to_vec()),
             EncryptPlan::Drop => EncryptOutcome::NotReady,
-            EncryptPlan::Encrypt => match self.session.encrypt_opus(packet) {
+            EncryptPlan::Encrypt => match self
+                .media_session()
+                .map(|session| session.encrypt_opus(packet))
+                .unwrap_or(Err(davey::errors::EncryptError::NotReady))
+            {
                 Ok(encrypted) => {
                     if !self.encrypting_logged {
                         self.encrypting_logged = true;
@@ -206,10 +247,7 @@ impl Dave {
     }
 
     pub fn encrypt_video(&mut self, frame: &[u8]) -> Option<Vec<u8>> {
-        if !self.session.is_ready() {
-            return None;
-        }
-        self.session
+        self.media_session()?
             .encrypt(MediaType::VIDEO, Codec::H264, frame)
             .ok()
             .map(std::borrow::Cow::into_owned)
@@ -222,14 +260,33 @@ impl Dave {
         if self.version == 0 {
             return self.passthrough.then(|| packet.to_vec());
         }
-        if !self.session.is_ready() {
-            return self.passthrough_allowed().then(|| packet.to_vec());
+        let passthrough = self.passthrough_allowed();
+        // Around a re-key, members switch groups at slightly different moments, so a packet
+        // may come with either group's keys: the one media uses first, then the others.
+        if self
+            .retired
+            .as_ref()
+            .is_some_and(|(_, until)| Instant::now() >= *until)
+        {
+            self.retired = None;
         }
-        match self.session.decrypt(user_id, media, packet) {
-            Ok(plaintext) => Some(plaintext),
-            Err(_) if self.passthrough_allowed() => Some(packet.to_vec()),
-            Err(_) => None,
+        let Self {
+            session,
+            previous,
+            retired,
+            ..
+        } = self;
+        let ready = session.is_ready();
+        let candidates = previous
+            .iter_mut()
+            .chain(ready.then_some(session))
+            .chain(retired.iter_mut().map(|(retired, _)| retired));
+        for candidate in candidates {
+            if let Ok(plaintext) = candidate.decrypt(user_id, media, packet) {
+                return Some(plaintext);
+            }
         }
+        passthrough.then(|| packet.to_vec())
     }
 
     fn passthrough_allowed(&self) -> bool {

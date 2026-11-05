@@ -682,7 +682,8 @@ async fn drive(
                             .d
                             .get("viewer_ids")
                             .and_then(Value::as_array)
-                            .map_or(0, Vec::len);
+                            .map(|ids| ids.iter().filter_map(model::id_value).collect())
+                            .unwrap_or_default();
                         if let Some(key) = key.filter(|key| key.len() <= 128) {
                             voice.stream_updated(key, viewers);
                         }
