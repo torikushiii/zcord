@@ -108,6 +108,9 @@ const NEWER_MESSAGES_THRESHOLD: usize = 8;
 
 pub(crate) const DISCORD_EPOCH_MS: u64 = 1_420_070_400_000;
 const ACK_DELAY: Duration = Duration::from_secs(1);
+/// Discord marks a channel read locally at once but sends the ack this much later, unless
+/// the channel has mentions or you asked for it.
+const ACK_SEND_DELAY: Duration = Duration::from_secs(3);
 const OLDER_RETRY_DELAY: Duration = Duration::from_secs(5);
 pub(crate) const MESSAGE_LIMIT: usize = 2000;
 const TYPING_RESEND: Duration = Duration::from_secs(9);
@@ -355,6 +358,8 @@ pub struct DiscordApp {
     pub(crate) unread_bar: bool,
     pub(crate) manual_unread: Option<u64>,
     ack_timer: Option<Task<()>>,
+    /// Acks waiting out `ACK_SEND_DELAY`, one per channel; leaving the channel doesn't stop them.
+    outgoing_acks: HashMap<u64, Task<()>>,
     status_expiry: Option<SystemTime>,
     status_expiry_timer: Option<Task<()>>,
     members_timer: Option<Task<()>>,
@@ -554,6 +559,7 @@ impl DiscordApp {
             unread_bar: false,
             manual_unread: None,
             ack_timer: None,
+            outgoing_acks: HashMap::new(),
             status_expiry: None,
             status_expiry_timer: None,
             members_timer: None,

@@ -130,7 +130,7 @@ impl Store {
             .collect()
     }
 
-    pub(super) fn mention_count(&self, channel_id: u64) -> u32 {
+    pub fn mention_count(&self, channel_id: u64) -> u32 {
         self.source
             .as_ref()
             .and_then(|source| read_state(source, &self.read_states, channel_id))
