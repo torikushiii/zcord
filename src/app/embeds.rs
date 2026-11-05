@@ -1472,6 +1472,7 @@ pub fn render_reactions(
                     .relative()
                     .on_mouse_down(MouseButton::Left, move |event, window, cx| {
                         let position = event.position - point(px(0.), px(8.));
+                        window.prevent_default();
                         open.update(cx, |app, cx| {
                             app.toggle_emoji_picker(
                                 PickerTarget::Reaction(message_id),

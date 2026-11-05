@@ -306,6 +306,7 @@ pub(super) fn message_actions(app: &DiscordApp, message: &Message, cx: &App) -> 
             MouseButton::Left,
             move |event, window, cx| {
                 let position = event.position - point(px(0.), px(8.));
+                window.prevent_default();
                 react
                     .update(cx, |app, cx| {
                         app.toggle_emoji_picker(PickerTarget::Reaction(id), position, window, cx)
