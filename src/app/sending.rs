@@ -327,6 +327,9 @@ impl DiscordApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.store.can_send(channel_id) {
+            return;
+        }
         if self.pending_sends.should_stage(
             channel_id,
             self.store.at_present(channel_id),

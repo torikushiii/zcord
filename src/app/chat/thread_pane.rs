@@ -2,7 +2,10 @@ use super::composer::{emoji_token_overlay, flush_textarea};
 use super::popouts::PopoutKind;
 use super::rows::render_pane_row;
 use super::*;
-use crate::app::OLDER_MESSAGES_THRESHOLD;
+use crate::app::{
+    OLDER_MESSAGES_THRESHOLD,
+    home::{HomePage, request_bar},
+};
 use crate::discord::model;
 use crate::store::{Change, Channel, EmojiChoice};
 use gpui_component::input::InputEvent;
@@ -34,8 +37,13 @@ pub(in crate::app) struct ThreadPane {
 }
 
 impl DiscordApp {
+    /// A guild channel or thread, or a DM; the side pane shows any of them.
     pub(crate) fn channel_by_id(&self, id: u64) -> Option<&Channel> {
-        self.store.guilds.iter().find_map(|guild| guild.channel(id))
+        self.store
+            .guilds
+            .iter()
+            .find_map(|guild| guild.channel(id))
+            .or_else(|| self.store.private_channel(id).map(|dm| &dm.channel))
     }
 
     pub(crate) fn history_channel(&self, id: u64) -> Option<&Channel> {
@@ -51,11 +59,21 @@ impl DiscordApp {
     }
 
     pub(crate) fn thread_pane_open(&self) -> bool {
-        !self.is_home()
-            && self
-                .thread_pane
-                .as_ref()
-                .is_some_and(|pane| self.channel_by_id(pane.id).is_some())
+        let Some(pane) = &self.thread_pane else {
+            return false;
+        };
+        // A message request opens beside the requests list, like Discord's sidebar, and only
+        // there; a thread pane belongs to its guild.
+        if self.store.private_channel(pane.id).is_some() {
+            return self.showing_home_page() && self.home.page == HomePage::Requests;
+        }
+        !self.is_home() && self.channel_by_id(pane.id).is_some()
+    }
+
+    pub(crate) fn thread_pane_is_dm(&self) -> bool {
+        self.thread_pane
+            .as_ref()
+            .is_some_and(|pane| self.store.private_channel(pane.id).is_some())
     }
 
     pub(crate) fn open_thread_pane(
@@ -82,6 +100,8 @@ impl DiscordApp {
         };
         let placeholder = if self.store.forum_post(thread_id).is_some() {
             format!("Send a message in \"{name}\"")
+        } else if self.store.private_channel(thread_id).is_some() {
+            format!("Message @{}", self.store.private_channel_name(thread_id))
         } else {
             format!("Message {name}")
         };
@@ -840,6 +860,53 @@ fn header(app: &DiscordApp, id: u64, name: &str) -> impl IntoElement + use<> {
         )
 }
 
+/// A message request's sidebar header, like Discord's: the sender's avatar and name, and close.
+fn dm_header(app: &DiscordApp, id: u64, cx: &App) -> impl IntoElement + use<> {
+    let close = app.entity.clone();
+    let name = app.store.private_channel_name(id);
+    let user_id = app
+        .store
+        .private_channel(id)
+        .and_then(|dm| dm.recipient_ids.first().copied())
+        .unwrap_or(0);
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap_2()
+        .h(rpx(HEADER_HEIGHT))
+        .pl_4()
+        .pr_2()
+        .border_b_1()
+        .border_color(rgba(theme::border()))
+        .child(theme::user_avatar(
+            app.store.user(user_id),
+            user_id,
+            24.,
+            None,
+            false,
+            cx,
+        ))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(rpx(16.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(theme::strong()))
+                .child(label(("dm-pane-name", id), &name)),
+        )
+        .child(
+            theme::icon_button("dm-pane-close", "x", 20., theme::muted())
+                .relative()
+                .child(theme::hover_tooltip("dm-pane-close-tip", "Close"))
+                .on_click(move |_, _, cx| {
+                    close.update(cx, |app, cx| app.close_thread_pane(cx)).ok();
+                }),
+        )
+}
+
 fn body(app: &DiscordApp, pane: &ThreadPane, thread: &Channel) -> AnyElement {
     let id = pane.id;
     if app.live && !thread.messages_loaded {
@@ -1034,10 +1101,15 @@ pub(crate) fn render_thread_pane(app: &DiscordApp, cx: &App) -> AnyElement {
         .border_color(rgba(theme::border()))
         .child(if app.store.forum_post(pane.id).is_some() {
             post_header(app, pane, &thread.name).into_any_element()
+        } else if app.store.private_channel(pane.id).is_some() {
+            dm_header(app, pane.id, cx).into_any_element()
         } else {
             header(app, pane.id, &thread.name).into_any_element()
         })
         .child(body(app, pane, thread))
-        .child(composer_box(app, pane, cx))
+        .child(match request_bar(app, pane.id) {
+            Some(bar) => bar,
+            None => composer_box(app, pane, cx).into_any_element(),
+        })
         .into_any_element()
 }

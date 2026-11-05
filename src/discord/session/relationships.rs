@@ -21,6 +21,11 @@ impl Session {
             .await
     }
 
+    pub async fn friend_suggestions(&self) -> Result<Vec<model::FriendSuggestion>, Error> {
+        self.rest(async |rest| rest.fetch_friend_suggestions().await)
+            .await
+    }
+
     pub async fn open_dm(&self, user_id: u64) -> Result<model::Channel, Error> {
         self.rest(async |rest| rest.open_dm(user_id).await).await
     }

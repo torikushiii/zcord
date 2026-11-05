@@ -97,6 +97,11 @@ pub(super) fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) 
                 .ok()
                 .map(|r| Event::RelationshipUpdate(Box::new(r))),
             "RELATIONSHIP_REMOVE" => id(&value, "id").map(|id| Event::RelationshipRemove { id }),
+            "FRIEND_SUGGESTION_CREATE" => serde_json::from_value(value)
+                .ok()
+                .map(|s| Event::FriendSuggestionCreate(Box::new(s))),
+            "FRIEND_SUGGESTION_DELETE" => id(&value, "suggested_user_id")
+                .map(|user_id| Event::FriendSuggestionDelete { user_id }),
             "THREAD_LIST_SYNC" => serde_json::from_value(value)
                 .ok()
                 .map(|sync| Event::ThreadListSync(Box::new(sync))),

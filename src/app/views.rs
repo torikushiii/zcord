@@ -86,10 +86,16 @@ pub(crate) fn member_list_style(width: f32) -> StyleRefinement {
 }
 
 /// A forum post's pane splits the width with the forum; a channel thread's pane is a sidebar.
-pub(crate) fn thread_pane_style(forum: bool) -> StyleRefinement {
+pub(crate) fn thread_pane_style(forum: bool, dm: bool) -> StyleRefinement {
     let style = StyleRefinement::default().h_full();
     if forum {
         style.flex_1().min_w_0()
+    } else if dm {
+        // Discord's message request sidebar takes about 37% of the content area.
+        style
+            .w(relative(0.37))
+            .min_w(rpx(chat::THREAD_PANE_WIDTH))
+            .flex_none()
     } else {
         style.w(rpx(chat::THREAD_PANE_WIDTH)).flex_none()
     }
@@ -298,10 +304,12 @@ impl Render for ComposerView {
         let view = cx.entity().entity_id();
         div()
             .w_full()
-            .child(match home::request_bar(app) {
-                Some(bar) => bar,
-                None => chat::composer(app, cx).into_any_element(),
-            })
+            .child(
+                match home::request_bar(app, app.selected_channel_id).filter(|_| app.is_home()) {
+                    Some(bar) => bar,
+                    None => chat::composer(app, cx).into_any_element(),
+                },
+            )
             .child(
                 canvas(
                     move |bounds, window, _cx| {

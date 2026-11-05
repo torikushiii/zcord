@@ -67,7 +67,10 @@ pub struct Store {
     notification_settings: HashMap<Option<u64>, model::UserGuildSettings>,
     guild_notification_defaults: HashMap<u64, model::NotificationLevel>,
     request_previews: HashMap<u64, RequestPreview>,
-    pub friend_suggestion_count: u32,
+    /// From `READY`; stands in until `friend_suggestions` is fetched.
+    friend_suggestion_count: u32,
+    /// `None` until the Suggestions tab first fetches the list.
+    friend_suggestions: Option<Vec<FriendSuggestion>>,
     guild_indices: HashMap<u64, usize>,
     folder_layout: Option<Vec<settings_proto::GuildFolder>>,
     account_theme: Option<settings_proto::AccountTheme>,
@@ -311,6 +314,7 @@ impl Store {
             guild_notification_defaults,
             request_previews: HashMap::new(),
             friend_suggestion_count,
+            friend_suggestions: None,
             guild_indices: HashMap::new(),
             folder_layout,
             account_theme,
@@ -448,6 +452,14 @@ impl Store {
             }
             Event::RelationshipRemove { id } => {
                 self.apply_relationship_remove(id);
+                Change::Structure
+            }
+            Event::FriendSuggestionCreate(suggestion) => {
+                self.add_friend_suggestion(&suggestion);
+                Change::Structure
+            }
+            Event::FriendSuggestionDelete { user_id } => {
+                self.remove_friend_suggestion(user_id);
                 Change::Structure
             }
             _ => Change::None,

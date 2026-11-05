@@ -33,6 +33,8 @@ pub enum Event {
     RelationshipAdd(Box<model::Relationship>),
     RelationshipUpdate(Box<model::RelationshipUpdate>),
     RelationshipRemove { id: u64 },
+    FriendSuggestionCreate(Box<model::FriendSuggestion>),
+    FriendSuggestionDelete { user_id: u64 },
     ThreadListSync(Box<model::ThreadListSync>),
     ThreadMembersUpdate(Box<model::ThreadMembersUpdate>),
     ThreadMemberUpdate(Box<model::ThreadMemberUpdate>),

@@ -4,7 +4,7 @@ use gpui::{Context, IntoElement, Render, TestAppContext, Window, div, prelude::*
 
 use super::{
     ACTIVE_ART, ACTIVE_BADGE, active_art, active_detail_text, activity_elapsed, elapsed,
-    shows_elapsed_line,
+    request_age, request_preview_line, shows_elapsed_line,
 };
 use crate::{store::GameActivity, theme::rpx};
 
@@ -183,4 +183,27 @@ fn small_image_overlays_art_without_moving_or_overlapping_details(cx: &mut TestA
             assert!(small.right() < details.left());
         }
     }
+}
+
+#[test]
+fn request_age_follows_discords_buckets() {
+    let now = 1_800_000_000_000_i64;
+    let ago = |seconds: i64| request_age(now - seconds * 1000, now);
+    assert_eq!(ago(10), "1m ago");
+    assert_eq!(ago(5 * 60), "5m ago");
+    assert_eq!(ago(3 * 3_600), "3h ago");
+    assert_eq!(ago(16 * 86_400), "16d ago");
+    assert_eq!(ago(31 * 86_400), ">30d ago");
+    assert_eq!(ago(359 * 86_400), ">30d ago");
+    // A year or more falls back to the full date.
+    assert!(ago(400 * 86_400).contains(", 20"));
+}
+
+#[test]
+fn request_preview_flattens_lines_and_markup() {
+    let store = crate::store::Store::seed();
+    let line = request_preview_line(&store, "hi <:wave:123>\nthere <a:spin:9> <#55>");
+    assert_eq!(line, "hi :wave: there :spin: <#55>");
+    let mention = request_preview_line(&store, "<@999999> heya");
+    assert!(mention.starts_with('@') && mention.ends_with(" heya"));
 }

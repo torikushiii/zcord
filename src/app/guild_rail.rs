@@ -237,7 +237,7 @@ pub fn render(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 app,
                 morphs,
             ))
-            .children(corner_badge(app.store.dm_mentions)),
+            .children(corner_badge(app.store.home_badge())),
         )
         .child(
             div()
