@@ -889,32 +889,52 @@ struct TooltipAbove {
 }
 
 impl RenderOnce for TooltipAbove {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let body = div()
-            .flex()
-            .flex_col()
-            .items_center()
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let bubble = div().child(
+            tooltip_bubble()
+                .flex()
+                .flex_col()
+                .items_center()
+                .text_size(rpx(14.))
+                .line_height(rpx(18.))
+                .map(|this| match self.detail {
+                    Some(detail) => this
+                        .child(
+                            div()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(strong()))
+                                .child(self.label),
+                        )
+                        .child(div().child(detail)),
+                    None => this.child(self.label),
+                }),
+        );
+        // The arrow stays on the target while only the bubble slides to fit the window. A single
+        // anchored body would flip its anchor at the window edge and point at a neighbour instead.
+        div()
+            .absolute()
+            .top(rpx(-4.))
+            .left(relative(0.5))
+            .size_0()
             .child(
-                tooltip_bubble()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .text_size(rpx(14.))
-                    .line_height(rpx(18.))
-                    .map(|this| match self.detail {
-                        Some(detail) => this
-                            .child(
-                                div()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(rgb(strong()))
-                                    .child(self.label),
-                            )
-                            .child(div().child(detail)),
-                        None => this.child(self.label),
-                    }),
+                deferred(
+                    anchored()
+                        .anchor(Anchor::BottomCenter)
+                        .child(tooltip_entrance(tooltip_arrow_down(), cx)),
+                )
+                .with_priority(2),
             )
-            .child(tooltip_arrow_down());
-        float_above(body, cx)
+            .child(
+                deferred(
+                    anchored()
+                        .anchor(Anchor::BottomCenter)
+                        // The arrow is 9px tall and overlaps the bubble's border by 1px.
+                        .offset(point(px(0.), -rpx(8.).to_pixels(window.rem_size())))
+                        .snap_to_window_with_margin(px(8.))
+                        .child(tooltip_entrance(bubble, cx)),
+                )
+                .with_priority(2),
+            )
     }
 }
 
