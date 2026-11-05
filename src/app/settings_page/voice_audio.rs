@@ -12,27 +12,29 @@ use super::{
     sections::{note, row, section},
 };
 use crate::{
-    app::{DiscordApp, voice::switch},
-    discord::{AudioDevice, MicTest, Session, audio_devices},
+    app::{
+        DiscordApp,
+        voice::{
+            device_menu::{DeviceKind, choices, current, device_line},
+            switch,
+        },
+    },
+    discord::{MicTest, Session},
     settings::Settings,
     theme::{self, rpx},
 };
 
 const METER_TICK: Duration = Duration::from_millis(50);
 const AUTOMATIC_THRESHOLD: f32 = -50.;
-const DEVICE_LIST_MAX_HEIGHT: f32 = 260.;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum DeviceKind {
-    Input,
-    Output,
-}
+/// Room for about seven devices before the list scrolls.
+const DEVICE_LIST_MAX_HEIGHT: f32 = 380.;
 
 /// Voice & Video page state, created the first time the page is shown.
 pub(super) struct VoiceAudio {
-    devices: Option<(Vec<AudioDevice>, Vec<AudioDevice>)>,
     open_list: Option<DeviceKind>,
-    open_list_trigger: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Each picker's button, measured every frame, so its list can match the button's width
+    /// and a click on it isn't taken for a click outside.
+    triggers: [Rc<Cell<Option<Bounds<Pixels>>>>; 2],
     input_volume: Entity<SliderState>,
     output_volume: Entity<SliderState>,
     sensitivity: Entity<SliderState>,
@@ -40,7 +42,6 @@ pub(super) struct VoiceAudio {
     test: Option<Rc<MicTest>>,
     test_error: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
-    _devices: Task<()>,
 }
 
 /// Applies the saved audio preferences to a session, before joining a call.
@@ -99,28 +100,11 @@ impl DiscordApp {
         ];
         let session = self.session.clone().filter(|_| self.voice.call.is_some());
         let meter = cx.new(|cx| LevelMeter::new(session, saved.voice_sensitivity, cx));
-        let devices = cx.spawn(async move |this, cx| {
-            let devices = cx
-                .background_executor()
-                .spawn(async { audio_devices() })
-                .await;
-            this.update(cx, |app, cx| {
-                if let Some(audio) = app
-                    .settings_page
-                    .as_mut()
-                    .and_then(|settings| settings.voice_audio.as_mut())
-                {
-                    audio.devices = Some(devices);
-                    cx.notify();
-                }
-            })
-            .ok();
-        });
+        self.refresh_audio_devices(cx);
         if let Some(settings) = &mut self.settings_page {
             settings.voice_audio = Some(VoiceAudio {
-                devices: None,
                 open_list: None,
-                open_list_trigger: Rc::default(),
+                triggers: Default::default(),
                 input_volume,
                 output_volume,
                 sensitivity,
@@ -128,7 +112,6 @@ impl DiscordApp {
                 test: None,
                 test_error: None,
                 _subscriptions: subscriptions,
-                _devices: devices,
             });
         }
     }
@@ -153,7 +136,12 @@ impl DiscordApp {
         }
     }
 
-    fn select_device(&mut self, kind: DeviceKind, name: Option<String>, cx: &mut Context<Self>) {
+    pub(crate) fn select_device(
+        &mut self,
+        kind: DeviceKind,
+        name: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         crate::settings::update(cx, |settings| match kind {
             DeviceKind::Input => settings.voice_input_device = name.clone(),
             DeviceKind::Output => settings.voice_output_device = name.clone(),
@@ -176,7 +164,7 @@ impl DiscordApp {
         cx.notify();
     }
 
-    fn set_input_volume(&mut self, gain: f32, cx: &mut Context<Self>) {
+    pub(crate) fn set_input_volume(&mut self, gain: f32, cx: &mut Context<Self>) {
         crate::settings::update(cx, |settings| {
             settings.voice_input_volume = (gain != 1.).then_some(gain)
         });
@@ -188,7 +176,7 @@ impl DiscordApp {
         }
     }
 
-    fn set_output_volume(&mut self, volume: f32, cx: &mut Context<Self>) {
+    pub(crate) fn set_output_volume(&mut self, volume: f32, cx: &mut Context<Self>) {
         crate::settings::update(cx, |settings| {
             settings.voice_output_volume = (volume != 1.).then_some(volume)
         });
@@ -290,8 +278,8 @@ pub(super) fn page(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> Vec<A
     let volumes = div()
         .flex()
         .gap(rpx(16.))
-        .child(labeled_slider("Input Volume", &audio.input_volume, cx))
-        .child(labeled_slider("Output Volume", &audio.output_volume, cx));
+        .child(labeled_slider("Microphone Volume", &audio.input_volume))
+        .child(labeled_slider("Speaker Volume", &audio.output_volume));
     let test_button = {
         let entity = app.entity.clone();
         let testing = audio.test.is_some();
@@ -469,18 +457,18 @@ fn device_picker(
     selected: Option<&str>,
 ) -> impl IntoElement {
     let (label, id) = match kind {
-        DeviceKind::Input => ("Input Device", "settings-input-device"),
-        DeviceKind::Output => ("Output Device", "settings-output-device"),
+        DeviceKind::Input => ("Microphone", "settings-input-device"),
+        DeviceKind::Output => ("Speaker", "settings-output-device"),
     };
-    let current = selected.unwrap_or("Windows default").to_owned();
+    let devices = app.audio_devices();
+    let shown = current(devices, kind, selected);
     let open = audio.open_list == Some(kind);
     let toggle = app.entity.clone();
-    let trigger = audio.open_list_trigger.clone();
+    let trigger = audio.triggers[kind as usize].clone();
     let button = div()
         .id(id)
         .flex()
         .items_center()
-        .justify_between()
         .gap(rpx(8.))
         .h(rpx(40.))
         .px(rpx(12.))
@@ -498,115 +486,119 @@ fn device_picker(
                 .update(cx, |app, cx| app.toggle_device_list(kind, cx))
                 .ok();
         })
-        .when(open, |this| {
-            this.on_prepaint(move |bounds, _, _| trigger.set(Some(bounds)))
-        })
+        .on_prepaint(move |bounds, _, _| trigger.set(Some(bounds)))
+        .child(theme::icon(shown.icon, 16., theme::text()))
         .child(
             div()
+                .flex()
+                .flex_1()
                 .min_w_0()
-                .truncate()
+                .items_center()
                 .text_size(rpx(14.))
-                .text_color(rgb(theme::strong()))
-                .child(current),
+                .child(
+                    div()
+                        .flex_none()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(theme::strong()))
+                        .child(shown.label),
+                )
+                .children(shown.detail.filter(|_| shown.name.is_none()).map(|detail| {
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .pl(rpx(4.))
+                        .text_color(rgb(theme::muted()))
+                        .child(format!("({detail})"))
+                })),
         )
         .child(theme::icon(
             if open { "chevron-up" } else { "chevron-down" },
             16.,
             theme::muted(),
         ));
-    let names: Vec<Option<String>> = match &audio.devices {
-        Some((inputs, outputs)) => std::iter::once(None)
-            .chain(
-                match kind {
-                    DeviceKind::Input => inputs,
-                    DeviceKind::Output => outputs,
-                }
-                .iter()
-                .map(|device| Some(device.name.clone())),
-            )
-            .collect(),
-        None => vec![None],
-    };
-
     let list = open.then(|| {
         let close = app.entity.clone();
-        let trigger = audio.open_list_trigger.clone();
+        let trigger = audio.triggers[kind as usize].clone();
+        let width = trigger.get().map(|bounds| bounds.size.width);
+        let rows = choices(devices, kind)
+            .into_iter()
+            .enumerate()
+            .map(|(index, choice)| {
+                let chosen = choice.name.as_deref() == selected;
+                let entity = app.entity.clone();
+                let line = device_line(&choice, false);
+                let name = choice.name;
+                div()
+                    .id((id, index as u64))
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(rpx(12.))
+                    .min_h(rpx(48.))
+                    .px(rpx(12.))
+                    .py(rpx(6.))
+                    .rounded(rpx(6.))
+                    .cursor_pointer()
+                    .text_size(rpx(14.))
+                    .line_height(rpx(18.))
+                    .when(chosen, |this| this.bg(rgba(theme::hover())))
+                    .hover(|style| style.bg(rgba(theme::hover())))
+                    .on_click(move |_, _, cx| {
+                        entity
+                            .update(cx, |app, cx| app.select_device(kind, name.clone(), cx))
+                            .ok();
+                    })
+                    .child(line)
+                    .when(chosen, |this| this.child(check_circle()))
+            });
+        // Deferred, so it draws over the settings below it. An anchored element is placed at
+        // its parent's corner, so it goes in an empty box that sits under the button.
         deferred(
-            div()
-                .id("settings-device-list")
-                .absolute()
-                .top(rpx(40.))
-                .left_0()
-                .right_0()
-                .flex()
-                .flex_col()
-                .mt(rpx(4.))
-                .p(rpx(4.))
-                .rounded(rpx(8.))
-                .bg(rgb(theme::bg()))
-                .border_1()
-                .border_color(rgba(theme::border()))
-                .max_h(rpx(DEVICE_LIST_MAX_HEIGHT))
-                .overflow_y_scrollbar()
-                .occlude()
-                .on_mouse_down_out(move |event, _, cx| {
-                    // The trigger closes on click; closing on mouse-down would reopen it.
-                    if trigger
-                        .get()
-                        .is_some_and(|bounds| bounds.contains(&event.position))
-                    {
-                        return;
-                    }
-                    close.update(cx, |app, cx| app.close_device_list(cx)).ok();
-                })
-                .children(names.into_iter().enumerate().map(|(index, name)| {
-                    let chosen = name.as_deref() == selected;
-                    let entity = app.entity.clone();
-                    let text = name.clone().unwrap_or_else(|| "Windows default".to_owned());
-                    div()
-                        .id((id, index as u64))
-                        .flex()
-                        .flex_none()
-                        .items_center()
-                        .justify_between()
-                        .gap(rpx(8.))
-                        .h(rpx(36.))
-                        .px(rpx(8.))
-                        .rounded(rpx(6.))
-                        .cursor_pointer()
-                        .hover(|style| style.bg(rgba(theme::hover())))
-                        .on_click(move |_, _, cx| {
-                            entity
-                                .update(cx, |app, cx| app.select_device(kind, name.clone(), cx))
-                                .ok();
-                        })
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(rpx(14.))
-                                .text_color(rgb(if chosen {
-                                    theme::strong()
-                                } else {
-                                    theme::text()
-                                }))
-                                .child(text),
-                        )
-                        .when(chosen, |this| {
-                            this.child(theme::icon("check", 16., theme::BLURPLE))
-                        })
-                }))
-                .when(audio.devices.is_none(), |this| {
-                    this.child(
+            anchored().snap_to_window_with_margin(px(8.)).child(
+                div()
+                    .id("settings-device-list")
+                    .when_some(width, |this, width| this.w(width))
+                    .mt(rpx(4.))
+                    .p(rpx(4.))
+                    .rounded(rpx(8.))
+                    .bg(rgb(theme::elevated()))
+                    .border_1()
+                    .border_color(rgba(theme::border()))
+                    .shadow_lg()
+                    .occlude()
+                    .on_mouse_down_out(move |event, _, cx| {
+                        // The trigger closes on click; closing on mouse-down would reopen it.
+                        if trigger
+                            .get()
+                            .is_some_and(|bounds| bounds.contains(&event.position))
+                        {
+                            return;
+                        }
+                        close.update(cx, |app, cx| app.close_device_list(cx)).ok();
+                    })
+                    // Only the rows scroll: a scroll area drops its own bottom padding, which
+                    // let the last row run into the frame's edge.
+                    .child(
                         div()
-                            .flex_none()
-                            .px(rpx(8.))
-                            .py(rpx(6.))
-                            .text_size(rpx(14.))
-                            .text_color(rgb(theme::muted()))
-                            .child("Looking for devices…"),
-                    )
-                }),
+                            .id("settings-device-rows")
+                            .flex()
+                            .flex_col()
+                            .max_h(rpx(DEVICE_LIST_MAX_HEIGHT))
+                            .overflow_y_scrollbar()
+                            .children(rows)
+                            .when(devices.is_none(), |this| {
+                                this.child(
+                                    div()
+                                        .flex_none()
+                                        .px(rpx(8.))
+                                        .py(rpx(6.))
+                                        .text_size(rpx(14.))
+                                        .text_color(rgb(theme::muted()))
+                                        .child("Looking for devices…"),
+                                )
+                            }),
+                    ),
+            ),
         )
         .with_priority(1)
     });
@@ -616,36 +608,35 @@ fn device_picker(
         .flex_1()
         .min_w_0()
         .gap(rpx(8.))
-        .child(field_label(label))
+        .child(picker_label(label))
         .child(
             div()
-                .relative()
                 .flex()
                 .flex_col()
                 .child(button)
-                .children(list),
+                .children(list.map(|list| div().h_0().child(list))),
         )
 }
 
-fn labeled_slider(label: &'static str, state: &Entity<SliderState>, cx: &App) -> impl IntoElement {
-    let percent = state.read(cx).value().start().round() as u32;
+fn check_circle() -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(rpx(20.))
+        .rounded_full()
+        .bg(rgb(theme::BLURPLE))
+        .child(theme::icon("check", 12., 0xFFFFFF))
+}
+
+fn labeled_slider(label: &'static str, state: &Entity<SliderState>) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
         .flex_1()
         .gap(rpx(8.))
-        .child(
-            div()
-                .flex()
-                .justify_between()
-                .child(field_label(label))
-                .child(
-                    div()
-                        .text_size(rpx(14.))
-                        .text_color(rgb(theme::muted()))
-                        .child(format!("{percent}%")),
-                ),
-        )
+        .child(picker_label(label))
         .child(
             div().h(rpx(20.)).child(
                 Slider::new(state)
@@ -655,13 +646,13 @@ fn labeled_slider(label: &'static str, state: &Entity<SliderState>, cx: &App) ->
         )
 }
 
-fn field_label(text: &'static str) -> impl IntoElement {
+fn picker_label(text: &'static str) -> Div {
     div()
-        .text_size(rpx(12.))
-        .line_height(rpx(16.))
-        .font_weight(FontWeight::BOLD)
-        .text_color(rgb(theme::muted()))
-        .child(text.to_uppercase())
+        .text_size(rpx(16.))
+        .line_height(rpx(20.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(theme::strong()))
+        .child(text)
 }
 
 pub(super) enum Source {

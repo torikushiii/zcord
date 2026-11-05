@@ -9,6 +9,7 @@ use gpui::{prelude::*, *};
 use gpui_component::ElementExt;
 
 mod details;
+pub(crate) mod device_menu;
 mod share_panel;
 pub(crate) mod share_picker;
 pub(crate) mod stream_card;
@@ -68,6 +69,10 @@ pub(crate) struct Voice {
     stream_card_hovered: bool,
     /// `(channel, user)` to watch once the call that was joined for it connects.
     pending_watch: Option<(u64, u64)>,
+    /// The audio devices as last listed, for the device menus and Voice & Video settings.
+    devices: Option<crate::discord::AudioDevices>,
+    devices_loading: Option<Task<()>>,
+    volume_slider: Option<device_menu::VolumeSlider>,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -133,6 +138,8 @@ enum MenuKind {
     NoiseSuppression,
     Details,
     Stream,
+    InputOptions,
+    OutputOptions,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -154,6 +161,7 @@ struct Menu {
     flyout: bool,
     /// The flyout lies outside the menu; a click there must not count as outside.
     pointer_in_flyout: bool,
+    device_flyout: Option<device_menu::Flyout>,
 }
 
 /// `Pending` until Discord either finishes the DAVE handshake, which yields the privacy
@@ -292,8 +300,15 @@ impl DiscordApp {
         cx.notify();
     }
 
+    /// Changing it by hand makes the Input Profile Custom, as in Discord.
     pub(crate) fn toggle_noise_suppression(&mut self, cx: &mut Context<Self>) {
-        let enabled = !self.voice.noise_suppression;
+        self.set_noise_suppression(!self.voice.noise_suppression, cx);
+        crate::settings::update(cx, |settings| {
+            settings.voice_input_profile = Some(crate::settings::InputProfile::Custom)
+        });
+    }
+
+    pub(crate) fn set_noise_suppression(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.voice.noise_suppression = enabled;
         if let Some(session) = &self.session {
             session.set_noise_suppression(enabled);
@@ -334,6 +349,7 @@ impl DiscordApp {
             switch_moved: false,
             flyout: false,
             pointer_in_flyout: false,
+            device_flyout: None,
         });
         cx.notify();
     }
@@ -1101,11 +1117,15 @@ fn unavailable(button: Stateful<Div>, feature: &'static str) -> Stateful<Div> {
 /// live inside the cached channel list view.
 pub(crate) fn menu(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
     let menu = app.voice.menu.as_ref()?;
-    let call = app.voice.call.as_ref()?;
+    let call = app.voice.call.as_ref();
     let card = match menu.kind {
         MenuKind::NoiseSuppression => noise_card(app, menu, cx),
-        MenuKind::Details => details::card(app, call, app.voice.details_tab, menu.closing, cx),
+        MenuKind::Details => details::card(app, call?, app.voice.details_tab, menu.closing, cx),
         MenuKind::Stream => share_panel::live_menu(app, menu),
+        MenuKind::InputOptions => device_menu::card(app, menu, device_menu::DeviceKind::Input, cx),
+        MenuKind::OutputOptions => {
+            device_menu::card(app, menu, device_menu::DeviceKind::Output, cx)
+        }
     };
     let close = app.entity.clone();
     let card = card.when(!menu.closing, |this| {

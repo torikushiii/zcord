@@ -229,6 +229,11 @@ impl DiscordApp {
         true
     }
 
+    pub(crate) fn open_voice_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings(window, cx);
+        self.select_settings_page(Page::VoiceVideo, None, cx);
+    }
+
     fn select_settings_page(&mut self, page: Page, section: Option<usize>, cx: &mut Context<Self>) {
         let Some(settings) = &mut self.settings_page else {
             return;

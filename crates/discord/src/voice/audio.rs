@@ -29,31 +29,103 @@ const STREAM_AUDIO_LIMIT: usize = 8;
 
 static MISSING_DEVICES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AudioDevice {
+    /// The system's full name for the device, which zcord saves to open it again.
     pub name: String,
+    /// The name Discord shows: the adapter, such as "UGREEN HiTune Max5c".
+    pub label: String,
+    /// The endpoint on it, such as "Headphones", when the system names one.
+    pub detail: Option<String>,
+    pub kind: AudioDeviceKind,
 }
 
-pub fn audio_devices() -> (Vec<AudioDevice>, Vec<AudioDevice>) {
+/// What a device is, for its icon.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioDeviceKind {
+    Bluetooth,
+    /// Sound through a monitor or TV, over HDMI or DisplayPort.
+    Display,
+    Headphones,
+    Microphone,
+    Speaker,
+    Other,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct AudioDevices {
+    pub inputs: Vec<AudioDevice>,
+    pub outputs: Vec<AudioDevice>,
+    /// What the system default currently is, shown under "Windows Default".
+    pub default_input: Option<AudioDevice>,
+    pub default_output: Option<AudioDevice>,
+}
+
+pub fn audio_devices() -> AudioDevices {
     let host = cpal::default_host();
-    (
-        host.input_devices().map(device_list).unwrap_or_default(),
-        host.output_devices().map(device_list).unwrap_or_default(),
-    )
+    AudioDevices {
+        inputs: host.input_devices().map(device_list).unwrap_or_default(),
+        outputs: host.output_devices().map(device_list).unwrap_or_default(),
+        default_input: host.default_input_device().as_ref().and_then(describe),
+        default_output: host.default_output_device().as_ref().and_then(describe),
+    }
 }
 
 fn device_list(devices: impl Iterator<Item = cpal::Device>) -> Vec<AudioDevice> {
     let mut list: Vec<AudioDevice> = Vec::new();
     for device in devices {
-        let Ok(description) = device.description() else {
+        let Some(device) = describe(&device) else {
             continue;
         };
-        let name = description.name().to_owned();
-        if !list.iter().any(|device| device.name == name) {
-            list.push(AudioDevice { name });
+        if !list.iter().any(|listed| listed.name == device.name) {
+            list.push(device);
         }
     }
     list
+}
+
+fn describe(device: &cpal::Device) -> Option<AudioDevice> {
+    let description = device.description().ok()?;
+    let name = description.name().to_owned();
+    let (label, detail) = split_name(&name);
+    Some(AudioDevice {
+        label,
+        detail,
+        kind: device_kind(description.interface_type(), description.device_type()),
+        name,
+    })
+}
+
+/// Windows names an endpoint "Headphones (UGREEN HiTune Max5c)"; Discord shows the part in
+/// brackets as the name and the rest under it.
+fn split_name(name: &str) -> (String, Option<String>) {
+    let parts = name
+        .strip_suffix(')')
+        .and_then(|rest| rest.rsplit_once(" ("))
+        .filter(|(endpoint, adapter)| !endpoint.is_empty() && !adapter.is_empty());
+    match parts {
+        Some((endpoint, adapter)) => (adapter.to_owned(), Some(endpoint.to_owned())),
+        None => (name.to_owned(), None),
+    }
+}
+
+fn device_kind(interface: cpal::InterfaceType, kind: cpal::DeviceType) -> AudioDeviceKind {
+    use cpal::{DeviceType, InterfaceType};
+    match (interface, kind) {
+        (InterfaceType::Bluetooth, _) => AudioDeviceKind::Bluetooth,
+        (InterfaceType::Hdmi | InterfaceType::DisplayPort, _) => AudioDeviceKind::Display,
+        (
+            _,
+            DeviceType::Headphones
+            | DeviceType::Headset
+            | DeviceType::Earpiece
+            | DeviceType::Handset
+            | DeviceType::HearingAid,
+        ) => AudioDeviceKind::Headphones,
+        (_, DeviceType::Microphone) => AudioDeviceKind::Microphone,
+        (_, DeviceType::Speaker) => AudioDeviceKind::Speaker,
+        _ => AudioDeviceKind::Other,
+    }
 }
 
 pub(super) struct Flags {
@@ -1918,6 +1990,37 @@ where
         },
         None,
     )
+}
+
+#[cfg(test)]
+mod device_name_tests {
+    use super::split_name;
+
+    #[test]
+    fn windows_names_split_into_adapter_and_endpoint() {
+        assert_eq!(
+            split_name("Headphones (UGREEN HiTune Max5c)"),
+            (
+                "UGREEN HiTune Max5c".to_owned(),
+                Some("Headphones".to_owned())
+            )
+        );
+        assert_eq!(
+            split_name("24V2W1G5 (2- High Definition Audio Device)"),
+            (
+                "2- High Definition Audio Device".to_owned(),
+                Some("24V2W1G5".to_owned())
+            )
+        );
+        assert_eq!(
+            split_name("Digital Audio (S/PDIF) (High Definition Audio Device)"),
+            (
+                "High Definition Audio Device".to_owned(),
+                Some("Digital Audio (S/PDIF)".to_owned())
+            )
+        );
+        assert_eq!(split_name("default"), ("default".to_owned(), None));
+    }
 }
 
 #[cfg(test)]
