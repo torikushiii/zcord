@@ -33,13 +33,15 @@ impl DiscordApp {
         channel_id: u64,
         cx: &mut Context<Self>,
     ) {
-        self.join_voice(guild_id, channel_id, cx);
+        // The first click only joins; clicking the channel again once in it opens the call.
         if self
             .voice
             .joined_call()
             .is_some_and(|(_, joined)| joined == channel_id)
         {
             self.open_call_view(cx);
+        } else {
+            self.join_voice(guild_id, channel_id, cx);
         }
     }
 
