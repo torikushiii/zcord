@@ -9,7 +9,7 @@ impl DiscordApp {
         self.unread_since = None;
         self.unread_bar = false;
         self.manual_unread = None;
-        self.ack_channel(cx);
+        self.ack_channel_now(self.selected_channel_id, true, cx);
         cx.notify();
     }
 
@@ -79,6 +79,12 @@ impl DiscordApp {
     }
 
     pub(crate) fn ack_channel_in(&mut self, channel_id: u64, cx: &mut Context<Self>) {
+        self.ack_channel_now(channel_id, false, cx);
+    }
+
+    /// Marks the channel read here at once and tells Discord: right away when `immediate` or
+    /// the channel has mentions, otherwise after `ACK_SEND_DELAY`, as Discord's client does.
+    fn ack_channel_now(&mut self, channel_id: u64, immediate: bool, cx: &mut Context<Self>) {
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;
         };
@@ -88,24 +94,34 @@ impl DiscordApp {
         let Some(message_id) = self.store.channel_ack(channel_id) else {
             return;
         };
+        let delay =
+            (!immediate && self.store.mention_count(channel_id) == 0).then_some(ACK_SEND_DELAY);
         self.store.apply(Event::MessageAck {
             channel_id,
             message_id,
         });
         cx.notify();
         let guild_id = self.request_guild();
-        let days = days_since_discord_epoch();
-        let request = Tokio::spawn(cx, async move {
-            session
-                .ack_message(guild_id, channel_id, message_id, days)
-                .await
+        let task = cx.spawn(async move |this, cx| {
+            if let Some(delay) = delay {
+                cx.background_executor().timer(delay).await;
+            }
+            let days = days_since_discord_epoch();
+            let request = Tokio::spawn(cx, async move {
+                session
+                    .ack_message(guild_id, channel_id, message_id, days)
+                    .await
+            });
+            match request.await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => log::warn!("Could not mark channel read: {error}"),
+                Err(error) => log::warn!("Mark read task failed: {error}"),
+            }
+            this.update(cx, |app, _| app.outgoing_acks.remove(&channel_id))
+                .ok();
         });
-        cx.spawn(async move |_, _| match request.await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => log::warn!("Could not mark channel read: {error}"),
-            Err(error) => log::warn!("Mark read task failed: {error}"),
-        })
-        .detach();
+        // A newer ack for the channel replaces one still waiting, as Discord sends only the latest.
+        self.outgoing_acks.insert(channel_id, task);
     }
 
     pub(crate) fn mark_guild_read(&mut self, guild_id: u64, cx: &mut Context<Self>) {
