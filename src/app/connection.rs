@@ -72,7 +72,7 @@ impl DiscordApp {
         self.voice.call_view = None;
         self.affinity_refresh = None;
         self.voice.speaking.clear();
-        self.current_activity = None;
+        self.current_game_application = None;
         self.current_game = None;
         self.thread_previews.clear();
         self.update_game_activity();

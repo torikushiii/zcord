@@ -1337,7 +1337,7 @@ fn current_game_row(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
     let invisible = self_invisible(app);
     let entity = app.entity.clone();
     let icon = app
-        .current_game_application()
+        .current_game_application
         .and_then(|id| app.game_icon_spec(id))
         .and_then(|spec| images::resolve(&spec, theme::image_px(CURRENT_GAME_ICON), cx))
         .map(|path| img(path).size_full().rounded(rpx(8.)).into_any_element())
