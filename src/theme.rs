@@ -240,6 +240,27 @@ pub fn user_avatar(
     )
 }
 
+/// A plain round avatar for `spec`, for users known only from an API response.
+pub fn spec_avatar(
+    spec: &ImageSpec,
+    user_id: u64,
+    name: &str,
+    size: f32,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    let initials: String = name.chars().take(2).collect();
+    avatar(
+        &initials,
+        user_color(user_id),
+        size,
+        None,
+        false,
+        user_id,
+        avatar_image(spec, size, false, None, cx),
+        None,
+    )
+}
+
 pub fn member_avatar(
     store: &Store,
     guild_id: u64,
@@ -887,21 +908,31 @@ impl RenderOnce for TooltipAbove {
                     }),
             )
             .child(tooltip_arrow_down());
-        div()
-            .absolute()
-            .top(rpx(-4.))
-            .left(relative(0.5))
-            .size_0()
-            .child(
-                deferred(
-                    anchored()
-                        .anchor(Anchor::BottomCenter)
-                        .child(tooltip_entrance(body, cx)),
-                )
-                // Tooltips also appear inside deferred popouts, so they must outrank them.
-                .with_priority(2),
-            )
+        float_above(body, cx)
     }
+}
+
+/// `body` centred above its `relative()` parent, over everything else.
+fn float_above(body: Div, cx: &App) -> Div {
+    div()
+        .absolute()
+        .top(rpx(-4.))
+        .left(relative(0.5))
+        .size_0()
+        .child(
+            deferred(
+                anchored()
+                    .anchor(Anchor::BottomCenter)
+                    .child(tooltip_entrance(body, cx)),
+            )
+            // Tooltips also appear inside deferred popouts, so they must outrank them.
+            .with_priority(2),
+        )
+}
+
+/// A tooltip bubble with no arrow holding `content`, centred above its `relative()` parent.
+pub fn tooltip_card_above(content: impl IntoElement, cx: &App) -> Div {
+    float_above(div().child(content), cx)
 }
 
 #[derive(IntoElement)]

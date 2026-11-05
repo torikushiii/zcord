@@ -311,6 +311,21 @@ impl Session {
         .await
     }
 
+    pub async fn reaction_users(
+        &self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        message_id: u64,
+        emoji: &str,
+        page: model::ReactorPage,
+    ) -> Result<Vec<model::User>, Error> {
+        self.rest(async |rest| {
+            rest.reaction_users(guild_id, channel_id, message_id, emoji, page)
+                .await
+        })
+        .await
+    }
+
     pub async fn remove_reaction(
         &self,
         guild_id: Option<u64>,

@@ -163,6 +163,8 @@ impl DiscordApp {
             self.revealed_spoilers.clear();
             self.stop_player(Some(window), cx);
             self.close_lightbox(cx);
+            self.close_reactions_dialog(cx);
+            self.dismiss_reaction_tooltip();
         }
         self.mention_names = restored.mentions;
         self.selected_channel_id = id;

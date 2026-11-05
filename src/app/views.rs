@@ -416,6 +416,7 @@ impl Render for OverlaysView {
             .children(search::popover(app, cx))
             .children(chat::create_thread_dialog(app))
             .children(forward_dialog::render(app))
+            .children(super::reactions_dialog::render(app, cx))
             .children(chat::thread_menu(app))
             .children(channel_list::sharing_paused_card(app, window))
             .children(chat::delete_dialog(app, cx))

@@ -158,6 +158,8 @@ impl DiscordApp {
         self.confirm_delete = None;
         self.stop_player(Some(window), cx);
         self.close_lightbox(cx);
+        self.close_reactions_dialog(cx);
+        self.dismiss_reaction_tooltip();
         self.selected_channel_id = 0;
         self.reset_mention_draft();
         self.unread_since = None;
