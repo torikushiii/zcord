@@ -164,8 +164,10 @@ impl<R: BufRead + Seek> Composer<R> {
         let rgba = match output.color_type {
             ColorType::Rgba => buffer,
             ColorType::GrayscaleAlpha => buffer
-                .chunks_exact(2)
-                .flat_map(|pixel| [pixel[0], pixel[0], pixel[0], pixel[1]])
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .flat_map(|&[gray, alpha]| [gray, gray, gray, alpha])
                 .collect(),
             other => return Err(decoding_error(&format!("unexpected PNG output {other:?}"))),
         };
@@ -197,4 +199,3 @@ fn decoding_error(message: &str) -> ImageError {
         message.to_owned(),
     ))
 }
-

@@ -514,7 +514,6 @@ impl Rest {
         Ok(())
     }
 
-    /// One page of the users who reacted with `emoji`.
     pub(in crate::discord) async fn reaction_users(
         &self,
         guild_id: Option<u64>,
