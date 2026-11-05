@@ -263,7 +263,10 @@ impl DiscordApp {
         {
             return;
         }
-        if self.close_lightbox(cx) || self.close_forward_dialog(cx) {
+        if self.close_lightbox(cx)
+            || self.close_forward_dialog(cx)
+            || self.close_reactions_dialog(cx)
+        {
             return;
         }
         if self.dismiss_status_menu(window, cx) {

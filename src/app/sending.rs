@@ -182,6 +182,7 @@ impl DiscordApp {
                             .unwrap_or(false);
                         if desired != add && app.live && app.session.is_some() {
                             app.send_reaction(guild_id, channel_id, message_id, emoji, desired, cx);
+                            return;
                         }
                     }
                     Ok(Err(error)) => {
@@ -195,6 +196,9 @@ impl DiscordApp {
                     }
                     Err(error) => log::warn!("Reaction task failed: {error}"),
                 }
+                // Its users are fetched again only once Discord has the change, so they include
+                // or drop you; a queued follow-up change does this when it lands instead.
+                app.reaction_changed(message_id, &emoji, cx);
             })
             .ok();
         })
@@ -866,6 +870,7 @@ impl DiscordApp {
     }
 
     pub(super) fn forget_message(&mut self, message_id: u64, cx: &mut Context<Self>) {
+        self.message_reactions_removed(message_id);
         if self
             .reply
             .as_ref()

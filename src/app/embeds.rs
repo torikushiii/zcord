@@ -1425,19 +1425,33 @@ pub fn render_reactions(
             .flex_wrap()
             .gap(rpx(4.))
             .mt(rpx(4.))
-            .children(reactions.iter().enumerate().map(|(index, reaction)| {
-                let entity = entity.clone();
-                let emoji = reaction.emoji.clone();
+            .children(reactions.iter().map(|reaction| {
+                let (click, hover) = (entity.clone(), entity.clone());
+                let (emoji, hovered) = (reaction.emoji.clone(), reaction.clone());
                 pill()
-                    .id(format!("reaction-{message_id}-{index}"))
+                    // Keyed by emoji, not position, so a hovered pill keeps its hover state when
+                    // another reaction before it goes.
+                    .id(format!(
+                        "reaction-{message_id}-{}",
+                        crate::app::reaction_emoji_text(&reaction.emoji)
+                    ))
+                    .relative()
                     .cursor_pointer()
                     .on_click(move |_, _, cx| {
-                        entity
+                        click
                             .update(cx, |app, cx| {
                                 app.toggle_reaction(message_id, emoji.clone(), cx)
                             })
                             .ok();
                     })
+                    .on_hover(move |over, _, cx| {
+                        hover
+                            .update(cx, |app, cx| {
+                                app.set_reaction_hover(message_id, &hovered, *over, cx)
+                            })
+                            .ok();
+                    })
+                    .children(app.reaction_tooltip(message_id, reaction, cx))
                     .map(|this| {
                         if reaction.me {
                             this.bg(rgba(theme::reaction_selected_bg()))

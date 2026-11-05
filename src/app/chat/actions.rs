@@ -569,6 +569,16 @@ pub(in crate::app) fn message_menu(app: &DiscordApp, cx: &App) -> Option<AnyElem
                     this.child(reaction_submenu(app, id, cx))
                 }),
             )
+            .when(!message.reactions.is_empty(), |this| {
+                this.child(menu_entry(
+                    app,
+                    "menu-view-reactions",
+                    "smile-plus",
+                    "View Reactions",
+                    text,
+                    move |app, _, window, cx| app.open_reactions_dialog(id, None, window, cx),
+                ))
+            })
             .child(menu_divider())
         })
         .when(allowed.edit, |this| {

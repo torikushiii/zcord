@@ -75,6 +75,8 @@ impl DiscordApp {
         self.current_game_application = None;
         self.current_game = None;
         self.thread_previews.clear();
+        self.reactions_dialog = None;
+        self.dismiss_reaction_tooltip();
         self.update_game_activity();
     }
 

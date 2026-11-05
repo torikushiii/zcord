@@ -376,11 +376,15 @@ struct ReadStateAck {
     read_state_type: u8,
 }
 
-pub(super) fn reaction_url(channel_id: u64, message_id: u64, emoji: &str) -> String {
+fn reactions_url(channel_id: u64, message_id: u64, emoji: &str) -> String {
     format!(
-        "https://discord.com/api/v9/channels/{channel_id}/messages/{message_id}/reactions/{}/@me",
+        "https://discord.com/api/v9/channels/{channel_id}/messages/{message_id}/reactions/{}",
         percent_encode(emoji)
     )
+}
+
+pub(super) fn reaction_url(channel_id: u64, message_id: u64, emoji: &str) -> String {
+    format!("{}/@me", reactions_url(channel_id, message_id, emoji))
 }
 
 impl Rest {
@@ -508,6 +512,33 @@ impl Rest {
         })
         .await?;
         Ok(())
+    }
+
+    /// One page of the users who reacted with `emoji`.
+    pub(in crate::discord) async fn reaction_users(
+        &self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        message_id: u64,
+        emoji: &str,
+        page: model::ReactorPage,
+    ) -> Result<Vec<model::User>, Error> {
+        let referer = referer(guild_id, channel_id);
+        let url = reactions_url(channel_id, message_id, emoji);
+        let mut query = vec![
+            ("limit", page.limit.to_string()),
+            ("type", u8::from(page.burst).to_string()),
+        ];
+        query.extend(page.after.map(|after| ("after", after.to_string())));
+        let response = self
+            .send(|| {
+                self.client
+                    .get(&url)
+                    .header(REFERER, &referer)
+                    .query(&query)
+            })
+            .await?;
+        response.json().await.map_err(|_| Error::Decode)
     }
 
     pub async fn ack_bulk(

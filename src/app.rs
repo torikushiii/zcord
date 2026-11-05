@@ -36,6 +36,8 @@ pub(crate) mod mentions;
 mod message_body;
 mod notifications;
 mod profile;
+mod reaction_tooltip;
+mod reactions_dialog;
 mod read_state;
 mod rich_text;
 mod search;
@@ -258,6 +260,8 @@ pub struct DiscordApp {
     dm_profile: Option<profile::ProfileCard>,
     message_search: Option<search::MessageSearch>,
     forward_dialog: Option<forward_dialog::ForwardDialog>,
+    reactions_dialog: Option<reactions_dialog::ReactionsDialog>,
+    reactions_openings: u64,
     stream_nonce: u64,
     pub(crate) stream_members_shown: bool,
     pub(crate) stream_members_toggles: u64,
@@ -316,6 +320,7 @@ pub struct DiscordApp {
     pub(crate) revealed_spoilers: HashSet<(u64, u16)>,
     pub(crate) hovered_rail: Option<u64>,
     pub(crate) hovered_add_reaction: Option<u64>,
+    reaction_tips: reaction_tooltip::ReactionTips,
     pub(crate) hovered_upload_button: Option<attachments::UploadButton>,
     pub(crate) expression_info: expression_info::State,
     pub(crate) player: Option<Player>,
@@ -501,6 +506,7 @@ impl DiscordApp {
             revealed_spoilers: HashSet::new(),
             hovered_rail: None,
             hovered_add_reaction: None,
+            reaction_tips: Default::default(),
             hovered_upload_button: None,
             stream_view: None,
             stage_chat: None,
@@ -508,6 +514,8 @@ impl DiscordApp {
             dm_profile: None,
             message_search: None,
             forward_dialog: None,
+            reactions_dialog: None,
+            reactions_openings: 0,
             stream_nonce: 0,
             stream_members_shown: true,
             stream_members_toggles: 0,
@@ -939,7 +947,19 @@ impl DiscordApp {
                     }
                     _ => false,
                 };
+                let reacted = match &event {
+                    Event::MessageReactionAdd(event) | Event::MessageReactionRemove(event) => {
+                        Some(event.message_id)
+                    }
+                    Event::MessageReactionRemoveAll(event) => Some(event.message_id),
+                    Event::MessageReactionRemoveEmoji(event) => Some(event.message_id),
+                    Event::MessageReactionAddMany(event) => Some(event.message_id),
+                    _ => None,
+                };
                 let change = self.store.apply(event);
+                if let Some(message_id) = reacted {
+                    self.message_reactions_changed(message_id, cx);
+                }
                 if status_update && let Some(status) = self.selected_self_status() {
                     self.store.set_self_status(status);
                 }
