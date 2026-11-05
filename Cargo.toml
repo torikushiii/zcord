@@ -30,6 +30,8 @@ rand = "0.8"
 dirs = "6"
 sysinfo = { version = "0.31", default-features = false, features = ["system"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }
+# Composites APNG frames itself; see `media::animated::apng`. Kept on the version `image` uses.
+png = "=0.18.1"
 palette = { version = "0.7", default-features = false, features = ["std"] }
 color-thief = "0.2.2"
 unicode-segmentation = "1"
@@ -93,7 +95,6 @@ winresource = "0.1"
 
 [dev-dependencies]
 gpui = { git = "https://github.com/zeronsh/zui", rev = "361ff20b919fdfb80199ee6d9aed725300cb7d54", features = ["test-support"] }
-png = "=0.18.1"
 
 [patch.crates-io]
 # The unused HPKE libcrux backend pins a vulnerable AEAD dependency in 0.6.1.

@@ -1,6 +1,6 @@
 //! Decoding a large GIF or clip takes seconds; re-showing one reads these frames instead.
 //!
-//! Format (little-endian): magic `ZCFR`, version `2`, frame count `u32`, width `u32`,
+//! Format (little-endian): magic `ZCFR`, version `3`, frame count `u32`, width `u32`,
 //! height `u32`, play count `u32` (0 = infinite); then per frame the delay numerator
 //! and denominator (`u32` each) followed by `width * height * 4` raw BGRA bytes,
 //! exactly as stored in `RenderImage`.
@@ -19,7 +19,8 @@ use std::{
 };
 
 const MAGIC: &[u8; 4] = b"ZCFR";
-const VERSION: u8 = 2;
+/// Bumped when decoding changes, so frames saved by an older decoder are decoded again.
+const VERSION: u8 = 3;
 const HEADER_LEN: usize = 21;
 const FRAME_HEADER_LEN: usize = 8;
 const MAX_DIMENSION: u32 = 4096;
