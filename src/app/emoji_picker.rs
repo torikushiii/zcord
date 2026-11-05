@@ -21,7 +21,11 @@ const ROW: f32 = 48.;
 const SIDEBAR: f32 = 48.;
 pub(super) const HEIGHT: f32 = 488.;
 pub(super) const PANEL_WIDTH: f32 = SIDEBAR + COLUMNS as f32 * CELL + 24.;
-const SUGGESTIONS: usize = 10;
+const VISIBLE_SUGGESTIONS: usize = 14;
+/// Window height the autocomplete leaves for the title bar, the channel header and its own
+/// title, besides the composer's measured height.
+const SUGGESTION_RESERVED_HEIGHT: f32 = 150.;
+const SUGGESTION_ROW: f32 = 36.;
 const GRID_EMOJI: f32 = 40.;
 const PICKER_RISE: f32 = 8.;
 const PICKER_ENTER: Duration = Duration::from_millis(150);
@@ -106,6 +110,7 @@ pub(crate) struct EmojiPicker {
 pub(crate) struct Suggest {
     index: usize,
     dismissed: Option<String>,
+    scroll: UniformListScrollHandle,
 }
 
 impl DiscordApp {
@@ -319,13 +324,16 @@ impl DiscordApp {
             &query,
             self.selected_guild_id,
             self.selected_channel_id,
-            SUGGESTIONS,
+            usize::MAX,
         );
         (!choices.is_empty()).then_some((query, choices))
     }
 
     pub(crate) fn reset_emoji_suggest(&mut self, cx: &App) {
         self.emoji_suggest.index = 0;
+        self.emoji_suggest
+            .scroll
+            .scroll_to_item(0, ScrollStrategy::Top);
         if self.emoji_suggest.dismissed.is_some()
             && self.emoji_suggest.dismissed != self.emoji_query(cx)
         {
@@ -342,7 +350,9 @@ impl DiscordApp {
         let index =
             (self.emoji_suggest.index.min(choices.len() - 1) as isize + delta).rem_euclid(len);
         self.emoji_suggest.index = index as usize;
-        self.reveal_suggestion(self.emoji_suggest.index);
+        self.emoji_suggest
+            .scroll
+            .scroll_to_item(self.emoji_suggest.index, ScrollStrategy::Nearest);
         cx.notify();
         true
     }
@@ -391,9 +401,17 @@ fn build_rows(app: &DiscordApp, query: &str, cx: &App) -> (Vec<Row>, Vec<Section
             rows.push(Row::Emojis(chunk.to_vec()));
         }
     };
+    // An unavailable emoji (its server lost the boost tier) can't be sent anywhere, so it only
+    // stays visible, dimmed, while browsing its own server.
+    let shown = |(choice, access): &Entry| match choice {
+        EmojiChoice::Custom(custom) => {
+            *access != EmojiAccess::Unavailable || custom.guild_id == guild_id
+        }
+        EmojiChoice::Unicode { .. } => true,
+    };
     if !query.is_empty() {
         let results = app.store.search_emoji(query, guild_id, channel_id, 400);
-        push(&mut rows, results);
+        push(&mut rows, results.into_iter().filter(shown).collect());
         return (rows, sections);
     }
     let access = |choice: &EmojiChoice| match choice {
@@ -407,6 +425,7 @@ fn build_rows(app: &DiscordApp, query: &str, cx: &App) -> (Vec<Row>, Vec<Section
             let access = access(&choice);
             (choice, access)
         })
+        .filter(shown)
         .collect();
     if !recent.is_empty() {
         sections.push(Section {
@@ -417,19 +436,23 @@ fn build_rows(app: &DiscordApp, query: &str, cx: &App) -> (Vec<Row>, Vec<Section
         push(&mut rows, recent);
     }
     for (_, name, icon, emojis) in app.store.emoji_guilds() {
-        sections.push(Section {
-            icon: SectionIcon::Guild(icon, initials(&name).into()),
-            row: rows.len(),
-        });
-        rows.push(Row::Header(name.into()));
-        let entries = emojis
+        let entries: Vec<Entry> = emojis
             .into_iter()
             .map(|custom| {
                 let choice = EmojiChoice::Custom(custom);
                 let access = access(&choice);
                 (choice, access)
             })
+            .filter(shown)
             .collect();
+        if entries.is_empty() {
+            continue;
+        }
+        sections.push(Section {
+            icon: SectionIcon::Guild(icon, initials(&name).into()),
+            row: rows.len(),
+        });
+        rows.push(Row::Header(name.into()));
         push(&mut rows, entries);
     }
     for category in emoji::categories() {
@@ -860,73 +883,131 @@ fn footer(app: &DiscordApp, picker: &EmojiPicker, cx: &App) -> impl IntoElement 
 pub(super) fn suggestions(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
     let (query, choices) = app.emoji_suggestions(cx)?;
     let selected = app.emoji_suggest.index.min(choices.len() - 1);
-    Some(super::mentions::suggestion_popup(
-        app,
-        format!("Emoji matching :{query}").into(),
-        choices.iter().enumerate().map(|(index, choice)| {
-            let hover = app.entity.clone();
-            let click = app.entity.clone();
-            let source = match choice {
-                EmojiChoice::Custom(custom) => app
-                    .store
-                    .guilds
-                    .iter()
-                    .find(|guild| guild.id == custom.guild_id)
-                    .map(|guild| guild.name.clone()),
-                EmojiChoice::Unicode { .. } => None,
-            };
-            div()
-                .id(("emoji-suggestion", index))
-                .flex()
-                .items_center()
-                .gap(rpx(10.))
-                .mx(rpx(8.))
-                .px(rpx(8.))
-                .h(rpx(36.))
-                .rounded(rpx(4.))
-                .cursor_pointer()
-                .when(index == selected, |this| this.bg(rgba(theme::selected())))
-                .on_hover(move |hovered, _, cx| {
-                    if *hovered {
-                        hover
-                            .update(cx, |app, cx| app.hover_emoji_suggestion(index, cx))
-                            .ok();
-                    }
-                })
-                .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
-                .on_click(move |_, window, cx| {
-                    click
-                        .update(cx, |app, cx| {
-                            app.accept_emoji_suggestion(Some(index), window, cx)
-                        })
-                        .ok();
-                })
-                .child(emoji_preview_image(
+    let composer = app
+        .views
+        .composer
+        .read(cx)
+        .height()
+        .map_or(70., |height| f32::from(height) * app.rpx_per_pixel);
+    let room = app.window_height - SUGGESTION_RESERVED_HEIGHT - composer;
+    let fits = (room / SUGGESTION_ROW).max(3.) as usize;
+    let visible = choices.len().min(VISIBLE_SUGGESTIONS).min(fits);
+    let choices = Rc::new(choices);
+    // Rows are rendered lazily, so only guild names are gathered up front.
+    let guild_names: Rc<std::collections::HashMap<u64, SharedString>> = Rc::new(
+        app.store
+            .guilds
+            .iter()
+            .map(|guild| (guild.id, SharedString::from(guild.name.clone())))
+            .collect(),
+    );
+    let entity = app.entity.clone();
+    let animate = crate::settings::emoji_animation();
+    // Virtualized: a short query can match thousands of emoji, and only the
+    // visible rows should resolve images.
+    let list = uniform_list("emoji-suggestions", choices.len(), move |range, _, cx| {
+        range
+            .map(|index| {
+                let choice = &choices[index];
+                let source = match choice {
+                    EmojiChoice::Custom(custom) => guild_names.get(&custom.guild_id).cloned(),
+                    EmojiChoice::Unicode { .. } => None,
+                };
+                suggestion_row(
+                    &entity,
+                    index,
+                    index == selected,
                     choice,
-                    24.,
-                    crate::settings::emoji_animation(),
+                    source,
+                    animate,
                     cx,
-                ))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(rpx(15.))
-                        .text_color(rgb(theme::strong()))
-                        .child(format!(":{}:", choice_name(choice))),
                 )
-                .children(source.map(|source| {
-                    div()
-                        .flex_none()
-                        .max_w(rpx(200.))
-                        .truncate()
-                        .text_size(rpx(12.))
-                        .text_color(rgb(theme::muted()))
-                        .child(source)
-                }))
-        }),
-    ))
+            })
+            .collect()
+    })
+    .track_scroll(&app.emoji_suggest.scroll)
+    .flex_none()
+    .w_full()
+    .px(rpx(8.))
+    .h(rpx(visible as f32 * SUGGESTION_ROW));
+    let panel = super::mentions::suggestion_panel(
+        "Emoji matching\u{a0}".into(),
+        Some(format!(":{query}").into()),
+    )
+    .child(list);
+    Some(super::mentions::place_suggestion_popup(app, panel))
+}
+
+fn suggestion_row(
+    entity: &WeakEntity<DiscordApp>,
+    index: usize,
+    selected: bool,
+    choice: &EmojiChoice,
+    source: Option<SharedString>,
+    animate: bool,
+    cx: &App,
+) -> Stateful<Div> {
+    let hover = entity.clone();
+    let click = entity.clone();
+    // Discord's `.autocompleteRow` (8px sides) around a `.base` (8px padding, 3px radius): a
+    // 20px emoji and 14px/16px text make the 36px row.
+    div()
+        .id(("emoji-suggestion", index))
+        .flex()
+        .items_center()
+        // Full width so the server name can fill the rest and sit at the right edge; the
+        // list pads the 8px row inset.
+        .w_full()
+        .px(rpx(8.))
+        .h(rpx(SUGGESTION_ROW))
+        .rounded(rpx(3.))
+        .cursor_pointer()
+        .text_size(rpx(14.))
+        .line_height(rpx(16.))
+        .font_weight(FontWeight::MEDIUM)
+        .hover(|style| style.bg(rgba(theme::selected())))
+        .when(selected, |this| this.bg(rgba(theme::selected())))
+        .on_hover(move |hovered, _, cx| {
+            if *hovered {
+                hover
+                    .update(cx, |app, cx| app.hover_emoji_suggestion(index, cx))
+                    .ok();
+            }
+        })
+        .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+        .on_click(move |_, window, cx| {
+            click
+                .update(cx, |app, cx| {
+                    app.accept_emoji_suggestion(Some(index), window, cx)
+                })
+                .ok();
+        })
+        .child(
+            div()
+                .flex_none()
+                .mr(rpx(8.))
+                .child(emoji_preview_image(choice, 20., animate, cx)),
+        )
+        .child(
+            // `.autocompleteRowContentPrimary`: keeps its width, shrinking only when crowded.
+            div()
+                .flex_shrink(1.)
+                .min_w_0()
+                .truncate()
+                .text_color(rgb(theme::text()))
+                .child(format!(":{}:", choice_name(choice))),
+        )
+        .children(source.map(|source| {
+            // `.autocompleteRowContentSecondary`: fills the rest, 16px in, right-aligned.
+            div()
+                .flex_1()
+                .min_w_0()
+                .ml(rpx(16.))
+                .truncate()
+                .text_right()
+                .text_color(rgb(theme::muted()))
+                .child(source)
+        }))
 }
 
 #[cfg(test)]

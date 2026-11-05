@@ -433,31 +433,58 @@ pub(super) fn suggestion_popup(
     title: SharedString,
     rows: impl IntoIterator<Item = Stateful<Div>>,
 ) -> AnyElement {
-    let panel = div()
+    let panel = suggestion_panel(title, None)
         .id("suggestion-popup")
-        .flex()
-        .flex_col()
         .max_h(rpx(SUGGESTION_MAX_HEIGHT))
         .overflow_y_scroll()
         .track_scroll(&app.suggest_scroll)
-        .py(rpx(8.))
+        .children(rows.into_iter().map(|row| row.flex_none()));
+    place_suggestion_popup(app, panel)
+}
+
+/// The popup's chrome and title; callers add the rows and decide how they scroll. `strong` is
+/// the bold part after the title, like the `:query` in "Emoji matching :query".
+pub(super) fn suggestion_panel(title: SharedString, strong: Option<SharedString>) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        // Discord's `.scroller` pads only the bottom; the title row brings its own top space.
+        .pb(rpx(8.))
         .rounded(rpx(8.))
         .border_1()
         .border_color(rgba(theme::border()))
-        .bg(rgb(theme::elevated()))
+        .bg(rgb(theme::surface_high()))
         .shadow_lg()
         .occlude()
         .child(
+            // Discord's `.contentTitle` (4px/0) inside a row's `.base` (8px) and the row's own
+            // 8px sides: 12px above and below, 16px in from the edge.
             div()
+                .flex()
                 .flex_none()
+                .min_w_0()
+                .py(rpx(12.))
                 .px(rpx(16.))
-                .pb(rpx(6.))
-                .text_size(rpx(12.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::muted()))
-                .child(title),
+                .text_size(rpx(14.))
+                .line_height(rpx(16.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(theme::text()))
+                .child(div().flex_none().child(title))
+                .children(strong.map(|strong| {
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(theme::muted()))
+                        .child(strong)
+                })),
         )
-        .children(rows.into_iter().map(|row| row.flex_none()));
+}
+
+pub(super) fn place_suggestion_popup(
+    app: &DiscordApp,
+    panel: impl IntoElement + Styled,
+) -> AnyElement {
     if app.editing.is_none() {
         return div()
             .absolute()
