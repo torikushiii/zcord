@@ -179,6 +179,42 @@ impl DiscordApp {
         true
     }
 
+    pub(crate) fn mention_user(
+        &mut self,
+        user_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(user) = self.store.user(user_id) else {
+            return;
+        };
+        let choice = MentionChoice::User {
+            id: user_id,
+            name: self
+                .store
+                .member_name(self.selected_guild_id, user_id)
+                .unwrap_or(&user.name)
+                .to_owned(),
+            username: user.username.clone(),
+        };
+        let text = mention_insertion(&choice, &mut self.mention_names);
+        let joined = {
+            let input = self.composer.read(cx);
+            let value = input.text().to_string();
+            let cursor = input.cursor().min(value.len());
+            value[..cursor]
+                .chars()
+                .next_back()
+                .is_some_and(|c| !c.is_whitespace())
+        };
+        let text = if joined { format!(" {text}") } else { text };
+        self.composer.update(cx, |input, cx| {
+            input.insert(text, window, cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
+    }
+
     pub(super) fn dismiss_mention_suggestions(&mut self, cx: &mut Context<Self>) -> bool {
         let Some((query, _)) = self.mention_suggestions(cx) else {
             return false;

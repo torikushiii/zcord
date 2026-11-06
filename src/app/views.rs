@@ -469,6 +469,7 @@ impl Render for OverlaysView {
             .children(super::dm_menu::menu(app))
             .children(super::dm_menu::dialog(app, cx))
             .children(super::guild_menu::menu(app))
+            .children(super::member_menu::menu(app))
             .children(super::dm_menu::incoming_call(app, cx))
             .children(member_list::activity::popout(app, window, cx))
             .children(voice::stream_card::render(app, cx))
