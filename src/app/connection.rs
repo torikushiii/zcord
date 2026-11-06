@@ -60,6 +60,8 @@ impl DiscordApp {
         self.loading_older.clear();
         self.loading_newer.clear();
         self.pending_present.clear();
+        self.history_failed.clear();
+        self.jump_return = None;
         self.pending_sends.clear();
         self.history_complete.clear();
         self.forum_pages.clear();

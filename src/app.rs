@@ -123,8 +123,14 @@ pub(crate) const JUMP_HIGHLIGHT: Duration = Duration::from_millis(2000);
 pub(crate) const JUMP_MISSING: Duration = Duration::from_secs(4);
 
 struct JumpScroll {
-    message_id: u64,
+    target: JumpTarget,
     nonce: u64,
+}
+
+#[derive(Clone, Copy)]
+enum JumpTarget {
+    Message(u64),
+    Present,
 }
 
 pub(crate) const DIALOG_EXIT: Duration = Duration::from_millis(150);
@@ -312,6 +318,8 @@ pub struct DiscordApp {
     /// Channels waiting for a latest-page fetch before jumping to the present.
     pending_present: HashSet<u64>,
     pending_jump: Option<u64>,
+    history_failed: HashSet<u64>,
+    jump_return: Option<(u64, u64)>,
     pending_sends: sending::PendingSends,
     history_complete: HashSet<u64>,
     forum_pages: HashMap<u64, ForumPage>,
@@ -506,6 +514,8 @@ impl DiscordApp {
             reaction_requests: HashSet::new(),
             pending_present: HashSet::new(),
             pending_jump: None,
+            history_failed: HashSet::new(),
+            jump_return: None,
             pending_sends: sending::PendingSends::default(),
             history_complete: HashSet::new(),
             forum_pages: HashMap::new(),
@@ -701,7 +711,7 @@ impl DiscordApp {
                     });
                 }
                 app.schedule_ack(cx);
-                if app.unread_since.is_some() {
+                if app.unread_since.is_some() || app.jump_return.is_some() {
                     app.views.messages.update(cx, |_, cx| cx.notify());
                 }
             })
