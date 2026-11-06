@@ -2,6 +2,31 @@
 
 ## Unversioned
 
+## 0.6.0
+
+- Major: Added the Quests page with the sponsored banner, quest cards and the All Quests and Claimed Quests tabs. Quests can't be started from zcord yet.
+- Major: Streams can now be popped out into their own window, which can be pinned on top of other windows.
+- Major: While streaming you can now watch a preview of your own stream.
+- Major: Embeds now follow Discord's layout, including portrait YouTube and TikTok videos.
+- Major: The image viewer can now zoom, pan a zoomed image by dragging, and page through every image in a message.
+- Major: Right-clicking an image in the image viewer now offers Copy Image, Save Image, Copy Image Link and Open Image Link.
+- Major: Right-clicking someone in the member list now offers Profile, Mention, Message, Ignore, Block and Copy User ID.
+- Major: Messages from blocked users now collapse behind "N blocked messages — Show", and a blocked user's profile asks before it is shown.
+- Minor: Direct messages with unread messages now show at the top of the server rail.
+- Minor: Calls now show in chat with how long they lasted, and ongoing calls have a link to join.
+- Minor: Added an audio menu to the call view with device and stream volume controls.
+- Minor: The bar above the message box now also shows when older messages fail to load, with a Try Again button, and when you are viewing a reply, with a button to jump back.
+- Minor: The send button now fills in once there is something to send.
+- Minor: Activity cards are darker, show New Player and Trending badges, and link to profiles.
+- Minor: Direct messages with blocked users are faded in the list and show a blocked icon, and their message box is replaced by an Unblock bar.
+- Minor: Messages that can't be delivered now explain why.
+- Minor: Copy ID menu items now use an ID card icon.
+- Bugfix: Fixed text selections being lost when other parts of the window redrew.
+- Bugfix: Fixed starting a DM call sometimes not ringing the other person.
+- Bugfix: Fixed the Streaming Now card staying open after switching servers.
+- Bugfix: Fixed the server name tooltip flickering when a server folder expands or collapses.
+- Dev: Credited the video slash icon in the icon licence.
+
 ## 0.5.0
 
 - Major: Go Live now has Stream Mode presets (Gaming, Screenshare, Custom) and streams up to 1440p at 60fps or at source resolution, matching your Nitro or server boost perks.
