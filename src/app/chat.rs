@@ -39,8 +39,8 @@ mod thread_pane;
 mod thread_ui;
 use crate::app::invite_card;
 pub(super) use actions::{MessageMenu, message_menu};
-use bars::{is_detached, jump_missing_notice, new_messages_bar, older_messages_bar};
-pub(crate) use composer::{TEXTAREA_BUILTIN_INSET_X, TEXTAREA_BUILTIN_INSET_Y, composer};
+use bars::{history_bar, is_detached, jump_missing_notice, new_messages_bar};
+pub(crate) use composer::{SendFill, TEXTAREA_BUILTIN_INSET_X, TEXTAREA_BUILTIN_INSET_Y, composer};
 pub(in crate::app) use composer_menu::render as composer_menu;
 pub(super) use composer_menu::{ComposerMenu, ComposerTarget};
 pub(super) use dialog::delete_dialog;
@@ -219,7 +219,7 @@ pub fn messages(app: &DiscordApp, cx: &App) -> AnyElement {
                 } else {
                     new_messages_bar(app, app.entity.clone())
                 };
-                let older = older_messages_bar(app, app.entity.clone());
+                let history = history_bar(app, app.entity.clone());
                 let missing = jump_missing_notice(app);
                 this.child(
                     div()
@@ -244,7 +244,7 @@ pub fn messages(app: &DiscordApp, cx: &App) -> AnyElement {
                         )
                         .vertical_scrollbar(&app.messages)
                         .children(bar)
-                        .children(older)
+                        .children(history)
                         .children(missing),
                 )
             }

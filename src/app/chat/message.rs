@@ -319,7 +319,7 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
                     entity
                         .update(cx, |app, cx| {
                             if !app.jump_in_thread_pane(source, target) {
-                                app.jump_to_message(target, window, cx);
+                                app.jump_to_quoted(source, target, window, cx);
                             }
                         })
                         .ok();

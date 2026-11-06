@@ -113,74 +113,183 @@ pub(super) fn jump_missing_notice(app: &DiscordApp) -> Option<AnyElement> {
     })
 }
 
-pub(super) fn older_messages_bar(
-    app: &DiscordApp,
-    entity: WeakEntity<DiscordApp>,
-) -> Option<AnyElement> {
-    if !app.live || !is_detached(app) {
+fn reply_visible(app: &DiscordApp, reply_id: u64) -> bool {
+    app.message_index(reply_id).is_some_and(|index| {
+        app.messages.item_is_above_viewport(index) == Some(false)
+            && app.messages.item_is_below_viewport(index) == Some(false)
+    })
+}
+
+const BOTTOM_BAR_OFFSET: f32 = 28.;
+const BRAND_HOVER: u32 = 0x4752C4;
+
+type BarAction = fn(&mut DiscordApp, &mut Window, &mut Context<DiscordApp>);
+
+enum BarEnd {
+    Button(&'static str),
+    Text(&'static str),
+    Loading,
+}
+
+pub(super) fn history_bar(app: &DiscordApp, entity: WeakEntity<DiscordApp>) -> Option<AnyElement> {
+    let channel_id = app.selected_channel_id;
+    if !app.live || !app.channel().is_some_and(|channel| channel.messages_loaded) {
         return None;
     }
-    let jump = entity;
-    // The typing indicator overhangs the list's bottom, so the pill rises above it.
+    let loading = app.loading.contains(&channel_id);
+    let (id, text, end, action): (_, _, _, BarAction) = if app.history_failed.contains(&channel_id)
+    {
+        (
+            "messages-failed",
+            "Messages Failed To Load",
+            if loading {
+                BarEnd::Loading
+            } else {
+                BarEnd::Text("Try Again")
+            },
+            |app, window, cx| app.retry_history(window, cx),
+        )
+    } else if let Some((_, reply_id)) = app
+        .jump_return
+        .filter(|(channel, _)| *channel == channel_id)
+        && !(loading && app.pending_present.contains(&channel_id))
+        && !reply_visible(app, reply_id)
+    {
+        (
+            "jump-to-reply",
+            "You Are Viewing a Reply.",
+            BarEnd::Button("Jump To Original Message"),
+            |app, window, cx| app.jump_back_to_reply(window, cx),
+        )
+    } else if !is_detached(app) {
+        return None;
+    } else if loading && app.pending_present.contains(&channel_id) {
+        (
+            "jump-to-present",
+            "You're Viewing Older Messages",
+            BarEnd::Loading,
+            |_, _, _| {},
+        )
+    } else {
+        (
+            "jump-to-present",
+            "You're Viewing Older Messages",
+            BarEnd::Button("Jump To Present"),
+            |app, window, cx| app.jump_to_present(window, cx),
+        )
+    };
+    // The typing indicator overhangs the list's bottom, so the bar rises above it.
     let typing = if app.typing_users().is_empty() {
         0.
     } else {
         super::composer::TYPING_HEIGHT
     };
-    // Floating pill centred above the composer; the full-width wrapper has no
-    // listeners, so clicks beside the pill still reach the list.
+    let busy = matches!(end, BarEnd::Loading);
+    let end = match end {
+        BarEnd::Button(label) => div()
+            .id("bar-button")
+            .flex_none()
+            .flex()
+            .items_center()
+            .h(rpx(32.))
+            .px(rpx(12.))
+            .rounded(rpx(8.))
+            .bg(rgb(theme::BLURPLE))
+            .hover(|style| style.bg(rgb(BRAND_HOVER)))
+            .active(|style| style.bg(rgb(theme::BLURPLE_ACTIVE)))
+            .text_size(rpx(14.))
+            .line_height(rpx(18.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(rgb(0xFFFFFF))
+            .whitespace_nowrap()
+            .child(label)
+            .into_any_element(),
+        BarEnd::Text(label) => div()
+            .flex_none()
+            .pl(rpx(4.))
+            .pr(rpx(12.))
+            .text_size(rpx(14.))
+            .line_height(rpx(18.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(rgb(theme::strong()))
+            .whitespace_nowrap()
+            .child(label)
+            .into_any_element(),
+        BarEnd::Loading => pulsing_ellipsis().into_any_element(),
+    };
+    let failed = id == "messages-failed";
+    // The full-width wrapper has no listeners, so clicks beside the bar still reach the list.
     Some(
         div()
             .absolute()
             .left_0()
             .right_0()
-            .bottom(rpx(8. + typing))
+            .bottom(rpx(BOTTOM_BAR_OFFSET.max(8. + typing)))
             .flex()
             .justify_center()
+            .px(rpx(16.))
             .child(
                 div()
+                    .id(id)
                     .flex()
                     .items_center()
-                    .gap(rpx(12.))
-                    .pl(rpx(16.))
-                    .pr(rpx(6.))
-                    .py(rpx(6.))
-                    .rounded(rpx(12.))
+                    .min_w(rpx(284.))
+                    .min_h(rpx(44.))
+                    .max_w_full()
+                    .py(rpx(8.))
+                    .when(failed, |bar| bar.pl(rpx(16.)).pr(rpx(8.)))
+                    .when(!failed, |bar| bar.px(rpx(12.)))
+                    .rounded(rpx(8.))
                     .border_1()
-                    .border_color(rgb(theme::placeholder_strong()))
-                    .bg(rgb(theme::elevated()))
-                    .shadow_lg()
+                    .border_color(rgba(theme::border()))
+                    .bg(rgb(theme::surface_highest()))
+                    .shadow_md()
+                    .when(!busy, |bar| {
+                        bar.cursor_pointer()
+                            .active(|style| style.mb(rpx(-1.)))
+                            .on_click(move |_, window, cx| {
+                                entity.update(cx, |app, cx| action(app, window, cx)).ok();
+                            })
+                    })
                     .child(
                         div()
-                            .text_size(rpx(15.))
-                            .line_height(rpx(20.))
+                            .flex_1()
+                            .min_w_0()
+                            .pl(rpx(4.))
+                            .pr(rpx(12.))
+                            .truncate()
+                            .text_size(rpx(14.))
+                            .line_height(rpx(18.))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(rgb(theme::text()))
-                            .whitespace_nowrap()
-                            .child("You're Viewing Older Messages"),
+                            .child(text),
                     )
-                    .child(
-                        div()
-                            .id("jump-to-present")
-                            .flex_none()
-                            .px(rpx(12.))
-                            .py(rpx(6.))
-                            .rounded(rpx(8.))
-                            .bg(rgb(theme::BLURPLE))
-                            .hover(|style| style.bg(rgb(0x4752C4)))
-                            .text_size(rpx(15.))
-                            .line_height(rpx(20.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(0xFFFFFF))
-                            .whitespace_nowrap()
-                            .cursor_pointer()
-                            .on_click(move |_, window, cx| {
-                                jump.update(cx, |app, cx| app.jump_to_present(window, cx))
-                                    .ok();
-                            })
-                            .child("Jump To Present"),
-                    ),
+                    .child(end),
             )
             .into_any_element(),
     )
+}
+
+fn pulsing_ellipsis() -> impl IntoElement {
+    div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap(rpx(4.))
+        .pr(rpx(12.))
+        .with_animation(
+            "bar-ellipsis",
+            Animation::new(Duration::from_millis(1400)).repeat(),
+            |dots, delta| {
+                dots.children((0..3).map(|index| {
+                    let phase = (delta - index as f32 * 0.2).rem_euclid(1.);
+                    let pulse = 1. - (phase * 2. - 1.).abs();
+                    div()
+                        .size(rpx(6.))
+                        .rounded_full()
+                        .bg(rgb(theme::strong()))
+                        .opacity(0.3 + 0.7 * pulse)
+                }))
+            },
+        )
 }

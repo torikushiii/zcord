@@ -171,6 +171,7 @@ impl DiscordApp {
         self.load_dm_profile(cx);
         self.sync_search();
         self.pending_jump = None;
+        self.jump_return = None;
         self.jump_missing = false;
         self.jump_missing_nonce += 1;
         self.manual_unread = None;
