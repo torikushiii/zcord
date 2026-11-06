@@ -15,6 +15,11 @@ impl Session {
         });
     }
 
+    pub async fn call_ringable(&self, channel_id: u64) -> Result<bool, Error> {
+        self.rest(async |rest| rest.call_ringable(channel_id).await)
+            .await
+    }
+
     pub async fn ring_call(&self, channel_id: u64) -> Result<(), Error> {
         self.rest(async |rest| rest.ring_call(channel_id).await)
             .await

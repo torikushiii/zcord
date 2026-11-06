@@ -17,6 +17,23 @@ fn stop_ringing(client: &Client, channel_id: u64, user_id: u64) -> RequestBuilde
 }
 
 impl Rest {
+    pub async fn call_ringable(&self, channel_id: u64) -> Result<bool, Error> {
+        #[derive(serde::Deserialize)]
+        struct CallEligibility {
+            #[serde(default)]
+            ringable: bool,
+        }
+        let response = self
+            .send(|| {
+                self.client.get(format!(
+                    "https://discord.com/api/v9/channels/{channel_id}/call"
+                ))
+            })
+            .await?;
+        let eligibility: CallEligibility = response.json().await.map_err(|_| Error::Decode)?;
+        Ok(eligibility.ringable)
+    }
+
     pub async fn ring_call(&self, channel_id: u64) -> Result<(), Error> {
         self.send(|| ring(&self.client, channel_id)).await?;
         Ok(())
