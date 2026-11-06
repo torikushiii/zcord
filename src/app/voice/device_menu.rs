@@ -1,6 +1,8 @@
 //! The mic's and headphones' options menus beside them in the account panel, and the device
 //! rows the Voice & Video settings share with them.
 
+use std::time::Duration;
+
 use gpui::{prelude::*, *};
 use gpui_component::slider::{Slider, SliderEvent, SliderState};
 
@@ -8,9 +10,9 @@ use super::{Menu, MenuKind};
 use crate::{
     app::{
         DiscordApp,
-        menu::{divider, panel, radio, row},
+        menu::{checkbox, divider, panel, radio, row},
     },
-    discord::{AudioDeviceKind, AudioDevices, audio_devices},
+    discord::{AudioDeviceKind, AudioDevices, Session, audio_devices},
     settings::InputProfile,
     theme::{self, rpx},
 };
@@ -19,6 +21,8 @@ const MENU_WIDTH: f32 = 240.;
 const DEVICE_FLYOUT_WIDTH: f32 = 312.;
 const PROFILE_FLYOUT_WIDTH: f32 = 212.;
 const FLYOUT_OFFSET: f32 = 16.;
+const LEVEL_SEGMENTS: usize = 28;
+const LEVEL_TICK: Duration = Duration::from_millis(50);
 pub(crate) const DEFAULT_DEVICE: &str = if cfg!(windows) {
     "Windows Default"
 } else {
@@ -40,12 +44,71 @@ pub(crate) enum DeviceKind {
 pub(crate) enum Flyout {
     Device,
     Profile,
+    OutputDevice,
 }
 
 /// The volume slider of the open device menu, made fresh each time one opens.
 pub(super) struct VolumeSlider {
     state: Entity<SliderState>,
     _changes: Subscription,
+}
+
+pub(crate) struct LevelBars {
+    session: Option<Session>,
+    shown: (usize, bool),
+    _tick: Task<()>,
+}
+
+impl LevelBars {
+    fn new(session: Option<Session>, cx: &mut Context<Self>) -> Self {
+        let tick = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(LEVEL_TICK).await;
+                let polled = this.update(cx, |bars, cx| {
+                    let reading = bars.reading();
+                    if reading != bars.shown {
+                        bars.shown = reading;
+                        cx.notify();
+                    }
+                });
+                if polled.is_err() {
+                    break;
+                }
+            }
+        });
+        let mut bars = Self {
+            session,
+            shown: (0, false),
+            _tick: tick,
+        };
+        bars.shown = bars.reading();
+        bars
+    }
+
+    fn reading(&self) -> (usize, bool) {
+        let (level, open) = self.session.as_ref().map_or((None, false), |session| {
+            (session.input_level(), session.input_gate_open())
+        });
+        let fill = level.map_or(0., |db| ((db + 100.) / 100.).clamp(0., 1.));
+        ((fill * LEVEL_SEGMENTS as f32).round() as usize, open)
+    }
+}
+
+impl Render for LevelBars {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let (lit, open) = self.shown;
+        div()
+            .flex()
+            .justify_between()
+            .h(rpx(18.))
+            .children((0..LEVEL_SEGMENTS).map(|index| {
+                div().w(rpx(4.)).h_full().rounded_full().bg(if index < lit {
+                    rgb(if open { theme::GREEN } else { theme::YELLOW })
+                } else {
+                    rgba(theme::selected())
+                })
+            }))
+    }
 }
 
 /// One entry of a device list; `name: None` follows the system default.
@@ -178,33 +241,43 @@ impl DiscordApp {
             .is_none_or(|open| open.kind != menu || open.closing);
         if opening {
             self.refresh_audio_devices(cx);
-            let saved = crate::settings::get(cx);
-            let gain = match kind {
-                DeviceKind::Input => saved.voice_input_volume,
-                DeviceKind::Output => saved.voice_output_volume,
-            };
-            let state = cx.new(|_| {
-                SliderState::new()
-                    .min(0.)
-                    .max(200.)
-                    .step(1.)
-                    .default_value(gain.unwrap_or(1.) * 100.)
-            });
-            let changes = cx.subscribe(&state, move |app, _, event: &SliderEvent, cx| {
-                if let SliderEvent::Change(value) = event {
-                    let gain = value.start() / 100.;
-                    match kind {
-                        DeviceKind::Input => app.set_input_volume(gain, cx),
-                        DeviceKind::Output => app.set_output_volume(gain, cx),
-                    }
-                }
-            });
-            self.voice.volume_slider = Some(VolumeSlider {
-                state,
-                _changes: changes,
-            });
+            self.voice.volume_slider = Some(volume_slider(kind, cx));
         }
         self.toggle_menu(menu, position, cx);
+    }
+
+    pub(crate) fn toggle_call_audio_menu(
+        &mut self,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let opening = self
+            .voice
+            .menu
+            .as_ref()
+            .is_none_or(|open| open.kind != MenuKind::CallAudio || open.closing);
+        if opening {
+            self.refresh_audio_devices(cx);
+            self.voice.volume_slider = Some(volume_slider(DeviceKind::Input, cx));
+            self.voice.output_slider = Some(volume_slider(DeviceKind::Output, cx));
+        }
+        self.toggle_menu(MenuKind::CallAudio, position, cx);
+        let session = self.session.clone();
+        if let Some(menu) = self
+            .voice
+            .menu
+            .as_mut()
+            .filter(|menu| menu.kind == MenuKind::CallAudio && menu.level.is_none())
+        {
+            menu.level = Some(cx.new(|cx| LevelBars::new(session, cx)));
+        }
+    }
+
+    pub(crate) fn call_audio_menu_open(&self) -> bool {
+        self.voice
+            .menu
+            .as_ref()
+            .is_some_and(|open| open.kind == MenuKind::CallAudio && !open.closing)
     }
 
     fn show_device_flyout(&mut self, flyout: Option<Flyout>, cx: &mut Context<Self>) {
@@ -249,6 +322,34 @@ impl DiscordApp {
     fn open_voice_settings_from_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_menu(cx);
         self.open_voice_settings(window, cx);
+    }
+}
+
+fn volume_slider(kind: DeviceKind, cx: &mut Context<DiscordApp>) -> VolumeSlider {
+    let saved = crate::settings::get(cx);
+    let gain = match kind {
+        DeviceKind::Input => saved.voice_input_volume,
+        DeviceKind::Output => saved.voice_output_volume,
+    };
+    let state = cx.new(|_| {
+        SliderState::new()
+            .min(0.)
+            .max(200.)
+            .step(1.)
+            .default_value(gain.unwrap_or(1.) * 100.)
+    });
+    let changes = cx.subscribe(&state, move |app, _, event: &SliderEvent, cx| {
+        if let SliderEvent::Change(value) = event {
+            let gain = value.start() / 100.;
+            match kind {
+                DeviceKind::Input => app.set_input_volume(gain, cx),
+                DeviceKind::Output => app.set_output_volume(gain, cx),
+            }
+        }
+    });
+    VolumeSlider {
+        state,
+        _changes: changes,
     }
 }
 
@@ -430,7 +531,6 @@ pub(super) fn card(app: &DiscordApp, menu: &Menu, kind: DeviceKind, cx: &App) ->
     };
     let saved = saved_device(kind, cx);
     let device = current(app.audio_devices(), kind, saved.as_deref());
-    let settings = app.entity.clone();
     panel("device-menu", MENU_WIDTH)
         .child(flyout_row(
             app,
@@ -453,46 +553,118 @@ pub(super) fn card(app: &DiscordApp, menu: &Menu, kind: DeviceKind, cx: &App) ->
             ))
         })
         .child(divider())
-        .child({
-            let entity = app.entity.clone();
-            div()
-                .id("device-menu-volume")
-                .flex()
-                .flex_col()
-                .gap(rpx(8.))
-                .p(rpx(8.))
-                .on_hover(move |hovered, _, cx| {
-                    if *hovered {
-                        entity
-                            .update(cx, |app, cx| app.show_device_flyout(None, cx))
-                            .ok();
-                    }
-                })
-                .child(
-                    div()
-                        .text_size(rpx(14.))
-                        .line_height(rpx(18.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(theme::text()))
-                        .child(volume_title),
-                )
-                .children(app.voice.volume_slider.as_ref().map(|slider| {
-                    div().h(rpx(20.)).child(
-                        Slider::new(&slider.state)
-                            .bg(rgb(theme::BLURPLE))
-                            .text_color(white()),
-                    )
-                }))
+        .child(
+            volume_block(app, "device-menu-volume", volume_title)
+                .children(app.voice.volume_slider.as_ref().map(slider)),
+        )
+        .child(divider())
+        .child(settings_row(app))
+}
+
+fn volume_block(app: &DiscordApp, id: &'static str, title: &'static str) -> Stateful<Div> {
+    let entity = app.entity.clone();
+    div()
+        .id(id)
+        .flex()
+        .flex_col()
+        .gap(rpx(8.))
+        .p(rpx(8.))
+        .on_hover(move |hovered, _, cx| {
+            if *hovered {
+                entity
+                    .update(cx, |app, cx| app.show_device_flyout(None, cx))
+                    .ok();
+            }
         })
+        .child(
+            div()
+                .text_size(rpx(14.))
+                .line_height(rpx(18.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(theme::text()))
+                .child(title),
+        )
+}
+
+fn slider(slider: &VolumeSlider) -> Div {
+    div().h(rpx(20.)).child(
+        Slider::new(&slider.state)
+            .bg(rgb(theme::BLURPLE))
+            .text_color(white()),
+    )
+}
+
+fn settings_row(app: &DiscordApp) -> Stateful<Div> {
+    let settings = app.entity.clone();
+    closes_flyout_row(app, "device-menu-settings")
+        .on_click(move |_, window, cx| {
+            settings
+                .update(cx, |app, cx| app.open_voice_settings_from_menu(window, cx))
+                .ok();
+        })
+        .child(theme::icon("settings", 20., theme::muted()))
+        .child(div().flex_1().min_w_0().truncate().child("Voice Settings"))
+}
+
+pub(super) fn call_card(app: &DiscordApp, menu: &Menu, cx: &App) -> Stateful<Div> {
+    let saved = |kind| saved_device(kind, cx);
+    let input = current(
+        app.audio_devices(),
+        DeviceKind::Input,
+        saved(DeviceKind::Input).as_deref(),
+    );
+    let output = current(
+        app.audio_devices(),
+        DeviceKind::Output,
+        saved(DeviceKind::Output).as_deref(),
+    );
+    let deafen = app.entity.clone();
+    panel("call-audio-menu", MENU_WIDTH)
+        .child(flyout_row(
+            app,
+            menu,
+            "call-audio-input-row",
+            "Input Device",
+            input.label,
+            Flyout::Device,
+            || device_flyout(app, DeviceKind::Input, cx),
+        ))
+        .child(flyout_row(
+            app,
+            menu,
+            "call-audio-profile-row",
+            "Input Profile",
+            profile_label(app.input_profile(cx)).to_owned(),
+            Flyout::Profile,
+            || profile_flyout(app, cx),
+        ))
+        .child(flyout_row(
+            app,
+            menu,
+            "call-audio-output-row",
+            "Output Device",
+            output.label,
+            Flyout::OutputDevice,
+            || device_flyout(app, DeviceKind::Output, cx),
+        ))
         .child(divider())
         .child(
-            closes_flyout_row(app, "device-menu-settings")
-                .on_click(move |_, window, cx| {
-                    settings
-                        .update(cx, |app, cx| app.open_voice_settings_from_menu(window, cx))
-                        .ok();
-                })
-                .child(theme::icon("settings", 20., theme::muted()))
-                .child(div().flex_1().min_w_0().truncate().child("Voice Settings")),
+            volume_block(app, "call-audio-input-volume", "Input Volume")
+                .children(app.voice.volume_slider.as_ref().map(slider)),
         )
+        .child(volume_block(app, "call-audio-level", "Input Level").children(menu.level.clone()))
+        .child(
+            volume_block(app, "call-audio-output-volume", "Output Volume")
+                .children(app.voice.output_slider.as_ref().map(slider)),
+        )
+        .child(divider())
+        .child(
+            closes_flyout_row(app, "call-audio-deafen")
+                .on_click(move |_, _, cx| {
+                    deafen.update(cx, |app, cx| app.toggle_self_deaf(cx)).ok();
+                })
+                .child(div().flex_1().min_w_0().truncate().child("Deafen"))
+                .child(checkbox(app.voice.self_deaf)),
+        )
+        .child(settings_row(app))
 }

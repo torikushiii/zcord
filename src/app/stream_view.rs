@@ -17,9 +17,14 @@ const MEMBERS_SLIDE: Duration = Duration::from_millis(250);
 const PANEL: u32 = 0x0F0F11;
 pub(super) const STOP_RED: u32 = 0xD22D39FF;
 const MUTED_TINT: u32 = 0xD22D3933;
+const POPOUT_TITLEBAR: f32 = 28.;
+const POPOUT_CAPTION_WIDTH: f32 = 36.;
+const POPOUT_WIDTH: f32 = 1080.;
+const POPOUT_HEIGHT: f32 = 640.;
 
 pub(crate) struct StreamView {
     user_id: u64,
+    own: bool,
     nonce: u64,
     frame: Option<Arc<RenderImage>>,
     retired: Option<Arc<RenderImage>>,
@@ -29,29 +34,160 @@ pub(crate) struct StreamView {
     controls: StageControls,
     volume_open: bool,
     popout: Option<WindowHandle<StreamPopout>>,
+    popout_opening: bool,
+    popout_closed: Option<Subscription>,
 }
 
+/// It draws from the app, so it is only ever opened outside an update of the app: opening
+/// draws it at once.
 pub(crate) struct StreamPopout {
     app: WeakEntity<DiscordApp>,
+    /// Everything that repaints the main window's stage repaints the overlays view.
+    _overlays: Subscription,
+    pinned: bool,
+    pin_hovered: bool,
 }
 
-impl Render for StreamPopout {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let frame = self
-            .app
-            .upgrade()
-            .and_then(|app| app.read(cx).stream_view.as_ref()?.frame.clone());
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(rgb(0x000000))
-            .children(frame.map(|frame| img(frame).size_full().object_fit(ObjectFit::Contain)))
+impl StreamPopout {
+    fn toggle_pin(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if set_topmost(window, !self.pinned) {
+            self.pinned = !self.pinned;
+            cx.notify();
+        }
+    }
+
+    /// Only Windows lets zcord raise a window above the others.
+    fn pin_button(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        if !cfg!(windows) {
+            return None;
+        }
+        let pinned = self.pinned;
+        Some(
+            div()
+                .id("stream-popout-pin")
+                .relative()
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .w(rpx(POPOUT_CAPTION_WIDTH))
+                .h_full()
+                .cursor_pointer()
+                // Occluding takes the button out of the drag area under it, so a press clicks
+                // it instead of moving the window.
+                .occlude()
+                .hover(|style| style.bg(rgba(theme::hover())))
+                .on_hover(cx.listener(|popout, hovered: &bool, _, cx| {
+                    popout.pin_hovered = *hovered;
+                    cx.notify();
+                }))
+                .on_click(cx.listener(|popout, _, window, cx| popout.toggle_pin(window, cx)))
+                .child(theme::icon(
+                    "pin",
+                    16.,
+                    if pinned {
+                        theme::BLURPLE
+                    } else {
+                        theme::muted()
+                    },
+                ))
+                .when(self.pin_hovered, |this| {
+                    this.child(theme::tooltip_below(if pinned {
+                        "Unpin"
+                    } else {
+                        "Pin to Top"
+                    }))
+                }),
+        )
     }
 }
 
-fn render_image(frame: StreamFrame) -> Option<Arc<RenderImage>> {
+#[cfg(windows)]
+fn set_topmost(window: &Window, topmost: bool) -> bool {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::{
+        Foundation::HWND,
+        UI::WindowsAndMessaging::{
+            HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
+        },
+    };
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return false;
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return false;
+    };
+    let hwnd = HWND(handle.hwnd.get() as *mut _);
+    let after = if topmost {
+        HWND_TOPMOST
+    } else {
+        HWND_NOTOPMOST
+    };
+    // SAFETY: the handle belongs to this live window, and only its z-order changes.
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            Some(after),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        )
+    }
+    .is_ok()
+}
+
+#[cfg(not(windows))]
+fn set_topmost(_: &Window, _: bool) -> bool {
+    false
+}
+
+impl Render for StreamPopout {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let strip = div()
+            .id("stream-popout-titlebar")
+            .flex()
+            .flex_none()
+            .justify_end()
+            .h(rpx(POPOUT_TITLEBAR))
+            .w_full()
+            .window_control_area(WindowControlArea::Drag)
+            .when(!cfg!(target_os = "windows"), |this| {
+                this.on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
+            })
+            .children(self.pin_button(cx))
+            .child(titlebar::caption_buttons(window, POPOUT_CAPTION_WIDTH));
+        let stage = self
+            .app
+            .upgrade()
+            .and_then(|app| popout_stage(app.read(cx), cx));
+        if stage.is_none() {
+            window.remove_window();
+        }
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(rgb(0x000000))
+            .text_color(rgb(theme::text()))
+            .text_size(rpx(16.))
+            .child(strip)
+            .child(div().relative().flex_1().min_h_0().children(stage))
+    }
+}
+
+/// Updating a window fails while it is busy, as it is when the click that ends the stream
+/// came from the popout itself.
+fn close_popout(popout: WindowHandle<StreamPopout>, cx: &mut App) {
+    cx.defer(move |cx| {
+        popout
+            .update(cx, |_, window, _| window.remove_window())
+            .ok();
+    });
+}
+
+pub(super) fn render_image(frame: StreamFrame) -> Option<Arc<RenderImage>> {
     // gpui's `RenderImage` holds BGRA in an `RgbaImage` container.
     let image = image::RgbaImage::from_raw(frame.width, frame.height, frame.bgra)?;
     Some(Arc::new(RenderImage::new(vec![image::Frame::new(image)])))
@@ -132,7 +268,7 @@ impl DiscordApp {
         self.hide_stage_controls(cx);
     }
 
-    fn stage_open(&self) -> bool {
+    pub(super) fn stage_open(&self) -> bool {
         self.stream_view.is_some() || self.voice.call_view.is_some()
     }
 
@@ -208,49 +344,78 @@ impl DiscordApp {
             return;
         };
         if let Some(popout) = view.popout.take() {
-            popout
-                .update(cx, |_, window, _| window.remove_window())
-                .ok();
+            close_popout(popout, cx);
             self.views.overlays.update(cx, |_, cx| cx.notify());
             return;
         }
-        let app = cx.entity().downgrade();
-        let closed = app.clone();
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-                None,
-                size(px(960.), px(540.)),
-                cx,
-            ))),
-            titlebar: Some(TitlebarOptions {
-                title: Some("Stream".into()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let opened = cx.open_window(options, |window, cx| {
-            window.on_window_should_close(cx, move |_, cx| {
-                closed
-                    .update(cx, |app, cx| {
-                        if let Some(view) = app.stream_view.as_mut() {
-                            view.popout = None;
-                        }
-                        app.views.overlays.update(cx, |_, cx| cx.notify());
-                    })
-                    .ok();
-                true
-            });
-            cx.new(|_| StreamPopout { app })
-        });
-        match opened {
-            Ok(handle) => {
-                if let Some(view) = self.stream_view.as_mut() {
-                    view.popout = Some(handle);
-                }
-            }
-            Err(error) => log::warn!("Could not open the stream window: {error}"),
+        if std::mem::replace(&mut view.popout_opening, true) {
+            return;
         }
-        self.views.overlays.update(cx, |_, cx| cx.notify());
+        let app = cx.entity();
+        let overlays = self.views.overlays.clone();
+        // Opening draws the window straight away, and the popout reads the app to draw, so it
+        // has to wait until this update of the app is over.
+        cx.defer(move |cx| {
+            let weak = app.downgrade();
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                    None,
+                    size(px(POPOUT_WIDTH), px(POPOUT_HEIGHT)),
+                    cx,
+                ))),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Stream".into()),
+                    appears_transparent: true,
+                    ..Default::default()
+                }),
+                window_decorations: cfg!(target_os = "linux").then_some(WindowDecorations::Client),
+                ..Default::default()
+            };
+            let opened = cx.open_window(options, |_, cx| {
+                cx.new(|cx| StreamPopout {
+                    app: weak,
+                    _overlays: cx.observe(&overlays, |_, _, cx| cx.notify()),
+                    pinned: false,
+                    pin_hovered: false,
+                })
+            });
+            app.update(cx, |app, cx| {
+                let entity = cx.entity().downgrade();
+                let view = app.stream_view.as_mut();
+                match (opened, view) {
+                    (Ok(handle), Some(view)) => {
+                        let window_id = handle.window_id();
+                        view.popout_opening = false;
+                        view.popout = Some(handle);
+                        view.popout_closed = Some(cx.on_window_closed(move |cx, id| {
+                            if id != window_id {
+                                return;
+                            }
+                            entity
+                                .update(cx, |app, cx| {
+                                    if let Some(view) = app.stream_view.as_mut().filter(|view| {
+                                        view.popout
+                                            .as_ref()
+                                            .is_some_and(|popout| popout.window_id() == id)
+                                    }) {
+                                        view.popout = None;
+                                    }
+                                    app.views.overlays.update(cx, |_, cx| cx.notify());
+                                })
+                                .ok();
+                        }));
+                    }
+                    (Ok(handle), None) => close_popout(handle, cx),
+                    (Err(error), view) => {
+                        if let Some(view) = view {
+                            view.popout_opening = false;
+                        }
+                        log::warn!("Could not open the stream window: {error}");
+                    }
+                }
+                app.views.overlays.update(cx, |_, cx| cx.notify());
+            });
+        });
     }
 
     pub(crate) fn watch_stream(
@@ -262,12 +427,22 @@ impl DiscordApp {
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;
         };
+        let own = user_id == self.store.current_user_id;
+        if own && !self.voice.sharing_screen() {
+            return;
+        }
         self.close_stream(window, cx);
-        session.watch_stream(user_id);
+        let frames = if own {
+            session.share_frames()
+        } else {
+            session.watch_stream(user_id);
+            session.stream_frames()
+        };
         self.stream_nonce += 1;
         let nonce = self.stream_nonce;
         self.stream_view = Some(StreamView {
             user_id,
+            own,
             nonce,
             frame: None,
             retired: None,
@@ -277,9 +452,10 @@ impl DiscordApp {
             controls: StageControls::new(),
             volume_open: false,
             popout: None,
+            popout_opening: false,
+            popout_closed: None,
         });
         self.ensure_stream_volume(cx);
-        let frames = session.stream_frames();
         cx.spawn(async move |this, cx| {
             let mut counted = 0;
             let mut counting_since = Instant::now();
@@ -309,9 +485,6 @@ impl DiscordApp {
                         if let Some(retired) = retired {
                             cx.drop_image(retired, None);
                         }
-                        if let Some(popout) = view.popout {
-                            popout.update(cx, |_, _, cx| cx.notify()).ok();
-                        }
                         app.views.overlays.update(cx, |_, cx| cx.notify());
                     }
                     if idle {
@@ -336,11 +509,10 @@ impl DiscordApp {
             return;
         };
         if let Some(popout) = view.popout {
-            popout
-                .update(cx, |_, window, _| window.remove_window())
-                .ok();
+            close_popout(popout, cx);
         }
         if view.ended.is_none()
+            && !view.own
             && let Some(session) = &self.session
         {
             session.stop_watching();
@@ -349,6 +521,21 @@ impl DiscordApp {
             cx.drop_image(image, window.as_deref_mut());
         }
         self.views.overlays.update(cx, |_, cx| cx.notify());
+    }
+
+    pub(crate) fn watching_own_stream(&self) -> bool {
+        self.stream_view.as_ref().is_some_and(|view| view.own)
+    }
+
+    pub(crate) fn own_stream_ended(&mut self, cx: &mut Context<Self>) {
+        if !self.watching_own_stream() {
+            return;
+        }
+        if self.voice.call.is_some() {
+            self.return_to_call(cx);
+        } else {
+            self.close_stream(None, cx);
+        }
     }
 
     /// The chat stays open across the switch, since both stages share the call's channel.
@@ -441,6 +628,28 @@ pub(super) fn control_with(
     background: u32,
 ) -> Stateful<Div> {
     let entity = app.entity.clone();
+    bare_control(id, background)
+        .on_hover(move |hovered, window, cx| {
+            let key = (id, window.window_handle().window_id());
+            entity
+                .update(cx, |app, cx| {
+                    if *hovered {
+                        app.hovered_stage_control = Some(key);
+                    } else if app.hovered_stage_control == Some(key) {
+                        app.hovered_stage_control = None;
+                    }
+                    app.views.overlays.update(cx, |_, cx| cx.notify());
+                })
+                .ok();
+        })
+        .children(
+            app.hovered_stage_control
+                .filter(|(hovered, _)| *hovered == id)
+                .map(|(_, window)| ControlTip { tip, window }),
+        )
+}
+
+fn bare_control(id: &'static str, background: u32) -> Stateful<Div> {
     div()
         .id(id)
         .relative()
@@ -454,17 +663,63 @@ pub(super) fn control_with(
         .cursor_pointer()
         .bg(rgba(background))
         .hover(|style| style.opacity(0.85))
-        .on_hover(move |hovered, _, cx| {
-            entity
-                .update(cx, |app, cx| {
-                    app.hovered_stage_control = hovered.then_some(id);
-                    app.views.overlays.update(cx, |_, cx| cx.notify());
-                })
-                .ok();
-        })
-        .when(app.hovered_stage_control == Some(id), |this| {
-            this.child(theme::tooltip_above(tip))
-        })
+}
+
+fn menu_chevron(id: &'static str, open: bool, color: u32, background: u32) -> Stateful<Div> {
+    div()
+        .id(id)
+        .relative()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .w(rpx(24.))
+        .h(rpx(44.))
+        .rounded_r(rpx(8.))
+        .cursor_pointer()
+        .bg(rgba(background))
+        .hover(|style| style.opacity(0.85))
+        .child(theme::icon(
+            if open { "chevron-up" } else { "chevron-down" },
+            16.,
+            color,
+        ))
+}
+
+fn with_menu(control: Stateful<Div>, chevron: Option<Stateful<Div>>) -> Div {
+    let joined = chevron.is_some();
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .child(control.when(joined, |this| this.rounded_r(px(0.))))
+        .children(chevron)
+}
+
+fn chevron_tint(tint: u32) -> u32 {
+    if tint == 0 {
+        0
+    } else {
+        (tint & !0xFF) | ((tint & 0xFF) + 0x14).min(0xFF)
+    }
+}
+
+#[derive(IntoElement)]
+struct ControlTip {
+    tip: &'static str,
+    window: WindowId,
+}
+
+impl RenderOnce for ControlTip {
+    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
+        // Fills the control, so the tooltip measures from it as if it were a direct child.
+        div()
+            .absolute()
+            .inset_0()
+            .when(window.window_handle().window_id() == self.window, |this| {
+                this.child(theme::tooltip_above(self.tip))
+            })
+    }
 }
 
 /// Plays `apply` towards `shown` after a toggle. With `toggles` at 0, or reduced motion, it
@@ -681,65 +936,111 @@ fn stage_members(app: &DiscordApp, view: &StreamView, cx: &App) -> Option<Div> {
     )
 }
 
-pub(super) fn voice_controls(app: &DiscordApp) -> Div {
+pub(super) fn voice_controls(app: &DiscordApp, in_popout: bool) -> Div {
     let mute = app.entity.clone();
-    let deafen = app.entity.clone();
-    let muted = app.voice.self_mute;
-    let deafened = app.voice.self_deaf;
-    let tint = |on: bool| if on { MUTED_TINT } else { 0 };
+    let menu = app.entity.clone();
+    let muted = app.voice.self_mute || app.voice.self_deaf;
+    let (color, tint) = if muted {
+        (theme::RED, MUTED_TINT)
+    } else {
+        (theme::text(), 0)
+    };
+    let mic = control(
+        app,
+        "stage-mute",
+        if muted { "Unmute" } else { "Mute" },
+        if muted { "mic-off" } else { "mic" },
+        color,
+        tint,
+    )
+    .on_click(move |_, _, cx| {
+        mute.update(cx, |app, cx| app.toggle_self_mute(cx)).ok();
+    });
+    let mic_menu = (!in_popout).then(|| {
+        menu_chevron(
+            "stage-mic-menu",
+            app.call_audio_menu_open(),
+            color,
+            chevron_tint(tint),
+        )
+        .on_mouse_down(MouseButton::Left, move |event, _, cx| {
+            // The open menu closes on any press outside it, this one included.
+            cx.stop_propagation();
+            let position = event.position;
+            menu.update(cx, |app, cx| app.toggle_call_audio_menu(position, cx))
+                .ok();
+        })
+    });
+    let camera = voice::unavailable(
+        bare_control("stage-camera", 0).child(theme::icon("video-slash", 22., theme::text())),
+        "Camera",
+    );
+    let camera_menu = (!in_popout).then(|| {
+        voice::unavailable(
+            menu_chevron("stage-camera-menu", false, theme::text(), 0),
+            "Camera",
+        )
+    });
     control_group()
-        .child(
-            control(
-                app,
-                "stage-mute",
-                if muted { "Unmute" } else { "Mute" },
-                if muted { "mic-off" } else { "mic" },
-                if muted { theme::RED } else { theme::text() },
-                tint(muted),
-            )
-            .on_click(move |_, _, cx| {
-                mute.update(cx, |app, cx| app.toggle_self_mute(cx)).ok();
-            }),
-        )
-        .child(
-            control(
-                app,
-                "stage-deafen",
-                if deafened { "Undeafen" } else { "Deafen" },
-                if deafened {
-                    "headphone-off"
-                } else {
-                    "headphones"
-                },
-                if deafened { theme::RED } else { theme::text() },
-                tint(deafened),
-            )
-            .on_click(move |_, _, cx| {
-                deafen.update(cx, |app, cx| app.toggle_self_deaf(cx)).ok();
-            }),
-        )
+        .child(with_menu(mic, mic_menu))
+        .child(with_menu(camera, camera_menu))
 }
 
-pub(super) fn share_control(app: &DiscordApp) -> Div {
-    let share = app.entity.clone();
-    let sharing = app.voice.sharing_screen();
-    control_group().child(
-        control(
-            app,
-            "stage-share",
-            if sharing {
-                "Stop Streaming"
-            } else {
-                "Share Your Screen"
-            },
-            "monitor-up",
-            if sharing { theme::GREEN } else { theme::text() },
-            0,
+pub(super) fn disconnect_control(app: &DiscordApp) -> Stateful<Div> {
+    let leave = app.entity.clone();
+    control_with(app, "stage-leave", "Disconnect", STOP_RED)
+        .w(rpx(64.))
+        .h(rpx(54.))
+        .rounded(rpx(12.))
+        .child(
+            theme::icon("phone", 22., 0xFFFFFF).with_transformation(Transformation::rotate(
+                radians(std::f32::consts::FRAC_PI_4 * 3.),
+            )),
         )
         .on_click(move |_, _, cx| {
-            share.update(cx, |app, cx| app.screen_button(cx)).ok();
-        }),
+            leave.update(cx, |app, cx| app.leave_voice(cx)).ok();
+        })
+}
+
+pub(super) fn share_control(app: &DiscordApp, in_popout: bool) -> Div {
+    let share = app.entity.clone();
+    let menu = app.entity.clone();
+    let sharing = app.voice.sharing_screen();
+    let tint = if sharing {
+        (theme::GREEN << 8) | 0x29
+    } else {
+        0
+    };
+    let button = control(
+        app,
+        "stage-share",
+        if sharing {
+            "Stop Streaming"
+        } else {
+            "Share Your Screen"
+        },
+        if sharing { "monitor-x" } else { "monitor-up" },
+        if sharing { theme::GREEN } else { theme::text() },
+        tint,
     )
+    .on_click(move |_, _, cx| {
+        share.update(cx, |app, cx| app.screen_button(cx)).ok();
+    });
+    let chevron = (sharing && !in_popout).then(|| {
+        menu_chevron(
+            "stage-share-menu",
+            app.stream_menu_open(),
+            theme::GREEN,
+            chevron_tint(tint),
+        )
+        .on_mouse_down(MouseButton::Left, move |event, _, cx| {
+            cx.stop_propagation();
+            let position = event.position;
+            menu.update(cx, |app, cx| app.toggle_live_menu(position, cx))
+                .ok();
+        })
+    });
+    control_group().child(with_menu(button, chevron))
 }
 
 pub(super) fn show_chat_button(app: &DiscordApp) -> Stateful<Div> {
@@ -764,8 +1065,12 @@ pub(super) fn show_chat_button(app: &DiscordApp) -> Stateful<Div> {
         .child(theme::icon("message-circle", 20., 0xFFFFFF))
 }
 
-/// The stage itself, which reports pointer activity to the fading controls.
-pub(super) fn stage_area(app: &DiscordApp, dock_height: f32, chat_open: bool) -> Stateful<Div> {
+pub(super) fn stage_area(
+    app: &DiscordApp,
+    top: f32,
+    dock_height: f32,
+    chat_open: bool,
+) -> Stateful<Div> {
     let activity = app.entity.clone();
     let left = app.entity.clone();
     div()
@@ -777,7 +1082,7 @@ pub(super) fn stage_area(app: &DiscordApp, dock_height: f32, chat_open: bool) ->
         .occlude()
         .on_mouse_move(move |event, window, cx| {
             let rem = window.rem_size();
-            let top = rpx(titlebar::HEIGHT + chat::HEADER_HEIGHT).to_pixels(rem);
+            let top = rpx(top + chat::HEADER_HEIGHT).to_pixels(rem);
             let bottom = window.viewport_size().height - rpx(dock_height).to_pixels(rem);
             let y = event.position.y;
             activity
@@ -844,6 +1149,22 @@ pub(super) fn stage_frame(
 
 pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
     let view = app.stream_view.as_ref()?;
+    let chat_open = app.stream_chat_open();
+    let (area, chat_title) = stage(app, view, false, cx);
+    Some(stage_frame(app, area, chat_title, chat_open))
+}
+
+fn popout_stage(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
+    let view = app.stream_view.as_ref()?;
+    Some(stage(app, view, true, cx).0.into_any_element())
+}
+
+fn stage(
+    app: &DiscordApp,
+    view: &StreamView,
+    in_popout: bool,
+    cx: &App,
+) -> (Stateful<Div>, String) {
     let call = app.voice.call.as_ref();
     let guild_id = call.map_or(0, |call| call.guild_id);
     let name = member_name(app, guild_id, view.user_id);
@@ -854,13 +1175,14 @@ pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
     let chat_title = channel.clone();
     let members_shown = app.stream_members_shown;
     let popped_out = view.popout.is_some();
+    let shown_elsewhere = popped_out && !in_popout;
     let live = view.ended.is_none();
-    let status = if popped_out {
+    let status = if shown_elsewhere {
         "Streaming in another window"
     } else {
         "Connecting\u{2026}"
     };
-    let video = match (&view.ended, view.frame.clone().filter(|_| !popped_out)) {
+    let video = match (&view.ended, view.frame.clone().filter(|_| !shown_elsewhere)) {
         (Some(reason), _) => ended_panel(app, reason, name.clone(), members_shown),
         (None, Some(frame)) => img(frame)
             .size_full()
@@ -874,7 +1196,7 @@ pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
     };
     let toggle = app.entity.clone();
     let stop = app.entity.clone();
-    let chat_open = app.stream_chat_open();
+    let chat_open = app.stream_chat_open() && !in_popout;
     let popout = app.entity.clone();
     let volume = app.entity.clone();
     let dismiss_volume = app.entity.clone();
@@ -918,7 +1240,9 @@ pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                 .filter(|_| live)
                 .map(|height| quality_pill(height, view.fps)),
         )
-        .when(!chat_open, |this| this.child(show_chat_button(app)));
+        .when(!chat_open && !in_popout, |this| {
+            this.child(show_chat_button(app))
+        });
     let controls = div()
         .relative()
         .flex()
@@ -927,9 +1251,11 @@ pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
         .justify_center()
         .gap_2()
         .h(rpx(DOCK_HEIGHT))
-        .child(voice_controls(app))
-        .child(share_control(app))
-        .child(
+        .child(voice_controls(app, in_popout))
+        .child(share_control(app, in_popout))
+        .child(if view.own {
+            disconnect_control(app)
+        } else {
             control(
                 app,
                 "stage-stop",
@@ -943,8 +1269,8 @@ pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
             .rounded(rpx(12.))
             .on_click(move |_, _, cx| {
                 stop.update(cx, |app, cx| app.return_to_call(cx)).ok();
-            }),
-        )
+            })
+        })
         .child(
             div()
                 .absolute()
@@ -952,52 +1278,54 @@ pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                 .flex()
                 .items_center()
                 .gap_1()
-                .child(
-                    control(
-                        app,
-                        "stage-volume",
-                        "Stream Volume",
-                        "volume-2",
-                        0xFFFFFF,
-                        0,
+                .when(!view.own, |this| {
+                    this.child(
+                        control(
+                            app,
+                            "stage-volume",
+                            "Stream Volume",
+                            "volume-2",
+                            0xFFFFFF,
+                            0,
+                        )
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(move |_, _, cx| {
+                            volume
+                                .update(cx, |app, cx| {
+                                    if let Some(view) = app.stream_view.as_mut() {
+                                        view.volume_open = !view.volume_open;
+                                    }
+                                    app.views.overlays.update(cx, |_, cx| cx.notify());
+                                })
+                                .ok();
+                        })
+                        .when(view.volume_open, |this| {
+                            this.children(app.stream_volume.as_ref().map(|(state, _)| {
+                                div()
+                                    .id("stage-volume-slider")
+                                    .absolute()
+                                    .bottom(rpx(52.))
+                                    .right_0()
+                                    .w(rpx(180.))
+                                    .px(rpx(12.))
+                                    .py(rpx(10.))
+                                    .rounded(rpx(8.))
+                                    .bg(rgb(PANEL))
+                                    .border_1()
+                                    .border_color(rgba(theme::border_subtle()))
+                                    .occlude()
+                                    .on_click(|_, _, cx| cx.stop_propagation())
+                                    .child(
+                                        div().h(rpx(20.)).child(
+                                            Slider::new(state)
+                                                .bg(rgb(theme::BLURPLE))
+                                                .text_color(white()),
+                                        ),
+                                    )
+                            }))
+                        }),
                     )
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(move |_, _, cx| {
-                        volume
-                            .update(cx, |app, cx| {
-                                if let Some(view) = app.stream_view.as_mut() {
-                                    view.volume_open = !view.volume_open;
-                                }
-                                app.views.overlays.update(cx, |_, cx| cx.notify());
-                            })
-                            .ok();
-                    })
-                    .when(view.volume_open, |this| {
-                        this.children(app.stream_volume.as_ref().map(|(state, _)| {
-                            div()
-                                .id("stage-volume-slider")
-                                .absolute()
-                                .bottom(rpx(52.))
-                                .right_0()
-                                .w(rpx(180.))
-                                .px(rpx(12.))
-                                .py(rpx(10.))
-                                .rounded(rpx(8.))
-                                .bg(rgb(PANEL))
-                                .border_1()
-                                .border_color(rgba(theme::border_subtle()))
-                                .occlude()
-                                .on_click(|_, _, cx| cx.stop_propagation())
-                                .child(
-                                    div().h(rpx(20.)).child(
-                                        Slider::new(state)
-                                            .bg(rgb(theme::BLURPLE))
-                                            .text_color(white()),
-                                    ),
-                                )
-                        }))
-                    }),
-                )
+                })
                 .child(
                     control(
                         app,
@@ -1138,7 +1466,12 @@ pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
         } else {
             DOCK_FADE
         };
-    let stage_area = stage_area(app, dock_height, chat_open)
+    let top = if in_popout {
+        POPOUT_TITLEBAR
+    } else {
+        titlebar::HEIGHT
+    };
+    let stage_area = stage_area(app, top, dock_height, chat_open)
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             dismiss_volume
                 .update(cx, |app, cx| {
@@ -1151,5 +1484,5 @@ pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
         })
         .child(stage)
         .child(dock);
-    Some(stage_frame(app, stage_area, chat_title, chat_open))
+    (stage_area, chat_title)
 }

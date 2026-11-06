@@ -86,6 +86,8 @@ struct Shared {
     stream: Option<StreamWatch>,
     share: Option<StreamShare>,
     frames: FrameSlot,
+    /// Outlives each share, so the app polls one slot for whatever it streams next.
+    local_preview: Arc<stream::share::LocalPreview>,
     flags: AudioFlags,
     generation: u64,
     dirty: bool,
@@ -118,6 +120,7 @@ impl Default for VoiceManager {
                 stream: None,
                 share: None,
                 frames: Arc::new(Mutex::new(None)),
+                local_preview: Arc::default(),
                 flags: AudioFlags::new(),
                 generation: 0,
                 dirty: false,
@@ -389,10 +392,11 @@ impl VoiceManager {
         shared.session_id.as_ref()?;
         let key = stream::stream_key((guild_id != 0).then_some(guild_id), channel_id, user_id);
         self.end_share(&mut shared, Some("Sharing replaced".into()));
+        let local = shared.local_preview.clone();
         shared.share = Some(StreamShare {
             key,
             server_id: server_id(guild_id, channel_id),
-            live: source.map(|source| stream::share::LiveShare::new(source, quality, audio)),
+            live: source.map(|source| stream::share::LiveShare::new(source, quality, audio, local)),
             rtc_server_id: None,
             rtc_channel_id: None,
             token: None,
@@ -426,6 +430,11 @@ impl VoiceManager {
         if let Some(shutdown) = share.shutdown.take() {
             let _ = shutdown.send(true);
         }
+        *shared
+            .local_preview
+            .frames
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = None;
         if notify
             && let (Some(sender), Some(generation)) = (
                 self.commands.clone(),
@@ -583,6 +592,26 @@ impl VoiceManager {
 
     pub fn stream_frames(&self) -> FrameSlot {
         self.lock().frames.clone()
+    }
+
+    pub fn share_frames(&self) -> FrameSlot {
+        self.lock().local_preview.frames.clone()
+    }
+
+    pub fn set_share_preview(&self, bounds: Option<(u32, u32)>) {
+        let shared = self.lock();
+        *shared
+            .local_preview
+            .bounds
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = bounds;
+        if bounds.is_none() {
+            *shared
+                .local_preview
+                .frames
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = None;
+        }
     }
 
     fn end_stream(&self, shared: &mut Shared, reason: Option<String>) {

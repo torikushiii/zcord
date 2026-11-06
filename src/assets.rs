@@ -169,6 +169,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "video-fullscreen",
     "video-muted",
     "video-off",
+    "video-slash",
     "video-pause",
     "video-play",
     "video-volume",

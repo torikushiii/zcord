@@ -10,6 +10,7 @@ use gpui_component::ElementExt;
 
 mod details;
 pub(crate) mod device_menu;
+pub(crate) mod self_preview;
 mod share_panel;
 pub(crate) mod share_picker;
 pub(crate) mod stream_card;
@@ -58,6 +59,7 @@ pub(crate) struct Voice {
     share_picker: Option<share_picker::SharePicker>,
     share_error: Option<String>,
     share_info: Option<share_panel::ShareInfo>,
+    self_preview: self_preview::SelfPreview,
     stream_mode: StreamMode,
     stream_custom: CustomStream,
     stream_preview_hidden: bool,
@@ -73,6 +75,7 @@ pub(crate) struct Voice {
     devices: Option<crate::discord::AudioDevices>,
     devices_loading: Option<Task<()>>,
     volume_slider: Option<device_menu::VolumeSlider>,
+    output_slider: Option<device_menu::VolumeSlider>,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -140,6 +143,7 @@ enum MenuKind {
     Stream,
     InputOptions,
     OutputOptions,
+    CallAudio,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -161,7 +165,10 @@ struct Menu {
     flyout: bool,
     /// The flyout lies outside the menu; a click there must not count as outside.
     pointer_in_flyout: bool,
+    flyout_left: bool,
     device_flyout: Option<device_menu::Flyout>,
+    /// Dropped with the menu so its ticking stops.
+    level: Option<Entity<device_menu::LevelBars>>,
 }
 
 /// `Pending` until Discord either finishes the DAVE handshake, which yields the privacy
@@ -322,6 +329,17 @@ impl DiscordApp {
         cx.notify();
     }
 
+    pub(crate) fn stream_menu_open(&self) -> bool {
+        self.voice
+            .menu
+            .as_ref()
+            .is_some_and(|menu| menu.kind == MenuKind::Stream && !menu.closing)
+    }
+
+    pub(crate) fn toggle_live_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        self.toggle_menu(MenuKind::Stream, position, cx);
+    }
+
     fn toggle_menu(&mut self, kind: MenuKind, position: Point<Pixels>, cx: &mut Context<Self>) {
         let voice = &mut self.voice;
         if voice
@@ -349,7 +367,9 @@ impl DiscordApp {
             switch_moved: false,
             flyout: false,
             pointer_in_flyout: false,
+            flyout_left: false,
             device_flyout: None,
+            level: None,
         });
         cx.notify();
     }
@@ -598,13 +618,20 @@ impl DiscordApp {
             }
             VoiceEvent::Stream(event) => self.handle_stream_event(event, cx),
             VoiceEvent::Share(event) => match event {
-                ShareEvent::Starting => voice.sharing = Sharing::Starting,
-                ShareEvent::Live => voice.sharing = Sharing::Live,
+                ShareEvent::Starting => {
+                    voice.sharing = Sharing::Starting;
+                    self.start_self_preview(cx);
+                }
+                ShareEvent::Live => {
+                    voice.sharing = Sharing::Live;
+                    self.start_self_preview(cx);
+                }
                 ShareEvent::Ended { reason } => {
                     voice.sharing = Sharing::Off;
                     voice.share_error = reason;
                     voice.preview_upload = None;
                     self.clear_share_info(cx);
+                    self.own_stream_ended(cx);
                 }
                 ShareEvent::Viewers(viewers) => {
                     if let Some(info) = &mut voice.share_info {
@@ -1104,7 +1131,7 @@ fn with_tooltip(
 
 /// Discord's voice controls that zcord doesn't implement yet: shown for familiarity, with a
 /// tooltip saying so instead of doing nothing silently.
-fn unavailable(button: Stateful<Div>, feature: &'static str) -> Stateful<Div> {
+pub(crate) fn unavailable(button: Stateful<Div>, feature: &'static str) -> Stateful<Div> {
     button.relative().child(theme::hover_tooltip(
         SharedString::from(format!("unavailable-{feature}")),
         format!("{feature} isn't available in zcord yet"),
@@ -1126,6 +1153,7 @@ pub(crate) fn menu(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
         MenuKind::OutputOptions => {
             device_menu::card(app, menu, device_menu::DeviceKind::Output, cx)
         }
+        MenuKind::CallAudio => device_menu::call_card(app, menu, cx),
     };
     let close = app.entity.clone();
     let card = card.when(!menu.closing, |this| {

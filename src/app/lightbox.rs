@@ -476,12 +476,13 @@ fn bar_button(
         .cursor_pointer()
         .when(active, |this| this.bg(rgba(theme::selected())))
         .hover(|style| style.bg(rgba(theme::selected())))
-        .on_hover(move |hovered, _, cx| {
+        .on_hover(move |hovered, window, cx| {
+            let key = (id, window.window_handle().window_id());
             hover
                 .update(cx, |app, cx| {
                     if *hovered {
-                        app.hovered_stage_control = Some(id);
-                    } else if app.hovered_stage_control == Some(id) {
+                        app.hovered_stage_control = Some(key);
+                    } else if app.hovered_stage_control == Some(key) {
                         app.hovered_stage_control = None;
                     }
                     app.views.overlays.update(cx, |_, cx| cx.notify());
@@ -489,9 +490,11 @@ fn bar_button(
                 .ok();
         })
         .child(theme::icon(icon, BAR_ICON, theme::strong()))
-        .when(app.hovered_stage_control == Some(id), |this| {
-            this.child(theme::tooltip_below(tip))
-        })
+        .when(
+            app.hovered_stage_control
+                .is_some_and(|(hovered, _)| hovered == id),
+            |this| this.child(theme::tooltip_below(tip)),
+        )
 }
 
 fn panel() -> Div {

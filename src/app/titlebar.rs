@@ -62,7 +62,7 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> impl IntoElement +
                 .child(nav_button("inbox", "inbox"))
                 .child(nav_button("help", "circle-question-mark")),
         )
-        .child(caption_buttons(window))
+        .child(caption_buttons(window, CAPTION_BUTTON_WIDTH))
 }
 
 fn guild_icon(guild: &Guild, cx: &App) -> AnyElement {
@@ -97,7 +97,7 @@ fn nav_button(id: &'static str, icon: &str) -> impl IntoElement {
         .occlude()
 }
 
-fn caption_buttons(window: &Window) -> impl IntoElement {
+pub(super) fn caption_buttons(window: &Window, width: f32) -> impl IntoElement {
     let (max_id, max_icon) = if window.is_maximized() {
         ("window-restore", "icons/window-restore.svg")
     } else {
@@ -111,6 +111,7 @@ fn caption_buttons(window: &Window) -> impl IntoElement {
             "icons/window-minimize.svg",
             WindowControlArea::Min,
             false,
+            width,
             |window| window.minimize_window(),
         ))
         .child(caption_button(
@@ -118,6 +119,7 @@ fn caption_buttons(window: &Window) -> impl IntoElement {
             max_icon,
             WindowControlArea::Max,
             false,
+            width,
             |window| window.zoom_window(),
         ))
         .child(caption_button(
@@ -125,6 +127,7 @@ fn caption_buttons(window: &Window) -> impl IntoElement {
             "icons/window-close.svg",
             WindowControlArea::Close,
             true,
+            width,
             |window| window.remove_window(),
         ))
 }
@@ -134,6 +137,7 @@ fn caption_button(
     icon_path: &'static str,
     area: WindowControlArea,
     close: bool,
+    width: f32,
     action: fn(&mut Window),
 ) -> impl IntoElement {
     let hover_bg: Hsla = if close {
@@ -147,7 +151,7 @@ fn caption_button(
         .flex()
         .items_center()
         .justify_center()
-        .w(rpx(CAPTION_BUTTON_WIDTH))
+        .w(rpx(width))
         .h_full()
         .hover(move |style| style.bg(hover_bg))
         .occlude()
