@@ -94,6 +94,13 @@ impl DiscordApp {
         .detach();
     }
 
+    /// The streamer row unmounts without a hover-out when the sidebar switches guilds.
+    pub(crate) fn dismiss_stream_card(&mut self) {
+        self.voice.stream_card = None;
+        self.voice.stream_card_close = None;
+        self.voice.stream_card_hovered = false;
+    }
+
     fn schedule_stream_card_close(&mut self, cx: &mut Context<Self>) {
         self.voice.stream_card_close = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(CLOSE_DELAY).await;
