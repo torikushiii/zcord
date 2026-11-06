@@ -12,8 +12,8 @@ languages.svg, library.svg, link.svg, lock.svg, log-out.svg, mail.svg, megaphone
 message-circle.svg, message-square.svg, messages-square.svg, mic-off.svg, mic.svg, monitor-up.svg,
 monitor-x.svg, music.svg, paperclip.svg, pencil.svg, phone.svg, pin.svg, reply.svg, search.svg,
 settings.svg, shapes.svg, smile-plus.svg, smile.svg, store.svg, thumbs-down.svg, thumbs-up.svg,
-timer.svg, trash-2.svg, user-check.svg, user-plus.svg, users.svg, user.svg, video.svg, volume-2.svg,
-zap.svg are the filled style of Keyline Icons
+timer.svg, trash-2.svg, user-check.svg, user-plus.svg, users.svg, user.svg, video.svg, video-slash.svg,
+volume-2.svg, zap.svg are the filled style of Keyline Icons
 (https://keylineicons.com), MIT License:
 
 MIT License
