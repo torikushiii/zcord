@@ -994,7 +994,14 @@ impl DiscordApp {
                     Event::MessageReactionAddMany(event) => Some(event.message_id),
                     _ => None,
                 };
+                let announced_call = match &event {
+                    Event::CallCreate(call) | Event::CallUpdate(call) => Some(call.channel_id),
+                    _ => None,
+                };
                 let change = self.store.apply(event);
+                if let Some(channel_id) = announced_call {
+                    self.ring_pending_dm_call(channel_id, cx);
+                }
                 if let Some(message_id) = reacted {
                     self.message_reactions_changed(message_id, cx);
                 }

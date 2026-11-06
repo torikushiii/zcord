@@ -251,7 +251,7 @@ impl DiscordApp {
         let Some(session) = self.session.as_ref().filter(|_| self.live) else {
             return;
         };
-        self.calls.pending_ring = None;
+        self.calls.cancel_pending();
         session.set_self_mute(self.voice.self_mute);
         session.set_self_deaf(self.voice.self_deaf);
         session.set_noise_suppression(self.voice.noise_suppression);
@@ -268,7 +268,7 @@ impl DiscordApp {
     }
 
     pub(crate) fn leave_voice(&mut self, cx: &mut Context<Self>) {
-        self.calls.pending_ring = None;
+        self.calls.cancel_pending();
         if self.voice.call.take().is_none() {
             return;
         }
@@ -457,7 +457,7 @@ impl DiscordApp {
             .any(|member| member.user_id == self.store.current_user_id);
         if still_listed {
             if saved.guild_id == 0 {
-                self.join_dm_call(saved.channel_id, cx);
+                self.start_dm_call(saved.channel_id, false, cx);
             } else {
                 self.join_voice(saved.guild_id, saved.channel_id, cx);
             }
@@ -547,7 +547,7 @@ impl DiscordApp {
                 }
             }
             VoiceEvent::Disconnected { reason } => {
-                self.calls.pending_ring = None;
+                self.calls.cancel_pending();
                 if let Some(reason) = reason {
                     log::warn!("Voice disconnected: {reason}");
                 }
