@@ -524,6 +524,27 @@ pub(super) fn system_tail(app: &DiscordApp, message: &Message) -> Option<Div> {
     };
     let row = div().flex().flex_wrap().items_baseline().gap(rpx(4.));
     match message.kind {
+        3 => {
+            let channel_id = message.call.as_ref()?.channel_id;
+            let joined = app
+                .voice
+                .call
+                .as_ref()
+                .is_some_and(|call| call.channel_id == channel_id);
+            if joined || !super::message::call_active(app, message) {
+                return None;
+            }
+            let entity = app.entity.clone();
+            Some(row.child(notice_link(
+                ("notice-call", id),
+                "Join the call".to_owned(),
+                move |_, cx| {
+                    entity
+                        .update(cx, |app, cx| app.join_dm_call(channel_id, cx))
+                        .ok();
+                },
+            )))
+        }
         6 => {
             let jump = app.entity.clone();
             let target = message.reference_id;

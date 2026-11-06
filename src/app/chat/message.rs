@@ -107,8 +107,71 @@ const JOIN_MESSAGES: [&str; 13] = [
     "Yay you made it, {}!",
 ];
 
-fn system_text(message: &Message) -> Option<(&'static str, u32, String)> {
+fn call_duration(secs: u64) -> String {
+    let days = secs as f64 / 86_400.;
+    let round = |value: f64| value.round() as u64;
+    let (minutes, hours) = (round(secs as f64 / 60.), round(secs as f64 / 3_600.));
+    let (months, years) = (
+        round(days * 4_800. / 146_097.),
+        round(days * 400. / 146_097.),
+    );
+    let days = round(days);
+    let (count, one, unit) = if secs <= 44 {
+        return "a few seconds".into();
+    } else if minutes < 45 {
+        (minutes, "a minute", "minutes")
+    } else if hours < 22 {
+        (hours, "an hour", "hours")
+    } else if days < 26 {
+        (days, "a day", "days")
+    } else if months < 11 {
+        (months, "a month", "months")
+    } else {
+        (years, "a year", "years")
+    };
+    if count <= 1 {
+        one.into()
+    } else {
+        format!("{count} {unit}")
+    }
+}
+
+pub(super) fn call_active(app: &DiscordApp, message: &Message) -> bool {
+    message.call.as_ref().is_some_and(|record| {
+        app.store
+            .dm_call(record.channel_id)
+            .is_some_and(|call| call.message_id == Some(message.id))
+    })
+}
+
+fn call_text(app: &DiscordApp, message: &Message) -> (&'static str, u32, String) {
+    let call = message.call.as_ref();
+    let missed = !call_active(app, message)
+        && call.is_some_and(|call| !call.participants.contains(&app.store.current_user_id));
+    let lasted = call.and_then(|call| call.duration_secs).map(call_duration);
+    match (missed, lasted) {
+        (true, Some(lasted)) => (
+            "phone-missed",
+            theme::muted(),
+            format!("You missed a call from {{}} that lasted {lasted}."),
+        ),
+        (true, None) => (
+            "phone-missed",
+            theme::muted(),
+            "You missed a call from {}.".into(),
+        ),
+        (false, Some(lasted)) => (
+            "phone",
+            theme::GREEN,
+            format!("{{}} started a call that lasted {lasted}."),
+        ),
+        (false, None) => ("phone", theme::GREEN, "{} started a call.".into()),
+    }
+}
+
+fn system_text(app: &DiscordApp, message: &Message) -> Option<(&'static str, u32, String)> {
     let template = match message.kind {
+        3 => call_text(app, message),
         7 => {
             let created = (message.id >> 22) + DISCORD_EPOCH_MS;
             return Some((
@@ -134,7 +197,7 @@ fn system_text(message: &Message) -> Option<(&'static str, u32, String)> {
 }
 
 fn render_system(app: &DiscordApp, message: &Message, cx: &App) -> Option<AnyElement> {
-    let (icon, color, template) = system_text(message)?;
+    let (icon, color, template) = system_text(app, message)?;
     let (before, after) = template.split_once("{}").unwrap_or((&template, ""));
     Some(
         div()

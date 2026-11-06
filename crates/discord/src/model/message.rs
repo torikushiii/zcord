@@ -117,7 +117,7 @@ pub struct Message {
     #[serde(default)]
     pub poll: Option<serde_json::Value>,
     #[serde(default)]
-    pub call: Option<serde_json::Value>,
+    pub call: Option<MessageCall>,
     #[serde(default)]
     pub activity: Option<serde_json::Value>,
     #[serde(default)]
@@ -182,6 +182,16 @@ pub struct MessageUpdate {
     pub referenced_message: Option<Option<Box<ReferencedMessage>>>,
     #[serde(default, deserialize_with = "nullable")]
     pub thread: Option<Option<Channel>>,
+    #[serde(default)]
+    pub call: Option<MessageCall>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+pub struct MessageCall {
+    #[serde(default, deserialize_with = "ids")]
+    pub participants: Vec<u64>,
+    #[serde(default)]
+    pub ended_timestamp: Option<String>,
 }
 
 #[derive(Clone, Default, PartialEq, Eq, Deserialize)]
