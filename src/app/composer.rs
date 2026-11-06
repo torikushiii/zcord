@@ -265,7 +265,8 @@ impl DiscordApp {
         {
             return;
         }
-        if self.close_lightbox(cx)
+        if self.close_lightbox_context_menu(cx)
+            || self.close_lightbox(cx)
             || self.close_forward_dialog(cx)
             || self.close_reactions_dialog(cx)
         {

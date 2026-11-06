@@ -55,6 +55,7 @@ pub(crate) struct Lightbox {
     key: String,
     zoomed: bool,
     menu: Menu,
+    context_menu: Option<Point<Pixels>>,
     /// Fetched when the details open, for media Discord doesn't report a size for.
     size: Option<u64>,
     scroll: ScrollHandle,
@@ -113,6 +114,7 @@ impl Lightbox {
             key: still.url.clone(),
             zoomed: false,
             menu: Menu::Closed,
+            context_menu: None,
             size: None,
             scroll: ScrollHandle::new(),
             drag: None,
@@ -253,6 +255,7 @@ impl DiscordApp {
             url: entry.url,
             zoomed: false,
             menu: Menu::Closed,
+            context_menu: None,
             size: None,
             scroll: ScrollHandle::new(),
             drag: None,
@@ -296,6 +299,26 @@ impl DiscordApp {
         if menu == Menu::Details {
             self.load_lightbox_size(cx);
         }
+    }
+
+    fn open_lightbox_context_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        if let Some(lightbox) = self.lightbox.as_mut() {
+            lightbox.menu = Menu::Closed;
+            lightbox.context_menu = Some(position);
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn close_lightbox_context_menu(&mut self, cx: &mut Context<Self>) -> bool {
+        let open = self
+            .lightbox
+            .as_mut()
+            .and_then(|lightbox| lightbox.context_menu.take())
+            .is_some();
+        if open {
+            cx.notify();
+        }
+        open
     }
 
     fn load_lightbox_size(&self, cx: &mut Context<Self>) {
@@ -706,14 +729,7 @@ fn panel() -> Div {
         .shadow_lg()
 }
 
-fn menu_row(
-    app: &DiscordApp,
-    id: &'static str,
-    label: &'static str,
-    icon: Option<&str>,
-    menu: Menu,
-) -> Stateful<Div> {
-    let hover = app.entity.clone();
+fn row(id: &'static str, label: &'static str, icon: Option<&str>) -> Stateful<Div> {
     div()
         .id(id)
         .flex()
@@ -727,15 +743,140 @@ fn menu_row(
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(theme::strong()))
         .hover(|style| style.bg(rgba(theme::selected())))
-        .on_hover(move |hovered, _, cx| {
-            if *hovered {
-                hover
-                    .update(cx, |app, cx| app.set_lightbox_menu(menu, cx))
-                    .ok();
-            }
-        })
         .children(icon.map(|icon| theme::icon(icon, 20., theme::strong())))
         .child(div().flex_1().min_w_0().truncate().child(label))
+}
+
+fn menu_row(
+    app: &DiscordApp,
+    id: &'static str,
+    label: &'static str,
+    icon: Option<&str>,
+    menu: Menu,
+) -> Stateful<Div> {
+    let hover = app.entity.clone();
+    row(id, label, icon).on_hover(move |hovered, _, cx| {
+        if *hovered {
+            hover
+                .update(cx, |app, cx| app.set_lightbox_menu(menu, cx))
+                .ok();
+        }
+    })
+}
+
+fn context_row(
+    app: &DiscordApp,
+    id: &'static str,
+    label: &'static str,
+    icon: &str,
+    run: impl Fn(&mut DiscordApp, &mut Context<DiscordApp>) + 'static,
+) -> Stateful<Div> {
+    let entity = app.entity.clone();
+    row(id, label, Some(icon)).on_click(move |_, _, cx| {
+        cx.stop_propagation();
+        entity
+            .update(cx, |app, cx| {
+                app.close_lightbox_context_menu(cx);
+                run(app, cx);
+            })
+            .ok();
+    })
+}
+
+/// The scrim swallows the click that dismisses the menu, so it doesn't also close the lightbox.
+fn context_menu(
+    app: &DiscordApp,
+    lightbox: &Lightbox,
+    position: Point<Pixels>,
+    attachment: Option<&Attachment>,
+) -> AnyElement {
+    let dismiss = app.entity.clone();
+    let dismiss_right = app.entity.clone();
+    let filename = file_name(lightbox, attachment);
+    let url = lightbox.url.clone();
+    let has_url = !url.is_empty();
+    let link = url.clone();
+    deferred(
+        div()
+            .id("lightbox-context-scrim")
+            .absolute()
+            .inset_0()
+            .occlude()
+            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                dismiss
+                    .update(cx, |app, cx| app.close_lightbox_context_menu(cx))
+                    .ok();
+            })
+            .on_mouse_down(MouseButton::Right, move |_, _, cx| {
+                dismiss_right
+                    .update(cx, |app, cx| app.close_lightbox_context_menu(cx))
+                    .ok();
+            })
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .child(
+                anchored()
+                    .position(position)
+                    .anchor(Anchor::TopLeft)
+                    .snap_to_window_with_margin(px(8.))
+                    .child(
+                        panel()
+                            .id("lightbox-context-menu")
+                            .flex()
+                            .flex_col()
+                            .w(rpx(MENU_WIDTH))
+                            .p(rpx(8.))
+                            .occlude()
+                            .without_text_selection()
+                            .child(context_row(
+                                app,
+                                "lightbox-context-copy-image",
+                                "Copy Image",
+                                "image",
+                                |app, cx| app.copy_lightbox_image(cx),
+                            ))
+                            .child(context_row(
+                                app,
+                                "lightbox-context-save-image",
+                                "Save Image",
+                                "image",
+                                move |app, cx| app.save_lightbox_image(filename.clone(), cx),
+                            ))
+                            .when(has_url, |this| {
+                                this.child(
+                                    div()
+                                        .flex_none()
+                                        .h(rpx(1.))
+                                        .my(rpx(4.))
+                                        .mx(rpx(8.))
+                                        .bg(rgba(theme::border())),
+                                )
+                                .child(context_row(
+                                    app,
+                                    "lightbox-context-copy-link",
+                                    "Copy Image Link",
+                                    "link",
+                                    move |_, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            url.clone(),
+                                        ))
+                                    },
+                                ))
+                                .child(
+                                    context_row(
+                                        app,
+                                        "lightbox-context-open-link",
+                                        "Open Image Link",
+                                        "app-window",
+                                        move |_, cx| cx.open_url(&link),
+                                    )
+                                    .child(theme::icon("arrow-up-right", 18., theme::muted())),
+                                )
+                            }),
+                    ),
+            ),
+    )
+    .with_priority(2)
+    .into_any_element()
 }
 
 fn details_field(title: &'static str, value: String) -> Div {
@@ -1114,6 +1255,7 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
     let found = origin(app, lightbox);
     let press = app.entity.clone();
     let click = app.entity.clone();
+    let context = app.entity.clone();
     let pan = app.entity.clone();
     let dragging = lightbox.drag.is_some_and(|drag| drag.moved);
     let picture = div()
@@ -1134,6 +1276,13 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
             let start = event.position;
             press
                 .update(cx, |app, _| app.start_lightbox_drag(start))
+                .ok();
+        })
+        .on_mouse_down(MouseButton::Right, move |event, _, cx| {
+            cx.stop_propagation();
+            let position = event.position;
+            context
+                .update(cx, |app, cx| app.open_lightbox_context_menu(position, cx))
                 .ok();
         })
         .on_click(move |event, window, cx| {
@@ -1216,6 +1365,14 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
             })
             .children(found.map(|origin| author_chip(app, origin.message, cx)))
             .child(toolbar(app, lightbox, found))
+            .children(lightbox.context_menu.map(|position| {
+                context_menu(
+                    app,
+                    lightbox,
+                    position,
+                    found.and_then(|origin| origin.attachment),
+                )
+            }))
             .into_any_element(),
     )
 }
