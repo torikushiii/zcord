@@ -8,7 +8,7 @@ mod encode_windows;
 mod icon_windows;
 
 use super::{
-    ScreenSource, StreamFrame, StreamQuality,
+    FrameSlot, ScreenSource, StreamFrame, StreamQuality,
     convert::{fit_dimensions, scale_bgra},
 };
 #[cfg(windows)]
@@ -53,14 +53,28 @@ pub(crate) struct LiveShare {
     /// Whether the system's sound goes out. Muted, it's still heard but nothing is sent, so
     /// unmuting needs no new capture.
     pub audio: AtomicBool,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    local: Arc<LocalPreview>,
+}
+
+#[derive(Default)]
+pub(crate) struct LocalPreview {
+    pub frames: FrameSlot,
+    pub bounds: Mutex<Option<(u32, u32)>>,
 }
 
 impl LiveShare {
-    pub(crate) fn new(source: ScreenSource, quality: StreamQuality, audio: bool) -> Arc<Self> {
+    pub(crate) fn new(
+        source: ScreenSource,
+        quality: StreamQuality,
+        audio: bool,
+        local: Arc<LocalPreview>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             picture: Mutex::new((source, quality)),
             version: AtomicU32::new(0),
             audio: AtomicBool::new(audio),
+            local,
         })
     }
 
@@ -357,6 +371,20 @@ fn capture(
         if force && !is_keyframe {
             keyframe.store(true, Ordering::Release);
         }
+        let local_bounds = *live
+            .local
+            .bounds
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(bounds) = local_bounds
+            && let Some(frame) = local_frame(&raw.data, raw.stride, raw.width, raw.height, bounds)
+        {
+            *live
+                .local
+                .frames
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(frame);
+        }
         if data.is_empty() {
             stats.empty += 1;
             continue;
@@ -430,6 +458,27 @@ fn preview(bgra: &[u8], stride: usize, width: u32, height: u32) -> Option<String
         "data:image/jpeg;base64,{}",
         base64::engine::general_purpose::STANDARD.encode(jpeg)
     ))
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn local_frame(
+    bgra: &[u8],
+    stride: usize,
+    width: u32,
+    height: u32,
+    (max_width, max_height): (u32, u32),
+) -> Option<StreamFrame> {
+    let (width, height) = (width as usize, height as usize);
+    let (small_width, small_height) =
+        fit_dimensions(width, height, max_width as usize, max_height as usize);
+    if small_width == 0 || small_height == 0 {
+        return None;
+    }
+    Some(StreamFrame {
+        width: small_width as u32,
+        height: small_height as u32,
+        bgra: scale_bgra(bgra, stride, width, height, small_width, small_height),
+    })
 }
 
 /// Where the capture loop spends its time, logged every few seconds to find a stalled stage.

@@ -271,7 +271,7 @@ pub struct DiscordApp {
     pub(crate) stream_members_shown: bool,
     pub(crate) stream_members_toggles: u64,
     pub(crate) stream_volume: Option<(Entity<SliderState>, Subscription)>,
-    pub(crate) hovered_stage_control: Option<&'static str>,
+    pub(crate) hovered_stage_control: Option<(&'static str, WindowId)>,
     pub(crate) emoji_picker: Option<emoji_picker::EmojiPicker>,
     emoji_picker_closing: Option<Task<()>>,
     emoji_picker_animation: u64,

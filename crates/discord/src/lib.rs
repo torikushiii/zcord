@@ -314,6 +314,14 @@ impl Session {
         self.inner.voice.stream_frames()
     }
 
+    pub fn share_frames(&self) -> FrameSlot {
+        self.inner.voice.share_frames()
+    }
+
+    pub fn set_share_preview(&self, bounds: Option<(u32, u32)>) {
+        self.inner.voice.set_share_preview(bounds);
+    }
+
     pub fn screen_sources(&self) -> Vec<ScreenSource> {
         self.inner.voice.screen_sources()
     }

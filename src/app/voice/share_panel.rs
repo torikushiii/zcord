@@ -293,26 +293,48 @@ pub(super) fn live_menu(app: &DiscordApp, menu: &Menu) -> Stateful<Div> {
     );
     let flyout = menu.flyout.then(|| {
         let entity = app.entity.clone();
+        let left = menu.flyout_left;
         div()
             .id("stream-live-quality-flyout")
             .absolute()
-            // The menu sits low, above the voice panel, so the flyout grows upward from
-            // the row instead of running off the bottom of the window.
-            .bottom(rpx(-9.))
-            .left(relative(1.))
-            .pl(rpx(8.))
-            // On the panel itself: it occludes, so a hover on this wrapper would never fire
-            // over it, and a click on an option would count as outside the menu and close it.
+            .top(rpx(-9.))
+            .map(|this| {
+                if left {
+                    this.right(relative(1.))
+                } else {
+                    this.left(relative(1.))
+                }
+            })
             .child(
-                quality_flyout(app, quality).on_hover(move |hovered, _, cx| {
-                    entity
-                        .update(cx, |app, _| {
-                            if let Some(menu) = app.voice.menu.as_mut() {
-                                menu.pointer_in_flyout = *hovered;
-                            }
-                        })
-                        .ok();
-                }),
+                anchored()
+                    .anchor(if left {
+                        Anchor::TopRight
+                    } else {
+                        Anchor::TopLeft
+                    })
+                    .snap_to_window_with_margin(px(8.))
+                    .child(
+                        // The gap is a margin: the anchored panel ignores the wrapper's padding.
+                        // The hover goes on the panel itself, since it occludes; and a click on
+                        // an option must not count as outside the menu and close it.
+                        quality_flyout(app, quality)
+                            .map(|this| {
+                                if left {
+                                    this.mr(rpx(8.))
+                                } else {
+                                    this.ml(rpx(8.))
+                                }
+                            })
+                            .on_hover(move |hovered, _, cx| {
+                                entity
+                                    .update(cx, |app, _| {
+                                        if let Some(menu) = app.voice.menu.as_mut() {
+                                            menu.pointer_in_flyout = *hovered;
+                                        }
+                                    })
+                                    .ok();
+                            }),
+                    ),
             )
     });
     panel("stream-live-menu", MENU_WIDTH)

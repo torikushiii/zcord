@@ -435,6 +435,7 @@ impl Render for OverlaysView {
         overlay_root()
             .children(super::call_view::render(app, window, cx))
             .children(super::stream_view::render(app, cx))
+            .children(voice::self_preview::render(app, window, cx))
             .children(settings_page::render(app, window, cx))
             .children(chat::channel_popout(app, window, cx))
             .children(search::popover(app, cx))

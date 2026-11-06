@@ -1,7 +1,6 @@
 use super::profile::avatar_colors;
 use super::stream_view::{
-    self, DOCK_HEIGHT, STOP_RED, StageControls, control, control_with, controls_fade, member_name,
-    name_chip,
+    self, DOCK_HEIGHT, StageControls, control, controls_fade, member_name, name_chip,
 };
 use super::*;
 use crate::media::images;
@@ -321,7 +320,6 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
         .when(!chat_open, |this| {
             this.child(stream_view::show_chat_button(app))
         });
-    let leave = app.entity.clone();
     let controls = div()
         .absolute()
         .bottom_0()
@@ -332,21 +330,9 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
         .justify_center()
         .gap_2()
         .h(rpx(DOCK_HEIGHT))
-        .child(stream_view::voice_controls(app))
-        .child(stream_view::share_control(app))
-        .child(
-            control_with(app, "stage-leave", "Disconnect", STOP_RED)
-                .w(rpx(64.))
-                .h(rpx(54.))
-                .rounded(rpx(12.))
-                // Lucide's handset tilted down into Discord's hang-up glyph.
-                .child(theme::icon("phone", 22., 0xFFFFFF).with_transformation(
-                    Transformation::rotate(radians(std::f32::consts::FRAC_PI_4 * 3.)),
-                ))
-                .on_click(move |_, _, cx| {
-                    leave.update(cx, |app, cx| app.leave_voice(cx)).ok();
-                }),
-        )
+        .child(stream_view::voice_controls(app, false))
+        .child(stream_view::share_control(app, false))
+        .child(stream_view::disconnect_control(app))
         .child(
             div().absolute().right(rpx(16.)).child(
                 control(
@@ -360,7 +346,7 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
                 .on_click(|_, window, _| window.toggle_fullscreen()),
             ),
         );
-    let area = stream_view::stage_area(app, DOCK_HEIGHT, chat_open)
+    let area = stream_view::stage_area(app, titlebar::HEIGHT, DOCK_HEIGHT, chat_open)
         .child(grid)
         .child(controls_fade(header, "stage-header", &view.controls, cx))
         .child(controls_fade(
