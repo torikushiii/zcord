@@ -20,6 +20,7 @@ mod messages;
 mod pins;
 mod profile_styles;
 mod profiles;
+mod quests;
 mod rate_limits;
 mod requests;
 mod settings;

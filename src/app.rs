@@ -37,6 +37,7 @@ mod menu;
 mod message_body;
 mod notifications;
 mod profile;
+mod quests;
 mod reaction_tooltip;
 mod reactions_dialog;
 mod read_state;
