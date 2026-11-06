@@ -1257,6 +1257,7 @@ fn collect_mentions(blocks: &[markdown::Block], ids: &mut Vec<u64>) {
 impl Render for DiscordApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         views::count_render(views::ViewKind::Root);
+        rich_text::keep_registered(window, cx);
         theme::set_image_scale(window, cx);
         self.rpx_per_pixel = theme::BASE_FONT_SIZE / f32::from(window.rem_size());
         self.window_height = f32::from(window.viewport_size().height) * self.rpx_per_pixel;
