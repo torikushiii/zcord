@@ -16,7 +16,7 @@ use crate::{
         friends, member_list,
         message_body::label,
         profile::presence_art,
-        search, set_text, voice,
+        quests, search, set_text, voice,
     },
     discord::{Error, Event, ProfileKind, model::PublicApplication},
     media::images::{self, ImageSpec},
@@ -72,6 +72,7 @@ pub(crate) enum HomePage {
     #[default]
     Friends,
     Requests,
+    Quests,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -86,6 +87,7 @@ pub(crate) struct Home {
     pub(crate) page: HomePage,
     tab: FriendsTab,
     pub(crate) friends: friends::Friends,
+    pub(crate) quests: quests::QuestHome,
     requests_tab: RequestsTab,
     previews_requested: HashSet<u64>,
     suggestions_loading: bool,
@@ -144,6 +146,11 @@ impl DiscordApp {
 
     fn open_requests(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.show_home_page(HomePage::Requests, window, cx);
+    }
+
+    fn open_quests(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_home_page(HomePage::Quests, window, cx);
+        self.load_quests(cx);
     }
 
     /// Lets a failed sender profile load again once its row is next drawn, after a delay that
@@ -607,6 +614,7 @@ pub(crate) fn sidebar(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         });
     let friends_selected = app.showing_home_page() && app.home.page == HomePage::Friends;
     let requests_selected = app.showing_home_page() && app.home.page == HomePage::Requests;
+    let quests_selected = app.showing_home_page() && app.home.page == HomePage::Quests;
     let entity = app.entity.clone();
     let friends = nav_row(
         "home-friends",
@@ -665,6 +673,25 @@ pub(crate) fn sidebar(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 .child(friends)
                 // Not built yet; shown so the layout matches Discord's.
                 .child(nav_row("home-library", "library", "Library", false, 0).opacity(0.5))
+                .child(
+                    nav_row("home-quests", "laurel-wreath", "Quests", quests_selected, 0)
+                        .cursor_pointer()
+                        .when(!quests_selected, |this| {
+                            this.hover(|style| {
+                                style
+                                    .bg(rgba(theme::hover()))
+                                    .text_color(rgb(theme::text()))
+                            })
+                        })
+                        .on_click({
+                            let entity = app.entity.clone();
+                            move |_, window, cx| {
+                                entity
+                                    .update(cx, |app, cx| app.open_quests(window, cx))
+                                    .ok();
+                            }
+                        }),
+                )
                 .child(
                     nav_row(
                         "home-requests",

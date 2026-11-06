@@ -7,6 +7,7 @@ mod messages;
 mod pins;
 mod profile_styles;
 mod profiles;
+mod quests;
 mod relationships;
 mod settings;
 mod threads;

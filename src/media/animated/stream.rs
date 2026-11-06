@@ -637,9 +637,10 @@ pub(super) async fn first(
 pub(crate) async fn first_video(
     path: PathBuf,
     size: u32,
+    max_fps: u32,
     stamp: Arc<Mutex<Instant>>,
 ) -> Result<Option<Arc<RenderImage>>> {
-    first_source(path, size, stamp, SourceKind::Video).await
+    first_source(path, size, stamp, SourceKind::Video { max_fps }).await
 }
 
 async fn first_source(
@@ -853,7 +854,9 @@ fn advance(
 enum SourceKind {
     Image,
     #[cfg(windows)]
-    Video,
+    Video {
+        max_fps: u32,
+    },
     #[cfg(test)]
     Fake(Arc<dyn Fn() -> Result<Box<dyn FrameSource>> + Send + Sync>),
 }
@@ -862,7 +865,9 @@ impl SourceKind {
     fn of(spec: &ImageSpec) -> Self {
         #[cfg(windows)]
         if matches!(spec, ImageSpec::Video { .. } | ImageSpec::LocalVideo { .. }) {
-            return Self::Video;
+            return Self::Video {
+                max_fps: crate::media::video::animation::max_fps(spec),
+            };
         }
         let _ = spec;
         Self::Image
@@ -1192,11 +1197,11 @@ impl Core {
                 Ok(core)
             }
             #[cfg(windows)]
-            SourceKind::Video => {
+            SourceKind::Video { max_fps } => {
                 let reader = crate::media::video::Reader::open(&path, size)?;
                 let rate = reader.rate();
                 Ok(Self::from_source(Box::new(
-                    crate::media::video::animation::VideoFrames::new(reader, rate),
+                    crate::media::video::animation::VideoFrames::new(reader, rate, max_fps),
                 )))
             }
             #[cfg(test)]
@@ -1582,7 +1587,9 @@ mod tests {
                 stats: captured.clone(),
             };
             Ok(Box::new(crate::media::video::animation::VideoFrames::new(
-                reader, rate,
+                reader,
+                rate,
+                crate::media::video::animation::MAX_FPS,
             )))
         }));
         (kind, stats)

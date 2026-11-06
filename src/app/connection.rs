@@ -40,6 +40,7 @@ impl DiscordApp {
         }
         self.live = false;
         self.store = Store::seed();
+        self.home.quests = Default::default();
         self.screen = Screen::Login(LoginForm::new(window, cx));
         cx.notify();
     }

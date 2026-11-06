@@ -43,6 +43,19 @@ pub(crate) mod animation {
     pub const MAX_CLIP: usize = 32 * 1024 * 1024;
     pub const MAX_FRAMES: usize = 300;
     pub const MAX_FPS: u32 = 15;
+    pub const PROMO_MAX_FPS: u32 = 60;
+
+    pub fn max_fps(spec: &crate::media::images::ImageSpec) -> u32 {
+        let crate::media::images::ImageSpec::Video { url, .. } = spec else {
+            return MAX_FPS;
+        };
+        let promo = reqwest::Url::parse(url).is_ok_and(|url| {
+            url.host_str() == Some("cdn.discordapp.com")
+                && (url.path().starts_with("/quests/")
+                    || url.path().starts_with("/assets/content/"))
+        });
+        if promo { PROMO_MAX_FPS } else { MAX_FPS }
+    }
     pub const STALE_AFTER: Duration = Duration::from_secs(2);
     pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -122,6 +135,7 @@ pub(crate) mod animation {
 
     pub struct VideoFrames<R> {
         reader: R,
+        max_fps: u32,
         stride: Option<usize>,
         nominal: i64,
         previous: Option<i64>,
@@ -134,13 +148,14 @@ pub(crate) mod animation {
     }
 
     impl<R: VideoReader> VideoFrames<R> {
-        pub fn new(reader: R, rate: Option<(u32, u32)>) -> Self {
+        pub fn new(reader: R, rate: Option<(u32, u32)>, max_fps: u32) -> Self {
             let rate = rate.filter(|&(n, d)| n > 0 && d > 0);
             Self {
                 reader,
+                max_fps,
                 stride: rate.map(|(n, d)| {
                     u64::from(n)
-                        .div_ceil(u64::from(d) * u64::from(MAX_FPS))
+                        .div_ceil(u64::from(d) * u64::from(max_fps))
                         .max(1) as usize
                 }),
                 nominal: rate.map_or(1_000_000, |(n, d)| {
@@ -204,7 +219,7 @@ pub(crate) mod animation {
                         let complete = self.stride.map_or_else(
                             || {
                                 end.saturating_sub(first)
-                                    >= 10_000_000u64.div_ceil(u64::from(MAX_FPS)) as i64
+                                    >= 10_000_000u64.div_ceil(u64::from(self.max_fps)) as i64
                             },
                             |stride| samples >= stride,
                         );
@@ -568,7 +583,9 @@ mod platform {
             if !still_wanted(&job_stamp) {
                 return Ok(DecodeOutcome::Cancelled);
             }
-            let image = stream::first_video(path.clone(), request.1, job_stamp.clone()).await?;
+            let max_fps = animation::max_fps(&request.0);
+            let image =
+                stream::first_video(path.clone(), request.1, max_fps, job_stamp.clone()).await?;
             Ok(match image {
                 Some(image) if still_wanted(&job_stamp) => DecodeOutcome::Decoded(image, path),
                 _ => DecodeOutcome::Cancelled,

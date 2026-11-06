@@ -212,6 +212,7 @@ impl Render for ChatHeaderView {
             match app.home.page {
                 home::HomePage::Friends => home::friends_header(app).into_any_element(),
                 home::HomePage::Requests => home::requests_header(app).into_any_element(),
+                home::HomePage::Quests => super::quests::header(app).into_any_element(),
             }
         } else if app.is_home() {
             home::dm_header(app, cx).into_any_element()
@@ -224,6 +225,7 @@ impl Render for ChatHeaderView {
 pub(crate) struct MessagesView {
     app: WeakEntity<DiscordApp>,
     layout_preferences: (f32, bool),
+    quest_cards: super::quests::QuestCards,
     active_now_clock: Option<Task<()>>,
     _observe: Subscription,
 }
@@ -236,6 +238,7 @@ impl MessagesView {
                 crate::settings::chat_font_size(),
                 crate::settings::link_previews(),
             ),
+            quest_cards: Default::default(),
             active_now_clock: None,
             _observe: observe_app(app, cx),
         }
@@ -259,13 +262,20 @@ impl MessagesView {
 }
 
 impl Render for MessagesView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         count_render(ViewKind::Messages);
         let Some(app) = self.app.upgrade() else {
             self.sync_active_now_clock(false, cx);
             return div().into_any_element();
         };
         self.sync_active_now_clock(home::needs_active_now_clock(app.read(cx)), cx);
+        let quests = {
+            let app = app.read(cx);
+            app.showing_home_page() && matches!(app.home.page, home::HomePage::Quests)
+        };
+        if quests {
+            self.quest_cards.sync(&app, cx);
+        }
         let app = app.read(cx);
         let preferences = (
             crate::settings::chat_font_size(),
@@ -280,6 +290,7 @@ impl Render for MessagesView {
             return match app.home.page {
                 home::HomePage::Friends => home::friends_page(app, cx),
                 home::HomePage::Requests => home::requests_page(app, cx),
+                home::HomePage::Quests => super::quests::page(app, &self.quest_cards, window, cx),
             };
         }
         chat::messages(app, cx)

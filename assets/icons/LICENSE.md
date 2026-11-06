@@ -84,6 +84,12 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+laurel-wreath.svg is laurel-wreath-line from MingCute Icon by MingCute Design
+(https://github.com/Richard9394/MingCute), Apache License 2.0
+(https://www.apache.org/licenses/LICENSE-2.0).
+
 discord.svg is from Simple Icons (https://simpleicons.org), CC0 1.0. The Discord logo is a trademark of Discord Inc.
 
 nitro.svg is Discord's Nitro wheel glyph, copied from Discord's web client. Nitro and its logo are trademarks of Discord Inc.
+
+orb.svg is Discord's Orb glyph, copied from Discord's web client. Orbs are a trademark of Discord Inc.
