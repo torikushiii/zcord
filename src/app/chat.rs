@@ -27,6 +27,7 @@ use crate::{
 
 mod actions;
 mod bars;
+mod blocked;
 mod composer;
 mod composer_menu;
 mod dialog;

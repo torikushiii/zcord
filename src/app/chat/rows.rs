@@ -1,3 +1,4 @@
+use super::blocked::{blocked_row, blocked_run};
 use super::message::render_message;
 use super::*;
 
@@ -75,6 +76,13 @@ pub(super) fn render_pane_row(
         return div().into_any_element();
     };
     let (new_day, grouped) = row_grouping(messages, index);
+    let run = blocked_run(app, messages, index);
+    if let Some(run) = &run
+        && !run.revealed
+        && index != run.start
+    {
+        return hidden_row(index + 1 == messages.len());
+    }
     let start = index == 0 && app.history_complete.contains(&channel_id);
     let post = app.store.forum_post(channel_id);
     let intro = start.then(|| match post {
@@ -101,11 +109,14 @@ pub(super) fn render_pane_row(
                 this
             }
         })
-        .when(!grouped, |this| this.pt_4())
+        .when(!grouped && run.is_none(), |this| this.pt_4())
         .when(index + 1 == messages.len(), |this| {
             this.pb(rpx(BOTTOM_SPACER))
         })
-        .child(render_message(app, message, grouped, true, cx))
+        .child(match &run {
+            Some(run) => blocked_row(app, messages, index, run, grouped, true, cx),
+            None => render_message(app, message, grouped, true, cx),
+        })
         .when(starter, |this| this.child(starter_actions(app, channel_id)))
         .into_any_element()
 }
@@ -119,6 +130,13 @@ pub(super) fn render_row(app: &DiscordApp, index: usize, cx: &App) -> AnyElement
         return div().into_any_element();
     };
     let (new_day, grouped) = row_grouping(messages, index);
+    let run = blocked_run(app, messages, index);
+    if let Some(run) = &run
+        && !run.revealed
+        && index != run.start
+    {
+        return hidden_row(index + 1 == messages.len());
+    }
     let start = index == 0 && app.history_complete.contains(&app.selected_channel_id);
     let first_unread = app.unread_since.is_some_and(|since| {
         is_first_unread(messages, index, since, start, app.store.current_user_id)
@@ -138,7 +156,17 @@ pub(super) fn render_row(app: &DiscordApp, index: usize, cx: &App) -> AnyElement
         .when(index + 1 == messages.len(), |this| {
             this.pb(rpx(BOTTOM_SPACER))
         })
-        .child(render_message(app, message, grouped, false, cx))
+        .child(match &run {
+            Some(run) => blocked_row(app, messages, index, run, grouped, false, cx),
+            None => render_message(app, message, grouped, false, cx),
+        })
+        .into_any_element()
+}
+
+fn hidden_row(last: bool) -> AnyElement {
+    div()
+        .w_full()
+        .when(last, |this| this.pb(rpx(BOTTOM_SPACER)))
         .into_any_element()
 }
 

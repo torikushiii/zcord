@@ -36,6 +36,12 @@ pub(in crate::app) struct ThreadPane {
     _submit: Subscription,
 }
 
+impl ThreadPane {
+    pub(super) fn remeasure(&self) {
+        self.list.remeasure();
+    }
+}
+
 impl DiscordApp {
     /// A guild channel or thread, or a DM; the side pane shows any of them.
     pub(crate) fn channel_by_id(&self, id: u64) -> Option<&Channel> {
