@@ -957,6 +957,11 @@ fn composer_box(app: &DiscordApp, pane: &ThreadPane, cx: &App) -> impl IntoEleme
     let id = pane.id;
     let can_send = app.store.can_send(id);
     let staged = app.staged_files_in(id);
+    let send_ready = can_send
+        && (!staged.is_empty()
+            || app
+                .pane_composer()
+                .is_some_and(|input| !input.read(cx).text().to_string().trim().is_empty()));
     let picker_anchor = Rc::new(Cell::new(None));
     let attach = app.entity.clone();
     let gif = app.entity.clone();
@@ -1099,11 +1104,16 @@ fn composer_box(app: &DiscordApp, pane: &ThreadPane, cx: &App) -> impl IntoEleme
                         )
                         .children(send_button.then(|| {
                             let entity = app.entity.clone();
-                            send_icon("pane-send", can_send).on_click(move |_, window, cx| {
-                                entity
-                                    .update(cx, |app, cx| app.send_pane_message(window, cx))
-                                    .ok();
-                            })
+                            send_icon(
+                                "pane-send",
+                                send_ready,
+                                &app.pane_send_fill,
+                                move |_, window, cx| {
+                                    entity
+                                        .update(cx, |app, cx| app.send_pane_message(window, cx))
+                                        .ok();
+                                },
+                            )
                         })),
                 ),
         )

@@ -20,6 +20,7 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
     let remaining = MESSAGE_LIMIT as i64 - length as i64;
     let picker_anchor = Rc::new(Cell::new(None));
     let staged = app.staged_files();
+    let send_ready = can_send && (!staged.is_empty() || !text.to_string().trim().is_empty());
     let joined_top = app.reply.is_some() || !staged.is_empty();
     let paste = app.entity.clone();
     let composer_input = app.composer.clone();
@@ -193,7 +194,7 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                         })
                         .children(send_button.then(|| {
                             let entity = app.entity.clone();
-                            send_icon("send", can_send).on_click(move |_, window, cx| {
+                            send_icon("send", send_ready, &app.send_fill, move |_, window, cx| {
                                 entity
                                     .update(cx, |app, cx| app.send_message(window, cx))
                                     .ok();
@@ -219,15 +220,96 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
         .children(typing_indicator(app))
 }
 
-/// The Send Message Button, shown when the composer's right-click menu turns it on.
-pub(super) fn send_icon(key: &'static str, enabled: bool) -> Stateful<Div> {
-    theme::icon_button(key, "send", 24., theme::muted())
-        .relative()
-        .when(!enabled, |this| this.opacity(0.5))
-        .child(theme::hover_tooltip(
-            SharedString::from(format!("{key}-tip")),
-            "Send Message",
-        ))
+const SEND_FILL: Duration = Duration::from_millis(250);
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct SendFill {
+    ready: Option<bool>,
+    flips: u64,
+}
+
+fn send_colors() -> (u32, u32) {
+    if theme::is_light() {
+        (0x4752C4, 0x3C45A5)
+    } else {
+        (0x6374F4, 0x7984F5)
+    }
+}
+
+fn mix(from: u32, to: u32, amount: f32) -> u32 {
+    let channel = |shift: u32| {
+        let from = ((from >> shift) & 0xFF) as f32;
+        let to = ((to >> shift) & 0xFF) as f32;
+        ((from + (to - from) * amount).round() as u32) << shift
+    };
+    channel(16) | channel(8) | channel(0)
+}
+
+pub(super) fn send_icon(
+    key: &'static str,
+    ready: bool,
+    fill: &Cell<SendFill>,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Div {
+    let mut state = fill.get();
+    if state.ready.is_some_and(|was| was != ready) {
+        state.flips += 1;
+    }
+    state.ready = Some(ready);
+    fill.set(state);
+    let muted = theme::interactive_muted();
+    let (brand, brand_hover) = send_colors();
+    let group = SharedString::from(format!("{key}-button"));
+    let icon = theme::icon("send", 20., if ready { brand } else { muted }).when(ready, |icon| {
+        icon.group_hover(group.clone(), move |style| {
+            style.text_color(rgb(brand_hover))
+        })
+    });
+    let icon = if state.flips == 0 {
+        icon.into_any_element()
+    } else {
+        let (from, to) = if ready {
+            (muted, brand)
+        } else {
+            (brand, muted)
+        };
+        icon.with_animation(
+            ElementId::NamedInteger(format!("{key}-fill").into(), state.flips),
+            Animation::new(SEND_FILL).with_easing(ease_in_out),
+            move |icon, delta| icon.text_color(rgb(mix(from, to, delta))),
+        )
+        .into_any_element()
+    };
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(rpx(4.))
+        .child(div().w(px(1.)).h(rpx(22.)).bg(rgba(theme::border())))
+        .child(
+            div()
+                .id(key)
+                .group(group)
+                .relative()
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(rpx(32.))
+                .rounded(rpx(4.))
+                .map(|button| {
+                    if ready {
+                        button.cursor_pointer()
+                    } else {
+                        button.cursor(CursorStyle::OperationNotAllowed)
+                    }
+                })
+                .on_click(on_click)
+                .child(icon)
+                .child(theme::hover_tooltip(
+                    SharedString::from(format!("{key}-tip")),
+                    "Send Message",
+                )),
+        )
 }
 
 /// Paints custom emoji over their invisible composer tokens (see `composer_tokens`).
