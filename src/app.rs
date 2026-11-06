@@ -1251,6 +1251,9 @@ fn send_error_text(error: &discord::Error) -> String {
         discord::Error::Captcha => {
             "Discord asked for a captcha. Send this one from the official client.".into()
         }
+        discord::Error::Rejected { code: 50007, .. } => {
+            "Your message could not be delivered. This is usually because you don't share a server with the recipient or the recipient is only accepting direct messages from friends.".into()
+        }
         discord::Error::Rejected { message, .. } => message.clone(),
         discord::Error::RateLimited { .. } => "You are sending messages too quickly.".into(),
         discord::Error::Http(413) => "That file is too large to upload.".into(),

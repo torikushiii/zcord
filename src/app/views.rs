@@ -332,7 +332,10 @@ impl Render for ComposerView {
         div()
             .w_full()
             .child(
-                match home::request_bar(app, app.selected_channel_id).filter(|_| app.is_home()) {
+                match home::request_bar(app, app.selected_channel_id)
+                    .or_else(|| home::blocked_bar(app, app.selected_channel_id))
+                    .filter(|_| app.is_home())
+                {
                     Some(bar) => bar,
                     None => chat::composer(app, cx).into_any_element(),
                 },

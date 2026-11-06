@@ -4,7 +4,7 @@ use super::rows::render_pane_row;
 use super::*;
 use crate::app::{
     OLDER_MESSAGES_THRESHOLD,
-    home::{HomePage, request_bar},
+    home::{HomePage, blocked_bar, request_bar},
 };
 use crate::discord::model;
 use crate::store::{Change, Channel, EmojiChoice};
@@ -1142,9 +1142,11 @@ pub(crate) fn render_thread_pane(app: &DiscordApp, cx: &App) -> AnyElement {
             header(app, pane.id, &thread.name).into_any_element()
         })
         .child(body(app, pane, thread))
-        .child(match request_bar(app, pane.id) {
-            Some(bar) => bar,
-            None => composer_box(app, pane, cx).into_any_element(),
-        })
+        .child(
+            match request_bar(app, pane.id).or_else(|| blocked_bar(app, pane.id)) {
+                Some(bar) => bar,
+                None => composer_box(app, pane, cx).into_any_element(),
+            },
+        )
         .into_any_element()
 }
