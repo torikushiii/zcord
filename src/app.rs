@@ -335,6 +335,7 @@ pub struct DiscordApp {
     drafts: HashMap<u64, ComposerDraft>,
     pub(crate) revealed_spoilers: HashSet<(u64, u16)>,
     revealed_blocked_run_starts: HashSet<u64>,
+    revealed_profiles: HashSet<u64>,
     pub(crate) hovered_rail: Option<u64>,
     /// The window's height in `rpx` units, as of the last frame, for popups that must fit it.
     pub(crate) window_height: f32,
@@ -534,6 +535,7 @@ impl DiscordApp {
             drafts: HashMap::new(),
             revealed_spoilers: HashSet::new(),
             revealed_blocked_run_starts: HashSet::new(),
+            revealed_profiles: HashSet::new(),
             hovered_rail: None,
             window_height: f32::MAX,
             rpx_per_pixel: 1.,
