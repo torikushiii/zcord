@@ -854,13 +854,15 @@ mod tests {
         assert_eq!(store.network_channel(900).unwrap().messages.len(), 3);
 
         store.apply(Event::MessageCreate(Box::new(message(701, 901, 11))));
-        assert!(store.private_channel(901).unwrap().channel.unread);
+        let other = &store.private_channel(901).unwrap().channel;
+        assert!(other.unread);
+        assert_eq!(other.mentions, 1);
 
         store.mark_channel_read(0, 900);
         let channel = &store.private_channel(900).unwrap().channel;
         assert!(!channel.unread);
         assert_eq!(channel.mentions, 0);
-        assert_eq!(store.dm_mentions, 0);
+        assert_eq!(store.dm_mentions, 1);
 
         store.apply(Event::MessageCreate(Box::new(message(10_000, 903, 10))));
         assert_eq!(store.dm_list().first().map(|dm| dm.channel.id), Some(903));
