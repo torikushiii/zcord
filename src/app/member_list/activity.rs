@@ -242,64 +242,87 @@ fn ago(seconds: i64) -> String {
 const POPOUT_WIDTH: f32 = 348.;
 const COVER_WIDTH: f32 = 72.;
 const COVER_HEIGHT: f32 = 96.;
-const DM_ICON: f32 = 80.;
+const DM_CARD_WIDTH: f32 = 400.;
+const DM_ICON: f32 = 64.;
+const DM_FACE: f32 = 20.;
 const HERO_TITLE: u32 = 0xFFFFFFD9;
 const HERO_LABEL: u32 = 0xFFFFFFB3;
 const QUICK_REACTIONS: usize = 6;
 
 /// Discord tints activity heroes with a 45° gradient of the game icon's two main colours.
-fn hero_background(app: &DiscordApp, application_id: Option<u64>) -> Background {
+fn hero_background(
+    app: &DiscordApp,
+    application_id: Option<u64>,
+    fallback: impl Into<Background>,
+) -> Background {
     match application_id.and_then(|id| app.activity_colors(id)) {
         Some([from, to]) => linear_gradient(
             45.,
             linear_color_stop(rgb(from), 0.),
             linear_color_stop(rgb(to), 1.),
         ),
-        None => rgb(theme::surface_highest()).into(),
+        None => fallback.into(),
     }
 }
 
 fn hero_badges(card: &ActivityCard, now_ms: i64, cx: &App) -> Div {
-    let label = |icon: &str| {
+    div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap_x(rpx(8.))
+        .gap_y(rpx(4.))
+        .children(badge_items(card, now_ms, cx))
+}
+
+fn badge_items(card: &ActivityCard, now_ms: i64, cx: &App) -> Vec<Div> {
+    let label = |icon: &str, text: SharedString| {
         div()
             .flex()
             .flex_none()
             .items_center()
             .gap(rpx(4.))
+            .overflow_hidden()
             .text_size(rpx(12.))
             .line_height(rpx(16.))
             .text_color(rgba(HERO_LABEL))
-            .child(theme::icon(icon, BADGE_ICON, 0xFFFFFF).opacity(0.7))
+            .child(
+                theme::icon(icon, BADGE_ICON, 0xFFFFFF)
+                    .flex_none()
+                    .opacity(0.7),
+            )
+            .child(div().min_w_0().truncate().child(text))
     };
-    let mut row = div()
-        .flex()
-        .flex_wrap()
-        .items_center()
-        .gap_x(rpx(8.))
-        .gap_y(rpx(4.));
+    let mut badges = Vec::new();
     if let Some(since) = card.live_since_ms {
-        row = row.child(
-            label("activity-game")
-                .font_family(cx.theme().mono_font_family.clone())
-                .child(timer((now_ms - since).max(0) / 1000)),
+        badges.push(
+            label(
+                "activity-game",
+                timer((now_ms - since).max(0) / 1000).into(),
+            )
+            .font_family(cx.theme().mono_font_family.clone()),
         );
     } else if let Some(hours) = card.most_played_hours {
-        row =
-            row.child(label("activity-trophy").child(format!("Most played — {hours}h this week")));
+        badges.push(label(
+            "activity-trophy",
+            format!("Most played — {hours}h this week").into(),
+        ));
     } else {
-        row =
-            row.child(label("activity-game").child(ago((now_ms - card.created_ms).max(0) / 1000)));
+        badges.push(label(
+            "activity-game",
+            ago((now_ms - card.created_ms).max(0) / 1000).into(),
+        ));
     }
     if let Some(days) = card.streak_days {
-        row = row.child(label("activity-streak").child(format!("{days}x Streak")));
+        badges.push(label("activity-streak", format!("{days}x Streak").into()));
     }
     if card.first_time {
-        row = row.child(label("sprout").child("New Player"));
+        badges.push(label("sprout", "New Player".into()));
     }
     if card.trending {
-        row = row.child(label("flame").child("Trending"));
+        badges.push(label("flame", "Trending".into()));
     }
-    row
+    badges
 }
 
 fn cover(app: &DiscordApp, card: &ActivityCard, cx: &App) -> AnyElement {
@@ -456,7 +479,11 @@ pub(in crate::app) fn popout(app: &DiscordApp, window: &Window, cx: &App) -> Opt
         .gap(rpx(16.))
         .p(rpx(8.))
         .rounded(rpx(8.))
-        .bg(hero_background(app, card.application_id))
+        .bg(hero_background(
+            app,
+            card.application_id,
+            rgb(theme::surface_highest()),
+        ))
         .child(cover(app, &card, cx))
         .child(
             div()
@@ -676,57 +703,98 @@ pub(in crate::app) fn dm_card(app: &DiscordApp, entry: &ActivityEntryView, cx: &
         .application_id
         .and_then(|id| app.game_icon_spec(id))
         .and_then(|spec| images::resolve(&spec, theme::image_px(DM_ICON), cx));
+    let badges = badge_items(&card, now_ms, cx)
+        .into_iter()
+        .take(2)
+        .enumerate()
+        .map(|(index, badge)| {
+            if index == 1 {
+                badge.flex_shrink(1.).min_w_0()
+            } else {
+                badge
+            }
+        });
+    let strong = theme::dark_palette().strong;
     div()
         .flex()
         .items_center()
-        .gap(rpx(16.))
-        .max_w(rpx(468.))
+        .gap(rpx(12.))
+        .w_full()
+        .max_w(rpx(DM_CARD_WIDTH))
+        .mt(rpx(4.))
         .p(rpx(8.))
         .rounded(rpx(8.))
-        .bg(hero_background(app, card.application_id))
-        .child(match icon {
-            Some(path) => img(path)
-                .size(rpx(DM_ICON))
-                .flex_none()
-                .rounded(rpx(8.))
-                .into_any_element(),
-            None => div()
-                .flex()
-                .flex_none()
-                .items_center()
-                .justify_center()
-                .size(rpx(DM_ICON))
-                .rounded(rpx(8.))
-                .bg(rgb(theme::icon_bg()))
-                .child(theme::icon("activity-game", 32., theme::muted()))
-                .into_any_element(),
-        })
+        .bg(hero_background(app, card.application_id, rgb(0x000000)))
+        .child(
+            div().flex_none().mb(rpx(-2.5)).child(match icon {
+                Some(path) => img(path)
+                    .size(rpx(DM_ICON))
+                    .rounded(rpx(4.))
+                    .object_fit(ObjectFit::Contain)
+                    .into_any_element(),
+                None => div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(rpx(DM_ICON))
+                    .rounded(rpx(4.))
+                    .bg(rgb(theme::dark_palette().icon_bg))
+                    .child(theme::icon(
+                        "activity-game",
+                        32.,
+                        theme::dark_palette().muted,
+                    ))
+                    .into_any_element(),
+            }),
+        )
         .child(
             div()
                 .flex()
                 .flex_col()
                 .flex_1()
                 .min_w_0()
-                .gap(rpx(4.))
+                .overflow_hidden()
                 .child(
                     div()
                         .flex()
                         .items_center()
                         .gap(rpx(6.))
-                        .child(theme::user_avatar(
-                            app.store.user(card.user_id),
-                            card.user_id,
-                            FACE,
-                            None,
-                            false,
-                            cx,
-                        ))
+                        .pr(rpx(30.))
                         .child(
                             div()
+                                .id(("activity-card-avatar", card.entry_id))
+                                .flex_none()
+                                .cursor_pointer()
+                                .on_click(crate::app::profile::opener(
+                                    app,
+                                    card.user_id,
+                                    Anchor::TopLeft,
+                                ))
+                                .child(theme::user_avatar(
+                                    app.store.user(card.user_id),
+                                    card.user_id,
+                                    DM_FACE,
+                                    None,
+                                    false,
+                                    cx,
+                                )),
+                        )
+                        .child(
+                            div()
+                                .id(("activity-card-name", card.entry_id))
+                                .min_w_0()
                                 .truncate()
+                                .cursor_pointer()
+                                .hover(|style| style.underline())
+                                .on_click(crate::app::profile::opener(
+                                    app,
+                                    card.user_id,
+                                    Anchor::TopLeft,
+                                ))
                                 .text_size(rpx(14.))
+                                .line_height(rpx(18.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(0xFFFFFF))
+                                .text_color(rgb(strong))
                                 .child(
                                     app.store
                                         .user(card.user_id)
@@ -737,6 +805,7 @@ pub(in crate::app) fn dm_card(app: &DiscordApp, entry: &ActivityEntryView, cx: &
                 )
                 .child(
                     div()
+                        .mt(rpx(2.))
                         .truncate()
                         .text_size(rpx(16.))
                         .line_height(rpx(20.))
@@ -744,7 +813,16 @@ pub(in crate::app) fn dm_card(app: &DiscordApp, entry: &ActivityEntryView, cx: &
                         .text_color(rgba(HERO_TITLE))
                         .child(card.game_name.clone()),
                 )
-                .child(hero_badges(&card, now_ms, cx)),
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(rpx(8.))
+                        .mt(rpx(4.))
+                        .min_w_0()
+                        .overflow_hidden()
+                        .children(badges),
+                ),
         )
         .into_any_element()
 }
