@@ -272,6 +272,16 @@ pub(super) fn member_row(
                     .ok();
             }
         })
+        .on_mouse_down(MouseButton::Right, {
+            let entity = app.entity.clone();
+            move |event, _, cx| {
+                cx.stop_propagation();
+                let position = event.position;
+                entity
+                    .update(cx, |app, cx| app.open_member_menu(id, position, cx))
+                    .ok();
+            }
+        })
         .children(nameplate)
         .when(plated, |this| {
             this.child(

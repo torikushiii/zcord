@@ -31,6 +31,7 @@ mod invites;
 mod lightbox;
 mod login;
 mod member_list;
+mod member_menu;
 mod members;
 pub(crate) mod mentions;
 mod menu;
@@ -232,6 +233,7 @@ pub struct DiscordApp {
     dm_menu: Option<dm_menu::DmMenu>,
     dm_dialog: Option<dm_menu::DmDialog>,
     guild_menu: Option<guild_menu::GuildMenu>,
+    member_menu: Option<member_menu::MemberMenu>,
     calls: calls::Calls,
     pub(crate) show_members: bool,
     pub(crate) composer: Entity<TextareaState>,
@@ -443,6 +445,7 @@ impl DiscordApp {
             dm_menu: None,
             dm_dialog: None,
             guild_menu: None,
+            member_menu: None,
             calls: calls::Calls::default(),
             show_members: true,
             composer,
