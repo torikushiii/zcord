@@ -160,7 +160,10 @@ pub(in crate::app) fn render(app: &DiscordApp, card: &ProfileCard, cx: &App) -> 
                 .child(body),
         )
         .child(footer)
-        .children(effect_layers(card, layout.width, layout.corner, false, cx));
+        .children(effect_layers(card, layout.width, layout.corner, false, cx))
+        .when(app.profile_gated(card.user_id), |this| {
+            this.child(gate::gate(app, card.user_id, layout.corner, cx))
+        });
     let outer = div()
         .relative()
         .size_full()

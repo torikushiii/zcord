@@ -189,7 +189,10 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
             styles
                 .filter(|_| !panel_open)
                 .map(|editor| styles_panel::show_styles_tab(app, editor, background)),
-        );
+        )
+        .when(app.profile_gated(card.user_id), |this| {
+            this.child(gate::gate(app, card.user_id, MODAL_RADIUS, cx))
+        });
     let save_bar = styles.and_then(|editor| styles_panel::save_bar(app, editor));
     let dialog = div()
         .id("profile-modal-shell")

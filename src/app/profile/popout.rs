@@ -58,7 +58,11 @@ pub(super) fn popout(
             cx,
         ))
         .child(popout_body(app, card, &layout, window, cx))
-        .children(effect_layers(card, layout.width, corner, false, cx));
+        .children(effect_layers(card, layout.width, corner, false, cx))
+        .when(app.profile_gated(card.user_id), |this| {
+            this.min_h(rpx(gate::MIN_HEIGHT))
+                .child(gate::gate(app, card.user_id, corner, cx))
+        });
     let inner = match card.account_max_height(window, &overflow) {
         Some(height) => {
             let inset = match theme {

@@ -30,6 +30,7 @@ mod badges;
 mod board;
 mod connections;
 mod frame;
+mod gate;
 mod identity_editor;
 mod image_editor;
 mod loading;
