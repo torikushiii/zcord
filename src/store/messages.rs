@@ -59,6 +59,7 @@ impl Store {
             uploads: Vec::new(),
             thread: None,
             reference_id: None,
+            call: None,
         });
         self.next_message_id += 1;
         Some(index)
@@ -222,6 +223,7 @@ impl Store {
             uploads,
             thread: None,
             reference_id: None,
+            call: None,
         });
         order_messages(&mut channel.messages);
         let index = channel.message_index(nonce).expect("queued message");
@@ -598,6 +600,9 @@ impl Store {
         }
         if let Some(stickers) = update.sticker_items {
             message.stickers = map_stickers(&stickers);
+        }
+        if let Some(call) = &update.call {
+            message.call = Some(mapping::map_call(call, update.channel_id, update.id));
         }
         if let Some(snapshots) = &update.message_snapshots {
             let reference = update.message_reference.as_ref().and_then(Option::as_ref);

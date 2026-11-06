@@ -541,6 +541,14 @@ pub struct Message {
     pub thread: Option<MessageThread>,
     /// The message a pin notice points at.
     pub reference_id: Option<u64>,
+    pub call: Option<CallRecord>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CallRecord {
+    pub channel_id: u64,
+    pub participants: Vec<u64>,
+    pub duration_secs: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

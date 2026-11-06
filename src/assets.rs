@@ -121,6 +121,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "palette",
     "pencil",
     "phone",
+    "phone-missed",
     "pin",
     "play",
     "plus",

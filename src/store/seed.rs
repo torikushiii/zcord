@@ -480,6 +480,7 @@ fn seed_messages(
             uploads: Vec::new(),
             thread: None,
             reference_id: None,
+            call: None,
         });
         *next_message_id += 1;
     }

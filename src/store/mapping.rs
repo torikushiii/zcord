@@ -417,7 +417,26 @@ pub(super) fn map_message(message: &model::Message) -> Option<Message> {
             .message_reference
             .as_ref()
             .and_then(|reference| reference.message_id),
+        call: message
+            .call
+            .as_ref()
+            .map(|call| map_call(call, message.channel_id, message.id)),
     })
+}
+
+pub(super) fn map_call(call: &model::MessageCall, channel_id: u64, message_id: u64) -> CallRecord {
+    const DISCORD_EPOCH_MS: i64 = 1_420_070_400_000;
+    let started_ms = (message_id >> 22) as i64 + DISCORD_EPOCH_MS;
+    let duration_secs = call
+        .ended_timestamp
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|ended| ((ended.timestamp_millis() - started_ms).max(0) as u64 + 500) / 1000);
+    CallRecord {
+        channel_id,
+        participants: call.participants.clone(),
+        duration_secs,
+    }
 }
 
 fn map_forward(message: &model::Message) -> Option<Forward> {
