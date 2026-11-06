@@ -14,6 +14,8 @@ use crate::theme;
 
 mod selection;
 
+pub(crate) use selection::keep_registered;
+
 #[cfg(test)]
 mod tests;
 
@@ -1051,7 +1053,7 @@ impl Element for RichText {
                 let state: Interaction = state.unwrap_or_else(|| Interaction {
                     selection: self
                         .selectable
-                        .then(|| Rc::new(selection::Selection::new(window, cx))),
+                        .then(|| selection::Selection::new(window, cx)),
                     pressed: Rc::new(RefCell::new(None)),
                 });
                 (state.clone(), state)

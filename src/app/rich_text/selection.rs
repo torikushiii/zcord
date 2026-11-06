@@ -1,8 +1,13 @@
-use std::{cell::RefCell, ops::Range, rc::Rc};
+use std::{
+    cell::RefCell,
+    ops::Range,
+    rc::{Rc, Weak},
+};
 
 use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, FocusHandle, Hitbox, HitboxBehavior, KeyDownEvent,
-    MouseButton, MouseDownEvent, Pixels, Point, Subscription, Window, fill, point, px, size,
+    MouseButton, MouseDownEvent, Pixels, Point, Subscription, Window, WindowId, fill, point, px,
+    size,
 };
 use gpui_base::{
     TextSelection, TextSelectionEvent, TextSelectionHandle, TextSelectionRegistration,
@@ -146,16 +151,60 @@ impl Data {
     }
 }
 
+thread_local! {
+    static SELECTIONS: RefCell<Vec<Weak<Selection>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// gpui-base drops any participant that did not register during a frame, clearing its
+/// selection. A reused cached view never prepaints its rich text, so a frame drawn for an
+/// unrelated panel would wipe the selection. Call this from a view that renders every frame.
+/// A `Selection` lives as long as its element state, which GPUI keeps for reused views and
+/// drops once the text leaves the tree, so whatever still upgrades is still on screen.
+pub(crate) fn keep_registered(window: &mut Window, cx: &mut App) {
+    let window_id = window.window_handle().window_id();
+    let live: Vec<_> = SELECTIONS.with_borrow_mut(|selections| {
+        selections.retain(|selection| selection.strong_count() > 0);
+        selections.iter().filter_map(Weak::upgrade).collect()
+    });
+    for selection in live
+        .iter()
+        .filter(|selection| selection.window == window_id)
+    {
+        selection.reregister(window, cx);
+    }
+}
+
+struct Registered {
+    hitbox: Hitbox,
+    bounds: Bounds<Pixels>,
+    text_bounds: Vec<Bounds<Pixels>>,
+}
+
+impl Registered {
+    fn registration(&self) -> TextSelectionRegistration {
+        TextSelectionRegistration::new(self.hitbox.clone(), self.bounds)
+            .with_document_order(reading_order(self.bounds.origin))
+            .with_text_bounds(self.text_bounds.clone())
+    }
+}
+
 pub(super) struct Selection {
     handle: TextSelectionHandle,
     focus: FocusHandle,
     data: Rc<RefCell<Data>>,
-    hitbox: RefCell<Option<Hitbox>>,
+    registered: RefCell<Option<Registered>>,
+    window: WindowId,
     _subscription: Subscription,
 }
 
 impl Selection {
-    pub(super) fn new(window: &Window, cx: &mut App) -> Self {
+    pub(super) fn new(window: &Window, cx: &mut App) -> Rc<Self> {
+        let selection = Rc::new(Self::build(window, cx));
+        SELECTIONS.with_borrow_mut(|selections| selections.push(Rc::downgrade(&selection)));
+        selection
+    }
+
+    fn build(window: &Window, cx: &mut App) -> Self {
         let handle = TextSelectionHandle::new("", cx);
         let focus = cx.focus_handle();
         let data = Rc::new(RefCell::new(Data::default()));
@@ -180,9 +229,22 @@ impl Selection {
             handle,
             focus,
             data,
-            hitbox: RefCell::new(None),
+            registered: RefCell::new(None),
+            window: window.window_id(),
             _subscription: subscription,
         }
+    }
+
+    fn reregister(&self, window: &mut Window, cx: &mut App) {
+        let Some(registration) = self
+            .registered
+            .borrow()
+            .as_ref()
+            .map(Registered::registration)
+        else {
+            return;
+        };
+        self.handle.register(registration, window, cx);
     }
 
     pub(super) fn register(
@@ -211,16 +273,14 @@ impl Selection {
             })
             .collect();
         self.data.borrow_mut().geometry = geometry;
-        let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+        let registered = Registered {
+            hitbox: window.insert_hitbox(bounds, HitboxBehavior::Normal),
+            bounds,
+            text_bounds,
+        };
         window.set_focus_handle(&self.focus, cx);
-        self.handle.register(
-            TextSelectionRegistration::new(hitbox.clone(), bounds)
-                .with_document_order(reading_order(bounds.origin))
-                .with_text_bounds(text_bounds),
-            window,
-            cx,
-        );
-        *self.hitbox.borrow_mut() = Some(hitbox);
+        self.handle.register(registered.registration(), window, cx);
+        *self.registered.borrow_mut() = Some(registered);
     }
 
     pub(super) fn range(&self) -> Option<Range<usize>> {
@@ -270,7 +330,12 @@ impl Selection {
     }
 
     pub(super) fn listen(self: &Rc<Self>, window: &mut Window) {
-        let Some(hitbox) = self.hitbox.borrow().clone() else {
+        let Some(hitbox) = self
+            .registered
+            .borrow()
+            .as_ref()
+            .map(|registered| registered.hitbox.clone())
+        else {
             return;
         };
         window.set_cursor_style(CursorStyle::IBeam, &hitbox);
