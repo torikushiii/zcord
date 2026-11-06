@@ -597,14 +597,38 @@ fn folder_item(app: &DiscordApp, folder: &Folder, cx: &App, morphs: Option<Insta
         return header.into_any_element();
     }
     let list_height = guilds.len() as f32 * (ICON + RAIL_GAP) + RAIL_GAP;
-    let body = div()
-        .relative()
+    let list = div()
         .flex()
         .flex_col()
         .flex_none()
         .gap_2()
         .w_full()
-        .pb_2()
+        .py_2()
+        .children(
+            guilds
+                .iter()
+                .map(|guild| guild_item(app, guild, cx, morphs)),
+        );
+    // The header stays outside the animation, whose id would otherwise re-key its tooltip.
+    let list = match fold {
+        Some(fold) => {
+            let (from, to) = (fold.from, fold.to);
+            list.overflow_hidden()
+                .with_animation(
+                    ("folder-fold", fold.id),
+                    Animation::new(FOLDER_FOLD).with_easing(ease_out_quint()),
+                    move |this, delta| this.h(rpx(list_height * (from + (to - from) * delta))),
+                )
+                .into_any_element()
+        }
+        None => list.into_any_element(),
+    };
+    div()
+        .relative()
+        .flex()
+        .flex_col()
+        .flex_none()
+        .w_full()
         .child(
             div()
                 .absolute()
@@ -616,26 +640,8 @@ fn folder_item(app: &DiscordApp, folder: &Folder, cx: &App, morphs: Option<Insta
                 .bg(tint),
         )
         .child(header)
-        .children(
-            guilds
-                .iter()
-                .map(|guild| guild_item(app, guild, cx, morphs)),
-        );
-    match fold {
-        Some(fold) => {
-            let (from, to) = (fold.from, fold.to);
-            body.overflow_hidden()
-                .with_animation(
-                    ("folder-fold", fold.id),
-                    Animation::new(FOLDER_FOLD).with_easing(ease_out_quint()),
-                    move |this, delta| {
-                        this.h(rpx(ICON + list_height * (from + (to - from) * delta)))
-                    },
-                )
-                .into_any_element()
-        }
-        None => body.into_any_element(),
-    }
+        .child(list)
+        .into_any_element()
 }
 
 fn rail_item(
