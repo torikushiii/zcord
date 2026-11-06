@@ -987,9 +987,6 @@ fn dm_row(
                         .children(dm_subtitle),
                 ),
         )
-        .when(dm.channel.mentions > 0, |this| {
-            this.child(count_pill(dm.channel.mentions))
-        })
         .when(!dm.message_request, |this| {
             let close = app.entity.clone();
             let group = dm.group;

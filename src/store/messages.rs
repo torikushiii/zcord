@@ -459,7 +459,10 @@ impl Store {
             }
         }
         let mapped = self.map_network_message(&message, loaded);
-        let mentions_me = self.message_mentions_me(&message);
+        let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+        let mentions_me = self.message_mentions_me(&message)
+            || (self.is_private_conversation(message.channel_id)
+                && !self.dm_muted(message.channel_id, now_ms));
         let previous = self.latest_message_id(message.channel_id);
         let mentions = self.mention_count(message.channel_id);
         if message.id > previous {

@@ -130,6 +130,8 @@ fn observe_app<T: 'static>(app: &Entity<DiscordApp>, cx: &mut Context<T>) -> Sub
 
 pub(crate) struct GuildRailView {
     app: WeakEntity<DiscordApp>,
+    dms: guild_rail::RailDms,
+    dm_settle: Option<Task<()>>,
     _observe: Subscription,
 }
 
@@ -137,6 +139,8 @@ impl GuildRailView {
     fn new(app: &Entity<DiscordApp>, cx: &mut Context<Self>) -> Self {
         Self {
             app: app.downgrade(),
+            dms: guild_rail::RailDms::default(),
+            dm_settle: None,
             _observe: observe_app(app, cx),
         }
     }
@@ -148,7 +152,14 @@ impl Render for GuildRailView {
         let Some(app) = self.app.upgrade() else {
             return div().into_any_element();
         };
-        guild_rail::render(app.read(cx), cx).into_any_element()
+        let current = guild_rail::rail_dm_ids(app.read(cx));
+        if self.dms.update(current, cx.reduce_motion()) {
+            self.dm_settle = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(guild_rail::DM_SLIDE).await;
+                this.update(cx, |_, cx| cx.notify()).ok();
+            }));
+        }
+        guild_rail::render(app.read(cx), &self.dms, cx).into_any_element()
     }
 }
 

@@ -322,6 +322,18 @@ impl Store {
         list
     }
 
+    pub fn unread_dms(&self) -> Vec<&PrivateChannel> {
+        let mut list: Vec<_> = self
+            .private
+            .iter()
+            .filter(|private| {
+                !private.message_request && !private.spam && private.channel.mentions > 0
+            })
+            .collect();
+        self.sort_private_list(&mut list);
+        list
+    }
+
     pub fn message_requests(&self) -> Vec<&PrivateChannel> {
         let mut list: Vec<_> = self
             .private
