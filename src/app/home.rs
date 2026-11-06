@@ -125,6 +125,7 @@ impl DiscordApp {
         self.member_rows.reset(0);
         self.member_layout = member_list::Layout::default();
         self.member_top = 0;
+        self.dismiss_stream_card();
         self.selected_guild_id = 0;
     }
 
