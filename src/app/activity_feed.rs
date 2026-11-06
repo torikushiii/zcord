@@ -274,7 +274,9 @@ impl DiscordApp {
             let colors = request.await.ok().flatten();
             this.update(cx, |app, cx| {
                 if let Some(colors) = colors {
-                    app.activity_feed.colors.insert(application_id, colors);
+                    app.activity_feed
+                        .colors
+                        .insert(application_id, colors.map(overlay_color));
                 } else {
                     app.activity_feed.colors_requested.remove(&application_id);
                 }
@@ -384,4 +386,72 @@ impl DiscordApp {
         })
         .detach();
     }
+}
+
+fn overlay_color(color: u32) -> u32 {
+    let mut color = color & 0xFF_FFFF;
+    for _ in 1..8 {
+        if darkness(color) >= 0.725 {
+            break;
+        }
+        let [l, a, b] = rgb_to_lab(color);
+        color = lab_to_rgb([l - 9., a, b]);
+    }
+    color
+}
+
+fn darkness(color: u32) -> f64 {
+    let [r, g, b] = channels(color);
+    1. - (0.299 * r + 0.587 * g + 0.114 * b) / 255.
+}
+
+fn channels(color: u32) -> [f64; 3] {
+    [
+        f64::from((color >> 16) & 0xFF),
+        f64::from((color >> 8) & 0xFF),
+        f64::from(color & 0xFF),
+    ]
+}
+
+const WHITE: [f64; 3] = [0.950_470, 1., 1.088_830];
+const T0: f64 = 4. / 29.;
+const T1: f64 = 6. / 29.;
+const T2: f64 = 3. * T1 * T1;
+const T3: f64 = T1 * T1 * T1;
+
+fn rgb_to_lab(color: u32) -> [f64; 3] {
+    let [r, g, b] = channels(color).map(|channel| {
+        let channel = channel / 255.;
+        if channel <= 0.040_45 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    });
+    let f = |t: f64| if t > T3 { t.cbrt() } else { t / T2 + T0 };
+    let x = f((0.412_456_4 * r + 0.357_576_1 * g + 0.180_437_5 * b) / WHITE[0]);
+    let y = f((0.212_672_9 * r + 0.715_152_2 * g + 0.072_175_0 * b) / WHITE[1]);
+    let z = f((0.019_333_9 * r + 0.119_192 * g + 0.950_304_1 * b) / WHITE[2]);
+    let l = 116. * y - 16.;
+    [l.max(0.), 500. * (x - y), 200. * (y - z)]
+}
+
+fn lab_to_rgb([l, a, b]: [f64; 3]) -> u32 {
+    let f = |t: f64| if t > T1 { t * t * t } else { T2 * (t - T0) };
+    let y = (l + 16.) / 116.;
+    let x = WHITE[0] * f(y + a / 500.);
+    let z = WHITE[2] * f(y - b / 200.);
+    let y = WHITE[1] * f(y);
+    let gamma = |channel: f64| {
+        let channel = if channel <= 0.003_130_8 {
+            12.92 * channel
+        } else {
+            1.055 * channel.powf(1. / 2.4) - 0.055
+        };
+        (channel * 255.).round().clamp(0., 255.) as u32
+    };
+    let r = gamma(3.240_454_2 * x - 1.537_138_5 * y - 0.498_531_4 * z);
+    let g = gamma(-0.969_266 * x + 1.876_010_8 * y + 0.041_556 * z);
+    let b = gamma(0.055_643_4 * x - 0.204_025_9 * y + 1.057_225_2 * z);
+    (r << 16) | (g << 8) | b
 }
