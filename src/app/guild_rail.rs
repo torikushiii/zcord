@@ -13,7 +13,7 @@ use crate::{
     },
     media::animated,
     media::images::{self, ImageSpec},
-    store::{Folder, Guild, RailEntry, VoiceActivity, VoiceMember},
+    store::{Folder, Guild, PrivateChannel, RailEntry, VoiceActivity, VoiceMember},
     theme::{self, rpx},
 };
 
@@ -37,6 +37,91 @@ const MORPH_IN: Duration = Duration::from_millis(300);
 const MORPH_OUT: Duration = Duration::from_millis(180);
 pub(crate) const FOLDER_FOLD: Duration = Duration::from_millis(200);
 const RAIL_GAP: f32 = 8.;
+pub(crate) const DM_SLIDE: Duration = Duration::from_millis(250);
+
+struct Slide {
+    channel_id: u64,
+    index: usize,
+    id: u64,
+    started: Instant,
+    entering: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct RailDms {
+    shown: Vec<u64>,
+    primed: bool,
+    slides: Vec<Slide>,
+    next_id: u64,
+}
+
+impl RailDms {
+    pub(crate) fn update(&mut self, current: Vec<u64>, reduce_motion: bool) -> bool {
+        let now = Instant::now();
+        self.slides
+            .retain(|slide| now.duration_since(slide.started) < DM_SLIDE);
+        if self.primed && !reduce_motion {
+            for (index, &channel_id) in self.shown.iter().enumerate() {
+                if !current.contains(&channel_id) {
+                    self.next_id += 1;
+                    self.slides.push(Slide {
+                        channel_id,
+                        index,
+                        id: self.next_id,
+                        started: now,
+                        entering: false,
+                    });
+                }
+            }
+            for &channel_id in &current {
+                if !self.shown.contains(&channel_id) {
+                    self.slides.retain(|slide| slide.channel_id != channel_id);
+                    self.next_id += 1;
+                    self.slides.push(Slide {
+                        channel_id,
+                        index: 0,
+                        id: self.next_id,
+                        started: now,
+                        entering: true,
+                    });
+                }
+            }
+        }
+        self.primed = true;
+        self.shown = current;
+        !self.slides.is_empty()
+    }
+
+    fn items(&self) -> Vec<(u64, Option<(u64, bool)>)> {
+        let slide = |channel_id: u64, entering: bool| {
+            self.slides
+                .iter()
+                .find(|slide| slide.channel_id == channel_id && slide.entering == entering)
+                .map(|slide| (slide.id, entering))
+        };
+        let mut items: Vec<_> = self
+            .shown
+            .iter()
+            .map(|&channel_id| (channel_id, slide(channel_id, true)))
+            .collect();
+        for leaving in self.slides.iter().filter(|slide| !slide.entering) {
+            if !self.shown.contains(&leaving.channel_id) {
+                let index = leaving.index.min(items.len());
+                items.insert(index, (leaving.channel_id, Some((leaving.id, false))));
+            }
+        }
+        items
+    }
+}
+
+pub(crate) fn rail_dm_ids(app: &DiscordApp) -> Vec<u64> {
+    app.store
+        .unread_dms()
+        .into_iter()
+        .map(|dm| dm.channel.id)
+        .filter(|&id| !(app.is_home() && app.selected_channel_id == id))
+        .collect()
+}
 
 struct Morph {
     id: u64,
@@ -190,7 +275,7 @@ fn round<E: Styled + IntoElement + 'static>(
     }
 }
 
-pub fn render(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
+pub fn render(app: &DiscordApp, dms: &RailDms, cx: &App) -> impl IntoElement + use<> {
     let morphs = app.rail_morphs.clock();
     div()
         .id("guild-rail")
@@ -239,6 +324,10 @@ pub fn render(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
             ))
             .children(corner_badge(app.store.home_badge())),
         )
+        .children(dms.items().into_iter().filter_map(|(channel_id, slide)| {
+            let dm = app.store.private_channel(channel_id)?;
+            Some(slide_dm(dm_item(app, dm, cx, morphs), slide))
+        }))
         .child(
             div()
                 .w(rpx(32.))
@@ -314,6 +403,81 @@ fn guild_item(app: &DiscordApp, guild: &Guild, cx: &App, morphs: Option<Instant>
                 .guild_voice_activity(id)
                 .map(|activity| voice_badge(activity, connected)),
         )
+}
+
+fn dm_item(
+    app: &DiscordApp,
+    dm: &PrivateChannel,
+    cx: &App,
+    morphs: Option<Instant>,
+) -> Stateful<Div> {
+    let id = dm.channel.id;
+    let name = app.store.private_channel_name(id);
+    let entity = app.entity.clone();
+    rail_item(("rail-dm", id), id, Some(&name), false, true, app)
+        .on_click(move |_, window, cx| {
+            entity
+                .update(cx, |app, cx| app.select_dm(id, window, cx))
+                .ok();
+        })
+        .child(dm_icon(app, dm, cx, morphs))
+        .children(corner_badge(dm.channel.mentions))
+}
+
+fn slide_dm(item: Stateful<Div>, slide: Option<(u64, bool)>) -> AnyElement {
+    let Some((id, entering)) = slide else {
+        return item.into_any_element();
+    };
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .w_full()
+        .overflow_hidden()
+        .child(item)
+        .with_animation(
+            ("rail-dm-slide", id),
+            Animation::new(DM_SLIDE).with_easing(ease_out_quint()),
+            move |this, delta| {
+                let open = if entering { delta } else { 1. - delta };
+                this.h(rpx(ICON * open))
+                    .mb(rpx(-RAIL_GAP * (1. - open)))
+                    .opacity(open)
+            },
+        )
+        .into_any_element()
+}
+
+fn dm_icon(app: &DiscordApp, dm: &PrivateChannel, cx: &App, morphs: Option<Instant>) -> AnyElement {
+    let id = dm.channel.id;
+    let corners = Corners::Morph(id, false);
+    let spec = if dm.group {
+        dm.icon.clone().map(|hash| ImageSpec::ChannelIcon {
+            channel_id: id,
+            hash,
+        })
+    } else {
+        dm.recipient_ids
+            .first()
+            .and_then(|user_id| app.store.user(*user_id))
+            .map(|user| user.avatar_spec())
+    };
+    match spec.and_then(|spec| images::resolve(&spec, theme::image_px(ICON), cx)) {
+        Some(path) => round(img(path).size(rpx(ICON)).flex_none(), corners, app, morphs),
+        None => round(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .size(rpx(ICON))
+                .bg(theme::user_color(id))
+                .child(theme::icon("users", 24., theme::strong())),
+            corners,
+            app,
+            morphs,
+        ),
+    }
 }
 
 fn guild_icon(

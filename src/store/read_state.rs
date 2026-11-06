@@ -165,6 +165,13 @@ impl Store {
         source.read_state.entries.get_mut(index)
     }
 
+    pub(super) fn is_private_conversation(&self, channel_id: u64) -> bool {
+        self.source
+            .as_ref()
+            .and_then(|s| self.source_channels.get(&channel_id)?.get(s))
+            .is_some_and(|c| matches!(c.kind, Some(1 | 3)))
+    }
+
     pub(super) fn increment_mentions(&mut self, channel_id: u64, message_id: u64) {
         if let Some(state) = self.read_state_mut(channel_id, message_id) {
             state.mention_count = state.mention_count.saturating_add(1);
@@ -204,12 +211,7 @@ impl Store {
             let thread = &mut self.guilds[location.guild].threads[location.thread];
             thread.unread = unread;
             thread.mentions = mentions;
-        } else if self
-            .source
-            .as_ref()
-            .and_then(|s| self.source_channels.get(&channel_id)?.get(s))
-            .is_some_and(|c| matches!(c.kind, Some(1 | 3)))
-        {
+        } else if self.is_private_conversation(channel_id) {
             self.dm_badges =
                 self.dm_badges.saturating_sub(u64::from(previous_mentions)) + u64::from(mentions);
             self.dm_mentions = self.dm_badges.min(u64::from(u32::MAX)) as u32;
