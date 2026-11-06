@@ -343,6 +343,8 @@ pub struct DiscordApp {
     pub(crate) player: Option<Player>,
     pub(crate) video_fullscreen: Option<Fullscreen>,
     jump: Option<JumpScroll>,
+    pub(crate) send_fill: Cell<chat::SendFill>,
+    pub(crate) pane_send_fill: Cell<chat::SendFill>,
     /// Message flashed after a reply jump lands, with a per-jump id to replay the fade.
     pub(crate) jump_highlight: Option<(u64, u64)>,
     pub(crate) jump_missing: bool,
@@ -549,6 +551,8 @@ impl DiscordApp {
             player: None,
             video_fullscreen: None,
             jump: None,
+            send_fill: Cell::default(),
+            pane_send_fill: Cell::default(),
             jump_highlight: None,
             jump_missing: false,
             jump_missing_nonce: 0,
