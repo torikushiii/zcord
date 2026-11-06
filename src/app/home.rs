@@ -919,6 +919,11 @@ fn dm_row(
         )
     });
     let plated = nameplate.is_some();
+    let blocked = recipient.is_some_and(|user_id| {
+        app.store
+            .relationship(user_id)
+            .is_some_and(|relationship| relationship.kind == RelationshipKind::Blocked)
+    });
     let dim = rgba(
         if selected {
             ring
@@ -944,11 +949,13 @@ fn dm_row(
         .cursor_pointer()
         .text_color(rgb(text))
         .when(selected, |this| this.bg(rgba(theme::selected())))
+        .when(blocked && !selected, |this| this.opacity(0.35))
         .when(!selected, |this| {
             this.hover(|style| {
                 style
                     .bg(rgba(theme::hover()))
                     .text_color(rgb(theme::text()))
+                    .opacity(1.)
             })
         })
         .when_some(recipient, |this, user_id| {
@@ -1021,10 +1028,25 @@ fn dm_row(
             this.child(
                 div()
                     .id(("dm-close", id))
+                    .relative()
                     .flex_none()
-                    .opacity(0.)
-                    .group_hover("dm-row", |style| style.opacity(1.))
-                    .child(theme::icon("x", 16., theme::muted()))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(blocked, |this| {
+                        this.child(
+                            div()
+                                .absolute()
+                                .group_hover("dm-row", |style| style.opacity(0.))
+                                .child(theme::icon("ban", 18., theme::muted())),
+                        )
+                    })
+                    .child(
+                        div()
+                            .opacity(0.)
+                            .group_hover("dm-row", |style| style.opacity(1.))
+                            .child(theme::icon("x", 16., theme::muted())),
+                    )
                     .on_click(move |_, window, cx| {
                         cx.stop_propagation();
                         close
@@ -3011,6 +3033,73 @@ pub(crate) fn request_bar(app: &DiscordApp, id: u64) -> Option<AnyElement> {
                     .gap(rpx(8.))
                     .child(ignore)
                     .child(accept),
+            )
+            .into_any_element(),
+    )
+}
+
+pub(crate) fn blocked_bar(app: &DiscordApp, id: u64) -> Option<AnyElement> {
+    let user_id = app
+        .store
+        .private_channel(id)
+        .filter(|dm| !dm.group)?
+        .recipient_ids
+        .first()
+        .copied()?;
+    app.store
+        .relationship(user_id)
+        .filter(|relationship| relationship.kind == RelationshipKind::Blocked)?;
+    let entity = app.entity.clone();
+    Some(
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(rpx(12.))
+            .mx_4()
+            .mb(rpx(24.))
+            .px(rpx(16.))
+            .py(rpx(12.))
+            .rounded(rpx(8.))
+            .bg(rgb(theme::elevated()))
+            .border_1()
+            .border_color(rgba(theme::border()))
+            .child(
+                div()
+                    .min_w_0()
+                    .text_size(rpx(16.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(theme::strong()))
+                    .child("You cannot send messages to a user you have blocked."),
+            )
+            .child(
+                div()
+                    .id("blocked-bar-unblock")
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .h(rpx(32.))
+                    .px(rpx(12.))
+                    .rounded(rpx(8.))
+                    .bg(rgba(theme::control()))
+                    .border_1()
+                    .border_color(rgba(theme::border()))
+                    .when(app.live, |this| {
+                        this.cursor_pointer()
+                            .hover(|style| style.bg(rgba(theme::hover())))
+                            .on_click(move |_, _, cx| {
+                                entity
+                                    .update(cx, |app, cx| app.unblock_user(user_id, cx))
+                                    .ok();
+                            })
+                    })
+                    .when(!app.live, |this| this.opacity(0.5))
+                    .text_size(rpx(14.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(theme::bright()))
+                    .without_text_selection()
+                    .child("Unblock"),
             )
             .into_any_element(),
     )
