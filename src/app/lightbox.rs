@@ -869,7 +869,11 @@ fn context_menu(
                                         "app-window",
                                         move |_, cx| cx.open_url(&link),
                                     )
-                                    .child(theme::icon("arrow-up-right", 18., theme::muted())),
+                                    .child(theme::icon(
+                                        "arrow-up-right",
+                                        18.,
+                                        theme::muted(),
+                                    )),
                                 )
                             }),
                     ),
