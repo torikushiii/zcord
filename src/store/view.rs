@@ -247,6 +247,25 @@ impl Timestamp {
         )
     }
 
+    pub fn calendar(self) -> String {
+        let Some(date) = chrono::NaiveDate::from_ymd_opt(
+            i32::from(self.year),
+            u32::from(self.month),
+            u32::from(self.day),
+        ) else {
+            return self.full();
+        };
+        let days = (date - chrono::Local::now().date_naive()).num_days();
+        let day = format!("{:02}/{:02}/{}", self.month, self.day, self.year);
+        match days {
+            0 => format!("Today at {}", self.time()),
+            -1 => format!("Yesterday at {}", self.time()),
+            1 => format!("Tomorrow at {}", self.time()),
+            2.. => day,
+            _ => format!("{day} {}", self.time()),
+        }
+    }
+
     pub fn short(self) -> String {
         use chrono::Datelike;
         let now = chrono::Local::now();

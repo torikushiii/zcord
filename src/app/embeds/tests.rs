@@ -7,8 +7,9 @@ use gpui::{
 use gpui_component::ElementExt;
 
 use super::{
-    EMBED_HORIZONTAL_INSET, EMBED_MEDIA, EMBED_WIDTH, card_content_width, component_container,
-    description_text, embed_card, embed_content_width, field_grid, fit, single_gallery_frame,
+    EMBED_HORIZONTAL_INSET, EMBED_MEDIA, EMBED_WIDTH, component_container, description_text,
+    embed_card, embed_content_width, field_grid, fit, inline_media, media_max,
+    single_gallery_frame,
 };
 use crate::{
     app::rich_text::{Piece, PieceStyle, rich_text},
@@ -200,23 +201,87 @@ fn inline_field_embed() -> Embed {
     }
 }
 
-#[test]
-fn fields_resolve_a_readable_width_with_or_without_a_thumbnail() {
-    let mut embed = inline_field_embed();
-    for thumbnail in [false, true] {
-        assert_eq!(
-            embed_content_width(&embed, thumbnail, None),
-            Some(EMBED_WIDTH - EMBED_HORIZONTAL_INSET)
-        );
+fn media(width: u32, height: u32) -> Media {
+    Media {
+        url: "https://cdn.discordapp.com/attachments/1/2/image.png".into(),
+        source: "https://example.com/image.png".into(),
+        width,
+        height,
+        animated: false,
     }
-    embed.fields.clear();
-    assert_eq!(embed_content_width(&embed, true, None), None);
+}
+
+#[test]
+fn cards_take_their_width_from_wide_media_then_fields_then_bare_media() {
+    let mut embed = inline_field_embed();
     assert_eq!(
-        embed_content_width(&embed, false, Some((400., 225.))),
+        embed_content_width(&embed, EMBED_MEDIA, None),
+        Some(EMBED_WIDTH - EMBED_HORIZONTAL_INSET)
+    );
+    embed.images = vec![media(1920, 1080)];
+    assert_eq!(
+        embed_content_width(&embed, EMBED_MEDIA, Some(400.)),
         Some(400.)
     );
+    embed.fields.clear();
+    embed.images = vec![media(120, 80)];
+    assert_eq!(
+        embed_content_width(&embed, EMBED_MEDIA, Some(120.)),
+        Some(120.)
+    );
     embed.description = Some("Short text".into());
-    assert_eq!(embed_content_width(&embed, false, Some((400., 225.))), None);
+    assert_eq!(embed_content_width(&embed, EMBED_MEDIA, Some(120.)), None);
+    embed.images = vec![media(120, 80), media(120, 80)];
+    assert_eq!(
+        embed_content_width(&embed, EMBED_MEDIA, Some(120.)),
+        Some(520. - EMBED_HORIZONTAL_INSET)
+    );
+}
+
+#[test]
+fn video_cards_narrow_to_a_portrait_video_like_discord() {
+    let mut embed = inline_field_embed();
+    embed.fields.clear();
+    embed.kind = EmbedKind::Video;
+    embed.description = Some("A portrait clip".into());
+    embed.video = Some(media(1080, 1920));
+    assert_eq!(embed_content_width(&embed, EMBED_MEDIA, None), Some(169.));
+    embed.kind = EmbedKind::Rich;
+    embed.video = None;
+    embed.images = vec![media(1080, 1920)];
+    assert_eq!(embed_content_width(&embed, EMBED_MEDIA, None), None);
+}
+
+#[test]
+fn bare_media_and_tall_boxes_follow_discord() {
+    let mut embed = inline_field_embed();
+    embed.fields.clear();
+    embed.kind = EmbedKind::Link;
+    embed.images = vec![media(800, 600)];
+    assert!(inline_media(&embed));
+    embed.description = Some("descriptions don't frame media".into());
+    assert!(inline_media(&embed));
+    embed.title = Some(crate::store::EmbedText {
+        text: "Title".into(),
+        url: None,
+        icon: None,
+    });
+    assert!(!inline_media(&embed));
+    embed.kind = EmbedKind::Rich;
+    embed.title = None;
+    assert!(!inline_media(&embed));
+
+    embed.kind = EmbedKind::Video;
+    embed.video = Some(Media {
+        source: "https://www.youtube.com/embed/abc".into(),
+        ..media(1080, 1920)
+    });
+    assert_eq!(media_max(&embed), (400., 450.));
+    embed.video = Some(Media {
+        source: "https://www.youtube.com/embed/abc".into(),
+        ..media(1920, 1080)
+    });
+    assert_eq!(media_max(&embed), EMBED_MEDIA);
 }
 
 struct InlineFieldLayout {
@@ -250,7 +315,7 @@ impl Render for InlineFieldLayout {
                 .into_any_element()
         });
         div().w(rpx(self.width)).child(
-            embed_card(embed.color, embed_content_width(&embed, true, None))
+            embed_card(embed.color, embed_content_width(&embed, EMBED_MEDIA, None))
                 .debug_selector(|| "inline-card".into())
                 .child(
                     div()
@@ -270,7 +335,7 @@ impl Render for InlineFieldLayout {
 }
 
 #[gpui::test]
-fn inline_fields_keep_identifiers_intact_and_reflow_in_a_narrow_card(cx: &mut TestAppContext) {
+fn inline_fields_share_their_row_evenly_even_in_a_narrow_card(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let (view, cx) = cx.add_window_view(|_, _| InlineFieldLayout { width: 600. });
     for width in [600., 360.] {
@@ -291,43 +356,16 @@ fn inline_fields_keep_identifiers_intact_and_reflow_in_a_narrow_card(cx: &mut Te
             let third = cx.debug_bounds("inline-field-2").unwrap();
             let region = cx.debug_bounds("inline-field-3").unwrap();
             assert!(card.size.width <= px(width.min(EMBED_WIDTH) * zoom + 1.));
-            assert!((uid.size.height - px(18. * zoom)).abs() <= px(1.));
             assert!(uid.right() + px(15. * zoom) <= thumbnail.left());
             assert!(thumbnail.right() < card.right());
             assert!(region.top() > third.bottom());
+            assert!((first.top() - third.top()).abs() <= px(1.));
+            assert!((first.size.width - third.size.width).abs() <= px(1.));
             if width == 600. {
-                assert!((first.top() - third.top()).abs() <= px(1.));
-            } else {
-                assert!(third.top() > first.bottom());
+                assert!((uid.size.height - px(18. * zoom)).abs() <= px(1.));
             }
         }
     }
-}
-
-#[test]
-fn portrait_posts_keep_readable_text_without_stretching_the_media() {
-    let description = "Translated from Japanese. A portrait video should not force the entire post into a narrow column.";
-    let mut embed = Embed {
-        kind: EmbedKind::Video,
-        url: None,
-        color: None,
-        provider: None,
-        author: None,
-        title: None,
-        description: Some(description.into()),
-        fields: Vec::new(),
-        components: Vec::new(),
-        thumbnail: None,
-        images: Vec::new(),
-        video: None,
-        footer: None,
-        timestamp: None,
-    };
-    let portrait = (169., 300.);
-    assert_eq!(card_content_width(&embed, portrait), None);
-    assert_eq!(card_content_width(&embed, (400., 225.)), None);
-    embed.description = None;
-    assert_eq!(card_content_width(&embed, portrait), Some(portrait.0));
 }
 
 struct LongComponentEmbed {

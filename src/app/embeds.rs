@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::rc::Rc;
 
 use gpui::{prelude::*, *};
 
@@ -10,6 +11,7 @@ use crate::{
         DiscordApp,
         chat::file_size,
         emoji_picker::PickerTarget,
+        lightbox::LightboxEntry,
         message_body::{BodyColors, BodyContext, render_body, wrapped_label},
     },
     media::images,
@@ -18,12 +20,18 @@ use crate::{
     theme::{self, WithoutTextSelection, rpx},
 };
 
-const EMBED_WIDTH: f32 = 516.;
+const EMBED_WIDTH: f32 = 521.;
 const EMBED_PADDING_LEFT: f32 = 15.;
 const EMBED_PADDING_RIGHT: f32 = 16.;
 const EMBED_HORIZONTAL_INSET: f32 = EMBED_PADDING_LEFT + EMBED_PADDING_RIGHT + 2.;
 const CONTAINER_WIDTH: f32 = 600.;
 const EMBED_MEDIA: (f32, f32) = (400., 300.);
+const TALL_EMBED_MEDIA: (f32, f32) = (400., 450.);
+const VIDEO_MIN: (f32, f32) = (150., 144.);
+const INLINE_MEDIA_WIDTH: f32 = 520.;
+const GALLERY_CARD_WIDTH: f32 = 520.;
+const GALLERY_GAP: f32 = 4.;
+const MEDIA_RADIUS: f32 = 4.;
 const PLAIN_MEDIA: (f32, f32) = (550., 350.);
 const THUMBNAIL: f32 = 80.;
 const SECTION_THUMBNAIL: f32 = 85.;
@@ -37,6 +45,8 @@ const VIDEO_SLOT: u64 = 1 << 22;
 const IMAGE_SLOT: u64 = 50;
 const SIDE_THUMBNAIL_SLOT: u64 = 51;
 const IMAGE_GRID_SLOT: u64 = 52;
+const TITLE_SLOT: u64 = 57;
+const FIELD_NAME_SLOT: u64 = 1 << 23;
 /// Free slot for forwarded content. Its mask has the top bit set, so a key derived
 /// from a snowflake is never itself a snowflake.
 pub(super) const FORWARD_SLOT: u64 = 0x50_0000;
@@ -173,7 +183,7 @@ fn embed_card(color: Option<u32>, content_width: Option<f32>) -> Div {
         })
         .font_weight(FontWeight::NORMAL)
         .text_color(rgb(theme::text()))
-        .pt(rpx(8.))
+        .pt(rpx(10.))
         .pr(rpx(EMBED_PADDING_RIGHT))
         .pb(rpx(16.))
         // 1px border + 15px = Discord's 4px accent + 12px gutter.
@@ -190,17 +200,18 @@ fn embed_card(color: Option<u32>, content_width: Option<f32>) -> Div {
                 .bottom(px(-1.))
                 .w(rpx(4.))
                 .rounded_l(rpx(4.))
-                .bg(rgb(color.unwrap_or(theme::embed_border()))),
+                .bg(rgb(color
+                    .filter(|&color| color != 0xFFFFFF)
+                    .unwrap_or(theme::embed_border()))),
         )
 }
 
 fn fit(media: &Media, max: (f32, f32)) -> (f32, f32) {
-    let room = super::chat::media_limit()
-        - if max == PLAIN_MEDIA {
-            0.
-        } else {
-            EMBED_HORIZONTAL_INSET
-        };
+    fit_in(media, max, max != PLAIN_MEDIA)
+}
+
+fn fit_in(media: &Media, max: (f32, f32), carded: bool) -> (f32, f32) {
+    let room = super::chat::media_limit() - if carded { EMBED_HORIZONTAL_INSET } else { 0. };
     let max = (max.0.min(room), max.1);
     if media.width == 0 || media.height == 0 {
         return max;
@@ -213,29 +224,59 @@ fn fit(media: &Media, max: (f32, f32)) -> (f32, f32) {
     )
 }
 
-/// Like Discord, a card with text fits its content (up to the embed width), so neither short
-/// text beside wide media nor long text beside portrait media is forced to the media's width.
-fn card_content_width(embed: &Embed, media: (f32, f32)) -> Option<f32> {
-    let has_text = embed.title.is_some()
+fn has_text(embed: &Embed) -> bool {
+    embed.title.is_some()
         || embed.description.is_some()
         || embed.author.is_some()
-        || !embed.fields.is_empty();
-    (!has_text).then_some(media.0)
+        || !embed.fields.is_empty()
 }
 
-fn embed_content_width(
-    embed: &Embed,
-    side_thumbnail: bool,
-    media: Option<(f32, f32)>,
-) -> Option<f32> {
-    if !embed.fields.is_empty() {
-        // Inline fields need a resolved width before their percent-width children measure.
-        Some(EMBED_WIDTH - EMBED_HORIZONTAL_INSET)
-    } else if side_thumbnail {
-        None
+fn media_max(embed: &Embed) -> (f32, f32) {
+    let provider = embed
+        .provider
+        .as_ref()
+        .map(|provider| provider.text.as_str());
+    let youtube = provider == Some("YouTube")
+        || embed.video.as_ref().is_some_and(|video| {
+            reqwest::Url::parse(&video.source)
+                .is_ok_and(|url| url.host_str() == Some("www.youtube.com"))
+        });
+    let portrait = embed
+        .video
+        .as_ref()
+        .is_some_and(|video| video.height > video.width);
+    if provider == Some("TikTok") || (portrait && youtube) {
+        TALL_EMBED_MEDIA
     } else {
-        media.and_then(|dimensions| card_content_width(embed, dimensions))
+        EMBED_MEDIA
     }
+}
+
+fn inline_media(embed: &Embed) -> bool {
+    let media = !embed.images.is_empty() || embed.video.is_some();
+    match embed.kind {
+        EmbedKind::Gifv => media || embed.thumbnail.is_some(),
+        EmbedKind::Rich | EmbedKind::Components => false,
+        _ => media && embed.author.is_none() && embed.title.is_none(),
+    }
+}
+
+fn media_card_width(embed: &Embed, max: (f32, f32)) -> Option<f32> {
+    let media = embed.images.first().or(embed.video.as_ref())?;
+    let width = fit(media, max).0;
+    if embed.kind == EmbedKind::Video || width >= 300. {
+        Some(width)
+    } else if embed.kind == EmbedKind::Rich && embed.images.len() > 1 {
+        Some(GALLERY_CARD_WIDTH - EMBED_HORIZONTAL_INSET)
+    } else {
+        None
+    }
+}
+
+fn embed_content_width(embed: &Embed, max: (f32, f32), media_width: Option<f32>) -> Option<f32> {
+    media_card_width(embed, max)
+        .or_else(|| (!embed.fields.is_empty()).then_some(EMBED_WIDTH - EMBED_HORIZONTAL_INSET))
+        .or_else(|| media_width.filter(|_| !has_text(embed)))
 }
 
 fn animated_id(key: &str) -> (&'static str, u64) {
@@ -322,17 +363,16 @@ fn image_box(media: &Media, width: f32, height: f32, radius: f32, cx: &App) -> D
         .children(child)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn gifv_box(
     app: &DiscordApp,
     key: u64,
     still: &Media,
     video: Option<&Media>,
+    width: f32,
+    height: f32,
     cx: &App,
 ) -> Stateful<Div> {
-    let (width, height) = fit(
-        video.filter(|video| video.width > 0).unwrap_or(still),
-        PLAIN_MEDIA,
-    );
     let pixels = theme::image_px(width.max(height));
     let playing = video.and_then(|video| {
         crate::media::video::resolve(&video.video_spec(), pixels, cx).map(|frames| (video, frames))
@@ -342,27 +382,22 @@ fn gifv_box(
             .flex_none()
             .w(rpx(width))
             .h(rpx(height))
-            .rounded(rpx(8.))
+            .rounded(rpx(MEDIA_RADIUS))
             .overflow_hidden()
             .child(
                 crate::media::animated::image(frames)
                     .size_full()
                     .object_fit(ObjectFit::Cover)
-                    .rounded(rpx(8.))
+                    .rounded(rpx(MEDIA_RADIUS))
                     .id(animated_id(&video.url)),
             ),
-        None => image_box(still, width, height, 8., cx),
+        None => image_box(still, width, height, MEDIA_RADIUS, cx),
     };
     element
         .id(("lightbox-open", key))
         .cursor_pointer()
         .without_text_selection()
         .on_click(super::lightbox::gifv_opener(app, still, video, pixels))
-}
-
-fn fitted(app: &DiscordApp, key: u64, media: &Media, max: (f32, f32), cx: &App) -> Stateful<Div> {
-    let (width, height) = fit(media, max);
-    lightbox_box(app, key, media, width, height, 8., cx)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -555,92 +590,15 @@ pub fn render_embed(
         return render_components(app, key(COMPONENT_SLOT), &embed.components, cx)
             .unwrap_or_else(|| div().into_any_element());
     }
-    let media = embed.thumbnail.as_ref().or(embed.images.first());
-    let bare = embed.title.is_none() && embed.description.is_none() && embed.author.is_none();
-    match embed.kind {
-        EmbedKind::Gifv => {
-            let Some(media) = media else {
-                return div().into_any_element();
-            };
-            return div()
-                .flex()
-                .flex_col()
-                .mt_1()
-                .child(gifv_box(
-                    app,
-                    key(IMAGE_SLOT),
-                    media,
-                    embed.video.as_ref(),
-                    cx,
-                ))
-                .child(
-                    div()
-                        .mt(rpx(4.))
-                        .text_size(rpx(12.))
-                        .line_height(rpx(16.))
-                        .text_color(rgb(theme::muted()))
-                        .child("GIF"),
-                )
-                .into_any_element();
-        }
-        EmbedKind::Image if bare => {
-            let Some(media) = media else {
-                return div().into_any_element();
-            };
-            return div()
-                .mt_1()
-                .child(fitted(app, key(IMAGE_SLOT), media, PLAIN_MEDIA, cx))
-                .into_any_element();
-        }
-        _ => {}
+    let max = media_max(embed);
+    if inline_media(embed) {
+        return div()
+            .mt_1()
+            .max_w(rpx(INLINE_MEDIA_WIDTH))
+            .children(embed_media(app, embed, &key, max, false, cx).map(|(media, _)| media))
+            .into_any_element();
     }
-
-    // Mastodon-style embeds (e.g. FxTwitter) carry a playable `video` without being
-    // typed as video embeds, so a trusted video makes the embed a video one.
-    let video_url = embed
-        .video
-        .as_ref()
-        .and_then(|media| images::trusted_video_url(&media.url));
-    let video = embed.kind == EmbedKind::Video || video_url.is_some();
-    let side_thumbnail = embed
-        .thumbnail
-        .as_ref()
-        .filter(|_| !video && !matches!(embed.kind, EmbedKind::Image | EmbedKind::Article));
-    let big_media: Vec<&Media> = if video {
-        embed
-            .thumbnail
-            .iter()
-            .chain(embed.images.first())
-            .take(1)
-            .collect()
-    } else if matches!(embed.kind, EmbedKind::Image | EmbedKind::Article) && embed.images.is_empty()
-    {
-        embed.thumbnail.iter().collect()
-    } else {
-        embed.images.iter().collect()
-    };
-    let video_dimensions = video_url.as_ref().map(|_| {
-        embed
-            .thumbnail
-            .as_ref()
-            .or(embed.images.first())
-            .or(embed.video.as_ref())
-            .map_or(EMBED_MEDIA, |media| fit(media, EMBED_MEDIA))
-    });
-    let content_width = embed_content_width(
-        embed,
-        side_thumbnail.is_some(),
-        video_dimensions.or_else(|| match big_media.as_slice() {
-            [] => None,
-            [single] => Some(fit(single, EMBED_MEDIA)),
-            _ => Some((
-                EMBED_MEDIA
-                    .0
-                    .min(super::chat::media_limit() - EMBED_HORIZONTAL_INSET),
-                EMBED_MEDIA.1,
-            )),
-        }),
-    );
+    let rich = embed.kind == EmbedKind::Rich;
 
     let mut body = div().flex().flex_col().flex_1().min_w_0().gap(rpx(8.));
     if let Some(provider) = &embed.provider {
@@ -684,6 +642,11 @@ pub fn render_embed(
     }
     if let Some(title) = &embed.title {
         let url = title.url.as_ref().or(embed.url.as_ref());
+        let text = if rich {
+            markdown(app, key(TITLE_SLOT), &title.text, 16., 22., cx)
+        } else {
+            wrapped_label(("embed-title-text", key(62)), &title.text)
+        };
         body = body.child(
             linked(
                 div()
@@ -698,34 +661,51 @@ pub fn render_embed(
                     })),
                 url,
             )
-            .child(wrapped_label(("embed-title-text", key(62)), &title.text)),
+            .child(text),
         );
     }
-    // Discord leaves the description off video embeds such as YouTube's.
-    if let Some(description) = embed
-        .description
-        .as_ref()
-        .filter(|_| embed.kind != EmbedKind::Video)
-    {
-        let description = description_text(description);
-        body = body.child(markdown(
-            app,
-            key(DESCRIPTION_SLOT),
-            &description,
-            14.,
-            18.,
-            cx,
-        ));
+    if let Some(description) = embed.description.as_ref().filter(|_| {
+        !matches!(
+            embed.kind,
+            EmbedKind::Image | EmbedKind::Video | EmbedKind::Gifv
+        )
+    }) {
+        body = body.child(if rich {
+            markdown(
+                app,
+                key(DESCRIPTION_SLOT),
+                &description_text(description),
+                14.,
+                18.,
+                cx,
+            )
+        } else {
+            div()
+                .text_size(rpx(14.))
+                .line_height(rpx(18.))
+                .child(wrapped_label(
+                    ("embed-description", key(DESCRIPTION_SLOT)),
+                    description,
+                ))
+                .into_any_element()
+        });
     }
     if !embed.fields.is_empty() {
         body = body.child(fields(
             app,
             &embed.fields,
             |n| key(FIELD_SLOT + n as u64),
+            |n| key(FIELD_NAME_SLOT + n as u64),
             cx,
         ));
     }
 
+    let media = embed_media(app, embed, &key, max, true, cx);
+    let side_thumbnail = embed
+        .thumbnail
+        .as_ref()
+        .filter(|_| media.is_none() || (rich && embed.video.is_none()));
+    let content_width = embed_content_width(embed, max, media.as_ref().map(|(_, width)| *width));
     let content = div()
         .flex()
         .gap(rpx(16.))
@@ -739,108 +719,21 @@ pub fn render_embed(
                 thumbnail,
                 width,
                 height,
-                4.,
+                MEDIA_RADIUS,
                 cx,
             )
         }));
 
-    let media_max = EMBED_MEDIA;
-    let media = if let Some(url) = video_url.as_deref() {
-        // Direct-video links (e.g. kkinstagram) come without a thumbnail; the media proxy
-        // renders the video's first frame instead.
-        let poster = embed
-            .thumbnail
-            .as_ref()
-            .or(embed.images.first())
-            .map(Media::spec)
-            .or_else(|| {
-                embed
-                    .video
-                    .as_ref()
-                    .map(|video| images::ImageSpec::VideoPoster {
-                        id: key(VIDEO_SLOT),
-                        url: video.url.clone(),
-                        width: video.width,
-                        height: video.height,
-                    })
-            });
-        let dimensions = video_dimensions.expect("playable video has dimensions");
-        let player = crate::media::player::video_box(
-            app,
-            crate::media::player::Video {
-                key: key(VIDEO_SLOT),
-                url,
-                poster,
-                width: dimensions.0,
-                height: dimensions.1,
-                radius: 8.,
-                fullscreen: false,
-            },
-            cx,
-        );
-        // Discord drops the card around a video with nothing else to show.
-        if embed.provider.is_none()
-            && embed.title.is_none()
-            && embed.description.is_none()
-            && embed.author.is_none()
-            && embed.fields.is_empty()
-            && embed.footer.is_none()
-        {
-            return div().mt_1().child(player).into_any_element();
-        }
-        Some(player)
-    } else {
-        match big_media.as_slice() {
-            [] => None,
-            [single] if video => {
-                // The thumbnail can be letterboxed (YouTube's hqdefault is 4:3 with bars), so
-                // size the box from the video and let the thumbnail cover it.
-                let shape = embed
-                    .video
-                    .as_ref()
-                    .filter(|video| video.width > 0 && video.height > 0)
-                    .unwrap_or(single);
-                let (width, height) = fit(shape, media_max);
-                let pill = embed.url.is_some();
-                Some(play_badge(image_box(single, width, height, 8., cx), pill).into_any_element())
-            }
-            [single] => {
-                Some(fitted(app, key(IMAGE_SLOT), single, media_max, cx).into_any_element())
-            }
-            many => Some(
-                media_grid(
-                    app,
-                    many,
-                    media_max.0,
-                    |slot| key(IMAGE_GRID_SLOT + slot as u64),
-                    cx,
-                )
-                .into_any_element(),
-            ),
-        }
-    };
-    let media = media.map(
-        |media| match (video, video_url.is_none(), embed.url.clone()) {
-            (true, true, Some(url)) => div()
-                .id(("embed-video", key(63)))
-                .cursor_pointer()
-                .on_click(move |_, _, cx| cx.open_url(&url))
-                .child(media)
-                .into_any_element(),
-            _ => media,
-        },
-    );
-
     let footer = embed.footer.as_ref().map(|footer| footer.text.clone());
-    let stamp = embed.timestamp.map(|timestamp| timestamp.full());
+    let stamp = embed.timestamp.map(|timestamp| timestamp.calendar());
     let footer_text = match (footer, stamp) {
-        (Some(text), Some(stamp)) => Some(format!("{text} • {stamp}")),
+        (Some(text), Some(stamp)) => Some(format!("{text} \u{2022} {stamp}")),
         (text, stamp) => text.or(stamp),
     };
 
     embed_card(embed.color, content_width)
         .child(content)
-        .children(media)
+        .children(media.map(|(media, _)| div().mt(rpx(8.)).child(media)))
         .children(footer_text.map(|text| {
             div()
                 .flex()
@@ -860,14 +753,183 @@ pub fn render_embed(
                         .text_size(rpx(12.))
                         .line_height(rpx(16.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(theme::muted()))
+                        .text_color(rgb(theme::text()))
                         .child(wrapped_label(("embed-footer-text", key(59)), &text)),
                 )
         }))
         .into_any_element()
 }
 
-fn fields(app: &DiscordApp, fields: &[EmbedField], key: impl Fn(usize) -> u64, cx: &App) -> Div {
+fn embed_media(
+    app: &DiscordApp,
+    embed: &Embed,
+    key: &impl Fn(u64) -> u64,
+    max: (f32, f32),
+    carded: bool,
+    cx: &App,
+) -> Option<(AnyElement, f32)> {
+    if embed.kind == EmbedKind::Gifv {
+        let still = embed.thumbnail.as_ref().or(embed.images.first())?;
+        let video = embed.video.as_ref();
+        let shape = video.filter(|video| video.width > 0).unwrap_or(still);
+        let (width, height) = fit_in(shape, max, carded);
+        let element = gifv_box(app, key(IMAGE_SLOT), still, video, width, height, cx);
+        return Some((element.into_any_element(), width));
+    }
+    if let Some(found) = video_media(app, embed, key, max, carded, cx) {
+        return Some(found);
+    }
+    match embed.images.as_slice() {
+        [] => None,
+        [single] => {
+            let (width, height) = fit_in(single, max, carded);
+            let element = lightbox_box(
+                app,
+                key(IMAGE_SLOT),
+                single,
+                width,
+                height,
+                MEDIA_RADIUS,
+                cx,
+            );
+            Some((element.into_any_element(), width))
+        }
+        many => {
+            let room =
+                super::chat::media_limit() - if carded { EMBED_HORIZONTAL_INSET } else { 0. };
+            let width = if carded {
+                media_card_width(embed, max).unwrap_or(max.0)
+            } else {
+                INLINE_MEDIA_WIDTH
+            }
+            .min(room);
+            let element = gallery_grid(app, many, width, max.1, key, cx);
+            Some((element, width))
+        }
+    }
+}
+
+fn video_media(
+    app: &DiscordApp,
+    embed: &Embed,
+    key: &impl Fn(u64) -> u64,
+    max: (f32, f32),
+    carded: bool,
+    cx: &App,
+) -> Option<(AnyElement, f32)> {
+    let video = embed.video.as_ref()?;
+    let still = embed.thumbnail.as_ref().or(embed.images.first());
+    // The thumbnail can be letterboxed, so the box takes the video's shape and the thumbnail
+    // covers it.
+    let shape = Some(video)
+        .filter(|video| video.width > 0 && video.height > 0)
+        .or(still);
+    let (width, height) = shape.map_or(max, |shape| fit_in(shape, max, carded));
+    let (width, height) = (width.max(VIDEO_MIN.0), height.max(VIDEO_MIN.1));
+    if let Some(url) = images::trusted_video_url(&video.url) {
+        let poster = still
+            .map(Media::spec)
+            .unwrap_or_else(|| images::ImageSpec::VideoPoster {
+                id: key(VIDEO_SLOT),
+                url: video.url.clone(),
+                width: video.width,
+                height: video.height,
+            });
+        let player = crate::media::player::video_box(
+            app,
+            crate::media::player::Video {
+                key: key(VIDEO_SLOT),
+                url: &url,
+                poster: Some(poster),
+                width,
+                height,
+                radius: MEDIA_RADIUS,
+                fullscreen: false,
+            },
+            cx,
+        );
+        return Some((player, width));
+    }
+    let badge = play_badge(
+        image_box(still?, width, height, MEDIA_RADIUS, cx),
+        embed.url.is_some(),
+    );
+    let element = match embed.url.clone() {
+        Some(url) => div()
+            .id(("embed-video", key(63)))
+            .cursor_pointer()
+            .on_click(move |_, _, cx| cx.open_url(&url))
+            .child(badge)
+            .into_any_element(),
+        None => badge.into_any_element(),
+    };
+    Some((element, width))
+}
+
+fn gallery_grid(
+    app: &DiscordApp,
+    media: &[Media],
+    width: f32,
+    height: f32,
+    key: &impl Fn(u64) -> u64,
+    cx: &App,
+) -> AnyElement {
+    let column = ((width - GALLERY_GAP) / 2.).floor();
+    let half = ((height - GALLERY_GAP) / 2.).floor();
+    let entries: Rc<[LightboxEntry]> = media
+        .iter()
+        .map(|media| LightboxEntry {
+            spec: media.spec(),
+            animated: animated_media(media),
+            size: if media.width > 0 && media.height > 0 {
+                (media.width, media.height)
+            } else {
+                (column.round().max(1.) as u32, half.round().max(1.) as u32)
+            },
+            preview: theme::image_px(column.max(height)),
+            url: media.source.clone(),
+        })
+        .collect();
+    let (left, right) = match media.len().min(4) {
+        2 => (vec![(0, height)], vec![(1, height)]),
+        3 => (vec![(0, height)], vec![(1, half), (2, half)]),
+        _ => (vec![(0, half), (2, half)], vec![(1, half), (3, half)]),
+    };
+    let side = |tiles: Vec<(usize, f32)>| {
+        div()
+            .flex()
+            .flex_col()
+            .gap(rpx(GALLERY_GAP))
+            .children(tiles.into_iter().map(|(slot, tile_height)| {
+                let entity = app.entity.clone();
+                let entries = entries.clone();
+                image_box(&media[slot], column, tile_height, MEDIA_RADIUS, cx)
+                    .id(("lightbox-open", key(IMAGE_GRID_SLOT + slot as u64)))
+                    .cursor_pointer()
+                    .on_click(move |_, _, cx| {
+                        entity
+                            .update(cx, |app, cx| {
+                                app.open_lightbox_gallery(entries.clone(), slot, cx)
+                            })
+                            .ok();
+                    })
+            }))
+    };
+    div()
+        .flex()
+        .gap(rpx(GALLERY_GAP))
+        .child(side(left))
+        .child(side(right))
+        .into_any_element()
+}
+
+fn fields(
+    app: &DiscordApp,
+    fields: &[EmbedField],
+    key: impl Fn(usize) -> u64,
+    name_key: impl Fn(usize) -> u64,
+    cx: &App,
+) -> Div {
     field_grid(fields, |index, field| {
         div()
             .flex()
@@ -875,14 +937,9 @@ fn fields(app: &DiscordApp, fields: &[EmbedField], key: impl Fn(usize) -> u64, c
             .gap(rpx(2.))
             .child(
                 div()
-                    .text_size(rpx(14.))
-                    .line_height(rpx(18.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(rgb(theme::strong()))
-                    .child(wrapped_label(
-                        ("embed-field-name", key(index) ^ 1),
-                        &field.name,
-                    )),
+                    .child(markdown(app, name_key(index), &field.name, 14., 18., cx)),
             )
             .child(markdown(app, key(index), &field.value, 14., 18., cx))
             .into_any_element()
@@ -905,31 +962,16 @@ fn field_grid(fields: &[EmbedField], render: impl Fn(usize, &EmbedField) -> AnyE
         .children(rows.into_iter().map(|row| {
             div()
                 .flex()
-                .flex_wrap()
                 .gap(rpx(8.))
                 .w_full()
                 .min_w_0()
                 .children(row.into_iter().map(|index| {
                     div()
                         .flex_1()
-                        .min_w(rpx(96.))
-                        .max_w_full()
+                        .min_w_0()
                         .child(render(index, &fields[index]))
                 }))
         }))
-}
-
-fn media_grid(
-    app: &DiscordApp,
-    media: &[&Media],
-    width: f32,
-    key: impl Fn(usize) -> u64,
-    cx: &App,
-) -> Div {
-    let lead = (media[0].width, media[0].height);
-    mosaic(media.len(), width, lead, |slot, w, h| {
-        lightbox_box(app, key(slot), media[slot], w, h, 4., cx).into_any_element()
-    })
 }
 
 /// Discord's media mosaic (MediaMosaic CSS): two side by side, three as a large tile beside a

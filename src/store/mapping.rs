@@ -90,19 +90,44 @@ fn map_media(value: &model::EmbedMedia) -> Option<Media> {
     )
 }
 
+/// Kept without a proxy URL, unlike pictures: embed players have none, and the video is only
+/// sized and opened, never fetched as an image.
+fn map_video(value: &model::EmbedMedia) -> Option<Media> {
+    map_media(value).or_else(|| {
+        let url = nonempty(&value.url)?;
+        reqwest::Url::parse(&url)
+            .ok()
+            .filter(|parsed| matches!(parsed.scheme(), "http" | "https"))?;
+        Some(Media {
+            url: url.clone(),
+            source: url,
+            width: value.width.unwrap_or(0),
+            height: value.height.unwrap_or(0),
+            animated: false,
+        })
+    })
+}
+
 pub(super) fn map_embed(embed: &model::Embed) -> Embed {
     let url = nonempty(&embed.url);
+    let kind = match embed.kind.as_deref().filter(|kind| !kind.is_empty()) {
+        None | Some("rich") => EmbedKind::Rich,
+        Some("image") => EmbedKind::Image,
+        Some("gifv") => EmbedKind::Gifv,
+        Some("video") => EmbedKind::Video,
+        Some("article") => EmbedKind::Article,
+        Some("components") => EmbedKind::Components,
+        _ if embed.color.is_some() || !embed.fields.is_empty() => EmbedKind::Rich,
+        _ => EmbedKind::Link,
+    };
+    let mut thumbnail = embed.thumbnail.as_ref().and_then(map_media);
+    let mut image = embed.image.as_ref().and_then(map_media);
+    if matches!(kind, EmbedKind::Article | EmbedKind::Image) && thumbnail.is_some() {
+        let main = thumbnail.take();
+        image = image.or(main);
+    }
     Embed {
-        kind: match embed.kind.as_deref().filter(|kind| !kind.is_empty()) {
-            None | Some("rich") => EmbedKind::Rich,
-            Some("image") => EmbedKind::Image,
-            Some("gifv") => EmbedKind::Gifv,
-            Some("video") => EmbedKind::Video,
-            Some("article") => EmbedKind::Article,
-            Some("components") => EmbedKind::Components,
-            _ if embed.color.is_some() || !embed.fields.is_empty() => EmbedKind::Rich,
-            _ => EmbedKind::Link,
-        },
+        kind,
         url: url.clone(),
         color: embed.color,
         provider: embed
@@ -132,6 +157,7 @@ pub(super) fn map_embed(embed: &model::Embed) -> Embed {
         fields: embed
             .fields
             .iter()
+            .filter(|_| kind == EmbedKind::Rich)
             .map(|field| EmbedField {
                 name: field.name.clone(),
                 value: field.value.clone(),
@@ -139,14 +165,9 @@ pub(super) fn map_embed(embed: &model::Embed) -> Embed {
             })
             .collect(),
         components: map_components(&embed.components),
-        thumbnail: embed.thumbnail.as_ref().and_then(map_media),
-        images: embed
-            .image
-            .as_ref()
-            .and_then(map_media)
-            .into_iter()
-            .collect(),
-        video: embed.video.as_ref().and_then(map_media),
+        thumbnail,
+        images: image.into_iter().collect(),
+        video: embed.video.as_ref().and_then(map_video),
         footer: embed
             .footer
             .as_ref()
@@ -180,7 +201,7 @@ pub(super) fn map_embeds(embeds: &[model::Embed], flags: u64) -> Vec<Embed> {
             };
             // Keep a follower's video when the group has none, so it stays playable.
             if first.video.is_none() {
-                first.video = embed.video.as_ref().and_then(map_media);
+                first.video = embed.video.as_ref().and_then(map_video);
             }
             let media = embed
                 .image

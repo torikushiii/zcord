@@ -1,3 +1,5 @@
+use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use gpui::{prelude::*, *};
@@ -28,6 +30,7 @@ const MENU_GAP: f32 = 8.;
 const DETAILS_WIDTH: f32 = 212.;
 const SURFACE: u32 = 0x1A1A1E;
 const ZOOM: f32 = 2.;
+const ZOOM_DURATION: Duration = Duration::from_millis(240);
 const DRAG_THRESHOLD: f32 = 3.;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -56,6 +59,25 @@ pub(crate) struct Lightbox {
     size: Option<u64>,
     scroll: ScrollHandle,
     drag: Option<Drag>,
+    motion: Option<ZoomMotion>,
+    gallery: Option<(Rc<[LightboxEntry]>, usize)>,
+}
+
+#[derive(Clone)]
+pub(crate) struct LightboxEntry {
+    pub(crate) spec: ImageSpec,
+    pub(crate) animated: bool,
+    pub(crate) size: (u32, u32),
+    pub(crate) preview: u32,
+    pub(crate) url: String,
+}
+
+#[derive(Clone, Copy)]
+struct ZoomMotion {
+    /// Unique per zoom, so each one replays its animation.
+    id: u64,
+    from: Bounds<Pixels>,
+    to: Bounds<Pixels>,
 }
 
 #[derive(Clone, Copy)]
@@ -94,6 +116,8 @@ impl Lightbox {
             size: None,
             scroll: ScrollHandle::new(),
             drag: None,
+            motion: None,
+            gallery: None,
         }
     }
 }
@@ -190,22 +214,69 @@ impl DiscordApp {
         url: String,
         cx: &mut Context<Self>,
     ) {
-        self.lightbox = Some(Lightbox {
+        let entry = LightboxEntry {
             spec,
             animated,
-            poster: None,
-            width: width.max(1),
-            height: height.max(1),
+            size: (width, height),
             preview,
-            key: url.clone(),
             url,
+        };
+        self.show_lightbox_entry(entry, None, cx);
+    }
+
+    pub(crate) fn open_lightbox_gallery(
+        &mut self,
+        entries: Rc<[LightboxEntry]>,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(entry) = entries.get(index).cloned() else {
+            return;
+        };
+        self.show_lightbox_entry(entry, Some((entries, index)), cx);
+    }
+
+    fn show_lightbox_entry(
+        &mut self,
+        entry: LightboxEntry,
+        gallery: Option<(Rc<[LightboxEntry]>, usize)>,
+        cx: &mut Context<Self>,
+    ) {
+        self.lightbox = Some(Lightbox {
+            spec: entry.spec,
+            animated: entry.animated,
+            poster: None,
+            width: entry.size.0.max(1),
+            height: entry.size.1.max(1),
+            preview: entry.preview,
+            key: entry.url.clone(),
+            url: entry.url,
             zoomed: false,
             menu: Menu::Closed,
             size: None,
             scroll: ScrollHandle::new(),
             drag: None,
+            motion: None,
+            gallery,
         });
         cx.notify();
+    }
+
+    fn step_lightbox(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let Some((entries, index)) = self.lightbox.as_ref().and_then(|box_| box_.gallery.clone())
+        else {
+            return;
+        };
+        let count = entries.len();
+        if count < 2 {
+            return;
+        }
+        let next = if forward {
+            (index + 1) % count
+        } else {
+            (index + count - 1) % count
+        };
+        self.open_lightbox_gallery(entries, next, cx);
     }
 
     pub(crate) fn close_lightbox(&mut self, cx: &mut Context<Self>) -> bool {
@@ -261,32 +332,75 @@ impl DiscordApp {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(lightbox) = &mut self.lightbox else {
+        let animate = !cx.reduce_motion();
+        let Some(lightbox) = self.lightbox.as_mut().filter(|box_| box_.motion.is_none()) else {
             return;
+        };
+        let (width, height) = fitted_size(lightbox, window);
+        let unit = rpx(1.).to_pixels(window.rem_size());
+        let viewport = window.viewport_size();
+        let center = point(viewport.width / 2., viewport.height / 2.);
+        let fitted_size = size(unit * width, unit * height);
+        let fitted = Bounds::new(
+            center - point(fitted_size.width / 2., fitted_size.height / 2.),
+            fitted_size,
+        );
+        let zoomed_size = size(fitted_size.width * ZOOM, fitted_size.height * ZOOM);
+        let margin = unit * MARGIN;
+        let zoomed = |offset| {
+            Bounds::new(
+                zoomed_origin(zoomed_size, margin, offset, viewport),
+                zoomed_size,
+            )
+        };
+        let (from, to) = if lightbox.zoomed {
+            (zoomed(lightbox.scroll.offset()), fitted)
+        } else {
+            let (image_x, image_y) = focus.map_or((0.5, 0.5), |focus| {
+                (
+                    0.5 + (focus.x - center.x) / fitted_size.width,
+                    0.5 + (focus.y - center.y) / fitted_size.height,
+                )
+            });
+            let wanted = point(
+                center.x - margin - zoomed_size.width * image_x,
+                center.y - margin - zoomed_size.height * image_y,
+            );
+            let offset = clamp_offset(wanted, zoomed_size, margin, viewport);
+            lightbox.scroll.set_offset(offset);
+            (fitted, zoomed(offset))
         };
         lightbox.zoomed = !lightbox.zoomed;
         lightbox.drag = None;
-        if lightbox.zoomed {
-            let (width, height) = fitted_size(lightbox, window);
-            let unit = rpx(1.).to_pixels(window.rem_size());
-            let viewport = window.viewport_size();
-            let center = point(viewport.width / 2., viewport.height / 2.);
-            let (image_x, image_y) = focus.map_or((0.5, 0.5), |focus| {
-                (
-                    0.5 + (focus.x - center.x) / (unit * width),
-                    0.5 + (focus.y - center.y) / (unit * height),
-                )
-            });
-            lightbox.scroll.set_offset(point(
-                center.x - unit * (MARGIN + width * ZOOM * image_x),
-                center.y - unit * (MARGIN + height * ZOOM * image_y),
-            ));
+        if animate {
+            static MOTIONS: AtomicU64 = AtomicU64::new(0);
+            let id = MOTIONS.fetch_add(1, Ordering::Relaxed) + 1;
+            lightbox.motion = Some(ZoomMotion { id, from, to });
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(ZOOM_DURATION).await;
+                this.update(cx, |app, cx| {
+                    if let Some(lightbox) = app
+                        .lightbox
+                        .as_mut()
+                        .filter(|box_| box_.motion.is_some_and(|motion| motion.id == id))
+                    {
+                        lightbox.motion = None;
+                        cx.notify();
+                    }
+                })
+                .ok();
+            })
+            .detach();
         }
         cx.notify();
     }
 
     fn start_lightbox_drag(&mut self, start: Point<Pixels>) {
-        if let Some(lightbox) = self.lightbox.as_mut().filter(|box_| box_.zoomed) {
+        if let Some(lightbox) = self
+            .lightbox
+            .as_mut()
+            .filter(|box_| box_.zoomed && box_.motion.is_none())
+        {
             lightbox.drag = Some(Drag {
                 start,
                 offset: lightbox.scroll.offset(),
@@ -401,6 +515,49 @@ fn clipboard_image(bytes: Vec<u8>) -> Option<Image> {
     Some(Image::from_bytes(ImageFormat::Png, png.into_inner()))
 }
 
+fn zoomed_origin(
+    image: Size<Pixels>,
+    margin: Pixels,
+    offset: Point<Pixels>,
+    viewport: Size<Pixels>,
+) -> Point<Pixels> {
+    let axis = |image: Pixels, offset: Pixels, view: Pixels| {
+        if image + margin * 2. <= view {
+            (view - image) / 2.
+        } else {
+            offset + margin
+        }
+    };
+    point(
+        axis(image.width, offset.x, viewport.width),
+        axis(image.height, offset.y, viewport.height),
+    )
+}
+
+fn clamp_offset(
+    offset: Point<Pixels>,
+    image: Size<Pixels>,
+    margin: Pixels,
+    viewport: Size<Pixels>,
+) -> Point<Pixels> {
+    let axis = |offset: Pixels, image: Pixels, view: Pixels| {
+        let lowest = view - image - margin * 2.;
+        if lowest >= px(0.) {
+            px(0.)
+        } else if offset < lowest {
+            lowest
+        } else if offset > px(0.) {
+            px(0.)
+        } else {
+            offset
+        }
+    };
+    point(
+        axis(offset.x, image.width, viewport.width),
+        axis(offset.y, image.height, viewport.height),
+    )
+}
+
 fn fitted_size(lightbox: &Lightbox, window: &Window) -> (f32, f32) {
     let css = |pixels: Pixels| pixels / window.rem_size() * theme::BASE_FONT_SIZE;
     let viewport = window.viewport_size();
@@ -494,6 +651,49 @@ fn bar_button(
             app.hovered_stage_control
                 .is_some_and(|(hovered, _)| hovered == id),
             |this| this.child(theme::tooltip_below(tip)),
+        )
+}
+
+fn gallery_button(app: &DiscordApp, forward: bool) -> Div {
+    let entity = app.entity.clone();
+    let icon = theme::icon("chevron-right", 20., theme::strong());
+    let icon = if forward {
+        icon
+    } else {
+        icon.with_transformation(Transformation::rotate(radians(std::f32::consts::PI)))
+    };
+    div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .flex()
+        .items_center()
+        .when(forward, |this| this.right(rpx(16.)))
+        .when(!forward, |this| this.left(rpx(16.)))
+        .child(
+            div()
+                .id(if forward {
+                    "lightbox-next"
+                } else {
+                    "lightbox-previous"
+                })
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(rpx(40.))
+                .rounded_full()
+                .cursor_pointer()
+                .bg(rgb(SURFACE))
+                .border_1()
+                .border_color(rgba(theme::border()))
+                .hover(|style| style.bg(rgba(theme::selected())))
+                .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    entity
+                        .update(cx, |app, cx| app.step_lightbox(forward, cx))
+                        .ok();
+                })
+                .child(icon),
         )
 }
 
@@ -856,7 +1056,8 @@ fn author_chip(app: &DiscordApp, message: &Message, cx: &App) -> Div {
 pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyElement> {
     let lightbox = app.lightbox.as_ref()?;
     let (width, height) = fitted_size(lightbox, window);
-    let (width, height) = if lightbox.zoomed {
+    // Moving either way, the picture keeps the zoomed resolution, so it doesn't swap mid-way.
+    let (width, height) = if lightbox.zoomed || lightbox.motion.is_some() {
         (width * ZOOM, height * ZOOM)
     } else {
         (width, height)
@@ -943,6 +1144,43 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
                 .ok();
         })
         .children(image);
+    let picture = match lightbox.motion {
+        Some(ZoomMotion { id, from, to }) => picture
+            .with_animation(
+                ("lightbox-zoom", id),
+                Animation::new(ZOOM_DURATION).with_easing(ease_out_quint()),
+                move |this, delta| {
+                    let lerp = |from: Pixels, to: Pixels| from + (to - from) * delta;
+                    this.absolute()
+                        .left(lerp(from.origin.x, to.origin.x))
+                        .top(lerp(from.origin.y, to.origin.y))
+                        .w(lerp(from.size.width, to.size.width))
+                        .h(lerp(from.size.height, to.size.height))
+                },
+            )
+            .into_any_element(),
+        None if lightbox.zoomed => div()
+            .id("lightbox-zoomed")
+            .absolute()
+            .inset_0()
+            .flex()
+            .overflow_scroll()
+            .track_scroll(&lightbox.scroll)
+            .on_mouse_move(move |event, window, cx| {
+                if event.dragging() {
+                    let position = event.position;
+                    pan.update(cx, |app, cx| app.drag_lightbox(position, window, cx))
+                        .ok();
+                }
+            })
+            .child(div().flex_none().m_auto().p(rpx(MARGIN)).child(picture))
+            .into_any_element(),
+        None => picture.into_any_element(),
+    };
+    let paged = lightbox
+        .gallery
+        .as_ref()
+        .is_some_and(|(entries, _)| entries.len() > 1);
     let animation = Animation::new(FADE).with_easing(ease_out_quint());
     Some(
         div()
@@ -971,30 +1209,10 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
             .with_animation(("lightbox-backdrop", 0u64), animation, |this, delta| {
                 this.bg(rgba(theme::LIGHTBOX_SCRIM).opacity(delta))
             })
-            .map(|this| {
-                if lightbox.zoomed {
-                    this.child(
-                        div()
-                            .id("lightbox-zoomed")
-                            .absolute()
-                            .inset_0()
-                            .flex()
-                            .overflow_scroll()
-                            .track_scroll(&lightbox.scroll)
-                            .on_mouse_move(move |event, window, cx| {
-                                if event.dragging() {
-                                    let position = event.position;
-                                    pan.update(cx, |app, cx| {
-                                        app.drag_lightbox(position, window, cx)
-                                    })
-                                    .ok();
-                                }
-                            })
-                            .child(div().flex_none().m_auto().p(rpx(MARGIN)).child(picture)),
-                    )
-                } else {
-                    this.child(picture)
-                }
+            .child(picture)
+            .when(paged, |this| {
+                this.child(gallery_button(app, false))
+                    .child(gallery_button(app, true))
             })
             .children(found.map(|origin| author_chip(app, origin.message, cx)))
             .child(toolbar(app, lightbox, found))
