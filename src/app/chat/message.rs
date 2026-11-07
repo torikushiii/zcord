@@ -4,6 +4,7 @@ use super::media::{render_attachments, render_sticker};
 use super::rows::is_system;
 use super::*;
 use crate::app::display_name::{self, Surface};
+use crate::app::menu::PopupButton as _;
 use crate::app::message_body::render_body_scaled;
 use crate::app::rich_text::{Action, Piece};
 
@@ -258,7 +259,7 @@ fn render_system(app: &DiscordApp, message: &Message, cx: &App) -> Option<AnyEle
                                 div()
                                     .text_size(rpx(12.))
                                     .text_color(rgb(theme::faint()))
-                                    .child(message.timestamp.short()),
+                                    .child(message.timestamp.header()),
                             ),
                     ),
             )
@@ -458,6 +459,70 @@ fn reply_bar(app: &DiscordApp, message: &Message, reply: &ReplyState, cx: &App) 
         .into_any_element()
 }
 
+fn forward_footer(
+    app: &DiscordApp,
+    message_id: u64,
+    forward: &Forward,
+    cx: &App,
+) -> Option<Stateful<Div>> {
+    let guild = forward
+        .guild_id
+        .and_then(|guild_id| app.store.guild_by_id(guild_id));
+    let target = forward
+        .channel_id
+        .zip(forward.message_id)
+        .filter(|(channel_id, _)| match forward.guild_id {
+            Some(_) => guild.is_some(),
+            None => app.store.private_channel(*channel_id).is_some(),
+        });
+    let stamp = forward.timestamp.map(|timestamp| timestamp.forwarded());
+    if guild.is_none() && stamp.is_none() {
+        return None;
+    }
+    let guild_id = forward.guild_id;
+    let entity = app.entity.clone();
+    Some(
+        div()
+            .id(("forward-source", message_id))
+            .flex()
+            .flex_none()
+            .self_start()
+            .max_w_full()
+            .items_center()
+            .gap(rpx(4.))
+            .mt(rpx(4.))
+            .py(rpx(1.))
+            .rounded(rpx(4.))
+            .min_w_0()
+            .text_size(rpx(14.))
+            .line_height(rpx(18.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(rgb(theme::faint()))
+            .children(guild.map(|guild| crate::app::titlebar::guild_icon(guild, 4., cx)))
+            .children(guild.map(|guild| div().min_w_0().truncate().child(guild.name.clone())))
+            .when(guild.is_some() && stamp.is_some(), |this| {
+                this.child(div().px(rpx(3.5)).child("•"))
+            })
+            .children(stamp.map(|stamp| div().flex_none().child(stamp)))
+            .when_some(target, |this, (channel_id, source_id)| {
+                this.cursor_pointer()
+                    .hover(|style| {
+                        style
+                            .bg(rgba(theme::control_bg()))
+                            .text_color(rgb(theme::strong()))
+                    })
+                    .child(theme::icon("chevron-right", 12., theme::faint()))
+                    .on_click(move |_, window, cx| {
+                        entity
+                            .update(cx, |app, cx| {
+                                app.open_message(guild_id, channel_id, source_id, window, cx)
+                            })
+                            .ok();
+                    })
+            }),
+    )
+}
+
 fn render_forward(app: &DiscordApp, message_id: u64, forward: &Forward, cx: &App) -> AnyElement {
     let key = forward_key(message_id);
     let font_size = crate::settings::chat_font_size();
@@ -467,46 +532,27 @@ fn render_forward(app: &DiscordApp, message_id: u64, forward: &Forward, cx: &App
     let context = body_context(app, key);
     let show_body =
         !parsed.blocks.is_empty() && !embeds::hides_content(&forward.content, &forward.embeds);
-    let channel = forward
-        .channel_id
-        .and_then(|channel_id| app.store.channel_name(channel_id));
-    let footer = (channel.is_some() || forward.timestamp.is_some()).then(|| {
-        let text = match (channel, forward.timestamp) {
-            (Some(channel), Some(timestamp)) => format!("#{channel} • {}", timestamp.full()),
-            (Some(channel), None) => format!("#{channel}"),
-            (None, timestamp) => timestamp
-                .map(|timestamp| timestamp.full())
-                .unwrap_or_default(),
-        };
-        div()
-            .mt(rpx(2.))
-            .text_size(rpx(12.))
-            .line_height(rpx(16.))
-            .text_color(rgb(theme::faint()))
-            .child(text)
-    });
-    div()
+    let footer = forward_footer(app, message_id, forward, cx);
+    let content = div()
         .flex()
         .flex_col()
-        .w_full()
-        .mt(rpx(2.))
-        .py(rpx(2.))
-        .pl(rpx(12.))
-        .rounded_l(rpx(4.))
-        .border_l_4()
-        .border_color(rgba(theme::border()))
+        .flex_1()
+        .min_w_0()
         .child(
             div()
                 .flex()
                 .items_center()
                 .gap(rpx(4.))
-                .child(theme::icon("forward", 16., theme::muted()))
+                .mt(rpx(2.))
+                .mb(rpx(4.))
+                .child(theme::icon("forward", 16., theme::faint()))
                 .child(
                     div()
                         .italic()
                         .text_size(rpx(14.))
                         .line_height(rpx(18.))
-                        .text_color(rgb(theme::muted()))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(theme::faint()))
                         .child("Forwarded"),
                 ),
         )
@@ -542,7 +588,20 @@ fn render_forward(app: &DiscordApp, message_id: u64, forward: &Forward, cx: &App
                 .map(|(index, embed)| embeds::render_embed(app, key, index, embed, cx)),
         )
         .children(embeds::render_components(app, key, &forward.components, cx))
-        .children(footer)
+        .children(footer);
+    div()
+        .flex()
+        .w_full()
+        .py(rpx(2.))
+        .child(
+            div()
+                .flex_none()
+                .w(rpx(4.))
+                .mr(rpx(12.))
+                .rounded(rpx(2.))
+                .bg(rgba(theme::outline())),
+        )
+        .child(content)
         .into_any_element()
 }
 
@@ -700,13 +759,16 @@ pub(super) fn render_message(
                                     div()
                                         .id("author-avatar")
                                         .when(!preview && message.webhook.is_none(), |this| {
-                                            this.cursor_pointer().without_text_selection().on_click(
-                                                profile::opener(
-                                                    app,
-                                                    message.author_id,
-                                                    Anchor::TopLeft,
-                                                ),
-                                            )
+                                            this.cursor_pointer()
+                                                .without_text_selection()
+                                                .on_popup_click(
+                                                    profile::shown(app, message.author_id),
+                                                    profile::opener(
+                                                        app,
+                                                        message.author_id,
+                                                        Anchor::TopLeft,
+                                                    ),
+                                                )
                                         })
                                         .child(author_avatar(
                                             app,
@@ -731,7 +793,7 @@ pub(super) fn render_message(
                                 div()
                                     .flex()
                                     .items_center()
-                                    .gap(rpx(6.))
+                                    .gap(rpx(4.))
                                     .h(rpx(22.))
                                     .line_height(rpx(22.))
                                     .child(
@@ -748,18 +810,26 @@ pub(super) fn render_message(
                                                 this.cursor_pointer()
                                                     .without_text_selection()
                                                     .hover(|style| style.underline())
-                                                    .on_click(profile::opener(
-                                                        app,
-                                                        message.author_id,
-                                                        Anchor::TopLeft,
-                                                    ))
+                                                    .on_popup_click(
+                                                        profile::shown(app, message.author_id),
+                                                        profile::opener(
+                                                            app,
+                                                            message.author_id,
+                                                            Anchor::TopLeft,
+                                                        ),
+                                                    )
                                             })
                                             .child(author_label(app, message, cx)),
                                     )
                                     .when(
                                         message.webhook.is_some()
                                             || user.is_some_and(|user| user.bot),
-                                        |this| this.child(theme::app_tag()),
+                                        |this| {
+                                            this.child(theme::app_tag(match &message.webhook {
+                                                Some(webhook) => webhook.verified_bot,
+                                                None => user.is_some_and(|user| user.verified_bot),
+                                            }))
+                                        },
                                     )
                                     .children(
                                         user.and_then(|user| user.tag.as_ref())
@@ -767,9 +837,11 @@ pub(super) fn render_message(
                                     )
                                     .child(
                                         div()
+                                            .ml(rpx(4.))
                                             .text_size(rpx(12.))
+                                            .font_weight(FontWeight::MEDIUM)
                                             .text_color(rgb(theme::faint()))
-                                            .child(message.timestamp.full()),
+                                            .child(message.timestamp.header()),
                                     ),
                             )
                         })

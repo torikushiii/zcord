@@ -66,6 +66,7 @@ pub struct User {
     pub status: Status,
     pub on_mobile: bool,
     pub bot: bool,
+    pub verified_bot: bool,
     pub role_color: Option<u32>,
     pub tag: Option<GuildTag>,
     pub playing: bool,
@@ -263,6 +264,41 @@ impl Timestamp {
             1 => format!("Tomorrow at {}", self.time()),
             2.. => day,
             _ => format!("{day} {}", self.time()),
+        }
+    }
+
+    pub fn header(self) -> String {
+        self.header_on(chrono::Local::now().date_naive())
+    }
+
+    fn header_on(self, today: chrono::NaiveDate) -> String {
+        let date = chrono::NaiveDate::from_ymd_opt(
+            i32::from(self.year),
+            u32::from(self.month),
+            u32::from(self.day),
+        );
+        match date.map(|date| (today - date).num_days()) {
+            Some(0) => self.time(),
+            Some(1) => format!("Yesterday at {}", self.time()),
+            _ => format!("{}/{}/{} {}", self.month, self.day, self.year, self.time()),
+        }
+    }
+
+    pub fn forwarded(self) -> String {
+        self.forwarded_on(chrono::Local::now().date_naive())
+    }
+
+    fn forwarded_on(self, today: chrono::NaiveDate) -> String {
+        let date = chrono::NaiveDate::from_ymd_opt(
+            i32::from(self.year),
+            u32::from(self.month),
+            u32::from(self.day),
+        );
+        match date.map(|date| ((today - date).num_days(), date)) {
+            Some((0, _)) => self.time(),
+            Some((1, _)) => "Yesterday".to_owned(),
+            Some((2..=6, date)) => date.format("%A").to_string(),
+            _ => format!("{:02}/{:02}/{}", self.month, self.day, self.year),
         }
     }
 
@@ -489,6 +525,7 @@ pub struct WebhookAuthor {
     pub id: u64,
     pub name: String,
     pub avatar: Option<String>,
+    pub verified_bot: bool,
 }
 
 const FORWARDABLE_FLAGS: u64 = (1 << 0)
@@ -604,6 +641,7 @@ pub struct Forward {
     pub edited: bool,
     pub channel_id: Option<u64>,
     pub guild_id: Option<u64>,
+    pub message_id: Option<u64>,
 }
 
 const ATTACHMENT_IS_SPOILER: u64 = 1 << 3;
@@ -1247,5 +1285,42 @@ mod tests {
         let mut message = message(0, 0);
         message.poll = Some(json!({}));
         assert!(!is_forwardable(&message));
+    }
+
+    #[test]
+    fn header_stamp_names_today_and_yesterday_then_the_full_date() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 7).unwrap();
+        let at = |month, day| Timestamp {
+            year: 2026,
+            month,
+            day,
+            hour: 4,
+            minute: 21,
+        };
+        // Another test flips the clock format, so compare against `time()` itself.
+        let time = at(11, 7).time();
+        assert_eq!(at(11, 7).header_on(today), time);
+        assert_eq!(at(11, 6).header_on(today), format!("Yesterday at {time}"));
+        assert_eq!(at(11, 5).header_on(today), format!("11/5/2026 {time}"));
+        assert_eq!(at(11, 8).header_on(today), format!("11/8/2026 {time}"));
+    }
+
+    #[test]
+    fn forwarded_stamp_names_the_time_yesterday_and_weekdays_then_the_date() {
+        let saturday = chrono::NaiveDate::from_ymd_opt(2026, 11, 7).unwrap();
+        let at = |month, day| Timestamp {
+            year: 2026,
+            month,
+            day,
+            hour: 4,
+            minute: 26,
+        };
+        assert_eq!(at(11, 7).forwarded_on(saturday), at(11, 7).time());
+        assert_eq!(at(11, 6).forwarded_on(saturday), "Yesterday");
+        assert_eq!(at(11, 5).forwarded_on(saturday), "Thursday");
+        assert_eq!(at(11, 2).forwarded_on(saturday), "Monday");
+        assert_eq!(at(11, 1).forwarded_on(saturday), "Sunday");
+        assert_eq!(at(10, 31).forwarded_on(saturday), "10/31/2026");
+        assert_eq!(at(11, 8).forwarded_on(saturday), "11/08/2026");
     }
 }

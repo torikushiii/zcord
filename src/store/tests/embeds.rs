@@ -153,7 +153,7 @@ fn reddit_component_embeds_preserve_text_galleries_and_link_buttons() {
     let snapshot: model::SnapshotMessage = serde_json::from_value(json!({
         "embeds": serde_json::from_str::<serde_json::Value>(include_str!("../fixtures/reddit_embeds.json")).unwrap()["embeds"].clone()
     })).unwrap();
-    let forward = mapping::map_snapshot(&snapshot, Some(2002), Some(200));
+    let forward = mapping::map_snapshot(&snapshot, Some(2002), Some(200), None);
     assert_eq!(forward.embeds[0].components.len(), 1);
     assert!(mapping::map_embeds(&source.embeds, 4).is_empty());
 }

@@ -7,9 +7,9 @@ use gpui::{
 use gpui_component::ElementExt;
 
 use super::{
-    EMBED_HORIZONTAL_INSET, EMBED_MEDIA, EMBED_WIDTH, component_container, description_text,
-    embed_card, embed_content_width, field_grid, fit, inline_media, media_max,
-    single_gallery_frame,
+    EMBED_HORIZONTAL_INSET, EMBED_MEDIA, EMBED_WIDTH, component_container, content_row,
+    description_text, embed_card, embed_content_width, field_bases, field_grid, fit, inline_media,
+    media_max, single_gallery_frame,
 };
 use crate::{
     app::rich_text::{Piece, PieceStyle, rich_text},
@@ -81,32 +81,31 @@ impl Render for EmbedLayout {
                 )
                 .line_height(rpx(18.)),
             );
-        let content =
-            div()
-                .flex()
-                .gap(rpx(16.))
-                .w_full()
-                .child(body)
-                .when(self.side_thumbnail, |this| {
-                    this.child(
+        let content = content_row().child(body).when(self.side_thumbnail, |this| {
+            this.child(
+                div()
+                    .flex_none()
+                    .size(rpx(80.))
+                    .debug_selector(|| "thumbnail".into()),
+            )
+        });
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .font_weight(FontWeight::BOLD)
+            .child(
+                embed_card(None, self.card_width.or(self.media_width))
+                    .debug_selector(|| "card".into())
+                    .child(content)
+                    .children(self.media_width.map(|width| {
                         div()
                             .flex_none()
-                            .size(rpx(80.))
-                            .debug_selector(|| "thumbnail".into()),
-                    )
-                });
-        div().size_full().font_weight(FontWeight::BOLD).child(
-            embed_card(None, self.card_width.or(self.media_width))
-                .debug_selector(|| "card".into())
-                .child(content)
-                .children(self.media_width.map(|width| {
-                    div()
-                        .flex_none()
-                        .w(rpx(width))
-                        .h(rpx(225.))
-                        .debug_selector(|| "media".into())
-                })),
-        )
+                            .w(rpx(width))
+                            .h(rpx(225.))
+                            .debug_selector(|| "media".into())
+                    })),
+            )
     }
 }
 
@@ -155,7 +154,7 @@ fn text_only_and_side_thumbnail_cards_keep_the_existing_width_limit(cx: &mut Tes
         let _ = window.draw(cx);
     });
     let compact = cx.debug_bounds("card").unwrap();
-    assert!(compact.size.width <= px(EMBED_WIDTH));
+    assert!(compact.size.width < px(300.));
     view.update(cx, |view, cx| {
         view.side_thumbnail = true;
         cx.notify();
@@ -212,12 +211,9 @@ fn media(width: u32, height: u32) -> Media {
 }
 
 #[test]
-fn cards_take_their_width_from_wide_media_then_fields_then_bare_media() {
+fn cards_take_their_width_from_wide_media_then_bare_media() {
     let mut embed = inline_field_embed();
-    assert_eq!(
-        embed_content_width(&embed, EMBED_MEDIA, None),
-        Some(EMBED_WIDTH - EMBED_HORIZONTAL_INSET)
-    );
+    assert_eq!(embed_content_width(&embed, EMBED_MEDIA, None), None);
     embed.images = vec![media(1920, 1080)];
     assert_eq!(
         embed_content_width(&embed, EMBED_MEDIA, Some(400.)),
@@ -291,7 +287,12 @@ struct InlineFieldLayout {
 impl Render for InlineFieldLayout {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let embed = inline_field_embed();
-        let grid = field_grid(&embed.fields, |index, field| {
+        let widths: Vec<f32> = embed
+            .fields
+            .iter()
+            .map(|field| field.name.len().max(field.value.len()) as f32 * 8.)
+            .collect();
+        let grid = field_grid(&embed.fields, &widths, |index, field| {
             let selector = format!("inline-field-{index}");
             div()
                 .flex()
@@ -314,14 +315,11 @@ impl Render for InlineFieldLayout {
                 )
                 .into_any_element()
         });
-        div().w(rpx(self.width)).child(
+        div().flex().flex_col().w(rpx(self.width)).child(
             embed_card(embed.color, embed_content_width(&embed, EMBED_MEDIA, None))
                 .debug_selector(|| "inline-card".into())
                 .child(
-                    div()
-                        .flex()
-                        .gap(rpx(16.))
-                        .w_full()
+                    content_row()
                         .child(div().flex().flex_col().flex_1().min_w_0().child(grid))
                         .child(
                             div()
@@ -335,7 +333,7 @@ impl Render for InlineFieldLayout {
 }
 
 #[gpui::test]
-fn inline_fields_share_their_row_evenly_even_in_a_narrow_card(cx: &mut TestAppContext) {
+fn inline_fields_share_a_row_and_fit_their_content(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let (view, cx) = cx.add_window_view(|_, _| InlineFieldLayout { width: 600. });
     for width in [600., 360.] {
@@ -353,6 +351,7 @@ fn inline_fields_share_their_row_evenly_even_in_a_narrow_card(cx: &mut TestAppCo
             let thumbnail = cx.debug_bounds("inline-thumbnail").unwrap();
             let uid = cx.debug_bounds("inline-value-1").unwrap();
             let first = cx.debug_bounds("inline-field-0").unwrap();
+            let second = cx.debug_bounds("inline-field-1").unwrap();
             let third = cx.debug_bounds("inline-field-2").unwrap();
             let region = cx.debug_bounds("inline-field-3").unwrap();
             assert!(card.size.width <= px(width.min(EMBED_WIDTH) * zoom + 1.));
@@ -360,9 +359,11 @@ fn inline_fields_share_their_row_evenly_even_in_a_narrow_card(cx: &mut TestAppCo
             assert!(thumbnail.right() < card.right());
             assert!(region.top() > third.bottom());
             assert!((first.top() - third.top()).abs() <= px(1.));
-            assert!((first.size.width - third.size.width).abs() <= px(1.));
+            assert!(first.right() <= second.left());
+            assert!(second.right() <= third.left());
             if width == 600. {
                 assert!((uid.size.height - px(18. * zoom)).abs() <= px(1.));
+                assert!(card.size.width < px((EMBED_WIDTH - 20.) * zoom));
             }
         }
     }
@@ -496,6 +497,17 @@ fn long_component_posts_reserve_the_full_gallery_height(cx: &mut TestAppContext)
             let image = cx.debug_bounds("gallery-image").unwrap();
             assert!(image.top() >= px(0.));
             assert!(image.bottom() <= px(600.));
+        }
+    }
+}
+
+#[test]
+fn field_columns_line_up_across_rows_like_css_grid() {
+    let bases = field_bases(&[vec![75.3, 62.2, 41.7], vec![51.8, 89.9]]);
+    let expected = [vec![75.3, 66.567, 50.433], vec![110.4, 89.9]];
+    for (row, expected) in bases.iter().zip(expected) {
+        for (basis, expected) in row.iter().zip(expected) {
+            assert!((basis - expected).abs() < 0.01, "{basis} != {expected}");
         }
     }
 }

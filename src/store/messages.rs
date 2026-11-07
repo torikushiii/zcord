@@ -613,9 +613,12 @@ impl Store {
             let guild_id = reference
                 .and_then(|reference| reference.guild_id)
                 .or_else(|| previous.and_then(|forward| forward.guild_id));
+            let message_id = reference
+                .and_then(|reference| reference.message_id)
+                .or_else(|| previous.and_then(|forward| forward.message_id));
             message.forward = snapshots
                 .first()
-                .map(|snapshot| map_snapshot(&snapshot.message, channel_id, guild_id));
+                .map(|snapshot| map_snapshot(&snapshot.message, channel_id, guild_id, message_id));
         }
         Change::MessageChanged {
             channel_id: update.channel_id,

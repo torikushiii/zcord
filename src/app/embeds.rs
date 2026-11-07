@@ -21,6 +21,8 @@ use crate::{
 };
 
 const EMBED_WIDTH: f32 = 521.;
+const FIELD_GAP: f32 = 8.;
+const FIELD_TRACKS: usize = 12;
 const EMBED_PADDING_LEFT: f32 = 15.;
 const EMBED_PADDING_RIGHT: f32 = 16.;
 const EMBED_HORIZONTAL_INSET: f32 = EMBED_PADDING_LEFT + EMBED_PADDING_RIGHT + 2.;
@@ -179,7 +181,9 @@ fn embed_card(color: Option<u32>, content_width: Option<f32>) -> Div {
         .map(|this| match content_width {
             // Resolve the card width before its percent-width text row is measured.
             Some(width) => this.w(rpx(width + EMBED_HORIZONTAL_INSET)).max_w_full(),
-            None => this.max_w(rpx(EMBED_WIDTH.min(super::chat::media_limit()))),
+            // A max width can't be both the limit and the parent's width, so the limit sits
+            // on the rows (`text_limit`) and the card keeps to its parent.
+            None => this.max_w_full(),
         })
         .font_weight(FontWeight::NORMAL)
         .text_color(rgb(theme::text()))
@@ -204,6 +208,14 @@ fn embed_card(color: Option<u32>, content_width: Option<f32>) -> Div {
                     .filter(|&color| color != 0xFFFFFF)
                     .unwrap_or(theme::embed_border()))),
         )
+}
+
+fn text_limit() -> f32 {
+    EMBED_WIDTH.min(super::chat::media_limit()) - EMBED_HORIZONTAL_INSET
+}
+
+fn content_row() -> Div {
+    div().flex().gap(rpx(16.)).w_full().max_w(rpx(text_limit()))
 }
 
 fn fit(media: &Media, max: (f32, f32)) -> (f32, f32) {
@@ -274,9 +286,7 @@ fn media_card_width(embed: &Embed, max: (f32, f32)) -> Option<f32> {
 }
 
 fn embed_content_width(embed: &Embed, max: (f32, f32), media_width: Option<f32>) -> Option<f32> {
-    media_card_width(embed, max)
-        .or_else(|| (!embed.fields.is_empty()).then_some(EMBED_WIDTH - EMBED_HORIZONTAL_INSET))
-        .or_else(|| media_width.filter(|_| !has_text(embed)))
+    media_card_width(embed, max).or_else(|| media_width.filter(|_| !has_text(embed)))
 }
 
 fn animated_id(key: &str) -> (&'static str, u64) {
@@ -706,10 +716,7 @@ pub fn render_embed(
         .as_ref()
         .filter(|_| media.is_none() || (rich && embed.video.is_none()));
     let content_width = embed_content_width(embed, max, media.as_ref().map(|(_, width)| *width));
-    let content = div()
-        .flex()
-        .gap(rpx(16.))
-        .w_full()
+    let content = content_row()
         .child(body)
         .children(side_thumbnail.map(|thumbnail| {
             let (width, height) = fit(thumbnail, (THUMBNAIL, THUMBNAIL));
@@ -739,6 +746,7 @@ pub fn render_embed(
                 .flex()
                 .items_center()
                 .gap(rpx(8.))
+                .max_w(rpx(text_limit()))
                 .children(icon_image(
                     embed
                         .footer
@@ -930,7 +938,8 @@ fn fields(
     name_key: impl Fn(usize) -> u64,
     cx: &App,
 ) -> Div {
-    field_grid(fields, |index, field| {
+    let widths: Vec<f32> = fields.iter().map(|field| field_width(field, cx)).collect();
+    field_grid(fields, &widths, |index, field| {
         div()
             .flex()
             .flex_col()
@@ -946,7 +955,7 @@ fn fields(
     })
 }
 
-fn field_grid(fields: &[EmbedField], render: impl Fn(usize, &EmbedField) -> AnyElement) -> Div {
+fn field_rows(fields: &[EmbedField]) -> Vec<Vec<usize>> {
     let mut rows: Vec<Vec<usize>> = Vec::new();
     for (index, field) in fields.iter().enumerate() {
         match rows.last_mut() {
@@ -954,20 +963,107 @@ fn field_grid(fields: &[EmbedField], render: impl Fn(usize, &EmbedField) -> AnyE
             _ => rows.push(vec![index]),
         }
     }
+    rows
+}
+
+/// CSS grid sizing of twelve `auto` columns, done by hand because Taffy's grid sizes them past a
+/// narrow card. Rows then grow fields in proportion to their span, which equals grid's even
+/// stretch of the columns only because every row covers all twelve.
+fn field_bases(rows: &[Vec<f32>]) -> Vec<Vec<f32>> {
+    let span = |row: &Vec<f32>| FIELD_TRACKS / row.len();
+    let mut items: Vec<(usize, usize, f32)> = Vec::new();
+    for row in rows {
+        for (column, width) in row.iter().enumerate() {
+            items.push((column * span(row), span(row), *width));
+        }
+    }
+    items.sort_by_key(|(_, span, _)| *span);
+    let mut tracks = [0f32; FIELD_TRACKS];
+    for (start, span, width) in items {
+        let spanned = start..start + span;
+        let current = tracks[spanned.clone()].iter().sum::<f32>() + FIELD_GAP * (span - 1) as f32;
+        if width > current {
+            let extra = (width - current) / span as f32;
+            tracks[spanned].iter_mut().for_each(|track| *track += extra);
+        }
+    }
+    rows.iter()
+        .map(|row| {
+            (0..row.len())
+                .map(|column| {
+                    let start = column * span(row);
+                    tracks[start..start + span(row)].iter().sum::<f32>()
+                        + FIELD_GAP * (span(row) - 1) as f32
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn field_width(field: &EmbedField, cx: &App) -> f32 {
+    let widest = |text: &str, weight| {
+        text.lines()
+            .map(|line| text_width(line, weight, cx))
+            .fold(0., f32::max)
+    };
+    widest(&field.name, FontWeight::SEMIBOLD).max(widest(&field.value, FontWeight::NORMAL))
+}
+
+/// Markdown markers count toward the width, so this runs a little wide for styled values.
+fn text_width(text: &str, weight: FontWeight, cx: &App) -> f32 {
+    thread_local! {
+        static WIDTHS: std::cell::RefCell<std::collections::HashMap<(String, u16), f32>> =
+            Default::default();
+    }
+    let key = (text.to_owned(), weight.0 as u16);
+    if let Some(width) = WIDTHS.with(|widths| widths.borrow().get(&key).copied()) {
+        return width;
+    }
+    let mut font = font(gpui_component::ActiveTheme::theme(cx).font_family.clone());
+    font.weight = weight;
+    let text_system = cx.text_system();
+    let id = text_system.resolve_font(&font);
+    let width = text
+        .chars()
+        .map(|ch| f32::from(text_system.layout_width(id, px(14.), ch)))
+        .sum();
+    WIDTHS.with(|widths| {
+        let mut widths = widths.borrow_mut();
+        if widths.len() > 2048 {
+            widths.clear();
+        }
+        widths.insert(key, width);
+    });
+    width
+}
+
+fn field_grid(
+    fields: &[EmbedField],
+    widths: &[f32],
+    render: impl Fn(usize, &EmbedField) -> AnyElement,
+) -> Div {
+    let rows = field_rows(fields);
+    let bases = field_bases(
+        &rows
+            .iter()
+            .map(|row| row.iter().map(|&index| widths[index]).collect())
+            .collect::<Vec<_>>(),
+    );
     div()
         .flex()
         .flex_col()
-        .gap(rpx(8.))
-        .w_full()
-        .children(rows.into_iter().map(|row| {
+        .gap(rpx(FIELD_GAP))
+        .children(rows.into_iter().zip(bases).map(|(row, bases)| {
+            let span = (FIELD_TRACKS / row.len()) as f32;
             div()
                 .flex()
-                .gap(rpx(8.))
-                .w_full()
+                .gap(rpx(FIELD_GAP))
                 .min_w_0()
-                .children(row.into_iter().map(|index| {
+                .children(row.into_iter().zip(bases).map(|(index, basis)| {
                     div()
-                        .flex_1()
+                        .flex_basis(rpx(basis))
+                        .flex_grow(span)
+                        .flex_shrink_1()
                         .min_w_0()
                         .child(render(index, &fields[index]))
                 }))
