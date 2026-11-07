@@ -2,6 +2,7 @@
 //! composer's right-click menu.
 
 use gpui::{prelude::*, *};
+use std::cell::Cell;
 
 use crate::theme::{self, WithoutTextSelection, rpx};
 
@@ -90,4 +91,47 @@ pub(in crate::app) fn panel(id: &'static str, width: f32) -> Stateful<Div> {
         .border_color(rgba(theme::border()))
         .shadow_lg()
         .occlude()
+}
+
+thread_local! {
+    static CLOSING_PRESS: Cell<Option<Point<Pixels>>> = const { Cell::new(None) };
+}
+
+/// For buttons that open a popup. Popups close on any press outside them, their own button's
+/// included, so the release would open them again. A click whose press began while `open` held
+/// was that close, and `handler` doesn't see it.
+pub(in crate::app) trait PopupButton:
+    InteractiveElement + StatefulInteractiveElement
+{
+    fn on_popup_click(
+        self,
+        open: impl Fn(&App) -> bool + 'static,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        // Every press on the button replaces the mark, so one left by a press that never became
+        // a click can't swallow a later one.
+        self.capture_any_mouse_down(move |event, _, cx| {
+            CLOSING_PRESS
+                .set((event.button == MouseButton::Left && open(cx)).then_some(event.position));
+        })
+        .on_click(move |event, window, cx| {
+            let closing = CLOSING_PRESS.take();
+            if let ClickEvent::Mouse(click) = event
+                && closing == Some(click.down.position)
+            {
+                return;
+            }
+            handler(event, window, cx);
+        })
+    }
+}
+
+impl<E: StatefulInteractiveElement> PopupButton for E {}
+
+pub(in crate::app) fn shown(
+    app: &super::DiscordApp,
+    open: impl Fn(&super::DiscordApp) -> bool + 'static,
+) -> impl Fn(&App) -> bool + 'static {
+    let entity = app.entity.clone();
+    move |cx| entity.read_with(cx, |app, _| open(app)).unwrap_or(false)
 }

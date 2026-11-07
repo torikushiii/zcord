@@ -1,6 +1,7 @@
 use super::rows::is_system;
 use super::*;
 use crate::app::emoji_picker::{PickerTarget, choice_name, emoji_image};
+use crate::app::menu::PopupButton as _;
 use crate::store::EmojiChoice;
 
 const BAR_REACTIONS: usize = 3;
@@ -14,6 +15,7 @@ pub(in crate::app) struct MessageMenu {
     position: Point<Pixels>,
     anchor: Anchor,
     reactions_open: bool,
+    reminders_open: bool,
 }
 
 impl DiscordApp {
@@ -31,6 +33,7 @@ impl DiscordApp {
             position,
             anchor: Anchor::TopRight,
             reactions_open: false,
+            reminders_open: false,
         });
         cx.notify();
     }
@@ -46,15 +49,27 @@ impl DiscordApp {
             position,
             anchor: Anchor::TopLeft,
             reactions_open: false,
+            reminders_open: false,
         });
         cx.notify();
     }
 
     fn show_reaction_submenu(&mut self, open: bool, cx: &mut Context<Self>) {
         if let Some(menu) = &mut self.message_menu
-            && menu.reactions_open != open
+            && (menu.reactions_open != open || menu.reminders_open)
         {
             menu.reactions_open = open;
+            menu.reminders_open = false;
+            cx.notify();
+        }
+    }
+
+    fn show_reminder_submenu(&mut self, cx: &mut Context<Self>) {
+        if let Some(menu) = &mut self.message_menu
+            && (!menu.reminders_open || menu.reactions_open)
+        {
+            menu.reminders_open = true;
+            menu.reactions_open = false;
             cx.notify();
         }
     }
@@ -415,13 +430,18 @@ pub(super) fn message_actions(app: &DiscordApp, message: &Message, cx: &App) -> 
             })
             .children(buttons)
             .when(!extended || !allowed.delete, |this| {
-                this.child(button("more", "ellipsis", theme::muted(), "More").on_click(
-                    move |event, _, cx| {
-                        let position = event.position();
-                        more.update(cx, |app, cx| app.toggle_message_menu(id, position, cx))
-                            .ok();
-                    },
-                ))
+                this.child(
+                    button("more", "ellipsis", theme::muted(), "More").on_popup_click(
+                        crate::app::menu::shown(app, move |app| {
+                            app.message_menu.is_some_and(|menu| menu.message_id == id)
+                        }),
+                        move |event, _, cx| {
+                            let position = event.position();
+                            more.update(cx, |app, cx| app.toggle_message_menu(id, position, cx))
+                                .ok();
+                        },
+                    ),
+                )
             })
             .into_any_element(),
     )
@@ -638,6 +658,63 @@ pub(in crate::app) fn message_menu(app: &DiscordApp, cx: &App) -> Option<AnyElem
                 text,
                 move |app, _, _, cx| app.copy_message_text(copy_text.clone(), cx),
             ))
+        })
+        .when(app.live, |this| {
+            let channel_id = app.selected_channel_id;
+            let bookmarked = app.store.is_bookmarked(id);
+            let hover = app.entity.clone();
+            let presets =
+                crate::app::saved::preset_rows(app, "menu-reminder-preset", channel_id, id);
+            this.child(menu_entry(
+                app,
+                "menu-bookmark",
+                if bookmarked {
+                    "bookmark-filled"
+                } else {
+                    "bookmark"
+                },
+                if bookmarked {
+                    "Remove Bookmark"
+                } else {
+                    "Bookmark Message"
+                },
+                text,
+                move |app, _, _, cx| app.toggle_bookmark(channel_id, id, cx),
+            ))
+            .child(
+                menu_row(
+                    app,
+                    "menu-reminder",
+                    "clock",
+                    "Create Reminder",
+                    text,
+                    |_, _, _, _| {},
+                )
+                .relative()
+                .when(menu.reminders_open, |this| this.bg(rgba(theme::selected())))
+                .on_hover(move |hovered, _, cx| {
+                    if *hovered {
+                        hover
+                            .update(cx, |app, cx| app.show_reminder_submenu(cx))
+                            .ok();
+                    }
+                })
+                .child(theme::icon("chevron-right", 16., theme::muted()))
+                .when(menu.reminders_open, |this| {
+                    this.child(
+                        div().absolute().top(rpx(-8.)).left(relative(1.)).child(
+                            deferred(
+                                anchored().snap_to_window_with_margin(px(8.)).child(
+                                    div()
+                                        .pl(rpx(16.))
+                                        .child(crate::app::saved::preset_panel(presets)),
+                                ),
+                            )
+                            .with_priority(3),
+                        ),
+                    )
+                }),
+            )
         })
         .when(
             app.store.can_manage_messages(app.selected_channel_id),

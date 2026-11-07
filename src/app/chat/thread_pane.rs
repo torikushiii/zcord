@@ -2,6 +2,7 @@ use super::composer::{emoji_token_overlay, flush_textarea, send_icon};
 use super::popouts::PopoutKind;
 use super::rows::render_pane_row;
 use super::*;
+use crate::app::menu::PopupButton as _;
 use crate::app::{
     OLDER_MESSAGES_THRESHOLD,
     home::{HomePage, blocked_bar, request_bar},
@@ -549,9 +550,14 @@ fn post_header(app: &DiscordApp, pane: &ThreadPane, name: &str) -> impl IntoElem
                     theme::icon_button("thread-pane-more", "ellipsis", 20., theme::muted())
                         .relative()
                         .child(theme::hover_tooltip("thread-pane-more-tip", "More"))
-                        .on_click(move |_, _, cx| {
-                            toggle.update(cx, |app, cx| app.toggle_pane_menu(cx)).ok();
-                        }),
+                        .on_popup_click(
+                            crate::app::menu::shown(app, |app| {
+                                app.thread_pane.as_ref().is_some_and(|pane| pane.menu)
+                            }),
+                            move |_, _, cx| {
+                                toggle.update(cx, |app, cx| app.toggle_pane_menu(cx)).ok();
+                            },
+                        ),
                 ),
         )
         .child(
