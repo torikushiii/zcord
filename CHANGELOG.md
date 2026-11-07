@@ -2,6 +2,27 @@
 
 ## Unversioned
 
+## 0.7.0
+
+- Major: Added the Inbox with Unreads, Mentions, Bookmarks, Reminders and Scheduled tabs. Messages can be bookmarked or given a reminder, and due reminders notify you.
+- Major: Added the Activity Privacy settings: what activity you share, which servers see it, and who can join your activities.
+- Major: Added Registered Games: see the games zcord has detected, turn detection off per game, and add a running program by hand.
+- Major: Voice channels now show actions on hover, and Open Chat shows a voice channel's chat without joining the call.
+- Major: Bot and app profiles now show their popular commands, roles, data access and help links, and verified bots get their badge.
+- Major: Profiles now show an "In voice" card with who is in the channel and a Join Voice button.
+- Major: Active Now now shows friends who are in voice channels.
+- Major: When Discord asks for a captcha during QR login, it now opens in your browser to solve.
+- Minor: Added Tweaks to hide your typing indicator, add an activity sharing button before the mic button, and always play animated avatars, decorations, nameplates, server icons and name effects.
+- Minor: The member list now shows a game icon, a +N count and a tooltip for activities hidden behind a custom status, and custom status emoji now show as images.
+- Minor: The member list's Activity section now shows up to eight cards and folds after three.
+- Minor: Forwarded messages now show the server and time they came from, and clicking that jumps to the original.
+- Minor: Message times now read "Yesterday at" or the full date for older messages.
+- Minor: Profile cards now lift on hover and open the full profile when clicked.
+- Minor: The voice stage and its chat now sit apart as two rounded panels.
+- Minor: The inbox button now has a tooltip.
+- Bugfix: Fixed clicking a popup's button again reopening it instead of closing it.
+- Bugfix: Fixed embed fields being laid out wider than their card.
+
 ## 0.6.0
 
 - Major: Added the Quests page with the sponsored banner, quest cards and the All Quests and Claimed Quests tabs. Quests can't be started from zcord yet.
