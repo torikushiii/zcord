@@ -72,5 +72,5 @@ pub(super) const DARK: Palette = Palette {
     upload_sheet: 0xD4D8FF,
     upload_fold: 0xA7AEFF,
     accent_border: 0xFFFFFF99,
-    account_hover: 0xFFFFFF14,
+    account_hover: 0x97979F33,
 };

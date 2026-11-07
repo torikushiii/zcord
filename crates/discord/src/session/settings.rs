@@ -120,6 +120,107 @@ impl Session {
         Ok(())
     }
 
+    pub fn activity_privacy(&self) -> settings_proto::ActivityPrivacy {
+        self.inner
+            .presence
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .proto()
+            .and_then(|proto| settings_proto::activity_privacy(proto).ok())
+            .unwrap_or_default()
+    }
+
+    /// Not retried after a reconnect.
+    pub async fn set_activity_privacy(
+        &self,
+        base: settings_proto::ActivityPrivacy,
+        edited: settings_proto::ActivityPrivacy,
+    ) -> Result<(), Error> {
+        let generation = self.status_generation()?;
+        let proto = self
+            .rest(async |rest| rest.fetch_preloaded_settings().await)
+            .await?;
+        let version = settings_proto::data_version(&proto)
+            .map_err(|_| Error::Decode)?
+            .ok_or(Error::Decode)?;
+        let latest = settings_proto::activity_privacy(&proto).map_err(|_| Error::Decode)?;
+        let desired = edited.rebase(&base, &latest);
+        let sharing_changed = latest.share_activity != desired.share_activity;
+        let Some(patch) =
+            settings_proto::activity_privacy_patch(&proto, &desired).map_err(|_| Error::Decode)?
+        else {
+            // Already saved elsewhere, possibly ahead of its gateway update: the cache still
+            // has to take the fetched settings, or the page falls back to the old value.
+            if self.status_generation()? != generation {
+                return Err(Error::Closed);
+            }
+            let command = {
+                let mut presence = self
+                    .inner
+                    .presence
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                let was_sharing = presence
+                    .proto()
+                    .and_then(|cached| settings_proto::activity_privacy(cached).ok())
+                    .unwrap_or_default()
+                    .share_activity;
+                presence.install(proto)?;
+                let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+                (was_sharing != latest.share_activity)
+                    .then(|| {
+                        presence
+                            .payload(now)
+                            .map(|payload| (payload, presence.revision))
+                    })
+                    .flatten()
+            };
+            if let Some((payload, revision)) = command {
+                self.inner
+                    .commands
+                    .send((generation, commands::presence(payload, revision)))
+                    .map_err(|_| Error::Closed)?;
+            }
+            return Ok(());
+        };
+        if self.status_generation()? != generation {
+            return Err(Error::Closed);
+        }
+        let proto = self
+            .rest(async |rest| rest.update_preloaded_settings(&patch, version).await)
+            .await?;
+        if self.status_generation()? != generation {
+            return Err(Error::Closed);
+        }
+        let saved = settings_proto::activity_privacy(&proto).map_err(|_| Error::Decode)?;
+        let command = {
+            let mut presence = self
+                .inner
+                .presence
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            presence.install(proto)?;
+            if saved != desired {
+                return Err(Error::SettingsOutdated);
+            }
+            let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+            sharing_changed
+                .then(|| {
+                    presence
+                        .payload(now)
+                        .map(|payload| (payload, presence.revision))
+                })
+                .flatten()
+        };
+        if let Some((payload, revision)) = command {
+            self.inner
+                .commands
+                .send((generation, commands::presence(payload, revision)))
+                .map_err(|_| Error::Closed)?;
+        }
+        Ok(())
+    }
+
     /// Not retried after a reconnect; the next READY reflects whatever was saved.
     pub async fn set_theme(&self, theme: settings_proto::AccountTheme) -> Result<(), Error> {
         let generation = self.status_generation()?;

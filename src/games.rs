@@ -1,4 +1,6 @@
 mod catalog;
+pub mod programs;
+pub mod registry;
 mod rpc;
 mod scan;
 
@@ -22,7 +24,7 @@ pub struct GameActivity {
 #[derive(Clone, PartialEq)]
 pub struct RunningGame {
     pub name: String,
-    pub application_id: u64,
+    pub application_id: Option<u64>,
 }
 
 pub fn start(enabled: watch::Receiver<bool>) -> watch::Receiver<Option<GameActivity>> {
@@ -94,6 +96,7 @@ async fn supervise(
             }
         }
         tasks.stop().await;
+        registry::flush();
         output.send_replace(None);
         if stopped {
             return;
@@ -162,12 +165,15 @@ fn compose(
     match rpc {
         Some(activity) => Some(with_name(activity.clone(), detected, catalog)),
         None => detected.map(|game| {
-            json!({
+            let mut activity = json!({
                 "type": 0,
                 "name": game.name,
-                "application_id": game.application_id.to_string(),
                 "timestamps": {"start": game.start_ms},
-            })
+            });
+            if let Some(id) = game.application_id {
+                activity["application_id"] = Value::String(id.to_string());
+            }
+            activity
         }),
     }
 }
@@ -190,7 +196,7 @@ fn with_name(
         .and_then(|id| id.parse::<u64>().ok());
     let name = application.and_then(|id| {
         detected
-            .filter(|game| game.application_id == id)
+            .filter(|game| game.application_id == Some(id))
             .map(|game| game.name.as_str())
             .or_else(|| catalog.and_then(|catalog| catalog.name(id)))
     });
@@ -294,7 +300,7 @@ mod tests {
 
     fn detected() -> scan::Detected {
         scan::Detected {
-            application_id: 42,
+            application_id: Some(42),
             name: "Detected".into(),
             start_ms: 1_000,
         }
@@ -329,6 +335,14 @@ mod tests {
             })
         );
         assert_eq!(compose(None, None, None), None);
+        let program = scan::Detected {
+            application_id: None,
+            ..detected
+        };
+        assert_eq!(
+            compose(None, Some(&program), None).unwrap(),
+            json!({"type": 0, "name": "Detected", "timestamps": {"start": 1_000}})
+        );
     }
 
     #[test]

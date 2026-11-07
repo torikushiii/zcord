@@ -65,6 +65,10 @@ fn main() {
             #[cfg(windows)]
             settings::set_close_to_tray(cx, !saved.close_to_tray_off);
             settings::set_game_activity(cx, saved.share_game_activity);
+            settings::set_user_panel_extended(cx, !saved.user_panel_compact);
+            settings::set_typing_hidden(cx, saved.typing_hidden);
+            settings::set_always_animate(cx, saved.always_animate);
+            settings::set_activity_toggle(cx, saved.activity_toggle);
             settings::set_chat_font_size(cx, saved.chat_font_size.unwrap_or(16.0));
             theme::set_light(saved.light_theme, cx);
             theme::set_zoom(saved.zoom.unwrap_or(theme::DEFAULT_ZOOM), cx);
@@ -90,6 +94,7 @@ fn main() {
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     settings::flush(cx);
+                    games::registry::flush();
                     cx.quit();
                 }
             })

@@ -68,6 +68,29 @@ impl Store {
             .is_some_and(|permissions| permissions & discord::MANAGE_MESSAGES != 0)
     }
 
+    pub fn guild_membership(&self, guild_id: u64) -> (Option<u32>, Option<&str>) {
+        self.source
+            .as_ref()
+            .and_then(|source| source.guilds.iter().find(|guild| guild.id == guild_id))
+            .map_or((None, None), |guild| {
+                (guild.member_count, guild.joined_at.as_deref())
+            })
+    }
+
+    pub fn can_create_invite(&self, channel_id: u64) -> bool {
+        self.source.is_none()
+            || self
+                .permissions(channel_id)
+                .is_some_and(|permissions| permissions & discord::CREATE_INSTANT_INVITE != 0)
+    }
+
+    pub fn can_manage_channel(&self, channel_id: u64) -> bool {
+        self.source.is_some()
+            && self
+                .permissions(channel_id)
+                .is_some_and(|permissions| permissions & discord::MANAGE_CHANNELS != 0)
+    }
+
     pub fn can_mention_everyone(&self, channel_id: u64) -> bool {
         self.source_channel_guild(channel_id).is_some()
             && self

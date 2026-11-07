@@ -55,6 +55,10 @@ pub struct Guild {
     pub unavailable: Option<bool>,
     #[serde(default)]
     pub premium_tier: u8,
+    #[serde(default)]
+    pub member_count: Option<u32>,
+    #[serde(default)]
+    pub joined_at: Option<String>,
 }
 
 impl Guild {

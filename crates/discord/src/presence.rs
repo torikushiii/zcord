@@ -115,6 +115,10 @@ impl Presence {
         true
     }
 
+    pub fn proto(&self) -> Option<&[u8]> {
+        self.proto.as_deref()
+    }
+
     pub fn shows_current_game(&self) -> bool {
         !matches!(
             self.proto

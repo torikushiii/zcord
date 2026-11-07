@@ -9,6 +9,8 @@ use crate::{
     theme::{self, rpx},
 };
 
+mod activity_privacy;
+mod registered_games;
 mod sections;
 mod voice_audio;
 
@@ -27,6 +29,7 @@ const VOICE_CONTENT_WIDTH: f32 = 728.;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Page {
     Account,
+    RegisteredGames,
     GameActivity,
     VoiceVideo,
     Appearance,
@@ -35,6 +38,7 @@ pub(crate) enum Page {
     Notifications,
     LanguageTime,
     Advanced,
+    Tweaks,
 }
 
 struct PageInfo {
@@ -56,21 +60,6 @@ const PAGES: &[PageInfo] = &[
         icon: "user",
         sections: &["Account Info", "Password & Security"],
         keywords: &["username", "email", "phone", "two-factor", "mfa", "2fa"],
-    },
-    PageInfo {
-        page: Page::GameActivity,
-        group: "User Settings",
-        label: "Activity Privacy",
-        icon: "gamepad-2",
-        sections: &[],
-        keywords: &[
-            "game",
-            "activity",
-            "rich presence",
-            "playing",
-            "status",
-            "detected",
-        ],
     },
     PageInfo {
         page: Page::VoiceVideo,
@@ -140,12 +129,63 @@ const PAGES: &[PageInfo] = &[
         keywords: &["clock", "24-hour", "12-hour", "time format"],
     },
     PageInfo {
+        page: Page::RegisteredGames,
+        group: "Games & Apps",
+        label: "Registered Games",
+        icon: "gamepad-2",
+        sections: &["Current Game", "Added Games"],
+        keywords: &[
+            "game",
+            "detection",
+            "detected",
+            "add game",
+            "playing",
+            "program",
+        ],
+    },
+    PageInfo {
+        page: Page::GameActivity,
+        group: "Games & Apps",
+        label: "Activity Privacy",
+        icon: "eye",
+        sections: &[],
+        keywords: &[
+            "game",
+            "activity",
+            "rich presence",
+            "playing",
+            "status",
+            "detected",
+            "servers",
+            "join",
+            "streaming",
+            "online",
+        ],
+    },
+    PageInfo {
         page: Page::Advanced,
         group: "App Settings",
         label: "Advanced",
         icon: "settings",
         sections: &[],
         keywords: &["startup", "launch", "windows", "cache", "data folder"],
+    },
+    PageInfo {
+        page: Page::Tweaks,
+        group: "zcord",
+        label: "Tweaks",
+        icon: "zap",
+        sections: &[],
+        keywords: &[
+            "patches",
+            "user panel",
+            "server list",
+            "layout",
+            "extend",
+            "animate",
+            "animation",
+            "avatar",
+        ],
     },
 ];
 
@@ -165,7 +205,14 @@ pub(crate) struct SettingsPage {
     launch_on_startup: bool,
     cache_status: Option<SharedString>,
     _cache_clear: Option<Task<()>>,
+    server_search: Entity<InputState>,
+    server_sort: activity_privacy::ServerSort,
+    server_sort_open: bool,
+    servers_expanded: bool,
+    games: registered_games::GamesPage,
+    _games_watch: Task<()>,
     _search_events: Subscription,
+    _server_search_events: Subscription,
     _close: Option<Task<()>>,
 }
 
@@ -185,6 +232,13 @@ impl DiscordApp {
                 cx.notify();
             }
         });
+        let server_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search my servers"));
+        let server_events = cx.subscribe_in(&server_search, window, |_, _, event, _, cx| {
+            if let InputEvent::Change = event {
+                cx.notify();
+            }
+        });
         self.settings_animation = self.settings_animation.wrapping_add(1);
         self.settings_page = Some(SettingsPage {
             page: Page::Account,
@@ -199,9 +253,17 @@ impl DiscordApp {
             launch_on_startup: crate::startup::enabled(),
             cache_status: None,
             _cache_clear: None,
+            server_search,
+            server_sort: Default::default(),
+            server_sort_open: false,
+            servers_expanded: false,
+            games: Default::default(),
+            _games_watch: Self::watch_registered_games(cx),
             _search_events: events,
+            _server_search_events: server_events,
             _close: None,
         });
+        super::channel_list::hide_account_tooltip(self, cx);
         cx.notify();
     }
 

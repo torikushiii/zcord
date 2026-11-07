@@ -112,6 +112,7 @@ pub fn init(cx: &mut App) {
                         show_main_window(cx);
                     } else if quit {
                         crate::settings::flush(cx);
+                        crate::games::registry::flush();
                         cx.quit();
                     }
                 }

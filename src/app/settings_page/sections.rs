@@ -11,7 +11,8 @@ use crate::{
 pub(super) fn page(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> Vec<AnyElement> {
     match settings.page {
         Page::Account => account(app, settings),
-        Page::GameActivity => vec![game_activity(app, settings)],
+        Page::GameActivity => super::activity_privacy::page(app, settings, cx),
+        Page::RegisteredGames => super::registered_games::page(app, settings, cx),
         Page::VoiceVideo => super::voice_audio::page(app, settings, cx),
         Page::Appearance => vec![
             theme_section(app, settings, cx),
@@ -23,6 +24,11 @@ pub(super) fn page(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> Vec<A
         Page::Notifications => vec![notifications(app, settings)],
         Page::LanguageTime => vec![language_time(app, settings, cx)],
         Page::Advanced => vec![advanced(app, settings)],
+        Page::Tweaks => vec![
+            layout(app, settings),
+            animation_tweaks(app, settings),
+            privacy_tweaks(app, settings),
+        ],
     }
 }
 
@@ -219,6 +225,64 @@ fn appearance(_app: &DiscordApp, cx: &App) -> AnyElement {
     )
 }
 
+fn layout(app: &DiscordApp, settings: &SettingsPage) -> AnyElement {
+    section(
+        "Layout",
+        vec![
+            toggle_row(
+                app,
+                settings,
+                "settings-user-panel-extended",
+                "Extend User Panel",
+                "Stretches the panel with your name and voice controls under the server list too.",
+                crate::settings::user_panel_extended(),
+                crate::settings::set_user_panel_extended,
+            ),
+            toggle_row(
+                app,
+                settings,
+                "settings-activity-toggle",
+                "Activity Toggle",
+                "Adds a button before your mic that turns sharing your activity on or off for \
+             your whole account.",
+                crate::settings::activity_toggle(),
+                crate::settings::set_activity_toggle,
+            ),
+        ],
+    )
+}
+
+fn animation_tweaks(app: &DiscordApp, settings: &SettingsPage) -> AnyElement {
+    section(
+        "Animation",
+        vec![toggle_row(
+            app,
+            settings,
+            "settings-always-animate",
+            "Always Animate",
+            "Plays animated avatars, decorations, nameplates, server icons and display name \
+             effects all the time instead of only when you hover them.",
+            crate::settings::always_animate(),
+            crate::settings::set_always_animate,
+        )],
+    )
+}
+
+fn privacy_tweaks(app: &DiscordApp, settings: &SettingsPage) -> AnyElement {
+    section(
+        "Privacy",
+        vec![toggle_row(
+            app,
+            settings,
+            "settings-typing-hidden",
+            "Hide My Typing",
+            "Others won't see that you're typing. You still see when they type.",
+            crate::settings::typing_hidden(),
+            crate::settings::set_typing_hidden,
+        )],
+    )
+}
+
 fn accessibility(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> AnyElement {
     let on = crate::settings::get(cx).reduce_motion == Some(true);
     let entity = app.entity.clone();
@@ -283,7 +347,7 @@ fn chat(_app: &DiscordApp, cx: &App) -> AnyElement {
 }
 
 /// A labelled switch row whose click flips `on` through `set`.
-fn toggle_row(
+pub(super) fn toggle_row(
     app: &DiscordApp,
     settings: &SettingsPage,
     id: &'static str,
@@ -331,7 +395,7 @@ fn notifications(app: &DiscordApp, settings: &SettingsPage) -> AnyElement {
     )
 }
 
-fn game_activity(app: &DiscordApp, settings: &SettingsPage) -> AnyElement {
+pub(super) fn detected_games(app: &DiscordApp, settings: &SettingsPage) -> Vec<AnyElement> {
     let on = crate::settings::game_activity();
     let entity = app.entity.clone();
     let mut rows = vec![toggle_row(
@@ -366,7 +430,7 @@ fn game_activity(app: &DiscordApp, settings: &SettingsPage) -> AnyElement {
         };
         rows.push(note(status));
     }
-    section("Activity Privacy", rows)
+    rows
 }
 
 fn chat_media(app: &DiscordApp, settings: &SettingsPage) -> AnyElement {

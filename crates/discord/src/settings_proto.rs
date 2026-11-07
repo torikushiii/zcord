@@ -3,6 +3,9 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use std::collections::{HashMap, HashSet};
 
+mod activity;
+pub use activity::{ActivityPrivacy, NewServerSharing, activity_privacy, activity_privacy_patch};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GuildFolder {
     pub guild_ids: Vec<u64>,

@@ -23,6 +23,10 @@ static NOTIFICATION_SOUND: AtomicBool = AtomicBool::new(true);
 #[cfg(windows)]
 static CLOSE_TO_TRAY: AtomicBool = AtomicBool::new(true);
 static GAME_ACTIVITY: AtomicBool = AtomicBool::new(false);
+static USER_PANEL_EXTENDED: AtomicBool = AtomicBool::new(true);
+static TYPING_HIDDEN: AtomicBool = AtomicBool::new(false);
+static ALWAYS_ANIMATE: AtomicBool = AtomicBool::new(false);
+static ACTIVITY_TOGGLE: AtomicBool = AtomicBool::new(false);
 static CHAT_FONT_SIZE: AtomicU32 = AtomicU32::new(16.0f32.to_bits());
 
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -83,6 +87,12 @@ pub struct Settings {
     #[serde(default)]
     pub clock_24h: bool,
     #[serde(default)]
+    pub inbox_unreads_tip_dismissed: bool,
+    #[serde(default)]
+    pub mentions_everyone_off: bool,
+    #[serde(default)]
+    pub mentions_roles_off: bool,
+    #[serde(default)]
     pub light_theme: bool,
     #[serde(default)]
     pub theme_sync_off: bool,
@@ -100,6 +110,14 @@ pub struct Settings {
     pub stream_audio_muted: bool,
     #[serde(default)]
     pub composer_send_button: bool,
+    #[serde(default)]
+    pub user_panel_compact: bool,
+    #[serde(default)]
+    pub typing_hidden: bool,
+    #[serde(default)]
+    pub always_animate: bool,
+    #[serde(default)]
+    pub activity_toggle: bool,
     /// The Input Profile picked in the mic's options; `None` until one is, which shows as
     /// Voice Isolation while noise suppression is on.
     #[serde(default)]
@@ -317,6 +335,46 @@ pub fn set_game_activity(cx: &mut App, on: bool) {
 
 pub fn game_activity() -> bool {
     GAME_ACTIVITY.load(Ordering::Relaxed)
+}
+
+pub fn set_user_panel_extended(cx: &mut App, on: bool) {
+    USER_PANEL_EXTENDED.store(on, Ordering::Relaxed);
+    update(cx, |settings| settings.user_panel_compact = !on);
+    cx.refresh_windows();
+}
+
+pub fn user_panel_extended() -> bool {
+    USER_PANEL_EXTENDED.load(Ordering::Relaxed)
+}
+
+pub fn set_typing_hidden(cx: &mut App, on: bool) {
+    TYPING_HIDDEN.store(on, Ordering::Relaxed);
+    update(cx, |settings| settings.typing_hidden = on);
+    cx.refresh_windows();
+}
+
+pub fn typing_hidden() -> bool {
+    TYPING_HIDDEN.load(Ordering::Relaxed)
+}
+
+pub fn set_always_animate(cx: &mut App, on: bool) {
+    ALWAYS_ANIMATE.store(on, Ordering::Relaxed);
+    update(cx, |settings| settings.always_animate = on);
+    cx.refresh_windows();
+}
+
+pub fn always_animate() -> bool {
+    ALWAYS_ANIMATE.load(Ordering::Relaxed)
+}
+
+pub fn set_activity_toggle(cx: &mut App, on: bool) {
+    ACTIVITY_TOGGLE.store(on, Ordering::Relaxed);
+    update(cx, |settings| settings.activity_toggle = on);
+    cx.refresh_windows();
+}
+
+pub fn activity_toggle() -> bool {
+    ACTIVITY_TOGGLE.load(Ordering::Relaxed)
 }
 
 fn clamp_chat_font_size(size: f32) -> f32 {
@@ -577,5 +635,6 @@ mod tests {
         assert!(!settings.light_theme);
         assert!(!settings.theme_sync_off);
         assert!(!settings.share_game_activity);
+        assert!(!settings.user_panel_compact);
     }
 }

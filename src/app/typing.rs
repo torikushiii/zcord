@@ -7,7 +7,8 @@ impl DiscordApp {
             return;
         };
         let now = Instant::now();
-        if self.composer.read(cx).value().trim().is_empty()
+        if crate::settings::typing_hidden()
+            || self.composer.read(cx).value().trim().is_empty()
             || !self.store.can_send(channel_id)
             || self.typing_sent.is_some_and(|(channel, sent)| {
                 channel == channel_id && now.duration_since(sent) < TYPING_RESEND
