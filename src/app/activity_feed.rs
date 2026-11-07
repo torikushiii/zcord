@@ -17,6 +17,7 @@ pub(crate) struct ActivityFeed {
     games_requested: HashSet<u64>,
     colors: HashMap<u64, [u32; 2]>,
     colors_requested: HashSet<u64>,
+    expanded: bool,
 }
 
 impl DiscordApp {
@@ -188,6 +189,17 @@ impl DiscordApp {
         if !missing.is_empty() {
             session.request_members(self.selected_guild_id, missing);
         }
+    }
+
+    pub(crate) fn activity_expanded(&self) -> bool {
+        self.activity_feed.expanded
+    }
+
+    pub(crate) fn toggle_activity_expanded(&mut self, cx: &mut Context<Self>) {
+        self.activity_feed.expanded = !self.activity_feed.expanded;
+        // The list caches row heights, and the Activity section is row 0.
+        self.member_rows.remeasure_items(0..1);
+        self.views.members.update(cx, |_, cx| cx.notify());
     }
 
     pub(crate) fn activity_cards(&self) -> Vec<ActivityCard> {

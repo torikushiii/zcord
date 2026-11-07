@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use gpui::{prelude::*, *};
 use gpui_component::ActiveTheme;
 
-use super::{ArtSlot, ProfileCard, ProfilePalette};
+use super::{ArtSlot, ProfileCard, ProfilePalette, Stack, StackHover, Tab};
 use crate::{
     app::{DISCORD_EPOCH_MS, DiscordApp, message_body::label},
     discord::model::{
@@ -26,13 +26,17 @@ use crate::{
 mod actions;
 mod activity;
 mod art;
+mod stack;
 #[cfg(test)]
 mod tests;
+mod voice;
 mod widgets;
 mod wishlist;
 use super::{widget_application_ids, widget_game_ids};
 pub(super) use activity::{activity, listening, popout_playing};
 pub(crate) use art::presence_art;
+pub(super) use stack::{card_stack, hover_card};
+pub(super) use voice::popout_voice;
 pub(super) use widgets::{
     board_panel, popout_widget, prefetch_images, tag_icon, tag_label, widget_element,
 };

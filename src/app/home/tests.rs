@@ -4,9 +4,19 @@ use gpui::{Context, IntoElement, Render, TestAppContext, Window, div, prelude::*
 
 use super::{
     ACTIVE_ART, ACTIVE_BADGE, active_art, active_detail_text, activity_elapsed, elapsed,
-    request_age, request_preview_line, shows_elapsed_line,
+    request_age, request_preview_line, shows_elapsed_line, voice_title,
 };
 use crate::{store::GameActivity, theme::rpx};
+
+#[test]
+fn voice_cards_name_two_friends_and_count_everyone_else() {
+    let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+    assert_eq!(voice_title(&names(&["A"]), 1), "A");
+    assert_eq!(voice_title(&names(&["A", "B"]), 2), "A and B");
+    assert_eq!(voice_title(&names(&["A"]), 2), "A and 1 other");
+    assert_eq!(voice_title(&names(&["A", "B"]), 3), "A, B, and 1 other");
+    assert_eq!(voice_title(&names(&["A", "B"]), 5), "A, B, and 3 others");
+}
 
 #[test]
 fn elapsed_clock_requires_a_start_and_detail_row() {

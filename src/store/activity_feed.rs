@@ -3,7 +3,7 @@ use super::*;
 const DISCORD_EPOCH_MS: u64 = 1_420_070_400_000;
 const STREAK_WINDOW_MS: i64 = 48 * 60 * 60 * 1000;
 const MIN_STREAK_DAYS: u32 = 3;
-const CARD_LIMIT: usize = 3;
+const CARD_LIMIT: usize = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActivityCard {

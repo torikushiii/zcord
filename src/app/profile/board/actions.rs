@@ -220,6 +220,7 @@ pub(super) fn play_button(game: &GameActivity, palette: ProfilePalette) -> Optio
             .child(theme::icon("activity", 18., palette.strong))
             .child("Play")
             .on_click(move |_, _, cx| {
+                cx.stop_propagation();
                 cx.open_url(&format!(
                     "https://discord.com/application-directory/{application_id}"
                 ))

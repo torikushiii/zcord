@@ -1,3 +1,4 @@
+use crate::app::menu::PopupButton as _;
 use gpui::{prelude::*, *};
 use gpui_component::scroll::ScrollableElement as _;
 
@@ -9,7 +10,7 @@ use crate::{
     },
     media::animated,
     media::images::{self, ImageSpec},
-    store::{MemberList, MemberRow, NameStyle, Nameplate, User},
+    store::{MemberList, MemberRow, NameStyle, Nameplate, StatusEmoji, User},
     theme::{self, WithoutTextSelection, rpx},
 };
 
@@ -258,7 +259,7 @@ pub(super) fn member_row(
                 .ok();
         })
         .without_text_selection()
-        .on_click({
+        .on_popup_click(super::profile::shown(app, id), {
             let entity = app.entity.clone();
             move |event, window, cx| {
                 cx.stop_propagation();
@@ -326,7 +327,15 @@ pub(super) fn member_row(
                             app.store.member_name_style(guild_id, user.id),
                             cx,
                         ))
-                        .children(activity_line(user, online)),
+                        .children(activity_line(
+                            user,
+                            online,
+                            app.store
+                                .user_voice_channel(user.id)
+                                .and_then(|channel| app.store.channel_name(channel))
+                                .map(str::to_owned),
+                            cx,
+                        )),
                 ),
         )
 }
@@ -359,12 +368,58 @@ fn name_line(
                     cx,
                 )),
         )
-        .when(user.bot, |this| this.child(theme::app_tag()))
+        .when(user.bot, |this| {
+            this.child(theme::app_tag(user.verified_bot))
+        })
         .children(user.tag.as_ref().map(|tag| theme::guild_tag(tag, cx)))
 }
 
-fn activity_line(user: &User, online: bool) -> Option<impl IntoElement> {
+const GAME_GREEN: u32 = 0x45A366;
+const STATUS_EMOJI: f32 = 14.;
+
+fn activity_line(
+    user: &User,
+    online: bool,
+    voice: Option<String>,
+    cx: &App,
+) -> Option<impl IntoElement> {
     let (activity, icon) = member_activity(user).filter(|_| online)?;
+    let status = user
+        .custom_status
+        .as_ref()
+        .filter(|_| icon.is_none() && user.activity_kind.is_none() && !user.playing);
+    let prefix = activity_prefix(
+        "member-activity-prefix",
+        user.id,
+        status
+            .and(user.game.as_ref())
+            .map(|game| game.name.as_str()),
+        status.and(voice.as_deref()),
+    );
+    let emoji = status
+        .and_then(|status| status.emoji.as_ref())
+        .and_then(|emoji| {
+            let source: ImageSource = match emoji {
+                StatusEmoji::Unicode(sequence) => {
+                    crate::text::emoji::image(sequence, theme::image_px(STATUS_EMOJI))?.into()
+                }
+                StatusEmoji::Custom { id, .. } => images::resolve(
+                    &ImageSpec::Emoji {
+                        id: *id,
+                        animated: false,
+                    },
+                    theme::image_px(STATUS_EMOJI),
+                    cx,
+                )?
+                .into(),
+            };
+            Some(img(source).size(rpx(STATUS_EMOJI)).flex_none())
+        });
+    // The emoji draws as an image, so the text drops the one `custom_text` put in front.
+    let text = match status {
+        Some(status) if emoji.is_some() => status.text.clone().unwrap_or_default(),
+        _ => activity,
+    };
     Some(
         div()
             .flex()
@@ -375,12 +430,76 @@ fn activity_line(user: &User, online: bool) -> Option<impl IntoElement> {
             .line_height(rpx(16.))
             .text_color(rgb(theme::muted()))
             .children(icon.map(|icon| theme::icon(icon, 14., theme::GREEN)))
+            .children(prefix)
+            .children(emoji)
+            .when(!text.is_empty(), |this| {
+                this.child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(label(("member-activity", user.id), &text)),
+                )
+            }),
+    )
+}
+
+/// `surface` keeps the hover of one place's copy from showing another's tooltip.
+pub(crate) fn activity_prefix(
+    surface: &'static str,
+    user_id: u64,
+    game: Option<&str>,
+    voice: Option<&str>,
+) -> Option<Div> {
+    let rows: Vec<(&str, String)> = game
+        .map(|game| ("activity-game", game.to_owned()))
+        .into_iter()
+        .chain(voice.map(|channel| ("volume-2", format!("In voice ({channel})"))))
+        .collect();
+    let (icon, _) = rows.first()?;
+    let extra = rows.len() - 1;
+    let tooltip = div()
+        .flex()
+        .flex_col()
+        .gap(rpx(2.))
+        .text_color(rgb(theme::text()))
+        .children(rows.iter().map(|(icon, text)| {
+            div()
+                .flex()
+                .items_center()
+                .gap(rpx(8.))
+                .child(theme::icon(icon, 12., GAME_GREEN))
+                .child(text.clone())
+        }));
+    Some(
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(rpx(4.))
             .child(
                 div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .child(label(("member-activity", user.id), &activity)),
+                    .id(ElementId::NamedInteger(surface.into(), user_id))
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .gap(rpx(2.))
+                    .text_size(rpx(12.))
+                    .line_height(rpx(16.))
+                    .text_color(rgb(GAME_GREEN))
+                    .child(theme::icon(icon, 12., GAME_GREEN))
+                    .when(extra > 0, |this| this.child(format!("+{extra}")))
+                    .child(theme::hover_tooltip_body(
+                        ElementId::NamedInteger(format!("{surface}-tip").into(), user_id),
+                        tooltip,
+                    )),
+            )
+            .child(
+                div()
+                    .text_size(rpx(12.))
+                    .line_height(rpx(16.))
+                    .text_color(rgb(theme::text()))
+                    .child("\u{2022}"),
             ),
     )
 }
@@ -588,7 +707,7 @@ fn nameplate_image(
         animated,
     };
     let pixels = theme::image_px(WIDTH);
-    let image = match animate
+    let image = match (animate || crate::settings::always_animate())
         .then(|| animated::resolve(&spec(true), pixels, cx))
         .flatten()
     {

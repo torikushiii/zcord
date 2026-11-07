@@ -37,10 +37,11 @@ impl Surface {
     }
 
     fn animates(self) -> bool {
-        matches!(
-            self,
-            Self::Profile | Self::Field | Self::Account { hovered: true }
-        )
+        match self {
+            Self::Profile | Self::Field => true,
+            Self::Account { hovered } => hovered || crate::settings::always_animate(),
+            Self::FontOnly => false,
+        }
     }
 
     fn tracks(self) -> bool {

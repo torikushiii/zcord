@@ -332,6 +332,7 @@ fn activity_accessory(
             )
             .child(theme::icon("arrow-right", 16., palette.muted))
             .on_click(move |_, _, cx| {
+                cx.stop_propagation();
                 entity.update(cx, |app, cx| app.open_full_profile(cx)).ok();
             })
             .into_any_element(),
@@ -440,120 +441,123 @@ pub(in crate::app::profile) fn popout_playing(
             .child(label((id, card.user_id), text))
     };
     Some(
-        div()
-            .flex()
-            .flex_col()
-            .gap(rpx(8.))
-            .p(rpx(8.))
-            .rounded(rpx(8.))
-            .bg(palette.panel)
-            .child(
-                playing_heading(game, palette)
-                    .text_size(rpx(12.))
-                    .line_height(rpx(16.))
-                    .font_weight(FontWeight::SEMIBOLD),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(rpx(12.))
-                    .child(art_tooltip(
-                        div()
-                            .relative()
-                            .flex_none()
-                            .size(rpx(POPOUT_ART))
-                            .rounded(rpx(8.))
-                            .map(|this| match art {
-                                Some(art) => this.child(art),
-                                None => this
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .bg(palette.hover)
-                                    .child(theme::icon("gamepad-2", 28., palette.muted)),
-                            })
-                            // Discord rings the small image in the card colour so it sits on
-                            // the large one's corner. The panel is translucent, so composite it
-                            // over the popout surface or the artwork shows through the ring.
-                            .children(badge.map(|badge| {
-                                let surface = card
-                                    .theme()
-                                    .map_or(theme::elevated(), |theme| theme.surface());
-                                let ring = Hsla::from(rgb(surface)).blend(palette.panel);
-                                art_tooltip(
-                                    div()
-                                        .absolute()
-                                        .right(rpx(-4.))
-                                        .bottom(rpx(-4.))
-                                        .size(rpx(POPOUT_BADGE + 4.))
-                                        .p(rpx(2.))
-                                        .rounded_full()
-                                        .bg(ring)
-                                        .child(badge),
-                                    app,
-                                    card,
-                                    ArtSlot::Small,
-                                    small_text,
-                                )
-                            })),
-                        app,
-                        card,
-                        ArtSlot::Large,
-                        large_text,
-                    ))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .min_w_0()
-                            .gap(rpx(2.))
-                            .child(
+        super::hover_card(
+            app,
+            ("profile-popout-playing", card.user_id),
+            Tab::Activity,
+            palette,
+        )
+        .flex()
+        .flex_col()
+        .gap(rpx(8.))
+        .p(rpx(8.))
+        .rounded(rpx(8.))
+        .bg(palette.panel)
+        .child(
+            playing_heading(game, palette)
+                .text_size(rpx(12.))
+                .line_height(rpx(16.))
+                .font_weight(FontWeight::SEMIBOLD),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(rpx(12.))
+                .child(art_tooltip(
+                    div()
+                        .relative()
+                        .flex_none()
+                        .size(rpx(POPOUT_ART))
+                        .rounded(rpx(8.))
+                        .map(|this| match art {
+                            Some(art) => this.child(art),
+                            None => this
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .bg(palette.hover)
+                                .child(theme::icon("gamepad-2", 28., palette.muted)),
+                        })
+                        // The panel is translucent, so the ring composites it over the popout
+                        // surface or the artwork shows through.
+                        .children(badge.map(|badge| {
+                            let surface = card
+                                .theme()
+                                .map_or(theme::elevated(), |theme| theme.surface());
+                            let ring = Hsla::from(rgb(surface)).blend(palette.panel);
+                            art_tooltip(
                                 div()
-                                    .truncate()
-                                    .text_size(rpx(16.))
-                                    .line_height(rpx(20.))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(rgb(palette.strong))
-                                    .child(label(
-                                        ("profile-popout-game", card.user_id),
-                                        &game.name,
-                                    )),
+                                    .absolute()
+                                    .right(rpx(-4.))
+                                    .bottom(rpx(-4.))
+                                    .size(rpx(POPOUT_BADGE + 4.))
+                                    .p(rpx(2.))
+                                    .rounded_full()
+                                    .bg(ring)
+                                    .child(badge),
+                                app,
+                                card,
+                                ArtSlot::Small,
+                                small_text,
                             )
-                            .children(
-                                game.details
-                                    .as_ref()
-                                    .map(|details| line("profile-popout-details", details)),
-                            )
-                            .children(
-                                game.state
-                                    .as_ref()
-                                    .map(|state| line("profile-popout-state", state)),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_wrap()
-                                    .items_center()
-                                    .gap_x(rpx(8.))
-                                    .text_size(rpx(13.))
-                                    .line_height(rpx(16.))
-                                    .text_color(rgb(palette.text))
-                                    .children(elapsed.map(|elapsed| {
-                                        activity_badge(timer_icon(game), elapsed, theme::GREEN)
-                                            .font_family(cx.theme().mono_font_family.clone())
-                                    }))
-                                    .children(entry.into_iter().flat_map(activity_traits).map(
+                        })),
+                    app,
+                    card,
+                    ArtSlot::Large,
+                    large_text,
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_w_0()
+                        .gap(rpx(2.))
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(rpx(16.))
+                                .line_height(rpx(20.))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(palette.strong))
+                                .child(label(("profile-popout-game", card.user_id), &game.name)),
+                        )
+                        .children(
+                            game.details
+                                .as_ref()
+                                .map(|details| line("profile-popout-details", details)),
+                        )
+                        .children(
+                            game.state
+                                .as_ref()
+                                .map(|state| line("profile-popout-state", state)),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .items_center()
+                                .gap_x(rpx(8.))
+                                .text_size(rpx(13.))
+                                .line_height(rpx(16.))
+                                .text_color(rgb(palette.text))
+                                .children(elapsed.map(|elapsed| {
+                                    activity_badge(timer_icon(game), elapsed, theme::GREEN)
+                                        .font_family(cx.theme().mono_font_family.clone())
+                                }))
+                                .children(
+                                    entry.into_iter().flat_map(activity_traits).map(
                                         |(icon, text)| activity_badge(icon, text, palette.text),
-                                    )),
-                            ),
-                    ),
-            )
-            .children(actions.buttons("profile-popout-playing-actions", card.user_id, palette))
-            .children(play_button(game, palette).map(|play| play.w_full()))
-            .children(activity_accessory(app, card, game, palette, cx))
-            .into_any_element(),
+                                    ),
+                                ),
+                        ),
+                ),
+        )
+        .children(actions.buttons("profile-popout-playing-actions", card.user_id, palette))
+        .children(play_button(game, palette).map(|play| play.w_full()))
+        .children(activity_accessory(app, card, game, palette, cx))
+        .into_any_element(),
     )
 }
 

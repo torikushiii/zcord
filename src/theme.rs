@@ -409,7 +409,7 @@ fn avatar_image(
     cx: &App,
 ) -> Option<AnyElement> {
     let pixels = image_px(size);
-    let animated = animate
+    let animated = (animate || crate::settings::always_animate())
         .then(|| spec.animated())
         .flatten()
         .and_then(|animated| animated::resolve(&animated, pixels, cx));
@@ -538,7 +538,8 @@ fn decoration(
     }
     let frame = size * DECORATION_SCALE;
     let pixels = image_px(frame);
-    let animates = animate && decoration.asset.starts_with("a_");
+    let animates =
+        (animate || crate::settings::always_animate()) && decoration.asset.starts_with("a_");
     let animated = animates
         .then(|| animated::resolve(&decoration.image_spec(true), pixels, cx))
         .flatten();
@@ -814,6 +815,31 @@ pub fn hover_tooltip(
         key: key.into(),
         label: label.into(),
         detail: None,
+        body: None,
+        below: false,
+    }
+}
+
+pub fn hover_tooltip_below(
+    key: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+) -> impl IntoElement {
+    HoverTooltip {
+        key: key.into(),
+        label: label.into(),
+        detail: None,
+        body: None,
+        below: true,
+    }
+}
+
+pub fn hover_tooltip_body(key: impl Into<ElementId>, body: impl IntoElement) -> impl IntoElement {
+    HoverTooltip {
+        key: key.into(),
+        label: SharedString::default(),
+        detail: None,
+        body: Some(body.into_any_element()),
+        below: false,
     }
 }
 
@@ -827,6 +853,8 @@ pub fn hover_tooltip_detail(
         key: key.into(),
         label: label.into(),
         detail: Some(detail.into()),
+        body: None,
+        below: false,
     }
 }
 
@@ -835,6 +863,8 @@ struct HoverTooltip {
     key: ElementId,
     label: SharedString,
     detail: Option<SharedString>,
+    body: Option<AnyElement>,
+    below: bool,
 }
 
 impl RenderOnce for HoverTooltip {
@@ -852,10 +882,15 @@ impl RenderOnce for HoverTooltip {
                 });
             })
             .when(shown, |this| {
-                this.child(TooltipAbove {
-                    label: self.label,
-                    detail: self.detail,
-                })
+                if self.below {
+                    this.child(TooltipBelow { label: self.label })
+                } else {
+                    this.child(TooltipAbove {
+                        label: self.label,
+                        detail: self.detail,
+                        body: self.body,
+                    })
+                }
             })
     }
 }
@@ -866,6 +901,7 @@ pub fn tooltip_above(label: impl Into<SharedString>) -> impl IntoElement {
     TooltipAbove {
         label: label.into(),
         detail: None,
+        body: None,
     }
 }
 
@@ -886,6 +922,7 @@ pub fn tooltip_entrance(body: Div, cx: &App) -> AnyElement {
 struct TooltipAbove {
     label: SharedString,
     detail: Option<SharedString>,
+    body: Option<AnyElement>,
 }
 
 impl RenderOnce for TooltipAbove {
@@ -897,8 +934,9 @@ impl RenderOnce for TooltipAbove {
                 .items_center()
                 .text_size(rpx(14.))
                 .line_height(rpx(18.))
-                .map(|this| match self.detail {
-                    Some(detail) => this
+                .map(|this| match (self.body, self.detail) {
+                    (Some(body), _) => this.items_start().child(body),
+                    (None, Some(detail)) => this
                         .child(
                             div()
                                 .font_weight(FontWeight::SEMIBOLD)
@@ -906,7 +944,7 @@ impl RenderOnce for TooltipAbove {
                                 .child(self.label),
                         )
                         .child(div().child(detail)),
-                    None => this.child(self.label),
+                    (None, None) => this.child(self.label),
                 }),
         );
         // The arrow stays on the target while only the bubble slides to fit the window. A single
@@ -1019,16 +1057,31 @@ pub fn badge(count: u32, ring: u32) -> impl IntoElement {
         .child(label)
 }
 
-pub fn app_tag() -> impl IntoElement {
+pub fn app_tag(verified: bool) -> impl IntoElement {
     div()
+        .flex()
         .flex_none()
-        .px(rpx(4.))
-        .rounded(rpx(3.))
+        .items_center()
+        .h(rpx(16.))
+        .pl(rpx(if verified { 2. } else { 4. }))
+        .pr(rpx(4.))
+        .rounded(rpx(4.))
         .bg(rgb(BLURPLE))
-        .text_size(rpx(10.))
-        .line_height(rpx(15.))
+        .text_size(rpx(12.))
+        .line_height(rpx(16.))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(white())
+        .when(verified, |this| {
+            this.child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .size(rpx(16.))
+                    .child(icon("check-bold", 14., 0xFFFFFF)),
+            )
+        })
         .child("APP")
 }
 

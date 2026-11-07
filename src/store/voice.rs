@@ -1,11 +1,20 @@
 use super::*;
 use crate::discord::model;
+use std::collections::HashSet;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum VoiceActivity {
     Voice,
     Streaming,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActiveVoice {
+    pub guild_id: u64,
+    pub channel_id: u64,
+    pub member_ids: Vec<u64>,
+    pub friend_ids: Vec<u64>,
 }
 
 pub struct VoiceMember {
@@ -177,6 +186,68 @@ impl Store {
             return Vec::new();
         };
         self.voice_members_matching(guild_id, |state| self.voice_state_visible(guild, state))
+    }
+
+    pub fn active_voice(&self) -> Vec<ActiveVoice> {
+        let Some(source) = self.source.as_ref() else {
+            return Vec::new();
+        };
+        let friends: HashSet<u64> = self.friends().into_iter().collect();
+        let mut channels: Vec<ActiveVoice> = Vec::new();
+        for guild in &source.guilds {
+            for state in &guild.voice_states {
+                let Some(channel_id) = state.channel_id else {
+                    continue;
+                };
+                if !self.voice_state_visible(guild, state) {
+                    continue;
+                }
+                match channels
+                    .iter_mut()
+                    .find(|voice| voice.channel_id == channel_id)
+                {
+                    Some(voice) => voice.member_ids.push(state.user_id),
+                    None => channels.push(ActiveVoice {
+                        guild_id: guild.id,
+                        channel_id,
+                        member_ids: vec![state.user_id],
+                        friend_ids: Vec::new(),
+                    }),
+                }
+            }
+        }
+        for voice in &mut channels {
+            voice.friend_ids = voice
+                .member_ids
+                .iter()
+                .copied()
+                .filter(|id| friends.contains(id))
+                .collect();
+            voice.member_ids.sort_by_key(|id| !friends.contains(id));
+        }
+        channels.retain(|voice| !voice.friend_ids.is_empty());
+        channels.sort_by(|left, right| {
+            right
+                .member_ids
+                .len()
+                .cmp(&left.member_ids.len())
+                .then(left.channel_id.cmp(&right.channel_id))
+        });
+        channels
+    }
+
+    pub fn user_voice_channel(&self, user_id: u64) -> Option<u64> {
+        self.user_voice(user_id).map(|(_, channel_id)| channel_id)
+    }
+
+    pub fn user_voice(&self, user_id: u64) -> Option<(u64, u64)> {
+        self.source.as_ref()?.guilds.iter().find_map(|guild| {
+            guild
+                .voice_states
+                .iter()
+                .find(|state| state.user_id == user_id && self.voice_state_visible(guild, state))
+                .and_then(|state| Some((guild.id, state.channel_id?)))
+        })
     }
 
     fn voice_state_visible(&self, guild: &model::Guild, state: &model::VoiceState) -> bool {

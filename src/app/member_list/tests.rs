@@ -255,6 +255,7 @@ fn user(
         initials: "L".into(),
         status: Status::Online,
         bot: false,
+        verified_bot: false,
         role_color: None,
         tag: None,
         playing: false,

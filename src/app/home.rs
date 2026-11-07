@@ -20,7 +20,10 @@ use crate::{
     },
     discord::{Error, Event, ProfileKind, model::PublicApplication},
     media::images::{self, ImageSpec},
-    store::{GameActivity, LiveStream, PrivateChannel, RelationshipKind, Status, Store, User},
+    store::{
+        ActiveVoice, GameActivity, LiveStream, PrivateChannel, RelationshipKind, Status, Store,
+        User,
+    },
     theme::{self, WithoutTextSelection, rpx},
 };
 
@@ -143,6 +146,12 @@ impl DiscordApp {
         if self.home.tab == FriendsTab::Suggestions {
             self.load_friend_suggestions(cx);
         }
+    }
+
+    pub(crate) fn open_friend_requests(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.enter_home();
+        self.home.tab = FriendsTab::Pending;
+        self.open_friends(window, cx);
     }
 
     fn open_requests(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1794,7 +1803,13 @@ fn active_header(
                         .line_height(rpx(20.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(theme::strong()))
-                        .child(label(("active-name", id), &app.store.friend_name(id))),
+                        .child(display_name::render(
+                            ("active-name", id),
+                            &app.store.friend_name(id),
+                            user.name_style.as_ref(),
+                            Surface::FontOnly,
+                            cx,
+                        )),
                 )
                 .child(
                     div()
@@ -2054,31 +2069,217 @@ fn active_card(
                 .p(rpx(16.))
                 .child(art)
                 .child(active_detail_text(id, &game.name, Some("1 Person"), None))
-                .child(theme::user_avatar(
-                    Some(user),
+                .child(theme::undecorated_member_avatar(
+                    &app.store,
+                    0,
                     id,
                     ACTIVE_PARTY_AVATAR,
-                    None,
-                    false,
                     cx,
                 )),
         })
         .into_any_element()
 }
 
-fn active_now(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
-    let cards: Vec<AnyElement> = app
+fn voice_title(names: &[String], members: usize) -> String {
+    let others = members.saturating_sub(names.len());
+    let others_label =
+        |count: usize| format!("{count} {}", if count == 1 { "other" } else { "others" });
+    match (names, others) {
+        ([], _) => others_label(others),
+        ([a], 0) => a.clone(),
+        ([a], _) => format!("{a} and {}", others_label(others)),
+        ([a, b], 0) => format!("{a} and {b}"),
+        ([a, b, ..], _) => format!("{a}, {b}, and {}", others_label(others)),
+    }
+}
+
+fn voice_card(app: &DiscordApp, voice: &ActiveVoice, cx: &App) -> Option<AnyElement> {
+    let lead_id = *voice.friend_ids.first()?;
+    let lead = app.store.user(lead_id)?;
+    let names: Vec<String> = voice
+        .friend_ids
+        .iter()
+        .filter(|id| **id != app.store.current_user_id)
+        .take(2)
+        .map(|id| app.store.friend_name(*id))
+        .collect();
+    let guild = app
         .store
-        .active_now()
+        .guilds
+        .iter()
+        .find(|guild| guild.id == voice.guild_id)?;
+    let channel = app
+        .store
+        .channel_name(voice.channel_id)
+        .unwrap_or_default()
+        .to_owned();
+    let icon = guild
+        .icon_spec()
+        .and_then(|spec| images::resolve(&spec, theme::image_px(ACTIVE_ART), cx))
+        .map(|path| img(path).size_full().rounded_full().into_any_element())
+        .unwrap_or_else(|| {
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .size_full()
+                .rounded_full()
+                .bg(rgb(guild.icon_color))
+                .text_size(rpx(12.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(white())
+                .child(guild.initials.clone())
+                .into_any_element()
+        });
+    let art = div()
+        .relative()
+        .flex_none()
+        .size(rpx(ACTIVE_ART))
+        .child(icon)
+        .child(
+            div()
+                .absolute()
+                .left(rpx(18.))
+                .top(rpx(18.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(rpx(16.))
+                .rounded_full()
+                .bg(rgb(theme::bg()))
+                .child(theme::icon("volume-2", 10., theme::text())),
+        );
+    let shown = voice.member_ids.len().min(3);
+    let extra = voice.member_ids.len() - shown;
+    let party = div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .children(
+            voice
+                .member_ids
+                .iter()
+                .take(shown)
+                .enumerate()
+                .map(|(index, id)| {
+                    div().when(index > 0, |this| this.ml(rpx(-2.))).child(
+                        theme::undecorated_member_avatar(
+                            &app.store,
+                            0,
+                            *id,
+                            ACTIVE_PARTY_AVATAR,
+                            cx,
+                        ),
+                    )
+                }),
+        )
+        .when(extra > 0, |this| {
+            this.child(
+                div()
+                    .ml(rpx(4.))
+                    .text_size(rpx(12.))
+                    .line_height(rpx(16.))
+                    .text_color(rgb(theme::faint()))
+                    .child(format!("+{extra}")),
+            )
+        });
+    let header = div()
+        .flex()
+        .items_center()
+        .gap(rpx(12.))
+        .p(rpx(16.))
+        .bg(rgb(theme::elevated()))
+        .group_hover(ACTIVE_CARD_GROUP, |style| {
+            style.bg(rgb(theme::composite(theme::hover(), theme::elevated())))
+        })
+        .child(theme::user_avatar(
+            Some(lead),
+            lead_id,
+            DM_AVATAR,
+            Some((lead.status, theme::elevated())),
+            false,
+            cx,
+        ))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(rpx(16.))
+                        .line_height(rpx(20.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(theme::text()))
+                        .child(voice_title(&names, voice.member_ids.len())),
+                )
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(rpx(14.))
+                        .line_height(rpx(18.))
+                        .text_color(rgb(theme::faint()))
+                        .child("In a Voice Channel"),
+                ),
+        );
+    let body = div()
+        .flex()
+        .items_center()
+        .gap(rpx(12.))
+        .p(rpx(16.))
+        .child(art)
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(rpx(14.))
+                        .line_height(rpx(18.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(theme::text()))
+                        .child(guild.name.clone()),
+                )
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(rpx(12.))
+                        .line_height(rpx(16.))
+                        .text_color(rgb(theme::faint()))
+                        .child(channel),
+                ),
+        )
+        .child(party);
+    Some(
+        active_card_frame()
+            .child(header)
+            .child(body)
+            .into_any_element(),
+    )
+}
+
+fn active_now(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
+    let voice_cards = app
+        .store
+        .active_voice()
+        .iter()
+        .filter_map(|voice| voice_card(app, voice, cx))
+        .collect::<Vec<_>>();
+    let cards: Vec<AnyElement> = voice_cards
         .into_iter()
-        .filter_map(|id| {
+        .chain(app.store.active_now().into_iter().filter_map(|id| {
             let user = app.store.user(id)?;
             if let Some(stream) = &user.live_stream {
                 return Some(live_stream_card(app, id, user, stream, cx));
             }
             let activity = user.game.as_ref().or(user.listening.as_ref())?;
             Some(active_card(app, id, user, activity, cx))
-        })
+        }))
         .collect();
     let empty = cards.is_empty();
     div()

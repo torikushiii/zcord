@@ -277,15 +277,16 @@ fn round<E: Styled + IntoElement + 'static>(
 
 pub fn render(app: &DiscordApp, dms: &RailDms, cx: &App) -> impl IntoElement + use<> {
     let morphs = app.rail_morphs.clock();
-    div()
+    let reserve = super::views::user_panel_reserve(app);
+    let rail = div()
         .id("guild-rail")
         .flex()
         .flex_col()
         .items_center()
         .gap_2()
-        .w(rpx(WIDTH))
-        .h_full()
-        .flex_none()
+        .w_full()
+        .flex_1()
+        .min_h_0()
         .pb_3()
         .overflow_y_scroll()
         .child(
@@ -359,7 +360,17 @@ pub fn render(app: &DiscordApp, dms: &RailDms, cx: &App) -> impl IntoElement + u
             "Discover",
             app,
             morphs,
-        ))
+        ));
+    div()
+        .flex()
+        .flex_col()
+        .w(rpx(WIDTH))
+        .h_full()
+        .flex_none()
+        .child(rail)
+        .when_some(reserve, |this, reserve| {
+            this.child(div().flex_none().h(reserve))
+        })
 }
 
 fn guild_item(app: &DiscordApp, guild: &Guild, cx: &App, morphs: Option<Instant>) -> Stateful<Div> {
@@ -493,7 +504,7 @@ fn guild_icon(
     // Like Discord, animated icons only play while their rail item is hovered.
     let animated = spec
         .as_ref()
-        .filter(|_| app.hovered_rail == Some(guild.id))
+        .filter(|_| app.hovered_rail == Some(guild.id) || crate::settings::always_animate())
         .and_then(ImageSpec::animated)
         .and_then(|animated| animated::resolve(&animated, pixels, cx));
     if let Some(image) = animated {

@@ -1032,6 +1032,23 @@ pub(in crate::app::profile) fn popout_widget(
     card: &ProfileCard,
     cx: &App,
 ) -> Option<AnyElement> {
+    let front = popout_widget_front(app, card, cx)?;
+    let stacked = card.profile.as_ref().is_some_and(|profile| {
+        profile
+            .widgets
+            .iter()
+            .filter(|widget| !matches!(widget.data, WidgetData::Unknown))
+            .count()
+            > 1
+    });
+    Some(if stacked {
+        super::card_stack(app, card, Stack::Widget, Tab::Board, front, cx)
+    } else {
+        front
+    })
+}
+
+fn popout_widget_front(app: &DiscordApp, card: &ProfileCard, cx: &App) -> Option<AnyElement> {
     let palette = card.palette();
     let profile = card.profile.as_ref()?;
     // Discord summarises the first Board widget it can show in the popout, in Board order:
@@ -1136,121 +1153,98 @@ pub(in crate::app::profile) fn popout_widget(
     let icon = application
         .and_then(|app| app.icon.as_deref())
         .and_then(|hash| app_asset(application_id, hash, 16., cx));
-    // Discord stacks a sliver of a second card under this one when the Board holds more widgets.
-    let stacked = card.profile.as_ref().is_some_and(|profile| {
-        profile
-            .widgets
-            .iter()
-            .filter(|widget| !matches!(widget.data, WidgetData::Unknown))
-            .count()
-            > 1
-    });
     let entity = app.entity.clone();
-    let front = div()
-        .flex()
-        .items_center()
-        .rounded(rpx(8.))
-        .bg(palette.panel)
-        .border_1()
-        .border_color(palette.border)
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_w_0()
-                .p(rpx(8.))
-                .gap(rpx(2.))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(rpx(6.))
-                        .min_w_0()
-                        .children(
-                            icon.map(|path| img(path).size(rpx(16.)).flex_none().rounded(rpx(4.))),
-                        )
-                        .child(
-                            div()
-                                .truncate()
-                                .text_size(rpx(12.))
-                                .line_height(rpx(16.))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(palette.strong))
-                                .child(label(("profile-popout-app", application_id), &name)),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_none()
-                        .items_center()
-                        .gap(rpx(4.))
-                        .min_w_0()
-                        .h(rpx(18.))
-                        .mt(rpx(6.))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(rpx(14.))
-                                .line_height(rpx(18.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(palette.strong))
-                                .child(label(("profile-popout-app-user", application_id), &title)),
-                        )
-                        .children(
-                            stat_icon.map(|icon| div().size(rpx(18.)).flex_none().child(icon)),
-                        ),
-                )
-                .children(stat_label.map(|text| {
-                    div()
-                        .truncate()
-                        .text_size(rpx(12.))
-                        .line_height(rpx(16.))
-                        .text_color(rgb(palette.muted))
-                        .child(text)
-                }))
-                .child(
-                    div()
-                        .id(("profile-popout-stats", application_id))
-                        .text_size(rpx(12.))
-                        .line_height(rpx(16.))
-                        .font_weight(FontWeight::NORMAL)
-                        .text_color(rgb(palette.text))
-                        .cursor_pointer()
-                        .hover(|style| style.underline())
-                        .on_click(move |_, _, cx| {
-                            entity.update(cx, |app, cx| app.open_full_profile(cx)).ok();
-                        })
-                        .child("View All Stats"),
-                ),
-        )
-        .children(hero.map(|hero| {
-            div()
-                .flex_none()
-                .p(rpx(8.))
-                .child(div().size(rpx(POPOUT_HERO)).rounded(rpx(8.)).child(hero))
-        }));
-    Some(
+    let front = super::hover_card(
+        app,
+        ("profile-popout-widget", application_id),
+        Tab::Board,
+        palette,
+    )
+    .flex()
+    .items_center()
+    .rounded(rpx(8.))
+    .bg(palette.panel)
+    .border_1()
+    .border_color(palette.border)
+    .child(
         div()
             .flex()
             .flex_col()
-            .child(front)
-            .when(stacked, |this| {
-                this.child(
-                    div()
-                        .mx(rpx(6.))
-                        .h(rpx(8.))
-                        .rounded_b(rpx(8.))
-                        .bg(palette.panel)
-                        .border_1()
-                        .border_t_0()
-                        .border_color(palette.border),
-                )
-            })
-            .into_any_element(),
+            .flex_1()
+            .min_w_0()
+            .p(rpx(8.))
+            .gap(rpx(2.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(rpx(6.))
+                    .min_w_0()
+                    .children(
+                        icon.map(|path| img(path).size(rpx(16.)).flex_none().rounded(rpx(4.))),
+                    )
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(rpx(12.))
+                            .line_height(rpx(16.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(rgb(palette.strong))
+                            .child(label(("profile-popout-app", application_id), &name)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(rpx(4.))
+                    .min_w_0()
+                    .h(rpx(18.))
+                    .mt(rpx(6.))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(rpx(14.))
+                            .line_height(rpx(18.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(palette.strong))
+                            .child(label(("profile-popout-app-user", application_id), &title)),
+                    )
+                    .children(stat_icon.map(|icon| div().size(rpx(18.)).flex_none().child(icon))),
+            )
+            .children(stat_label.map(|text| {
+                div()
+                    .truncate()
+                    .text_size(rpx(12.))
+                    .line_height(rpx(16.))
+                    .text_color(rgb(palette.muted))
+                    .child(text)
+            }))
+            .child(
+                div()
+                    .id(("profile-popout-stats", application_id))
+                    .text_size(rpx(12.))
+                    .line_height(rpx(16.))
+                    .font_weight(FontWeight::NORMAL)
+                    .text_color(rgb(palette.text))
+                    .cursor_pointer()
+                    .hover(|style| style.underline())
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        entity.update(cx, |app, cx| app.open_full_profile(cx)).ok();
+                    })
+                    .child("View All Stats"),
+            ),
     )
+    .children(hero.map(|hero| {
+        div()
+            .flex_none()
+            .p(rpx(8.))
+            .child(div().size(rpx(POPOUT_HERO)).rounded(rpx(8.)).child(hero))
+    }));
+    Some(front.into_any_element())
 }
 
 fn popout_personal(
@@ -1269,62 +1263,68 @@ fn popout_personal(
         _ => None,
     });
     let entity = app.entity.clone();
-    div()
-        .flex()
-        .items_center()
-        .gap(rpx(8.))
-        .p(rpx(8.))
-        .rounded(rpx(8.))
-        .bg(palette.panel)
-        .border_1()
-        .border_color(palette.border)
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_w_0()
-                .gap(rpx(4.))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(rpx(4.))
-                        .min_w_0()
-                        .children(header.map(|header| {
-                            div()
-                                .truncate()
-                                .text_size(rpx(14.))
-                                .line_height(rpx(18.))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(palette.strong))
-                                .child(label(("profile-popout-personal", widget_id), header))
-                        })),
-                )
-                .child(
-                    div()
-                        .id(("profile-popout-personal-view", widget_id))
-                        .text_size(rpx(12.))
-                        .line_height(rpx(16.))
-                        .text_color(rgb(palette.text))
-                        .cursor_pointer()
-                        .hover(|style| style.underline())
-                        .on_click(move |_, _, cx| {
-                            entity.update(cx, |app, cx| app.open_full_profile(cx)).ok();
-                        })
-                        .child("View Widget"),
-                ),
-        )
-        .children(cover.map(|cover| {
-            div()
-                .flex_none()
-                .w(rpx(POPOUT_COVER_WIDTH))
-                .h(rpx(POPOUT_COVER_HEIGHT))
-                .rounded(rpx(4.))
-                .overflow_hidden()
-                .child(cover)
-        }))
-        .into_any_element()
+    super::hover_card(
+        app,
+        ("profile-popout-personal-card", widget_id),
+        Tab::Board,
+        palette,
+    )
+    .flex()
+    .items_center()
+    .gap(rpx(8.))
+    .p(rpx(8.))
+    .rounded(rpx(8.))
+    .bg(palette.panel)
+    .border_1()
+    .border_color(palette.border)
+    .child(
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .gap(rpx(4.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(rpx(4.))
+                    .min_w_0()
+                    .children(header.map(|header| {
+                        div()
+                            .truncate()
+                            .text_size(rpx(14.))
+                            .line_height(rpx(18.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(rgb(palette.strong))
+                            .child(label(("profile-popout-personal", widget_id), header))
+                    })),
+            )
+            .child(
+                div()
+                    .id(("profile-popout-personal-view", widget_id))
+                    .text_size(rpx(12.))
+                    .line_height(rpx(16.))
+                    .text_color(rgb(palette.text))
+                    .cursor_pointer()
+                    .hover(|style| style.underline())
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        entity.update(cx, |app, cx| app.open_full_profile(cx)).ok();
+                    })
+                    .child("View Widget"),
+            ),
+    )
+    .children(cover.map(|cover| {
+        div()
+            .flex_none()
+            .w(rpx(POPOUT_COVER_WIDTH))
+            .h(rpx(POPOUT_COVER_HEIGHT))
+            .rounded(rpx(4.))
+            .overflow_hidden()
+            .child(cover)
+    }))
+    .into_any_element()
 }
 
 /// The popout sums up the Board's game lists as one row of icons.
@@ -1371,51 +1371,50 @@ fn game_collection(
             }))
             .into_any_element()
     });
-    let entity = app.entity.clone();
     Some(
-        div()
-            .id(("profile-popout-collection", card.user_id))
-            .flex()
-            .items_center()
-            .gap(rpx(8.))
-            .p(rpx(8.))
-            .rounded(rpx(8.))
-            .bg(palette.panel)
-            .border_1()
-            .border_color(palette.border)
-            .cursor_pointer()
-            .on_click(move |_, _, cx| {
-                entity.update(cx, |app, cx| app.open_full_profile(cx)).ok();
-            })
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(rpx(12.))
-                    .line_height(rpx(16.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(palette.strong))
-                    .child("Game Collection"),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .gap(rpx(4.))
-                    .children(icons)
-                    .when(hidden > 0, |this| {
-                        this.child(
-                            tile()
-                                .bg(palette.button)
-                                .text_size(rpx(12.))
-                                .line_height(rpx(16.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(palette.strong))
-                                .child(format!("+{hidden}")),
-                        )
-                    }),
-            )
-            .into_any_element(),
+        super::hover_card(
+            app,
+            ("profile-popout-collection", card.user_id),
+            Tab::Board,
+            palette,
+        )
+        .flex()
+        .items_center()
+        .gap(rpx(8.))
+        .p(rpx(8.))
+        .rounded(rpx(8.))
+        .bg(palette.panel)
+        .border_1()
+        .border_color(palette.border)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(rpx(12.))
+                .line_height(rpx(16.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(palette.strong))
+                .child("Game Collection"),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .gap(rpx(4.))
+                .children(icons)
+                .when(hidden > 0, |this| {
+                    this.child(
+                        tile()
+                            .bg(palette.button)
+                            .text_size(rpx(12.))
+                            .line_height(rpx(16.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(palette.strong))
+                            .child(format!("+{hidden}")),
+                    )
+                }),
+        )
+        .into_any_element(),
     )
 }

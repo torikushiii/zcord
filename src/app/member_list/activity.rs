@@ -1,3 +1,4 @@
+use crate::app::menu::PopupButton as _;
 use gpui::{prelude::*, *};
 use gpui_component::ActiveTheme;
 
@@ -14,9 +15,38 @@ use crate::{
 const THUMBNAIL: f32 = 48.;
 const FACE: f32 = 16.;
 const BADGE_ICON: f32 = 12.;
+const COLLAPSED_CARDS: usize = 3;
 
 pub(super) fn section(app: &DiscordApp, cards: &[ActivityCard], cx: &App) -> AnyElement {
     let now_ms = chrono::Utc::now().timestamp_millis();
+    let expanded = app.activity_expanded();
+    let collapsible = cards.len() > COLLAPSED_CARDS;
+    let shown = if collapsible && !expanded {
+        COLLAPSED_CARDS
+    } else {
+        cards.len()
+    };
+    let toggle = collapsible.then(|| {
+        let entity = app.entity.clone();
+        theme::icon_button(
+            "activity-expand",
+            if expanded {
+                "chevron-down"
+            } else {
+                "chevron-right"
+            },
+            20.,
+            theme::muted(),
+        )
+        .w(rpx(24.))
+        .h(rpx(18.))
+        .rounded(rpx(4.))
+        .on_click(move |_, _, cx| {
+            entity
+                .update(cx, |app, cx| app.toggle_activity_expanded(cx))
+                .ok();
+        })
+    });
     div()
         .flex()
         .flex_col()
@@ -25,16 +55,23 @@ pub(super) fn section(app: &DiscordApp, cards: &[ActivityCard], cx: &App) -> Any
             div()
                 .flex()
                 .items_center()
+                .justify_between()
                 .pt(rpx(20.))
                 .pb(rpx(4.))
-                .px(rpx(8.))
+                .pl(rpx(8.))
+                .pr(rpx(4.))
                 .text_size(rpx(14.))
                 .line_height(rpx(18.))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(rgb(theme::muted()))
-                .child(format!("Activity — {}", cards.len())),
+                .child(format!("Activity — {}", cards.len()))
+                .children(toggle),
         )
-        .children(cards.iter().map(|card| card_view(app, card, now_ms, cx)))
+        .children(
+            cards[..shown]
+                .iter()
+                .map(|card| card_view(app, card, now_ms, cx)),
+        )
         .into_any_element()
 }
 
@@ -96,6 +133,7 @@ fn card_view(app: &DiscordApp, card: &ActivityCard, now_ms: i64, cx: &App) -> An
                 .flex_col()
                 .flex_1()
                 .min_w_0()
+                .mb(rpx(-2.))
                 .child(
                     div()
                         .flex()
@@ -454,9 +492,16 @@ pub(in crate::app) fn popout(app: &DiscordApp, window: &Window, cx: &App) -> Opt
                 .relative()
                 .child(
                     theme::icon_button("activity-popout-menu", "ellipsis", 16., theme::muted())
-                        .on_click(move |_, _, cx| {
-                            menu.update(cx, |app, cx| app.toggle_activity_menu(cx)).ok();
-                        }),
+                        .on_popup_click(
+                            crate::app::menu::shown(app, |app| {
+                                app.activity_popout
+                                    .as_ref()
+                                    .is_some_and(|popout| popout.menu)
+                            }),
+                            move |_, _, cx| {
+                                menu.update(cx, |app, cx| app.toggle_activity_menu(cx)).ok();
+                            },
+                        ),
                 )
                 .when(state.menu, |this| {
                     // A layer of its own, so the popout's hero and reactions can't paint over it.
@@ -765,11 +810,10 @@ pub(in crate::app) fn dm_card(app: &DiscordApp, entry: &ActivityEntryView, cx: &
                                 .id(("activity-card-avatar", card.entry_id))
                                 .flex_none()
                                 .cursor_pointer()
-                                .on_click(crate::app::profile::opener(
-                                    app,
-                                    card.user_id,
-                                    Anchor::TopLeft,
-                                ))
+                                .on_popup_click(
+                                    crate::app::profile::shown(app, card.user_id),
+                                    crate::app::profile::opener(app, card.user_id, Anchor::TopLeft),
+                                )
                                 .child(theme::user_avatar(
                                     app.store.user(card.user_id),
                                     card.user_id,
@@ -786,11 +830,10 @@ pub(in crate::app) fn dm_card(app: &DiscordApp, entry: &ActivityEntryView, cx: &
                                 .truncate()
                                 .cursor_pointer()
                                 .hover(|style| style.underline())
-                                .on_click(crate::app::profile::opener(
-                                    app,
-                                    card.user_id,
-                                    Anchor::TopLeft,
-                                ))
+                                .on_popup_click(
+                                    crate::app::profile::shown(app, card.user_id),
+                                    crate::app::profile::opener(app, card.user_id, Anchor::TopLeft),
+                                )
                                 .text_size(rpx(14.))
                                 .line_height(rpx(18.))
                                 .font_weight(FontWeight::SEMIBOLD)
