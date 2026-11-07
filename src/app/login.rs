@@ -32,6 +32,7 @@ enum QrState {
     Loading,
     Code(Rc<QrMatrix>),
     Scanned(RemoteUser),
+    Captcha(SharedString),
     Failed(SharedString),
 }
 
@@ -101,6 +102,10 @@ impl DiscordApp {
                 None => QrState::Failed("Couldn't draw the QR code.".into()),
             },
             RemoteAuthEvent::Scanned(user) => QrState::Scanned(user),
+            RemoteAuthEvent::Captcha(url) => {
+                cx.open_url(&url);
+                QrState::Captcha(url.into())
+            }
             RemoteAuthEvent::Failed(message) => QrState::Failed(message.into()),
             RemoteAuthEvent::Token(token) => {
                 form.qr._auth = None;
@@ -283,6 +288,26 @@ fn qr_panel(state: &QrState, cx: &mut Context<DiscordApp>) -> Div {
                 )
                 .into_any_element(),
         ),
+        QrState::Captcha(url) => {
+            let url = url.clone();
+            (
+                "Are you human?".into(),
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .child("Discord wants a captcha first. Solve it in your browser to finish logging in.")
+                    .child(
+                        link("qr-captcha", "Open it again")
+                            .mt(rpx(8.))
+                            .on_click(move |_, _, cx| cx.open_url(&url)),
+                    )
+                    .child(link("qr-captcha-restart", "Start over").mt(rpx(4.)).on_click(
+                        cx.listener(|this, _, window, cx| this.restart_qr_login(window, cx)),
+                    ))
+                    .into_any_element(),
+            )
+        }
         QrState::Failed(message) => {
             (
                 "Log in with QR Code".into(),
@@ -397,7 +422,7 @@ fn qr_visual(state: &QrState, cx: &App) -> AnyElement {
                 })
                 .into_any_element()
         }
-        QrState::Failed(_) => frame
+        QrState::Captcha(_) | QrState::Failed(_) => frame
             .bg(rgb(theme::bg()))
             .child(theme::logo(QR_LOGO).opacity(0.5))
             .into_any_element(),

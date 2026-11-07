@@ -1,9 +1,12 @@
 // https://docs.discord.food/remote-authentication/desktop
+mod captcha;
+
 use super::{Secret, properties, rest};
 use base64::{
     Engine,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
+use captcha::{Captcha, Page};
 use futures::{
     SinkExt, StreamExt,
     channel::mpsc::{self, UnboundedSender},
@@ -16,7 +19,7 @@ use tokio::{
     net::TcpStream,
     sync::watch,
     task::JoinHandle,
-    time::{Instant, MissedTickBehavior, interval, sleep, sleep_until, timeout},
+    time::{Instant, Interval, MissedTickBehavior, interval, sleep, sleep_until, timeout},
 };
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async,
@@ -32,6 +35,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 const RECEIVER_CHECK: Duration = Duration::from_secs(1);
 const CAPTCHA_MESSAGE: &str = "Discord asked for a captcha. Log in with a token instead.";
+const CAPTCHA_REFUSED: &str = "Discord didn't take the captcha. Try again.";
+const CAPTCHA_EXPIRED: &str = "Nobody solved the captcha in time. Try again.";
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -65,6 +70,7 @@ impl Drop for RemoteAuth {
 pub enum RemoteAuthEvent {
     Qr(String),
     Scanned(RemoteUser),
+    Captcha(String),
     Token(Secret),
     Failed(String),
 }
@@ -354,14 +360,20 @@ async fn attempt(
                         healthy: reached_qr,
                     };
                 };
-                match exchange_ticket(&endpoints.login, ticket, &key).await {
-                    Ok(token) => {
+                let ticket = Ticket {
+                    login: &endpoints.login,
+                    ticket,
+                    key: &key,
+                };
+                match trade(ticket, &mut socket, &mut heartbeat, sender, shutdown).await {
+                    Traded::Token(token) => {
                         if !emit(sender, RemoteAuthEvent::Token(Secret(token))) {
                             return Outcome::Stop;
                         }
                         return Outcome::Done;
                     }
-                    Err(message) => return Outcome::Fatal(message),
+                    Traded::Stop => return Outcome::Stop,
+                    Traded::Failed(message) => return Outcome::Fatal(message),
                 }
             }
             "cancel" => return Outcome::Fresh,
@@ -453,7 +465,82 @@ fn parse_user_payload(payload: &[u8]) -> Option<RemoteUser> {
     })
 }
 
-async fn exchange_ticket(url: &str, ticket: &str, key: &RsaPrivateKey) -> Result<String, String> {
+struct Ticket<'a> {
+    login: &'a str,
+    ticket: &'a str,
+    key: &'a RsaPrivateKey,
+}
+
+enum Traded {
+    Token(String),
+    Stop,
+    Failed(String),
+}
+
+enum Exchange {
+    Token(String),
+    Captcha(Captcha),
+}
+
+/// The gateway keeps getting heartbeats while a captcha is being solved.
+async fn trade(
+    ticket: Ticket<'_>,
+    socket: &mut Socket,
+    heartbeat: &mut Interval,
+    sender: &UnboundedSender<RemoteAuthEvent>,
+    shutdown: &mut watch::Receiver<bool>,
+) -> Traded {
+    let mut solved: Option<(Captcha, String)> = None;
+    for shown in 0..=captcha::TRIES {
+        let solution = solved
+            .as_ref()
+            .map(|(captcha, solution)| (captcha, solution.as_str()));
+        let captcha = match exchange_ticket(&ticket, solution).await {
+            Ok(Exchange::Token(token)) => return Traded::Token(token),
+            Ok(Exchange::Captcha(captcha)) => captcha,
+            Err(message) => return Traded::Failed(message),
+        };
+        if shown == captcha::TRIES {
+            return Traded::Failed(CAPTCHA_REFUSED.to_owned());
+        }
+        let Ok(page) = Page::serve(&captcha).await else {
+            return Traded::Failed("Couldn't show Discord's captcha.".to_owned());
+        };
+        if !emit(sender, RemoteAuthEvent::Captcha(page.url.clone())) {
+            return Traded::Stop;
+        }
+        let waiting = timeout(captcha::WAIT, page.solution());
+        tokio::pin!(waiting);
+        let mut receiver_check = interval(RECEIVER_CHECK);
+        let mut open = true;
+        let solution = loop {
+            tokio::select! {
+                biased;
+                _ = shutdown.changed() => return Traded::Stop,
+                _ = receiver_check.tick() => {
+                    if sender.is_closed() {
+                        return Traded::Stop;
+                    }
+                }
+                solution = &mut waiting => match solution {
+                    Ok(solution) => break solution,
+                    Err(_) => return Traded::Failed(CAPTCHA_EXPIRED.to_owned()),
+                },
+                _ = heartbeat.tick(), if open => {
+                    open = send(socket, json!({"op": "heartbeat"})).await.is_ok();
+                }
+                message = socket.next(), if open => open = matches!(message, Some(Ok(_))),
+            }
+        };
+        solved = Some((captcha, solution));
+    }
+    unreachable!("the last try returns before showing another captcha")
+}
+
+async fn exchange_ticket(
+    ticket: &Ticket<'_>,
+    solved: Option<(&Captcha, &str)>,
+) -> Result<Exchange, String> {
     let headers =
         rest::client_headers().map_err(|_| "Could not prepare the QR login request.".to_owned())?;
     let client = reqwest::Client::builder()
@@ -462,23 +549,33 @@ async fn exchange_ticket(url: &str, ticket: &str, key: &RsaPrivateKey) -> Result
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|_| "Could not prepare the QR login request.".to_owned())?;
-    let response = client
-        .post(url)
+    let mut request = client
+        .post(ticket.login)
         .header("x-super-properties", properties::super_properties())
         .header(reqwest::header::REFERER, "https://discord.com/login")
-        .header(reqwest::header::ORIGIN, "https://discord.com")
-        .json(&json!({ "ticket": ticket }))
+        .header(reqwest::header::ORIGIN, "https://discord.com");
+    if let Some((captcha, solution)) = solved {
+        for (name, value) in captcha.headers(solution) {
+            request = request.header(name, value);
+        }
+    }
+    let response = request
+        .json(&json!({ "ticket": ticket.ticket }))
         .send()
         .await
         .map_err(|_| "Could not reach Discord to finish QR login.".to_owned())?;
     let status = response.status();
     let body = response.json::<Value>().await.unwrap_or(Value::Null);
-    if status.as_u16() == 400
-        && ["captcha_key", "captcha_sitekey"]
+    if status.as_u16() == 400 {
+        if let Some(captcha) = Captcha::from_body(&body) {
+            return Ok(Exchange::Captcha(captcha));
+        }
+        if ["captcha_key", "captcha_sitekey"]
             .iter()
             .any(|field| body.get(*field).is_some_and(|value| !value.is_null()))
-    {
-        return Err(CAPTCHA_MESSAGE.to_owned());
+        {
+            return Err(CAPTCHA_MESSAGE.to_owned());
+        }
     }
     if !status.is_success() {
         return Err(format!(
@@ -490,11 +587,11 @@ async fn exchange_ticket(url: &str, ticket: &str, key: &RsaPrivateKey) -> Result
         .get("encrypted_token")
         .and_then(Value::as_str)
         .ok_or_else(|| "Discord sent an unreadable login response.".to_owned())?;
-    let token = decrypt(key, encrypted)
+    decrypt(ticket.key, encrypted)
         .and_then(|bytes| String::from_utf8(bytes).ok())
         .filter(|token| !token.is_empty())
-        .ok_or_else(|| "Discord sent an unreadable login response.".to_owned())?;
-    Ok(token)
+        .map(Exchange::Token)
+        .ok_or_else(|| "Discord sent an unreadable login response.".to_owned())
 }
 
 fn emit(sender: &UnboundedSender<RemoteAuthEvent>, event: RemoteAuthEvent) -> bool {
@@ -712,72 +809,11 @@ mod tests {
         let gateway = gateway_listener.local_addr().unwrap();
         let (key_sender, key_receiver) = oneshot::channel();
 
-        let ws_server = tokio::spawn(async move {
-            let (tcp, _) = gateway_listener.accept().await.unwrap();
-            let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
-            socket
-                .send(Message::Text(
-                    json!({"op": "hello", "heartbeat_interval": 100_000, "timeout_ms": 120_000})
-                        .to_string(),
-                ))
-                .await
-                .unwrap();
-            let init: Value =
-                serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
-                    .unwrap();
-            let der = STANDARD
-                .decode(init["encoded_public_key"].as_str().unwrap())
-                .unwrap();
-            let public = RsaPublicKey::from_public_key_der(&der).unwrap();
-            let fingerprint = fingerprint(&der);
-            let nonce = b"fixture nonce";
-            socket
-                .send(Message::Text(
-                    json!({"op": "nonce_proof", "encrypted_nonce": encrypt(&public, nonce)})
-                        .to_string(),
-                ))
-                .await
-                .unwrap();
-            let _: Value =
-                serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
-                    .unwrap();
-            socket
-                .send(Message::Text(
-                    json!({"op": "pending_remote_init", "fingerprint": fingerprint}).to_string(),
-                ))
-                .await
-                .unwrap();
-            socket
-                .send(Message::Text(
-                    json!({
-                        "op": "pending_ticket",
-                        "encrypted_user_payload": encrypt(&public, b"42:0:0:user"),
-                    })
-                    .to_string(),
-                ))
-                .await
-                .unwrap();
-            key_sender.send(public).unwrap();
-            socket
-                .send(Message::Text(
-                    json!({"op": "pending_login", "ticket": "fixture-ticket"}).to_string(),
-                ))
-                .await
-                .unwrap();
-            let _ = socket.next().await;
-        });
+        let ws_server = tokio::spawn(fake_login_gateway(gateway_listener, key_sender));
 
         let http_server = tokio::spawn(async move {
             let public = key_receiver.await.unwrap();
-            let (mut stream, head, body) = loop {
-                let request = accept_request(&login_listener).await;
-                if request
-                    .1
-                    .starts_with("POST /api/v9/users/@me/remote-auth/login ")
-                {
-                    break request;
-                }
-            };
+            let (mut stream, head, body) = accept_login(&login_listener).await;
             let lower = head.to_ascii_lowercase();
             assert!(!lower.contains("\r\nauthorization:"));
             assert!(
@@ -846,6 +882,172 @@ mod tests {
         ws_server.await.unwrap();
         http_server.await.unwrap();
         task.abort();
+    }
+
+    async fn fake_login_gateway(listener: TcpListener, key_sender: oneshot::Sender<RsaPublicKey>) {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+        socket
+            .send(Message::Text(
+                json!({"op": "hello", "heartbeat_interval": 100_000, "timeout_ms": 120_000})
+                    .to_string(),
+            ))
+            .await
+            .unwrap();
+        let init: Value =
+            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        let der = STANDARD
+            .decode(init["encoded_public_key"].as_str().unwrap())
+            .unwrap();
+        let public = RsaPublicKey::from_public_key_der(&der).unwrap();
+        let fingerprint = fingerprint(&der);
+        socket
+            .send(Message::Text(
+                json!({"op": "nonce_proof", "encrypted_nonce": encrypt(&public, b"fixture nonce")})
+                    .to_string(),
+            ))
+            .await
+            .unwrap();
+        let _: Value =
+            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        socket
+            .send(Message::Text(
+                json!({"op": "pending_remote_init", "fingerprint": fingerprint}).to_string(),
+            ))
+            .await
+            .unwrap();
+        socket
+            .send(Message::Text(
+                json!({
+                    "op": "pending_ticket",
+                    "encrypted_user_payload": encrypt(&public, b"42:0:0:user"),
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        key_sender.send(public).unwrap();
+        socket
+            .send(Message::Text(
+                json!({"op": "pending_login", "ticket": "fixture-ticket"}).to_string(),
+            ))
+            .await
+            .unwrap();
+        while let Some(Ok(_)) = socket.next().await {}
+    }
+
+    /// Other local programs may probe the ephemeral port, so skip anything but the login POST.
+    async fn accept_login(listener: &TcpListener) -> (TcpStream, String, Vec<u8>) {
+        loop {
+            let request = accept_request(listener).await;
+            if request
+                .1
+                .starts_with("POST /api/v9/users/@me/remote-auth/login ")
+            {
+                return request;
+            }
+        }
+    }
+
+    async fn respond_json(mut stream: TcpStream, status: &str, body: Value) {
+        let body = body.to_string();
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        stream.shutdown().await.unwrap();
+    }
+
+    async fn next_event(events: &mut mpsc::UnboundedReceiver<RemoteAuthEvent>) -> RemoteAuthEvent {
+        timeout(Duration::from_secs(10), events.next())
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn captcha_is_shown_then_the_ticket_is_retried_with_its_solution() {
+        let login_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let login = format!(
+            "http://{}/api/v9/users/@me/remote-auth/login",
+            login_listener.local_addr().unwrap()
+        );
+        let gateway_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let gateway = gateway_listener.local_addr().unwrap();
+        let (key_sender, key_receiver) = oneshot::channel();
+        let ws_server = tokio::spawn(fake_login_gateway(gateway_listener, key_sender));
+        let http_server = tokio::spawn(async move {
+            let public = key_receiver.await.unwrap();
+            let (stream, head, _) = accept_login(&login_listener).await;
+            assert!(!head.to_ascii_lowercase().contains("\r\nx-captcha-key:"));
+            respond_json(
+                stream,
+                "400 Bad Request",
+                json!({
+                    "captcha_key": ["captcha-required"],
+                    "captcha_service": "hcaptcha",
+                    "captcha_sitekey": "fixture-sitekey",
+                    "captcha_rqtoken": "fixture-rqtoken",
+                    "captcha_session_id": "fixture-session",
+                }),
+            )
+            .await;
+            let (stream, head, body) = accept_login(&login_listener).await;
+            let lower = head.to_ascii_lowercase();
+            assert!(lower.contains("\r\nx-captcha-key: solved\r\n"), "{head}");
+            assert!(lower.contains("\r\nx-captcha-rqtoken: fixture-rqtoken\r\n"));
+            assert!(lower.contains("\r\nx-captcha-session-id: fixture-session\r\n"));
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).unwrap(),
+                json!({"ticket": "fixture-ticket"})
+            );
+            respond_json(
+                stream,
+                "200 OK",
+                json!({"encrypted_token": encrypt(&public, b"fixture-token")}),
+            )
+            .await;
+        });
+
+        let (sender, mut events) = mpsc::unbounded();
+        let (_shutdown, stopped) = watch::channel(false);
+        let task = tokio::spawn(run(
+            Endpoints {
+                gateway: format!("ws://{gateway}"),
+                login,
+            },
+            sender,
+            stopped,
+        ));
+
+        assert!(matches!(
+            next_event(&mut events).await,
+            RemoteAuthEvent::Qr(_)
+        ));
+        assert!(matches!(
+            next_event(&mut events).await,
+            RemoteAuthEvent::Scanned(_)
+        ));
+        let RemoteAuthEvent::Captcha(url) = next_event(&mut events).await else {
+            panic!("expected a captcha page");
+        };
+        let client = reqwest::Client::new();
+        let html = client.get(&url).send().await.unwrap().text().await.unwrap();
+        assert!(html.contains(r#""fixture-sitekey""#), "{html}");
+        client.post(&url).body("solved").send().await.unwrap();
+        match next_event(&mut events).await {
+            RemoteAuthEvent::Token(secret) => assert_eq!(secret.0, "fixture-token"),
+            other => panic!("expected token event, got {other:?}"),
+        }
+        http_server.await.unwrap();
+        task.abort();
+        ws_server.abort();
     }
 
     #[test]
