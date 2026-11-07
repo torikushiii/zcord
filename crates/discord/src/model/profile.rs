@@ -39,6 +39,51 @@ pub struct Profile {
         deserialize_with = "wishlist_ids"
     )]
     pub wishlist_ids: Vec<u64>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub application: Option<ProfileApplication>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+pub struct ProfileApplication {
+    #[serde(deserialize_with = "snowflake")]
+    pub id: u64,
+    #[serde(default, deserialize_with = "default_value")]
+    pub flags: u64,
+    #[serde(default, deserialize_with = "ids")]
+    pub popular_application_command_ids: Vec<u64>,
+    #[serde(default)]
+    install_params: Option<Value>,
+    #[serde(default)]
+    custom_install_url: Option<String>,
+}
+
+/// https://docs.discord.food/resources/application#application-flags
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DataAccess {
+    Messages,
+    Presence,
+    Members,
+}
+
+impl ProfileApplication {
+    pub fn installable(&self) -> bool {
+        self.install_params.is_some() || self.custom_install_url.is_some()
+    }
+
+    pub fn data_access(&self) -> Vec<DataAccess> {
+        const PRESENCE: u64 = 1 << 12 | 1 << 13;
+        const MEMBERS: u64 = 1 << 14 | 1 << 15;
+        const MESSAGE_CONTENT: u64 = 1 << 18 | 1 << 19;
+        [
+            (MESSAGE_CONTENT, DataAccess::Messages),
+            (PRESENCE, DataAccess::Presence),
+            (MEMBERS, DataAccess::Members),
+        ]
+        .into_iter()
+        .filter(|(bits, _)| self.flags & bits != 0)
+        .map(|(_, access)| access)
+        .collect()
+    }
 }
 
 #[derive(Clone, Deserialize)]

@@ -55,6 +55,7 @@ impl Store {
                     existing.discriminator = Some(discriminator.clone());
                 }
                 existing.bot |= user.bot;
+                existing.verified_bot |= model::verified_bot(user.bot, user.public_flags);
                 apply_cosmetics(existing, user);
                 return;
             }

@@ -316,6 +316,18 @@ impl Session {
         Ok(identities)
     }
 
+    pub async fn popular_commands(
+        &self,
+        guild_id: u64,
+        application_id: u64,
+        popular: Vec<u64>,
+    ) -> Result<Vec<model::ApplicationCommand>, Error> {
+        let index = self
+            .rest(async |rest| rest.fetch_guild_command_index(guild_id).await)
+            .await?;
+        Ok(index.popular(application_id, &popular))
+    }
+
     pub async fn games(&self, ids: &[u64]) -> Result<Vec<Arc<model::Game>>, Error> {
         let _request = self.request_lock(CacheRequest::Games).lock_owned().await;
         let missing: Vec<u64> = {

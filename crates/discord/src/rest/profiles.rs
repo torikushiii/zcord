@@ -100,6 +100,21 @@ impl Rest {
         response.json().await.map_err(|_| Error::Decode)
     }
 
+    pub async fn fetch_guild_command_index(
+        &self,
+        guild_id: u64,
+    ) -> Result<model::ApplicationCommandIndex, Error> {
+        let url = format!("https://discord.com/api/v9/guilds/{guild_id}/application-command-index");
+        let response = self
+            .send(|| {
+                self.client
+                    .get(&url)
+                    .header(REFERER, "https://discord.com/channels/@me")
+            })
+            .await?;
+        response.json().await.map_err(|_| Error::Decode)
+    }
+
     pub async fn fetch_wishlist(&self, wishlist_id: u64) -> Result<model::Wishlist, Error> {
         let url = format!("https://discord.com/api/v9/wishlists/{wishlist_id}");
         let response = self

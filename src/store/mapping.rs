@@ -354,6 +354,7 @@ pub(super) fn map_webhook_author(id: Option<u64>, author: &model::User) -> Optio
         id: id?,
         name: author.username.clone(),
         avatar: author.avatar.clone(),
+        verified_bot: model::verified_bot(author.bot, author.public_flags),
     })
 }
 
@@ -449,6 +450,7 @@ fn map_forward(message: &model::Message) -> Option<Forward> {
         &snapshot.message,
         reference.channel_id,
         reference.guild_id,
+        reference.message_id,
     ))
 }
 
@@ -456,8 +458,10 @@ pub(super) fn map_snapshot(
     snapshot: &model::SnapshotMessage,
     channel_id: Option<u64>,
     guild_id: Option<u64>,
+    message_id: Option<u64>,
 ) -> Forward {
     Forward {
+        message_id,
         content: snapshot.content.clone(),
         embeds: map_embeds(
             &embeds_without_activity_card(&snapshot.embeds, &snapshot.components),
@@ -518,6 +522,7 @@ pub(super) fn map_user(user: &model::User) -> User {
         name,
         status: Status::Offline,
         bot: user.bot,
+        verified_bot: model::verified_bot(user.bot, user.public_flags),
         on_mobile: false,
         role_color: None,
         tag: user.primary_guild.as_ref().and_then(guild_tag),
@@ -573,6 +578,10 @@ pub(super) fn apply_user_update(user: &mut User, update: &model::UserUpdate) {
     if let Some(bot) = update.bot {
         user.bot = bot;
     }
+    if update.public_flags.is_some() {
+        user.verified_bot = model::verified_bot(user.bot, update.public_flags);
+    }
+    user.verified_bot &= user.bot;
     if let Some(decoration) = &update.avatar_decoration_data {
         user.decoration = decoration.as_ref().map(map_decoration);
     }

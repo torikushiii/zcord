@@ -159,6 +159,7 @@ pub(super) fn badges(
         profile.badges.len()
     };
     let hidden = profile.badges.len() - shown;
+    let boxed = !profile.user.user.bot;
     Some(
         div()
             .flex()
@@ -167,12 +168,14 @@ pub(super) fn badges(
             .gap(rpx(2.))
             .w_auto()
             .max_w_full()
-            .px(rpx(3.))
-            .py(rpx(1.))
-            .rounded(rpx(8.))
-            .bg(palette.panel)
-            .border_1()
-            .border_color(palette.border)
+            .when(boxed, |this| {
+                this.px(rpx(3.))
+                    .py(rpx(1.))
+                    .rounded(rpx(8.))
+                    .bg(palette.panel)
+                    .border_1()
+                    .border_color(palette.border)
+            })
             .children(
                 profile
                     .badges

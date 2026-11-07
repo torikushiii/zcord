@@ -56,32 +56,6 @@ pub(in crate::app::profile) fn profile_actions(
     if card.is_account() || card.user_id == app.store.current_user_id {
         return None;
     }
-    let open = card.more_menu_open;
-    let margin = rpx(8.).to_pixels(window.rem_size());
-    let max_width = (window.viewport_size().width - margin * 2.).max(px(0.));
-    let trigger_bounds: MenuBounds = Rc::new(Cell::new(None));
-    let trigger_paint = trigger_bounds.clone();
-    let palette = card.palette();
-    let toggle = app.entity.clone();
-    let button =
-        theme::icon_button_with_hover("profile-more", "ellipsis", 20., palette.text, palette.hover)
-            .role(Role::Button)
-            .aria_label("More")
-            .aria_expanded(open)
-            .focusable()
-            .size(rpx(32.))
-            .rounded(rpx(8.))
-            .bg(if open { palette.raised } else { palette.button })
-            .focus_visible(move |style| style.bg(palette.raised))
-            .without_text_selection()
-            .on_prepaint(move |bounds, _, _| trigger_paint.set(Some(bounds)))
-            .map(|this| action_tooltip(this, app, card, "More", !open))
-            .on_click(move |_, _, cx| {
-                cx.stop_propagation();
-                toggle
-                    .update(cx, |app, cx| app.set_profile_menu(!open, cx))
-                    .ok();
-            });
     let friend_action = app.friend_action(card.user_id);
     let friend_error = app.friend_error(card.user_id);
     let friends = friend_action == Some(FriendAction::Friends);
@@ -94,7 +68,89 @@ pub(in crate::app::profile) fn profile_actions(
         .when(!friends, |this| {
             this.child(message_button(app, card, false))
         })
-        .child(div().relative().child(button).when(open, |this| {
+        .child(more_button(app, card, window, false));
+    Some(
+        div()
+            .flex()
+            .flex_col()
+            .gap(rpx(6.))
+            .child(more)
+            .children(friend_error.map(|text| {
+                div()
+                    .text_size(rpx(12.))
+                    .line_height(rpx(16.))
+                    .text_color(rgb(theme::RED))
+                    .child(text)
+            }))
+            .into_any_element(),
+    )
+}
+
+pub(in crate::app::profile) fn more_button(
+    app: &DiscordApp,
+    card: &ProfileCard,
+    window: &Window,
+    on_banner: bool,
+) -> AnyElement {
+    let open = card.more_menu_open;
+    let margin = rpx(8.).to_pixels(window.rem_size());
+    let max_width = (window.viewport_size().width - margin * 2.).max(px(0.));
+    let trigger_bounds: MenuBounds = Rc::new(Cell::new(None));
+    let trigger_paint = trigger_bounds.clone();
+    let palette = card.palette();
+    let toggle = app.entity.clone();
+    let (icon_size, icon_color, hover, fill, raised) = if on_banner {
+        let fill: Hsla = rgba(0x0000008F).into();
+        (
+            16.,
+            0xFFFFFF,
+            rgba(0x000000B3).into(),
+            fill,
+            rgba(0x000000B3).into(),
+        )
+    } else {
+        (
+            20.,
+            palette.text,
+            palette.hover,
+            palette.button,
+            palette.raised,
+        )
+    };
+    let button =
+        theme::icon_button_with_hover("profile-more", "ellipsis", icon_size, icon_color, hover)
+            .role(Role::Button)
+            .aria_label("More")
+            .aria_expanded(open)
+            .focusable()
+            .size(rpx(32.))
+            .map(|this| {
+                if on_banner {
+                    this.rounded_full()
+                } else {
+                    this.rounded(rpx(8.))
+                }
+            })
+            .bg(if open { raised } else { fill })
+            .focus_visible(move |style| style.bg(raised))
+            .without_text_selection()
+            .on_prepaint(move |bounds, _, _| trigger_paint.set(Some(bounds)))
+            .map(|this| action_tooltip(this, app, card, "More", !open))
+            .on_click(move |_, _, cx| {
+                cx.stop_propagation();
+                toggle
+                    .update(cx, |app, cx| app.set_profile_menu(!open, cx))
+                    .ok();
+            });
+    let friend_action = app.friend_action(card.user_id);
+    let application_id = card
+        .profile
+        .as_deref()
+        .and_then(|profile| Some(profile.application.as_ref()?.id));
+    div()
+        .relative()
+        .child(button)
+        .when(open, |this| {
             let close = app.entity.clone();
             let switch = app.entity.clone();
             let copy = app.entity.clone();
@@ -188,44 +244,49 @@ pub(in crate::app::profile) fn profile_actions(
                 }))
                 .child(menu_entry(
                     "profile-menu-copy-id",
-                    "Copy User ID",
+                    if application_id.is_some() {
+                        "Copy App ID"
+                    } else {
+                        "Copy User ID"
+                    },
                     None,
                     move |cx| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(user_id.to_string()));
+                        let id = application_id.unwrap_or(user_id);
+                        cx.write_to_clipboard(ClipboardItem::new_string(id.to_string()));
                         copy.update(cx, |app, cx| app.set_profile_menu(false, cx))
                             .ok();
                     },
                 ));
             this.child(
-                div().absolute().top_0().left(rpx(40.)).size_0().child(
-                    deferred(
-                        anchored()
-                            .anchor(Anchor::TopLeft)
-                            .snap_to_window_with_margin(Edges::all(margin))
-                            .child(menu),
-                    )
-                    .with_priority(3),
-                ),
-            )
-        }));
-    Some(
-        div()
-            .flex()
-            .flex_col()
-            .gap(rpx(6.))
-            .child(more)
-            .children(friend_error.map(|text| {
                 div()
-                    .text_size(rpx(12.))
-                    .line_height(rpx(16.))
-                    .text_color(rgb(theme::RED))
-                    .child(text)
-            }))
-            .into_any_element(),
-    )
+                    .absolute()
+                    .size_0()
+                    .map(|this| {
+                        if on_banner {
+                            this.top(rpx(40.)).right_0()
+                        } else {
+                            this.top_0().left(rpx(40.))
+                        }
+                    })
+                    .child(
+                        deferred(
+                            anchored()
+                                .anchor(if on_banner {
+                                    Anchor::TopRight
+                                } else {
+                                    Anchor::TopLeft
+                                })
+                                .snap_to_window_with_margin(Edges::all(margin))
+                                .child(menu),
+                        )
+                        .with_priority(3),
+                    ),
+            )
+        })
+        .into_any_element()
 }
 
-fn action_tooltip(
+pub(in crate::app::profile) fn action_tooltip(
     button: Stateful<Div>,
     app: &DiscordApp,
     card: &ProfileCard,
@@ -254,7 +315,11 @@ fn action_tooltip(
         })
 }
 
-fn message_button(app: &DiscordApp, card: &ProfileCard, labelled: bool) -> AnyElement {
+pub(in crate::app::profile) fn message_button(
+    app: &DiscordApp,
+    card: &ProfileCard,
+    labelled: bool,
+) -> AnyElement {
     let user_id = card.user_id;
     let palette = card.palette();
     let entity = app.entity.clone();

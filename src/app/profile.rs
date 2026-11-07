@@ -148,6 +148,7 @@ pub(crate) struct ProfileCard {
     /// Whether the pointer is over each rich-presence image (indexed by `ArtSlot`), for their
     /// `large_text`/`small_text` tooltips. A small image sits on its large one, so both can be.
     pub(crate) hovered_art: [bool; 4],
+    stack_hover: [StackHover; 2],
     pub(crate) widget_configs: HashMap<u64, Arc<model::WidgetConfig>>,
     widget_configs_pending: HashSet<u64>,
     board_requested: bool,
@@ -177,6 +178,10 @@ pub(crate) struct ProfileCard {
     /// The last "Show more"/"Show less" per widget: a generation that restarts its animation, and
     /// when it happened.
     pub(crate) widget_toggles: HashMap<u64, (u64, Instant)>,
+    commands: Vec<model::ApplicationCommand>,
+    commands_requested: bool,
+    commands_pending: bool,
+    hovered_command: Option<u64>,
     _tasks: Vec<Task<()>>,
 }
 
@@ -186,6 +191,19 @@ enum ProfileOrigin {
     Member,
     /// The bottom account strip; uses the global profile and follows the strip's bounds.
     Account(AccountPanelBounds),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Stack {
+    Widget,
+    Activity,
+}
+
+/// `generation` counts pointer enters and leaves, restarting the lift animation on each.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct StackHover {
+    hovered: bool,
+    generation: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -203,6 +221,8 @@ pub(crate) enum Tab {
     Wishlist,
     Servers,
     Friends,
+    Bio,
+    DataAccess,
 }
 
 struct Layout {
@@ -276,6 +296,7 @@ impl ProfileCard {
             && self.applications_pending.is_empty()
             && self.widget_configs_pending.is_empty()
             && self.cosmetics_pending.is_empty()
+            && !self.commands_pending
             && !(self.avatar_theme_source.is_some() && self.avatar_theme.is_none());
         settled || self.opened.elapsed() >= POPOUT_WAIT
     }
@@ -543,6 +564,14 @@ impl Layout {
             corner: MODAL_CARD_RADIUS,
         }
     }
+}
+
+pub(crate) fn shown(app: &DiscordApp, user_id: u64) -> impl Fn(&App) -> bool + 'static {
+    super::menu::shown(app, move |app| {
+        app.profile
+            .as_ref()
+            .is_some_and(|card| card.user_id == user_id && !card.modal)
+    })
 }
 
 pub fn opener(

@@ -6,6 +6,8 @@ use super::popout::{
 use super::*;
 use gpui_component::scroll::ScrollableElement as _;
 
+mod app_profile;
+
 /// The Wishlist tab is hidden for now; its panel and loading stay in place.
 const WISHLIST_TAB: bool = false;
 
@@ -19,6 +21,9 @@ pub(super) fn profile_close_button(palette: ProfilePalette) -> Stateful<Div> {
 }
 
 pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &App) -> AnyElement {
+    if super::popout::is_app(app, card) {
+        return app_profile::modal(app, card, window, cx);
+    }
     let theme = card.theme();
     let palette = card.palette();
     let css = |pixels: Pixels| pixels / window.rem_size() * theme::BASE_FONT_SIZE;
@@ -309,7 +314,7 @@ fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &App) -> AnyElement {
             Some(editor) => super::widget_editor::panel(app, card, editor, cx),
             None => board::board_panel(app, card, cx),
         },
-        Tab::Activity => activity_panel(app, card, cx),
+        Tab::Activity | Tab::Bio | Tab::DataAccess => activity_panel(app, card, cx),
         Tab::Wishlist => board::wishlist_panel(app, card, cx),
         Tab::Servers => servers_panel(app, &mutual_guilds, palette, cx),
         Tab::Friends => friends_panel(app, &mutual_friends, palette, cx),

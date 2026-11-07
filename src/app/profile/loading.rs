@@ -134,6 +134,10 @@ impl DiscordApp {
     }
 
     pub(crate) fn open_full_profile(&mut self, cx: &mut Context<Self>) {
+        self.open_full_profile_on(Tab::Board, cx);
+    }
+
+    pub(super) fn open_full_profile_on(&mut self, tab: Tab, cx: &mut Context<Self>) {
         if self.profile.is_none()
             && let Some(user_id) = self.dm_profile.as_ref().map(|card| card.user_id)
         {
@@ -153,8 +157,8 @@ impl DiscordApp {
         card.modal = true;
         card.opened = Instant::now();
         card.effect_started.replace(None);
-        // Discord opens on the Board; `side_panel` falls back to Activity without widgets.
-        card.tab = Tab::Board;
+        // `side_panel` falls back to Activity when there is no Board.
+        card.tab = tab;
         self.open_styles_editor(cx);
         self.load_profile(ProfileKind::Modal, cx);
         self.start_profile_game_timer(cx);
@@ -199,6 +203,29 @@ impl DiscordApp {
         let state = &mut card.hovered_art[slot as usize];
         if *state != hovered {
             *state = hovered;
+            self.views.overlays.update(cx, |_, cx| cx.notify());
+            self.views.members.update(cx, |_, cx| cx.notify());
+        }
+    }
+
+    pub(super) fn hover_profile_stack(
+        &mut self,
+        panel: bool,
+        stack: Stack,
+        hovered: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let card = if panel {
+            self.dm_profile.as_mut()
+        } else {
+            self.profile.as_mut()
+        };
+        let Some(state) = card.map(|card| &mut card.stack_hover[stack as usize]) else {
+            return;
+        };
+        if state.hovered != hovered {
+            state.hovered = hovered;
+            state.generation += 1;
             self.views.overlays.update(cx, |_, cx| cx.notify());
             self.views.members.update(cx, |_, cx| cx.notify());
         }
@@ -685,6 +712,7 @@ impl DiscordApp {
             card.load_widget_configs(session.clone(), widget_application_ids, cx);
             card.load_games(session.clone(), game_ids, cx);
         }
+        card.load_commands(session.clone(), cx);
         card.load_linked_metadata(session, cx);
         self.styles_profile_loaded();
         self.prefetch_profile_images(cx);
@@ -972,6 +1000,7 @@ impl ProfileCard {
             hovered_badge: None,
             hovered_cover: None,
             hovered_art: [false; 4],
+            stack_hover: Default::default(),
             widget_configs: HashMap::new(),
             widget_configs_pending: HashSet::new(),
             board_requested: false,
@@ -994,8 +1023,58 @@ impl ProfileCard {
             activity_prompt: rand::random::<usize>() % ACTIVITY_PROMPTS.len(),
             expanded_widgets: HashSet::new(),
             widget_toggles: HashMap::new(),
+            commands: Vec::new(),
+            commands_requested: false,
+            commands_pending: false,
+            hovered_command: None,
             _tasks: Vec::new(),
         }
+    }
+
+    fn load_commands(&mut self, session: Session, cx: &mut Context<DiscordApp>) {
+        let Some(guild_id) = self.source_guild_id.filter(|_| !self.commands_requested) else {
+            return;
+        };
+        let Some(application) = self
+            .profile
+            .as_ref()
+            .and_then(|profile| profile.application.as_ref())
+            .filter(|application| !application.popular_application_command_ids.is_empty())
+        else {
+            return;
+        };
+        self.commands_requested = true;
+        self.commands_pending = true;
+        let user_id = self.user_id;
+        let application_id = application.id;
+        let popular = application.popular_application_command_ids.clone();
+        let request = Tokio::spawn(cx, async move {
+            session
+                .popular_commands(guild_id, application_id, popular)
+                .await
+        });
+        self._tasks.push(cx.spawn(async move |this, cx| {
+            let commands = match request.await {
+                Ok(Ok(commands)) => commands,
+                Ok(Err(error)) => {
+                    log::warn!("Could not load commands for app {application_id}: {error}");
+                    Vec::new()
+                }
+                Err(error) => {
+                    log::warn!("Commands task failed for app {application_id}: {error}");
+                    Vec::new()
+                }
+            };
+            this.update(cx, |app, cx| {
+                let Some(card) = app.profile.as_mut().filter(|card| card.user_id == user_id) else {
+                    return;
+                };
+                card.commands_pending = false;
+                card.commands = commands;
+                cx.notify();
+            })
+            .ok();
+        }));
     }
 
     pub(super) fn switch_scope(&mut self) -> bool {

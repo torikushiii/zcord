@@ -1,6 +1,13 @@
 use super::serde_helpers::*;
 use serde::Deserialize;
 
+/// https://docs.discord.food/resources/user#user-flags
+pub const VERIFIED_BOT: u64 = 1 << 16;
+
+pub fn verified_bot(bot: bool, public_flags: Option<u64>) -> bool {
+    bot && public_flags.is_some_and(|flags| flags & VERIFIED_BOT != 0)
+}
+
 #[derive(Clone, Default, Deserialize)]
 pub struct User {
     #[serde(deserialize_with = "snowflake")]
@@ -15,6 +22,8 @@ pub struct User {
     pub discriminator: Option<String>,
     #[serde(default)]
     pub bot: bool,
+    #[serde(default)]
+    pub public_flags: Option<u64>,
     #[serde(default)]
     pub premium_type: Option<u8>,
     #[serde(default, deserialize_with = "nullable")]
@@ -49,6 +58,8 @@ pub struct UserUpdate {
     pub discriminator: Option<Option<String>>,
     #[serde(default)]
     pub bot: Option<bool>,
+    #[serde(default)]
+    pub public_flags: Option<u64>,
     #[serde(default, deserialize_with = "nullable")]
     pub primary_guild: Option<Option<PrimaryGuild>>,
     #[serde(default, deserialize_with = "nullable")]
