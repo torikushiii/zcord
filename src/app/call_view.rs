@@ -58,6 +58,7 @@ impl DiscordApp {
 
     pub(crate) fn dismiss_call_view(&mut self) {
         self.voice.call_view = None;
+        self.voice_lobby = None;
         if self.stream_view.is_none() {
             self.stage_chat = None;
         }
@@ -68,7 +69,33 @@ impl DiscordApp {
             .call_view
             .as_ref()
             .and(self.voice.joined_call())
+            .or(self.voice_lobby)
             .map_or(self.selected_channel_id, |(_, channel_id)| channel_id)
+    }
+
+    pub(crate) fn open_voice_chat(
+        &mut self,
+        guild_id: u64,
+        channel_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Switching stages keeps the way back to the text channel the chat first opened over.
+        let back = self.stage_chat.take();
+        if self.voice.joined_call() == Some((guild_id, channel_id)) {
+            self.voice_lobby = None;
+            self.open_call_view(cx);
+        } else {
+            // A stream stage outranks a lobby, so it has to go for this channel to show.
+            self.close_stream(Some(window), cx);
+            self.dismiss_call_view();
+            self.voice_lobby = Some((guild_id, channel_id));
+        }
+        self.open_stream_chat(window, cx);
+        if back.is_some() {
+            self.stage_chat = back;
+        }
+        cx.notify();
     }
 
     pub(crate) fn tick_call_view(&mut self, cx: &mut Context<Self>) {
@@ -258,7 +285,7 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
         - guild_rail::WIDTH
         - channel_list::WIDTH
         - if chat_open {
-            stream_view::CHAT_WIDTH
+            stream_view::CHAT_WIDTH + stream_view::CHAT_GAP
         } else {
             0.
         }
@@ -358,9 +385,178 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
     Some(stream_view::stage_frame(app, area, channel, chat_open))
 }
 
+fn in_voice(names: &[String]) -> String {
+    match names {
+        [] => "No one is currently in voice".to_owned(),
+        [a] => format!("{a} is currently in voice"),
+        [a, b] => format!("{a} and {b} are currently in voice"),
+        [a, b, rest @ ..] => format!(
+            "{a}, {b}, and {} {} are currently in voice",
+            rest.len(),
+            if rest.len() == 1 { "other" } else { "others" }
+        ),
+    }
+}
+
+const LOBBY_BANDS: [(f32, u32, u32); 3] = [
+    (0.27, 0x0F0F17, 0x16163D),
+    (0.33, 0x16163D, 0x2A2D80),
+    (0.40, 0x2A2D80, 0x7A88E4),
+];
+
+pub(super) fn render_lobby(app: &DiscordApp) -> Option<AnyElement> {
+    if app.stream_view.is_some() || app.voice.call_view.is_some() {
+        return None;
+    }
+    let (guild_id, channel_id) = app.voice_lobby?;
+    let chat_open = app.stream_chat_open();
+    let channel = app
+        .store
+        .channel_name(channel_id)
+        .unwrap_or_default()
+        .to_owned();
+    let names: Vec<String> = app
+        .store
+        .voice_members(guild_id, channel_id)
+        .iter()
+        .map(|member| member_name(app, guild_id, member.user_id))
+        .collect();
+    let backdrop = div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .flex_col()
+        .children(LOBBY_BANDS.map(|(share, from, to)| {
+            div().w_full().h(relative(share)).bg(linear_gradient(
+                180.,
+                linear_color_stop(rgb(from), 0.),
+                linear_color_stop(rgb(to), 1.),
+            ))
+        }))
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left_0()
+                .w(relative(0.5))
+                .bg(linear_gradient(
+                    90.,
+                    linear_color_stop(rgba(0x00000080), 0.),
+                    linear_color_stop(rgba(0x00000000), 1.),
+                )),
+        )
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right_0()
+                .w(relative(0.5))
+                .bg(linear_gradient(
+                    270.,
+                    linear_color_stop(rgba(0x00000080), 0.),
+                    linear_color_stop(rgba(0x00000000), 1.),
+                )),
+        );
+    let join = app.store.can_connect_voice(guild_id, channel_id).then(|| {
+        let entity = app.entity.clone();
+        div()
+            .id("lobby-join-voice")
+            .flex()
+            .items_center()
+            .h(rpx(38.))
+            .mt(rpx(24.))
+            .px(rpx(16.))
+            .rounded(rpx(8.))
+            .bg(white())
+            .hover(|style| style.bg(rgb(0xE6E6E8)))
+            .cursor_pointer()
+            .text_size(rpx(16.))
+            .line_height(rpx(20.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(black())
+            .on_click(move |_, _, cx| {
+                entity
+                    .update(cx, |app, cx| app.join_voice(guild_id, channel_id, cx))
+                    .ok();
+            })
+            .child("Join Voice")
+    });
+    let body = div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .px(rpx(16.))
+        .child(
+            div()
+                .max_w_full()
+                .truncate()
+                .text_size(rpx(32.))
+                .line_height(rpx(40.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(theme::strong()))
+                .child(channel.clone()),
+        )
+        .child(
+            div()
+                .mt(rpx(8.))
+                .text_size(rpx(14.))
+                .line_height(rpx(18.))
+                .text_color(rgb(theme::text()))
+                .child(in_voice(&names)),
+        )
+        .children(join);
+    let header = div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .right_0()
+        .flex()
+        .items_center()
+        .gap_2()
+        .h(rpx(chat::HEADER_HEIGHT))
+        .px(rpx(16.))
+        .text_size(rpx(16.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(white())
+        .child(theme::icon("volume-2", 20., 0xFFFFFF))
+        .child(div().flex_1().min_w_0().truncate().child(channel.clone()))
+        .when(!chat_open, |this| {
+            this.child(stream_view::show_chat_button(app))
+        });
+    let area = stream_view::stage_area(app, titlebar::HEIGHT, 0., chat_open)
+        .child(backdrop)
+        .child(body)
+        .child(header);
+    Some(stream_view::stage_frame(app, area, channel, chat_open))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::grid;
+    use super::{grid, in_voice};
+
+    #[test]
+    fn lobby_line_names_up_to_two_members() {
+        let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+        assert_eq!(in_voice(&[]), "No one is currently in voice");
+        assert_eq!(in_voice(&names(&["Ann"])), "Ann is currently in voice");
+        assert_eq!(
+            in_voice(&names(&["Ann", "Bo"])),
+            "Ann and Bo are currently in voice"
+        );
+        assert_eq!(
+            in_voice(&names(&["Ann", "Bo", "Cy"])),
+            "Ann, Bo, and 1 other are currently in voice"
+        );
+        assert_eq!(
+            in_voice(&names(&["Ann", "Bo", "Cy", "Di"])),
+            "Ann, Bo, and 2 others are currently in voice"
+        );
+    }
 
     #[test]
     fn three_tiles_fill_a_wide_stage_as_two_over_one() {

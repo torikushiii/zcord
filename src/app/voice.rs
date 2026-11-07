@@ -263,6 +263,10 @@ impl DiscordApp {
         }
         self.voice.call = Some(Call::new(guild_id, channel_id));
         self.voice.speaking.clear();
+        if self.voice_lobby == Some((guild_id, channel_id)) {
+            self.voice_lobby = None;
+            self.open_call_view(cx);
+        }
         self.sync_channel_rows();
         cx.notify();
     }

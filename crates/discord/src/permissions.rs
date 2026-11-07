@@ -1,5 +1,7 @@
 use super::model::{Channel, Guild, Member, Overwrite};
 
+pub const CREATE_INSTANT_INVITE: u64 = 1 << 0;
+pub const MANAGE_CHANNELS: u64 = 1 << 4;
 pub const VIEW_CHANNEL: u64 = 1 << 10;
 pub const SEND_MESSAGES: u64 = 1 << 11;
 pub const MANAGE_MESSAGES: u64 = 1 << 13;

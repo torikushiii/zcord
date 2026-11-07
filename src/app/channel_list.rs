@@ -1,3 +1,4 @@
+use crate::app::menu::PopupButton as _;
 use gpui_component::scroll::ScrollableElement as _;
 use std::{
     cell::Cell,
@@ -63,6 +64,7 @@ enum Row {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AccountControl {
+    ActivityToggle,
     Mute,
     Deafen,
     Settings,
@@ -310,7 +312,7 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
             .border_r_1()
             .border_color(rgba(theme::border()))
             .child(home::sidebar(app, cx))
-            .child(user_panel(app, cx))
+            .child(user_panel_slot(app, cx))
             .into_any_element();
     }
     let entity = app.entity.clone();
@@ -344,6 +346,8 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
                         let Some(app_entity) = entity.upgrade() else {
                             return div().into_any_element();
                         };
+                        let hovered =
+                            window.use_keyed_state(("channel-row-hover", index), cx, |_, _| false);
                         let app = app_entity.read(cx);
                         let Some(row) = app.channel_rows.rows.get(index).copied() else {
                             return div().into_any_element();
@@ -441,14 +445,25 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
                                 .into_any_element();
                         }
                         let entity = app.entity.clone();
+                        let hovered = channel.map(|_| hovered);
+                        let over = hovered.as_ref().is_some_and(|hovered| *hovered.read(cx));
                         row_content(
                             app.guild(),
                             row,
                             app.highlighted_channel(),
                             openness,
                             app.voice.joined(&app.store),
+                            Some((app, over)),
                         )
                         .id(("channel-list-row", index))
+                        .when_some(hovered, |this, hovered| {
+                            this.on_hover(move |over, _, cx| {
+                                hovered.update(cx, |hovered, cx| {
+                                    *hovered = *over;
+                                    cx.notify();
+                                });
+                            })
+                        })
                         .map(|this| match (channel, category) {
                             (Some((id, ChannelKind::Voice)), _) => {
                                 this.on_click(move |_, _, cx| {
@@ -496,8 +511,15 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
             )
         })
         .child(corner_cover())
-        .child(user_panel(app, cx))
+        .child(user_panel_slot(app, cx))
         .into_any_element()
+}
+
+fn user_panel_slot(app: &DiscordApp, cx: &App) -> AnyElement {
+    match super::views::user_panel_reserve(app) {
+        Some(reserve) => div().flex_none().h(reserve).into_any_element(),
+        None => user_panel(app, cx).into_any_element(),
+    }
 }
 
 fn banner_hover_listener(app: &DiscordApp) -> impl Fn(&bool, &mut Window, &mut App) + use<> {
@@ -735,6 +757,7 @@ fn row_content(
     selected: u64,
     openness: f32,
     voice: Option<voice::Joined>,
+    app: Option<(&DiscordApp, bool)>,
 ) -> Div {
     let content = match row {
         Row::Banner | Row::VoiceMember { .. } | Row::Thread { .. } => div().into_any_element(),
@@ -787,10 +810,21 @@ fn row_content(
                     div()
                         .flex_none()
                         .h(rpx(CHANNEL_HEIGHT + CHANNEL_GAP))
-                        .child(channel_row(channel, selected == channel.id, voice)),
+                        .child(channel_row(
+                            channel,
+                            selected == channel.id,
+                            voice,
+                            actions(app, channel, selected),
+                        )),
                 )
                 .into_any_element(),
-            Some(channel) => channel_row(channel, selected == channel.id, voice).into_any_element(),
+            Some(channel) => channel_row(
+                channel,
+                selected == channel.id,
+                voice,
+                actions(app, channel, selected),
+            )
+            .into_any_element(),
             None => div().into_any_element(),
         },
     };
@@ -882,6 +916,7 @@ fn channel_row(
     channel: &Channel,
     selected: bool,
     voice: Option<voice::Joined>,
+    actions: Option<Div>,
 ) -> impl IntoElement + use<> {
     let id = channel.id;
     let joined = voice.filter(|voice| voice.channel_id == id);
@@ -1018,19 +1053,102 @@ fn channel_row(
                 .text_color(rgb(theme::GREEN))
                 .child(voice::format_elapsed(elapsed))
         }))
-        .when(selected, |this| {
-            this.child(theme::icon("user-plus", 14., theme::muted()))
-                .child(theme::icon("settings", 14., theme::muted()))
-        })
+        .children(actions)
 }
 
-const SUBTITLE_HEIGHT: f32 = 14.;
-const USER_PANEL_HEIGHT: f32 = 56.;
+fn actions(app: Option<(&DiscordApp, bool)>, channel: &Channel, selected: u64) -> Option<Div> {
+    let (app, hovered) = app?;
+    (hovered || selected == channel.id)
+        .then(|| row_actions(app, channel))
+        .flatten()
+}
+
+fn row_actions(app: &DiscordApp, channel: &Channel) -> Option<Div> {
+    let id = channel.id;
+    let voice = channel.kind == ChannelKind::Voice;
+    let open_chat = voice.then(|| {
+        let entity = app.entity.clone();
+        let guild_id = app.selected_guild_id;
+        row_action(("channel-open-chat", id), "message-circle")
+            .child(theme::hover_tooltip(
+                ("channel-open-chat-tip", id),
+                "Open Chat",
+            ))
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                entity
+                    .update(cx, |app, cx| app.open_voice_chat(guild_id, id, window, cx))
+                    .ok();
+            })
+    });
+    let invite = app.store.can_create_invite(id).then(|| {
+        row_action(("channel-invite", id), "user-plus")
+            .child(theme::hover_tooltip_detail(
+                ("channel-invite-tip", id),
+                if voice {
+                    "Invite to Voice"
+                } else {
+                    "Invite to Channel"
+                },
+                "Create invites from Discord for now",
+            ))
+            .on_click(|_, _, cx| cx.stop_propagation())
+    });
+    let settings = app.store.can_manage_channel(id).then(|| {
+        row_action(("channel-settings", id), "settings")
+            .child(theme::hover_tooltip_detail(
+                ("channel-settings-tip", id),
+                "Edit Channel",
+                "Edit channels from Discord for now",
+            ))
+            .on_click(|_, _, cx| cx.stop_propagation())
+    });
+    if open_chat.is_none() && invite.is_none() && settings.is_none() {
+        return None;
+    }
+    Some(
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(rpx(4.))
+            .children(open_chat)
+            .children(invite)
+            .children(settings),
+    )
+}
+
+fn row_action(id: impl Into<ElementId>, icon: &str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .relative()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(rpx(16.))
+        .cursor_pointer()
+        .child(
+            theme::icon(icon, 16., theme::muted())
+                .hover(|style| style.text_color(rgb(theme::strong()))),
+        )
+}
+
+const SUBTITLE_HEIGHT: f32 = 13.;
+const STATUS_EMOJI: f32 = 14.;
+pub(crate) const USER_PANEL_HEIGHT: f32 = 56.;
+const MUTED_GLOW: u32 = 0xD22D391F;
 const ACCOUNT_AVATAR_SIZE: f32 = 32.;
 
 /// The custom status (or the presence when there is none), which slides up to reveal the
 /// username while the panel is hovered, like Discord's.
-fn account_subtitle(user: &User, hovered: bool, animate: bool, cx: &App) -> AnyElement {
+fn account_subtitle(
+    user: &User,
+    hovered: bool,
+    animate: bool,
+    activities: Option<Div>,
+    cx: &App,
+) -> AnyElement {
     let line = || {
         div()
             .flex()
@@ -1050,14 +1168,14 @@ fn account_subtitle(user: &User, hovered: bool, animate: bool, cx: &App) -> AnyE
             let emoji = status.emoji.as_ref().and_then(|emoji| {
                 let source: ImageSource = match emoji {
                     StatusEmoji::Unicode(sequence) => {
-                        emoji::image(sequence, theme::image_px(SUBTITLE_HEIGHT))?.into()
+                        emoji::image(sequence, theme::image_px(STATUS_EMOJI))?.into()
                     }
                     StatusEmoji::Custom { id, .. } => images::resolve(
                         &ImageSpec::Emoji {
                             id: *id,
                             animated: false,
                         },
-                        theme::image_px(SUBTITLE_HEIGHT),
+                        theme::image_px(STATUS_EMOJI),
                         cx,
                     )?
                     .into(),
@@ -1065,11 +1183,12 @@ fn account_subtitle(user: &User, hovered: bool, animate: bool, cx: &App) -> AnyE
                 Some(
                     img(source)
                         .debug_selector(|| "account-status-emoji".into())
-                        .size(rpx(SUBTITLE_HEIGHT))
+                        .size(rpx(STATUS_EMOJI))
                         .flex_none(),
                 )
             });
             line()
+                .children(activities)
                 .children(emoji)
                 .children(status.text.as_ref().map(|text| {
                     div()
@@ -1117,7 +1236,14 @@ fn account_subtitle(user: &User, hovered: bool, animate: bool, cx: &App) -> AnyE
         .into_any_element()
 }
 
-fn account_identity(user: &User, hovered: bool, animate_subtitle: bool, cx: &App) -> Div {
+fn account_identity(
+    user: &User,
+    hovered: bool,
+    animate_subtitle: bool,
+    compact: bool,
+    activities: Option<Div>,
+    cx: &App,
+) -> Div {
     div()
         .debug_selector(|| "account-identity".into())
         .flex()
@@ -1125,12 +1251,18 @@ fn account_identity(user: &User, hovered: bool, animate_subtitle: bool, cx: &App
         .min_w_0()
         .items_center()
         .gap(rpx(8.))
+        .px(rpx(4.))
+        .ml(rpx(-4.))
         .py(rpx(5.))
         .rounded(rpx(4.))
         .child(theme::user_avatar(
             Some(user),
             user.id,
-            ACCOUNT_AVATAR_SIZE,
+            if compact {
+                ACCOUNT_AVATAR_SIZE * 0.9
+            } else {
+                ACCOUNT_AVATAR_SIZE
+            },
             Some((user.status, theme::elevated())),
             hovered,
             cx,
@@ -1144,12 +1276,12 @@ fn account_identity(user: &User, hovered: bool, animate_subtitle: bool, cx: &App
                 .child(
                     div()
                         .debug_selector(|| "account-name".into())
-                        .h(rpx(22.))
+                        .h(rpx(18.))
                         .mt(rpx(-1.))
                         .mb(rpx(2.))
                         .min_w_0()
                         .text_size(rpx(16.))
-                        .line_height(rpx(22.))
+                        .line_height(rpx(18.))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(rgb(theme::strong()))
                         .child(super::display_name::render(
@@ -1160,13 +1292,24 @@ fn account_identity(user: &User, hovered: bool, animate_subtitle: bool, cx: &App
                             cx,
                         )),
                 )
-                .child(account_subtitle(user, hovered, animate_subtitle, cx)),
+                .child(account_subtitle(
+                    user,
+                    hovered,
+                    animate_subtitle,
+                    activities,
+                    cx,
+                )),
         )
 }
 
 /// A mic or headphones button with Discord's chevron beside it, which opens that device's
 /// options menu.
-fn with_options(app: &DiscordApp, button: Stateful<Div>, kind: DeviceKind) -> AnyElement {
+fn with_options(
+    app: &DiscordApp,
+    button: Stateful<Div>,
+    kind: DeviceKind,
+    glow: bool,
+) -> AnyElement {
     let (id, control, tip) = match kind {
         DeviceKind::Input => (
             "input-options",
@@ -1185,11 +1328,14 @@ fn with_options(app: &DiscordApp, button: Stateful<Div>, kind: DeviceKind) -> An
         id,
         if open { "chevron-up" } else { "chevron-down" },
         16.,
-        theme::muted(),
+        if glow { theme::RED } else { theme::muted() },
     )
     .w(rpx(16.))
     .h(rpx(32.))
-    .rounded(rpx(6.))
+    .ml(rpx(1.))
+    .rounded_l(px(0.))
+    .rounded_r(rpx(8.))
+    .when(glow, |this| this.bg(rgba(MUTED_GLOW)))
     .when(open, |this| this.bg(rgba(theme::hover())))
     .when(!open, |this| account_tooltip(this, app, control, tip))
     .on_mouse_down(MouseButton::Left, move |event, _, cx| {
@@ -1203,7 +1349,11 @@ fn with_options(app: &DiscordApp, button: Stateful<Div>, kind: DeviceKind) -> An
         .flex()
         .flex_none()
         .items_center()
-        .child(button)
+        .child(
+            button
+                .rounded_r(px(0.))
+                .when(glow, |this| this.bg(rgba(MUTED_GLOW))),
+        )
         .child(chevron)
         .into_any_element()
 }
@@ -1218,7 +1368,8 @@ fn account_button(id: &'static str, icon: &str, color: u32) -> Stateful<Div> {
 fn account_row(
     nameplate: Option<AnyElement>,
     identity: Option<AnyElement>,
-    controls: [AnyElement; 3],
+    controls: Vec<AnyElement>,
+    compact: bool,
 ) -> Div {
     div()
         .debug_selector(|| "account-strip".into())
@@ -1226,9 +1377,9 @@ fn account_row(
         .flex()
         .flex_none()
         .items_center()
-        .gap(rpx(4.))
+        .gap(rpx(if compact { 4. } else { 8. }))
         .h(rpx(USER_PANEL_HEIGHT))
-        .p(rpx(4.))
+        .p(rpx(if compact { 4. } else { 12. }))
         .children(nameplate.map(|nameplate| {
             // The nameplate bleeds one CSS pixel past the account strip's border.
             div()
@@ -1242,7 +1393,14 @@ fn account_row(
                 .child(nameplate)
         }))
         .children(identity)
-        .child(div().flex().flex_none().items_center().children(controls))
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .when(!compact, |this| this.gap(rpx(8.)))
+                .children(controls),
+        )
 }
 
 fn status_label(status: Status) -> &'static str {
@@ -1281,6 +1439,13 @@ fn account_tooltip(
             app.channel_rows.hovered_account_control == Some(control),
             |this| this.child(theme::tooltip_above(label)),
         )
+}
+
+/// Tooltips are deferred above modals, and a control covered by one never sees its hover end.
+pub(crate) fn hide_account_tooltip(app: &mut DiscordApp, cx: &mut App) {
+    if app.channel_rows.hovered_account_control.take().is_some() {
+        app.views.channel_list.update(cx, |_, cx| cx.notify());
+    }
 }
 
 pub(crate) fn self_invisible(app: &DiscordApp) -> bool {
@@ -1456,7 +1621,7 @@ fn current_game_row(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
     )
 }
 
-fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
+pub(crate) fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
     let account_bounds = app.channel_rows.account_bounds.clone();
     let user = app.store.user(app.store.current_user_id);
     let nameplate = user
@@ -1481,11 +1646,24 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
     } else {
         ("headphones", theme::text(), "Deafen")
     };
+    let compact = crate::settings::activity_toggle();
     let identity = user.map(|user| {
+        let game = user
+            .game
+            .as_ref()
+            .map(|game| game.name.as_str())
+            .or(app.current_game.as_deref());
+        let voice = app
+            .store
+            .user_voice_channel(user.id)
+            .or(app.voice.joined_call().map(|(_, channel_id)| channel_id))
+            .and_then(|channel_id| app.store.channel_name(channel_id));
         account_identity(
             user,
             app.hovered_account,
             app.channel_rows.subtitle_hovered_once,
+            compact,
+            member_list::activity_prefix("account-activity-prefix", user.id, game, voice),
             cx,
         )
         .id("account")
@@ -1507,51 +1685,74 @@ fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
             }
         })
         .without_text_selection()
-        .on_click(profile::account_opener(
-            app,
-            user.id,
-            app.channel_rows.account_bounds.clone(),
-        ))
+        .on_popup_click(
+            profile::shown(app, user.id),
+            profile::account_opener(app, user.id, app.channel_rows.account_bounds.clone()),
+        )
         .into_any_element()
     });
-    let controls = [
-        with_options(
-            app,
-            account_button("mic", mic, mic_color)
-                .map(|this| account_tooltip(this, app, AccountControl::Mute, mic_tip))
-                .on_click({
-                    let entity = app.entity.clone();
-                    move |_, _, cx| {
-                        entity.update(cx, |app, cx| app.toggle_self_mute(cx)).ok();
-                    }
-                }),
-            DeviceKind::Input,
-        ),
-        with_options(
-            app,
-            account_button("deafen", deafen, deafen_color)
-                .map(|this| account_tooltip(this, app, AccountControl::Deafen, deafen_tip))
-                .on_click({
-                    let entity = app.entity.clone();
-                    move |_, _, cx| {
-                        entity.update(cx, |app, cx| app.toggle_self_deaf(cx)).ok();
-                    }
-                }),
-            DeviceKind::Output,
-        ),
-        account_button("user-settings", "settings", theme::text())
-            .map(|this| account_tooltip(this, app, AccountControl::Settings, "User Settings"))
+    let activity_toggle = crate::settings::activity_toggle().then(|| {
+        let sharing = app.activity_privacy().share_activity;
+        let (icon, color, tip) = if sharing {
+            ("activity-game", theme::muted(), "Disable Activities")
+        } else {
+            ("activity-game-off", theme::RED, "Enable Activities")
+        };
+        account_button("activity-toggle", icon, color)
+            .map(|this| account_tooltip(this, app, AccountControl::ActivityToggle, tip))
             .on_click({
                 let entity = app.entity.clone();
-                move |_, window, cx| {
+                move |_, _, cx| {
                     entity
-                        .update(cx, |app, cx| app.open_settings(window, cx))
+                        .update(cx, |app, cx| app.toggle_activity_sharing(cx))
                         .ok();
                 }
             })
-            .into_any_element(),
-    ];
-    let account = account_row(nameplate, identity, controls)
+            .into_any_element()
+    });
+    let controls = activity_toggle
+        .into_iter()
+        .chain([
+            with_options(
+                app,
+                account_button("mic", mic, mic_color)
+                    .map(|this| account_tooltip(this, app, AccountControl::Mute, mic_tip))
+                    .on_click({
+                        let entity = app.entity.clone();
+                        move |_, _, cx| {
+                            entity.update(cx, |app, cx| app.toggle_self_mute(cx)).ok();
+                        }
+                    }),
+                DeviceKind::Input,
+                voice.self_mute || voice.self_deaf,
+            ),
+            with_options(
+                app,
+                account_button("deafen", deafen, deafen_color)
+                    .map(|this| account_tooltip(this, app, AccountControl::Deafen, deafen_tip))
+                    .on_click({
+                        let entity = app.entity.clone();
+                        move |_, _, cx| {
+                            entity.update(cx, |app, cx| app.toggle_self_deaf(cx)).ok();
+                        }
+                    }),
+                DeviceKind::Output,
+                voice.self_deaf,
+            ),
+            account_button("user-settings", "settings", theme::text())
+                .map(|this| account_tooltip(this, app, AccountControl::Settings, "User Settings"))
+                .on_click({
+                    let entity = app.entity.clone();
+                    move |_, window, cx| {
+                        entity
+                            .update(cx, |app, cx| app.open_settings(window, cx))
+                            .ok();
+                    }
+                })
+                .into_any_element(),
+        ])
+        .collect();
+    let account = account_row(nameplate, identity, controls, compact)
         // The account strip, not the outer footer: a connected voice panel must not move the
         // popout or change the height available above the account row.
         .on_prepaint(move |bounds, _, _| account_bounds.set(Some(bounds)));

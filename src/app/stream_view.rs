@@ -8,6 +8,8 @@ const TILE_WIDTH: f32 = 192.;
 const TILE_HEIGHT: f32 = 108.;
 pub(super) const DOCK_HEIGHT: f32 = 72.;
 pub(super) const CHAT_WIDTH: f32 = 448.;
+pub(super) const CHAT_GAP: f32 = 8.;
+const PANEL_RADIUS: f32 = 8.;
 const VOLUME_MAX: f32 = 200.;
 const STRIP_HEIGHT: f32 = TILE_HEIGHT + 8.;
 const DOCK_FADE: f32 = 36.;
@@ -269,7 +271,15 @@ impl DiscordApp {
     }
 
     pub(super) fn stage_open(&self) -> bool {
-        self.stream_view.is_some() || self.voice.call_view.is_some()
+        self.stream_view.is_some() || self.voice.call_view.is_some() || self.voice_lobby.is_some()
+    }
+
+    pub(super) fn stage_channel(&self) -> Option<(u64, u64)> {
+        if self.stream_view.is_some() || self.voice.call_view.is_some() {
+            self.voice.joined_call()
+        } else {
+            self.voice_lobby
+        }
     }
 
     pub(crate) fn stream_chat_open(&self) -> bool {
@@ -282,19 +292,16 @@ impl DiscordApp {
     }
 
     /// Voice channels have their own text chat, which only opens from a stage.
-    fn open_stream_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((guild_id, channel_id)) = self.voice.joined_call() else {
+    pub(super) fn open_stream_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((guild_id, channel_id)) = self.stage_channel() else {
             return;
         };
-        if !self.stage_open() {
-            return;
-        }
         let back = (self.selected_guild_id, self.selected_channel_id);
         if guild_id != 0 && self.selected_guild_id != guild_id {
-            // Passing through the guild's text channel must not dismiss the call.
-            let call_view = self.voice.call_view.take();
+            // Passing through the guild's text channel must not dismiss the stage.
+            let stage = (self.voice.call_view.take(), self.voice_lobby.take());
             self.select_guild(guild_id, window, cx);
-            self.voice.call_view = call_view;
+            (self.voice.call_view, self.voice_lobby) = stage;
         }
         self.stage_chat = Some(back);
         if guild_id == 0 {
@@ -308,14 +315,14 @@ impl DiscordApp {
         let Some((guild_id, channel_id)) = self.stage_chat.take() else {
             return;
         };
-        // Going back selects a text channel, which would otherwise dismiss the call behind it.
-        let call_view = self.voice.call_view.take();
+        // Going back selects a text channel, which would otherwise dismiss the stage behind it.
+        let stage = (self.voice.call_view.take(), self.voice_lobby.take());
         if guild_id == 0 {
             self.open_home(window, cx);
         } else {
             self.select_guild_channel(guild_id, Some(channel_id), window, cx);
         }
-        self.voice.call_view = call_view;
+        (self.voice.call_view, self.voice_lobby) = stage;
     }
 
     fn ensure_stream_volume(&mut self, cx: &mut Context<Self>) {
@@ -1077,7 +1084,7 @@ pub(super) fn stage_area(
         .id("stream-stage")
         .absolute()
         .inset_0()
-        .when(chat_open, |this| this.right(rpx(CHAT_WIDTH)))
+        .when(chat_open, |this| this.right(rpx(CHAT_WIDTH + CHAT_GAP)))
         .bg(rgb(0x000000))
         .occlude()
         .on_mouse_move(move |event, window, cx| {
@@ -1114,6 +1121,15 @@ pub(super) fn stage_frame(
         .when(chat_open, |this| {
             this.child(
                 div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right(rpx(CHAT_WIDTH))
+                    .w(rpx(CHAT_GAP))
+                    .bg(rgb(theme::base_lowest())),
+            )
+            .child(
+                div()
                     .id("stage-chat-header")
                     .absolute()
                     .top_0()
@@ -1143,8 +1159,33 @@ pub(super) fn stage_frame(
                         ),
                     ),
             )
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right_0()
+                    .w(rpx(CHAT_WIDTH))
+                    .rounded_l(rpx(PANEL_RADIUS))
+                    .border_1()
+                    .border_color(rgba(theme::border())),
+            )
+            .child(corner(1).top_0().right(rpx(CHAT_WIDTH + CHAT_GAP)))
+            .child(corner(2).bottom_0().right(rpx(CHAT_WIDTH + CHAT_GAP)))
+            .child(corner(0).top_0().right(rpx(CHAT_WIDTH - PANEL_RADIUS)))
+            .child(corner(3).bottom_0().right(rpx(CHAT_WIDTH - PANEL_RADIUS)))
         })
         .into_any_element()
+}
+
+/// GPUI clips children to rectangles, so a rounded panel whose content paints to its edges gets
+/// its corners covered in the gap's color instead.
+fn corner(quarter_turns: u8) -> Svg {
+    theme::icon("corner-mask", PANEL_RADIUS, theme::base_lowest())
+        .absolute()
+        .with_transformation(Transformation::rotate(radians(
+            std::f32::consts::FRAC_PI_2 * f32::from(quarter_turns),
+        )))
 }
 
 pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {

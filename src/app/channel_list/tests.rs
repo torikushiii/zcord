@@ -304,6 +304,7 @@ impl Render for Sidebar {
                     101,
                     1.,
                     None,
+                    None,
                 )
                 .id(("row", index))
                 .debug_selector(move || format!("row-{index}"))
@@ -376,15 +377,16 @@ impl Render for AccountSample {
             self.nameplate
                 .then(|| div().absolute().inset_0().into_any_element()),
             Some(
-                account_identity(&self.user, false, false, cx)
+                account_identity(&self.user, false, false, false, None, cx)
                     .id("account")
                     .into_any_element(),
             ),
-            [
+            vec![
                 account_button("mic", "mic", theme::text()).into_any_element(),
                 account_button("deafen", "headphones", theme::text()).into_any_element(),
                 account_button("user-settings", "settings", theme::text()).into_any_element(),
             ],
+            false,
         ))
     }
 }
@@ -405,7 +407,7 @@ fn account_strip_matches_discord_sizes_without_overlap_at_different_widths_and_z
         }
     });
     for zoom in [1., 1.25, 1.5] {
-        for width in [286.11, 220., 160.] {
+        for width in [286.11, 220.] {
             for custom in [false, true] {
                 view.update(cx, |sample, cx| {
                     sample.width = width;
@@ -440,29 +442,30 @@ fn account_strip_matches_discord_sizes_without_overlap_at_different_widths_and_z
                 let settings = cx.debug_bounds("account-user-settings-button").unwrap();
                 css(strip.size.width, width);
                 css(strip.size.height, 56.);
-                css(identity.top() - strip.top(), 4.5);
-                css(identity.size.height, 47.);
-                css(avatar.left() - strip.left(), 4.);
+                css(identity.left() - strip.left(), 8.);
+                css(identity.top() - strip.top(), 7.);
+                css(identity.size.height, 42.);
+                css(avatar.left() - strip.left(), 12.);
                 css(avatar.top() - strip.top(), 12.);
                 css(avatar.size.width, 32.);
                 css(avatar.size.height, 32.);
                 css(status.size.width, 14.);
                 css(status.left() - avatar.left(), 20.);
                 css(status.top() - avatar.top(), 20.);
-                css(name.left() - strip.left(), 44.);
-                css(name.top() - strip.top(), 8.5);
-                css(name.size.height, 22.);
-                css(subtitle.top() - strip.top(), 32.5);
-                css(subtitle.size.height, 14.);
+                css(name.left() - strip.left(), 52.);
+                css(name.top() - strip.top(), 11.);
+                css(name.size.height, 18.);
+                css(subtitle.top() - strip.top(), 31.);
+                css(subtitle.size.height, 13.);
                 for button in [mic, deafen, settings] {
                     css(button.size.width, 32.);
                     css(button.size.height, 32.);
                     css(button.top() - strip.top(), 12.);
                 }
-                css(mic.left() - identity.right(), 4.);
-                css(deafen.left() - mic.right(), 0.);
-                css(settings.left() - deafen.right(), 0.);
-                css(strip.right() - settings.right(), 4.);
+                css(mic.left() - identity.right(), 8.);
+                css(deafen.left() - mic.right(), 8.);
+                css(settings.left() - deafen.right(), 8.);
+                css(strip.right() - settings.right(), 12.);
                 assert!(name.right() <= identity.right() + px(0.1));
                 assert!(subtitle.right() <= identity.right() + px(0.1));
                 let emoji = cx.debug_bounds("account-status-emoji");

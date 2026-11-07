@@ -73,6 +73,7 @@ impl DiscordApp {
         self.status_expiry_timer = None;
         self.voice.call = None;
         self.voice.call_view = None;
+        self.voice_lobby = None;
         self.affinity_refresh = None;
         self.voice.speaking.clear();
         self.current_game_application = None;

@@ -115,7 +115,7 @@ impl DiscordApp {
         if !kind.is_selectable() && !stream_chat {
             return;
         }
-        if self.voice.joined_call().map(|(_, channel_id)| channel_id) != Some(id) {
+        if self.stage_channel().map(|(_, channel_id)| channel_id) != Some(id) {
             self.dismiss_call_view();
         }
         let forum = kind.is_forum();
@@ -125,7 +125,7 @@ impl DiscordApp {
         } else if self.store.can_send(id) {
             if self.is_home() {
                 home::placeholder(&self.store, id, &name)
-            } else if is_thread {
+            } else if is_thread || kind == crate::store::ChannelKind::Voice {
                 format!("Message {name}")
             } else {
                 format!("Message #{name}")
