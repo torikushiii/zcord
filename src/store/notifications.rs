@@ -61,6 +61,26 @@ impl Store {
             .is_some_and(|setting| mute_active(setting.muted, setting.mute_config.as_ref(), now_ms))
     }
 
+    pub fn channel_muted(&self, guild_id: u64, channel_id: u64, now_ms: u64) -> bool {
+        self.notification_settings
+            .get(&Some(guild_id))
+            .and_then(|settings| override_for(settings, channel_id))
+            .is_some_and(|setting| mute_active(setting.muted, setting.mute_config.as_ref(), now_ms))
+    }
+
+    pub fn channel_notification_level(
+        &self,
+        guild_id: u64,
+        channel_id: u64,
+    ) -> model::NotificationLevel {
+        self.notification_settings
+            .get(&Some(guild_id))
+            .and_then(|settings| override_for(settings, channel_id))
+            .map_or(model::NotificationLevel::Inherit, |setting| {
+                setting.message_notifications
+            })
+    }
+
     pub fn guild_muted(&self, guild_id: u64, now_ms: u64) -> bool {
         self.notification_settings
             .get(&Some(guild_id))

@@ -1,5 +1,6 @@
 use gpui::{prelude::*, *};
 
+use crate::app::menu::PopupButton as _;
 use crate::{
     app::{DiscordApp, guild_rail, message_body::label},
     media::images,
@@ -46,7 +47,7 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> impl IntoElement +
                 .text_size(rpx(13.))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(rgb(theme::strong()))
-                .children(guild.map(|guild| guild_icon(guild, cx)))
+                .children(guild.map(|guild| guild_icon(guild, 5., cx)))
                 .child(label(
                     ("titlebar-guild", guild.map_or(0, |guild| guild.id)),
                     guild.map_or("zcord", |guild| &guild.name),
@@ -59,13 +60,14 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> impl IntoElement +
                 .items_center()
                 .gap_1()
                 .pr_2()
-                .child(nav_button("inbox", "inbox"))
+                .children(super::saved::overdue_pill(app))
+                .child(inbox_button(app))
                 .child(nav_button("help", "circle-question-mark")),
         )
         .child(caption_buttons(window, CAPTION_BUTTON_WIDTH))
 }
 
-fn guild_icon(guild: &Guild, cx: &App) -> AnyElement {
+pub(in crate::app) fn guild_icon(guild: &Guild, radius: f32, cx: &App) -> AnyElement {
     let image = guild
         .icon_spec()
         .and_then(|spec| images::resolve(&spec, theme::image_px(guild_rail::ICON), cx));
@@ -73,7 +75,7 @@ fn guild_icon(guild: &Guild, cx: &App) -> AnyElement {
         Some(path) => img(path)
             .size(rpx(GUILD_ICON))
             .flex_none()
-            .rounded(rpx(5.))
+            .rounded(rpx(radius))
             .into_any_element(),
         None => div()
             .flex()
@@ -81,7 +83,7 @@ fn guild_icon(guild: &Guild, cx: &App) -> AnyElement {
             .items_center()
             .justify_center()
             .size(rpx(GUILD_ICON))
-            .rounded(rpx(5.))
+            .rounded(rpx(radius))
             .bg(rgb(guild.icon_color))
             .text_size(rpx(7.))
             .font_weight(FontWeight::BOLD)
@@ -89,6 +91,26 @@ fn guild_icon(guild: &Guild, cx: &App) -> AnyElement {
             .child(guild.initials.clone())
             .into_any_element(),
     }
+}
+
+fn inbox_button(app: &DiscordApp) -> impl IntoElement + use<> {
+    let entity = app.entity.clone();
+    theme::icon_button("inbox", "inbox", 16., theme::muted())
+        .relative()
+        .size(rpx(24.))
+        .occlude()
+        .when(app.inbox.is_some(), |this| this.bg(rgba(theme::selected())))
+        // The open inbox sits right under the button, where the tooltip would cover its header.
+        .when(app.inbox.is_none(), |this| {
+            this.child(theme::hover_tooltip_below("inbox-tooltip", "Inbox"))
+        })
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_popup_click(
+            super::menu::shown(app, |app| app.inbox.is_some()),
+            move |_, _, cx| {
+                entity.update(cx, |app, cx| app.toggle_inbox(None, cx)).ok();
+            },
+        )
 }
 
 fn nav_button(id: &'static str, icon: &str) -> impl IntoElement {

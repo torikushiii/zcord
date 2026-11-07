@@ -1,5 +1,6 @@
 mod activity_feed;
 mod activity_popout;
+mod activity_privacy;
 mod appearance;
 pub(crate) mod attachments;
 mod call_view;
@@ -26,6 +27,7 @@ mod guild_rail;
 mod history;
 mod home;
 mod hover;
+mod inbox;
 mod invite_card;
 mod invites;
 mod lightbox;
@@ -43,6 +45,7 @@ mod reaction_tooltip;
 mod reactions_dialog;
 mod read_state;
 mod rich_text;
+mod saved;
 mod search;
 mod selection;
 mod sending;
@@ -254,6 +257,12 @@ pub struct DiscordApp {
     pub(crate) shift_held: bool,
     pub(in crate::app) channel_popout: Option<chat::ChannelPopout>,
     pub(in crate::app) popout_closed: Option<(chat::PopoutKind, Instant)>,
+    pub(in crate::app) inbox: Option<inbox::Inbox>,
+    pub(in crate::app) last_inbox_tab: inbox::InboxTab,
+    pub(in crate::app) schedule_edit: Option<inbox::ScheduleEdit>,
+    pub(in crate::app) custom_reminder: Option<saved::CustomReminder>,
+    reminder_timer: Option<Task<()>>,
+    notified_reminders: HashSet<u64>,
     pub(in crate::app) create_thread: Option<chat::CreateThread>,
     pub(in crate::app) thread_menu: Option<chat::ThreadMenu>,
     pub(in crate::app) thread_pane: Option<chat::ThreadPane>,
@@ -270,6 +279,8 @@ pub struct DiscordApp {
     pub(crate) stream_view: Option<stream_view::StreamView>,
     /// `(guild, channel)` to go back to when a stage's chat closes.
     stage_chat: Option<(u64, u64)>,
+    voice_lobby: Option<(u64, u64)>,
+    pub(crate) activity_privacy: activity_privacy::Saving,
     affinity_refresh: Option<Task<()>>,
     dm_profile: Option<profile::ProfileCard>,
     message_search: Option<search::MessageSearch>,
@@ -468,6 +479,12 @@ impl DiscordApp {
             shift_held: false,
             channel_popout: None,
             popout_closed: None,
+            inbox: None,
+            last_inbox_tab: Default::default(),
+            schedule_edit: None,
+            custom_reminder: None,
+            reminder_timer: None,
+            notified_reminders: HashSet::new(),
             create_thread: None,
             thread_menu: None,
             thread_pane: None,
@@ -544,6 +561,8 @@ impl DiscordApp {
             hovered_upload_button: None,
             stream_view: None,
             stage_chat: None,
+            voice_lobby: None,
+            activity_privacy: Default::default(),
             affinity_refresh: None,
             dm_profile: None,
             message_search: None,
@@ -772,7 +791,7 @@ impl DiscordApp {
     ) {
         let (activity, running) =
             game.map_or((None, None), |game| (Some(game.activity), game.running));
-        self.current_game_application = running.as_ref().map(|game| game.application_id);
+        self.current_game_application = running.as_ref().and_then(|game| game.application_id);
         self.current_game = running.map(|game| game.name);
         if let Some(session) = &self.session {
             session.set_local_activity(activity);
@@ -952,6 +971,7 @@ impl DiscordApp {
                 self.arm_status_expiry_timer(cx);
                 self.load_user_affinities(cx);
                 self.refresh_activity_feed(true, cx);
+                self.load_saved_messages(cx);
                 self.sync_channel_rows();
                 self.screen = Screen::Chat;
                 if reconnect && self.channel().is_some() {
@@ -1117,6 +1137,7 @@ impl DiscordApp {
                     index.saturating_sub(1)..(index + 1).min(len)
                 });
             }
+            Change::Saved => self.saved_changed(cx),
             Change::Members { guild_id } => {
                 if guild_id.is_none_or(|id| id == self.selected_guild_id) {
                     self.arm_members_timer(cx);
@@ -1310,6 +1331,7 @@ impl Render for DiscordApp {
             Screen::Login(form) => login::render(form, window, cx).into_any_element(),
             Screen::Connecting => connecting().into_any_element(),
             Screen::Chat => div()
+                .relative()
                 .flex()
                 .flex_1()
                 .min_h_0()
@@ -1413,6 +1435,9 @@ impl Render for DiscordApp {
                                 ),
                         ),
                 )
+                .when(crate::settings::user_panel_extended(), |this| {
+                    this.child(views::user_panel_overlay(&self.views))
+                })
                 .into_any_element(),
         };
         div()

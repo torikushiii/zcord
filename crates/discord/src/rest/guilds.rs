@@ -24,6 +24,38 @@ enum GuildNotificationFlagPatch {
     MobilePush(bool),
 }
 
+#[derive(Serialize)]
+struct ChannelOverrides {
+    channel_overrides: HashMap<String, Value>,
+}
+
+fn set_channel_setting(
+    client: &Client,
+    guild_id: u64,
+    channel_id: u64,
+    setting: model::ChannelSetting,
+    now: DateTime<Utc>,
+) -> RequestBuilder {
+    let value = match setting {
+        model::ChannelSetting::Mute(mute) => {
+            let (muted, mute_config) = mute_fields(mute, now);
+            serde_json::to_value(GuildMute { muted, mute_config }).unwrap_or_default()
+        }
+        model::ChannelSetting::Notifications(level) => {
+            let level = match level {
+                model::NotificationLevel::All => 0,
+                model::NotificationLevel::Mentions => 1,
+                model::NotificationLevel::Nothing => 2,
+                model::NotificationLevel::Inherit => 3,
+            };
+            serde_json::json!({ "message_notifications": level })
+        }
+    };
+    guild_settings(client, guild_id).json(&ChannelOverrides {
+        channel_overrides: HashMap::from([(channel_id.to_string(), value)]),
+    })
+}
+
 fn guild_referer(guild_id: u64) -> String {
     format!("https://discord.com/channels/{guild_id}")
 }
@@ -89,6 +121,18 @@ fn set_guild_notification_flag(
 }
 
 impl Rest {
+    pub async fn set_channel_setting(
+        &self,
+        guild_id: u64,
+        channel_id: u64,
+        setting: model::ChannelSetting,
+    ) -> Result<(), Error> {
+        let now = Utc::now();
+        self.send(|| set_channel_setting(&self.client, guild_id, channel_id, setting, now))
+            .await?;
+        Ok(())
+    }
+
     pub async fn set_guild_mute(&self, guild_id: u64, mute: Option<i64>) -> Result<(), Error> {
         let now = Utc::now();
         self.send(|| set_guild_mute(&self.client, guild_id, mute, now))

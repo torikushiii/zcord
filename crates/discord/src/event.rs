@@ -39,6 +39,8 @@ pub enum Event {
     ThreadMembersUpdate(Box<model::ThreadMembersUpdate>),
     ThreadMemberUpdate(Box<model::ThreadMemberUpdate>),
     ChannelPinsUpdate(model::ChannelPinsUpdate),
+    SavedMessageCreate(Box<model::SavedMessage>),
+    SavedMessageDelete(model::SavedMessageRemoved),
     GuildUpsert(Box<model::Guild>),
     GuildEmojisUpdate(model::GuildEmojisUpdate),
     GuildStickersUpdate(model::GuildStickersUpdate),

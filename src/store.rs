@@ -14,6 +14,7 @@ mod notifications;
 mod pins;
 mod reactions;
 mod read_state;
+mod saved;
 mod seed;
 mod settings;
 mod social;
@@ -36,10 +37,11 @@ use mapping::{
     map_message, map_name_style, map_nameplate, map_reactions, map_snapshot, map_stickers,
     map_user, read_state, timestamp_from_nonce,
 };
+pub use saved::SavedEntry;
 use seed::SEED_START;
 use std::{cell::RefCell, collections::HashMap};
 pub use view::*;
-pub use voice::{VoiceActivity, VoiceMember};
+pub use voice::{ActiveVoice, VoiceActivity, VoiceMember};
 
 pub struct Store {
     pub guilds: Vec<Guild>,
@@ -77,6 +79,7 @@ pub struct Store {
     frecency: Option<Vec<u8>>,
     favorite_gifs: Vec<settings_proto::FavoriteGif>,
     content_inbox: Option<model::ContentInbox>,
+    saved: saved::Saved,
     rail_order: Vec<u64>,
     social: social::Social,
     voice_start_times: HashMap<(u64, u64), u64>,
@@ -217,6 +220,7 @@ pub enum Change {
     Notifications,
     VoiceTimers,
     Theme,
+    Saved,
 }
 
 impl Store {
@@ -325,6 +329,7 @@ impl Store {
             frecency: None,
             favorite_gifs: Vec::new(),
             content_inbox: None,
+            saved: saved::Saved::default(),
             rail_order,
             social: social::Social::default(),
             voice_start_times: HashMap::new(),
@@ -390,6 +395,8 @@ impl Store {
                 Change::Notifications
             }
             Event::MessageCreate(message) => self.message_create(message),
+            Event::SavedMessageCreate(saved) => self.message_saved(*saved),
+            Event::SavedMessageDelete(removed) => self.message_unsaved(removed.message_id),
             Event::MessageUpdate(update) => self.message_update(update),
             Event::MessageReactionAdd(event) => self.reaction_add(event),
             Event::MessageReactionRemove(event) => self.reaction_remove(event),

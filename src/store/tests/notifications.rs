@@ -718,3 +718,38 @@ fn registering_an_author_keeps_their_presence_details() {
     store.register_author(&user);
     assert!(store.user(2).unwrap().on_mobile);
 }
+
+#[test]
+fn inbox_unreads_skip_muted_servers_categories_and_channels() {
+    let ids = |store: &Store| -> Vec<u64> {
+        store
+            .inbox_unreads(0)
+            .into_iter()
+            .map(|unread| unread.channel_id)
+            .collect()
+    };
+    let store = make_store(json!([]));
+    assert_eq!(ids(&store), [2002]);
+    assert_eq!(store.inbox_unreads(0)[0].last_read, 50);
+
+    for entries in [
+        json!([{"guild_id": "200", "muted": true}]),
+        json!([{"guild_id": "200", "channel_overrides": [{"channel_id": "2002", "muted": true}]}]),
+        json!([{"guild_id": "200", "channel_overrides": [{"channel_id": "220", "muted": true}]}]),
+    ] {
+        assert!(ids(&make_store(entries)).is_empty());
+    }
+
+    let store = make_store(json!([{"guild_id": "200", "channel_overrides": [
+        {"channel_id": "2002", "message_notifications": 1}
+    ]}]));
+    assert_eq!(ids(&store), [2002]);
+    assert_eq!(
+        store.channel_notification_level(200, 2002),
+        model::NotificationLevel::Mentions
+    );
+    assert_eq!(
+        store.channel_notification_level(200, 2003),
+        model::NotificationLevel::Inherit
+    );
+}

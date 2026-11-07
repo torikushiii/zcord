@@ -674,6 +674,10 @@ impl Store {
         }
     }
 
+    pub fn channel_guild_id(&self, channel_id: u64) -> Option<u64> {
+        self.message_guild(channel_id, None)
+    }
+
     fn message_guild(&self, channel_id: u64, guild_id: Option<u64>) -> Option<u64> {
         guild_id.or_else(|| match self.source_channels.get(&channel_id)? {
             SourceChannel::Guild { guild, .. } | SourceChannel::Thread { guild, .. } => {

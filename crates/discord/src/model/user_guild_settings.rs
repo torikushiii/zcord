@@ -11,6 +11,14 @@ pub enum NotificationLevel {
     Inherit,
 }
 
+/// A guild channel's notification override: a mute (seconds, `-1` until unmuted, `None` to
+/// unmute) or a notification level.
+#[derive(Clone, Copy)]
+pub enum ChannelSetting {
+    Mute(Option<i64>),
+    Notifications(NotificationLevel),
+}
+
 impl NotificationLevel {
     pub(crate) fn from_value(value: &Value) -> Self {
         match value.as_u64() {

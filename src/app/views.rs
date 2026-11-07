@@ -12,6 +12,7 @@ use std::{
 };
 
 use gpui::{prelude::*, *};
+use gpui_component::ElementExt as _;
 
 use crate::{
     app::{
@@ -34,14 +35,19 @@ pub(crate) struct PanelViews {
     pub(crate) members: Entity<MemberListView>,
     pub(crate) thread_pane: Entity<ThreadPaneView>,
     pub(crate) overlays: Entity<OverlaysView>,
+    pub(crate) user_panel: Entity<UserPanelView>,
+    pub(crate) user_panel_height: Rc<Cell<Option<Pixels>>>,
 }
 
 impl PanelViews {
     pub(crate) fn new(app: &Entity<DiscordApp>, cx: &mut Context<DiscordApp>) -> Self {
         let composer_height = Rc::new(Cell::new(None));
+        let channel_list = cx.new(|cx| ChannelListView::new(app, cx));
         Self {
             guild_rail: cx.new(|cx| GuildRailView::new(app, cx)),
-            channel_list: cx.new(|cx| ChannelListView::new(app, cx)),
+            user_panel: cx.new(|cx| UserPanelView::new(app, &channel_list, cx)),
+            user_panel_height: Rc::new(Cell::new(None)),
+            channel_list,
             chat_header: cx.new(|cx| ChatHeaderView::new(app, cx)),
             messages: cx.new(|cx| MessagesView::new(app, cx)),
             composer: cx.new(|cx| ComposerView::new(app, composer_height.clone(), cx)),
@@ -185,6 +191,72 @@ impl Render for ChannelListView {
         };
         channel_list::render(app.read(cx), window, cx).into_any_element()
     }
+}
+
+/// Account and voice state changes often notify only the channel list, so this view observes it.
+pub(crate) struct UserPanelView {
+    app: WeakEntity<DiscordApp>,
+    _observe: Subscription,
+    _observe_list: Subscription,
+}
+
+impl UserPanelView {
+    fn new(
+        app: &Entity<DiscordApp>,
+        channel_list: &Entity<ChannelListView>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self {
+            app: app.downgrade(),
+            _observe: observe_app(app, cx),
+            _observe_list: cx.observe(channel_list, |_, _, cx| cx.notify()),
+        }
+    }
+}
+
+impl Render for UserPanelView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(app) = self.app.upgrade() else {
+            return div().into_any_element();
+        };
+        channel_list::user_panel(app.read(cx), cx).into_any_element()
+    }
+}
+
+/// The parent must be positioned and span the whole chat body.
+pub(crate) fn user_panel_overlay(views: &PanelViews) -> impl IntoElement + use<> {
+    let measured = views.user_panel_height.clone();
+    let sidebars = [views.guild_rail.entity_id(), views.channel_list.entity_id()];
+    div()
+        .absolute()
+        .left_0()
+        .bottom_0()
+        .w(rpx(guild_rail::WIDTH + channel_list::WIDTH))
+        .child(views.user_panel.clone())
+        .on_prepaint(move |bounds, window, _| {
+            let height = bounds.size.height;
+            let changed = measured
+                .get()
+                .is_none_or(|old| (f32::from(old) - f32::from(height)).abs() > 0.5);
+            if changed {
+                measured.set(Some(height));
+                window.on_next_frame(move |_, cx| {
+                    for view in sidebars {
+                        cx.notify(view);
+                    }
+                });
+            }
+        })
+}
+
+pub(crate) fn user_panel_reserve(app: &DiscordApp) -> Option<Length> {
+    if !crate::settings::user_panel_extended() {
+        return None;
+    }
+    Some(match app.views.user_panel_height.get() {
+        Some(height) => height.into(),
+        None => rpx(channel_list::USER_PANEL_HEIGHT + 2. + 16.).into(),
+    })
 }
 
 pub(crate) struct ChatHeaderView {
@@ -448,10 +520,14 @@ impl Render for OverlaysView {
         let app = app.read(cx);
         overlay_root()
             .children(super::call_view::render(app, window, cx))
+            .children(super::call_view::render_lobby(app))
             .children(super::stream_view::render(app, cx))
             .children(voice::self_preview::render(app, window, cx))
             .children(settings_page::render(app, window, cx))
             .children(chat::channel_popout(app, window, cx))
+            .children(super::inbox::inbox_popout(app, window, cx))
+            .children(super::saved::custom_reminder_dialog(app))
+            .children(super::inbox::schedule_edit_dialog(app))
             .children(search::popover(app, cx))
             .children(chat::create_thread_dialog(app))
             .children(forward_dialog::render(app))

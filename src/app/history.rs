@@ -111,6 +111,34 @@ impl DiscordApp {
         self.go_to_message(message_id, window, cx);
     }
 
+    pub(crate) fn open_message(
+        &mut self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        message_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let guild_id = guild_id.or_else(|| {
+            self.store
+                .guilds
+                .iter()
+                .find(|guild| guild.channel(channel_id).is_some())
+                .map(|guild| guild.id)
+        });
+        match guild_id {
+            Some(guild_id) => self.select_guild_channel(guild_id, Some(channel_id), window, cx),
+            None => self.open_home(window, cx),
+        }
+        // Threads aren't in the channel list, so the server opens on another channel first.
+        if self.selected_channel_id != channel_id {
+            self.select_channel(channel_id, window, cx);
+        }
+        if self.selected_channel_id == channel_id {
+            self.jump_to_message(message_id, window, cx);
+        }
+    }
+
     fn go_to_message(&mut self, message_id: u64, window: &mut Window, cx: &mut Context<Self>) {
         smooth_scroll::cancel(cx);
         if let Some(index) = self.message_index(message_id) {

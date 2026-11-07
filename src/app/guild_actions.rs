@@ -11,8 +11,12 @@ use crate::{
 };
 
 impl DiscordApp {
-    fn run_guild_action<F, Fut>(&mut self, action: &'static str, request: F, cx: &mut Context<Self>)
-    where
+    pub(super) fn run_guild_action<F, Fut>(
+        &mut self,
+        action: &'static str,
+        request: F,
+        cx: &mut Context<Self>,
+    ) where
         F: FnOnce(Session) -> Fut,
         Fut: Future<Output = Result<(), Error>> + Send + 'static,
     {

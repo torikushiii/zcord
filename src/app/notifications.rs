@@ -64,19 +64,6 @@ impl DiscordApp {
         crate::tray::show(window);
         #[cfg(not(windows))]
         window.activate_window();
-        let guild_id = self
-            .store
-            .guilds
-            .iter()
-            .find(|guild| guild.channel(channel_id).is_some())
-            .map(|guild| guild.id);
-        match guild_id {
-            Some(guild_id) => self.select_guild_channel(guild_id, Some(channel_id), window, cx),
-            None => {
-                self.open_home(window, cx);
-                self.select_channel(channel_id, window, cx);
-            }
-        }
-        self.jump_to_message(message_id, window, cx);
+        self.open_message(None, channel_id, message_id, window, cx);
     }
 }

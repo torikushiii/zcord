@@ -114,6 +114,12 @@ pub(super) fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) 
             "CHANNEL_PINS_UPDATE" => serde_json::from_value(value)
                 .ok()
                 .map(Event::ChannelPinsUpdate),
+            "SAVED_MESSAGE_CREATE" => serde_json::from_value(value)
+                .ok()
+                .map(|saved| Event::SavedMessageCreate(Box::new(saved))),
+            "SAVED_MESSAGE_DELETE" => {
+                model::SavedMessageRemoved::from_value(&value).map(Event::SavedMessageDelete)
+            }
             "GUILD_CREATE" | "GUILD_UPDATE" => serde_json::from_value::<model::Guild>(value)
                 .ok()
                 .map(|mut guild| {
@@ -557,6 +563,42 @@ mod tests {
                     && update.guild_id == Some(2)
                     && update.last_pin_timestamp.as_deref() == Some("2026-09-10T12:00:00Z")
         ));
+
+        let event = dispatch(
+            "SAVED_MESSAGE_CREATE",
+            json!({"save_data": {"channel_id": "20", "message_id": "30", "guild_id": "2",
+                "saved_at": "2026-11-06T20:11:36.127788+00:00",
+                "due_at": "2026-11-06T20:41:35.871000+00:00"},
+                "message": {"id": "30", "channel_id": "20", "content": "hi", "type": 0,
+                    "timestamp": "2026-11-02T18:22:45.791000+00:00",
+                    "author": {"id": "5", "username": "user", "discriminator": "0"}}}),
+            &mut ignored,
+        );
+        assert!(matches!(
+            event,
+            Some(Event::SavedMessageCreate(saved))
+                if saved.save_data.message_id == 30
+                    && saved.save_data.guild_id == Some(2)
+                    && saved.save_data.due_at.as_deref() == Some("2026-11-06T20:41:35.871000+00:00")
+                    && saved.message.as_ref().is_some_and(|message| message.id == 30)
+        ));
+        for payload in [
+            json!({"channel_id": "20", "message_id": "30"}),
+            json!({"save_data": {"channel_id": "20", "message_id": "30"}}),
+        ] {
+            assert_eq!(
+                dispatch("SAVED_MESSAGE_DELETE", payload, &mut ignored).and_then(
+                    |event| match event {
+                        Event::SavedMessageDelete(removed) => Some(removed),
+                        _ => None,
+                    }
+                ),
+                Some(model::SavedMessageRemoved {
+                    channel_id: 20,
+                    message_id: 30
+                })
+            );
+        }
 
         let event = dispatch(
             "THREAD_MEMBERS_UPDATE",

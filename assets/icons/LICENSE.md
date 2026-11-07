@@ -38,7 +38,8 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-The remaining icons, other than discord.svg and the Keyline icons above, are from Lucide (https://lucide.dev), ISC License:
+The remaining icons, other than discord.svg, nitro.svg, orb.svg, laurel-wreath.svg, the Keyline icons above and the
+MingCute and Tabler icons below, are from Lucide (https://lucide.dev), ISC License:
 
 ISC License
 
@@ -84,9 +85,35 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-laurel-wreath.svg is laurel-wreath-line from MingCute Icon by MingCute Design
+laurel-wreath.svg is laurel-wreath-line, bookmark.svg is bookmark-line, bookmark-filled.svg is
+bookmark-fill and circle-alert-filled.svg is warning-fill from MingCute Icon by MingCute Design
 (https://github.com/Richard9394/MingCute), Apache License 2.0
 (https://www.apache.org/licenses/LICENSE-2.0).
+
+bell-snooze.svg is bell-z-filled and message-jump.svg is message-circle-share from Tabler Icons
+(https://tabler.io/icons), MIT License:
+
+MIT License
+
+Copyright (c) 2020-2024 Paweł Kuna
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 discord.svg is from Simple Icons (https://simpleicons.org), CC0 1.0. The Discord logo is a trademark of Discord Inc.
 

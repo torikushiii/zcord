@@ -1,6 +1,19 @@
 use super::super::*;
 
 impl Session {
+    pub async fn set_channel_setting(
+        &self,
+        guild_id: u64,
+        channel_id: u64,
+        setting: model::ChannelSetting,
+    ) -> Result<(), Error> {
+        self.rest(async |rest| {
+            rest.set_channel_setting(guild_id, channel_id, setting)
+                .await
+        })
+        .await
+    }
+
     pub async fn set_guild_mute(&self, guild_id: u64, mute: Option<i64>) -> Result<(), Error> {
         self.rest(async |rest| rest.set_guild_mute(guild_id, mute).await)
             .await

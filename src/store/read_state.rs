@@ -1,6 +1,50 @@
 use super::*;
 
+pub struct UnreadChannel {
+    pub guild_id: u64,
+    pub channel_id: u64,
+    pub last_read: u64,
+}
+
 impl Store {
+    pub fn inbox_unreads(&self, now_ms: u64) -> Vec<UnreadChannel> {
+        let Some(source) = &self.source else {
+            return Vec::new();
+        };
+        let mut unreads: Vec<_> = source
+            .guilds
+            .iter()
+            .filter(|guild| guild.unavailable != Some(true) && !self.guild_muted(guild.id, now_ms))
+            .flat_map(|guild| {
+                guild.channels.iter().flatten().filter_map(move |channel| {
+                    if !matches!(channel.kind, Some(0 | 5)) {
+                        return None;
+                    }
+                    let state = read_state(source, &self.read_states, channel.id);
+                    let muted = self.channel_muted(guild.id, channel.id, now_ms)
+                        || channel
+                            .parent_id
+                            .flatten()
+                            .is_some_and(|parent| self.channel_muted(guild.id, parent, now_ms));
+                    (channel_unread(channel, state)
+                        && !muted
+                        && discord::can_view(guild, channel, source.user.id))
+                    .then(|| {
+                        let latest = channel.last_message_id.flatten().unwrap_or(0);
+                        let unread = UnreadChannel {
+                            guild_id: guild.id,
+                            channel_id: channel.id,
+                            last_read: state.and_then(|state| state.last_message_id).unwrap_or(0),
+                        };
+                        (latest, unread)
+                    })
+                })
+            })
+            .collect();
+        unreads.sort_by_key(|(latest, _)| std::cmp::Reverse(*latest));
+        unreads.into_iter().map(|(_, unread)| unread).collect()
+    }
+
     pub fn mark_guild_read(&mut self, guild_id: u64) {
         let Some(index) = self.guilds.iter().position(|guild| guild.id == guild_id) else {
             return;
