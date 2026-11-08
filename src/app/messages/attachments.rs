@@ -577,12 +577,18 @@ mod tests {
             refusal(&[dir.join("missing.txt")], 0, 10),
             Err(Refusal::Invalid)
         );
-        assert_eq!(refusal(&[dir.clone()], 0, 10), Err(Refusal::Invalid));
+        assert_eq!(
+            refusal(std::slice::from_ref(&dir), 0, 10),
+            Err(Refusal::Invalid)
+        );
         assert_eq!(
             refusal(&[small.clone(), large.clone()], MAX_FILES - 1, 10),
             Err(Refusal::TooMany)
         );
-        assert_eq!(refusal(&[small.clone()], 0, 2), Err(Refusal::TooLarge(2)));
+        assert_eq!(
+            refusal(std::slice::from_ref(&small), 0, 2),
+            Err(Refusal::TooLarge(2))
+        );
         assert_eq!(refusal(&[small, large], 8, 4), Ok(()));
         assert_eq!(refusal(&[], 0, 10), Ok(()));
         fs::remove_dir_all(dir).unwrap();

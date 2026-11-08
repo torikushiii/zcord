@@ -37,40 +37,37 @@ impl Store {
             info.name_style = styles.as_ref().map(map_name_style);
         }
         info.color = member_color(&guild.roles, info);
-        if new {
-            if let Some(index) = self.guild_indices.get(&guild_id) {
-                self.guilds[*index].member_ids.push(id);
-            }
+        if new && let Some(index) = self.guild_indices.get(&guild_id) {
+            self.guilds[*index].member_ids.push(id);
         }
-        if id == self.current_user_id {
-            if let Some(source) = &mut self.source {
-                if let Some(guild) = source.guilds.iter_mut().find(|g| g.id == guild_id) {
-                    let members = guild.members.get_or_insert_with(Vec::new);
-                    if let Some(own) = members.iter_mut().find(|m| m.id() == Some(id)) {
-                        own.nick.clone_from(&info.nick);
-                        own.roles.clone_from(&info.roles);
-                        own.avatar.clone_from(&info.avatar);
-                        if member.avatar_decoration_data.is_some() {
-                            own.avatar_decoration_data
-                                .clone_from(&member.avatar_decoration_data);
-                        }
-                        if member.display_name_styles.is_some() {
-                            own.display_name_styles
-                                .clone_from(&member.display_name_styles);
-                        }
-                    } else {
-                        members.push(model::Member {
-                            user_id: Some(id),
-                            user: None,
-                            nick: info.nick.clone(),
-                            roles: info.roles.clone(),
-                            avatar: info.avatar.clone(),
-                            avatar_decoration_data: member.avatar_decoration_data.clone(),
-                            display_name_styles: member.display_name_styles.clone(),
-                            collectibles: None,
-                        });
-                    }
+        if id == self.current_user_id
+            && let Some(source) = &mut self.source
+            && let Some(guild) = source.guilds.iter_mut().find(|g| g.id == guild_id)
+        {
+            let members = guild.members.get_or_insert_with(Vec::new);
+            if let Some(own) = members.iter_mut().find(|m| m.id() == Some(id)) {
+                own.nick.clone_from(&info.nick);
+                own.roles.clone_from(&info.roles);
+                own.avatar.clone_from(&info.avatar);
+                if member.avatar_decoration_data.is_some() {
+                    own.avatar_decoration_data
+                        .clone_from(&member.avatar_decoration_data);
                 }
+                if member.display_name_styles.is_some() {
+                    own.display_name_styles
+                        .clone_from(&member.display_name_styles);
+                }
+            } else {
+                members.push(model::Member {
+                    user_id: Some(id),
+                    user: None,
+                    nick: info.nick.clone(),
+                    roles: info.roles.clone(),
+                    avatar: info.avatar.clone(),
+                    avatar_decoration_data: member.avatar_decoration_data.clone(),
+                    display_name_styles: member.display_name_styles.clone(),
+                    collectibles: None,
+                });
             }
         }
         if let Some(presence) = &member.presence {

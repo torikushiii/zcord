@@ -274,13 +274,12 @@ fn activity_image(
             return None;
         }
         format!("https://media.discordapp.net/{path}")
-    } else if let Some(id) = key.strip_prefix("spotify:") {
+    } else {
+        let id = key.strip_prefix("spotify:")?;
         if id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
             return None;
         }
         format!("https://i.scdn.co/image/{id}")
-    } else {
-        return None;
     };
     Some(ActivityImage {
         url,
@@ -510,6 +509,7 @@ impl Store {
         })
     }
 
+    #[allow(clippy::result_large_err)]
     pub(super) fn apply_social(&mut self, event: discord::Event) -> Result<Change, discord::Event> {
         use discord::Event;
         let guild_id = match event {
@@ -577,11 +577,11 @@ impl Store {
                 Some(update.guild_id)
             }
             Event::MemberUpsert(update) => {
-                if let Some(id) = update.member.id() {
-                    if self.upsert_member(update.guild_id, id, &update.member) {
-                        self.rebuild_structure(Some(update.guild_id));
-                        return Ok(Change::Structure);
-                    }
+                if let Some(id) = update.member.id()
+                    && self.upsert_member(update.guild_id, id, &update.member)
+                {
+                    self.rebuild_structure(Some(update.guild_id));
+                    return Ok(Change::Structure);
                 }
                 Some(update.guild_id)
             }
@@ -597,14 +597,12 @@ impl Store {
                             .retain(|member| *member != id);
                     }
                     if id == self.current_user_id {
-                        if let Some(source) = &mut self.source {
-                            if let Some(guild) =
+                        if let Some(source) = &mut self.source
+                            && let Some(guild) =
                                 source.guilds.iter_mut().find(|g| g.id == update.guild_id)
-                            {
-                                if let Some(members) = &mut guild.members {
-                                    members.retain(|m| m.id() != Some(id));
-                                }
-                            }
+                            && let Some(members) = &mut guild.members
+                        {
+                            members.retain(|m| m.id() != Some(id));
                         }
                         self.rebuild_structure(Some(update.guild_id));
                         return Ok(Change::Structure);
@@ -619,15 +617,14 @@ impl Store {
                     member.color = member_color(&guild.roles, member);
                 }
                 refresh_group_names(guild);
-                if let Some(source) = &mut self.source {
-                    if let Some(guild) = source.guilds.iter_mut().find(|g| g.id == update.guild_id)
-                    {
-                        let roles = guild.roles.get_or_insert_with(Vec::new);
-                        if let Some(role) = roles.iter_mut().find(|r| r.id == update.role.id) {
-                            *role = update.role;
-                        } else {
-                            roles.push(update.role);
-                        }
+                if let Some(source) = &mut self.source
+                    && let Some(guild) = source.guilds.iter_mut().find(|g| g.id == update.guild_id)
+                {
+                    let roles = guild.roles.get_or_insert_with(Vec::new);
+                    if let Some(role) = roles.iter_mut().find(|r| r.id == update.role.id) {
+                        *role = update.role;
+                    } else {
+                        roles.push(update.role);
                     }
                 }
                 self.rebuild_structure(Some(update.guild_id));
@@ -641,12 +638,11 @@ impl Store {
                     }
                     refresh_group_names(guild);
                 }
-                if let Some(source) = &mut self.source {
-                    if let Some(guild) = source.guilds.iter_mut().find(|g| g.id == guild_id) {
-                        if let Some(roles) = &mut guild.roles {
-                            roles.retain(|r| r.id != role_id);
-                        }
-                    }
+                if let Some(source) = &mut self.source
+                    && let Some(guild) = source.guilds.iter_mut().find(|g| g.id == guild_id)
+                    && let Some(roles) = &mut guild.roles
+                {
+                    roles.retain(|r| r.id != role_id);
                 }
                 self.rebuild_structure(Some(guild_id));
                 return Ok(Change::Structure);

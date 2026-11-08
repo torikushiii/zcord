@@ -217,21 +217,18 @@ pub(super) fn advance(
         {
             sessions.remove(&id);
         }
-        if !sessions.contains_key(&id) {
-            sessions.insert(
-                id,
-                Session {
-                    core: Core::open_kind(
-                        path.clone(),
-                        size,
-                        kind,
-                        spool.as_ref().map(|spool| spool.file.clone()),
-                    )?
-                    .with_plays(plays),
-                    generation,
-                    shared: Arc::downgrade(shared),
-                },
-            );
+        if let std::collections::hash_map::Entry::Vacant(e) = sessions.entry(id) {
+            e.insert(Session {
+                core: Core::open_kind(
+                    path.clone(),
+                    size,
+                    kind,
+                    spool.as_ref().map(|spool| spool.file.clone()),
+                )?
+                .with_plays(plays),
+                generation,
+                shared: Arc::downgrade(shared),
+            });
         }
         let session = sessions.get_mut(&id).context("missing animation session")?;
         let frame = session.core.step(target, || {

@@ -63,8 +63,13 @@ impl Store {
                     let end = (end as usize).min(max_rows.saturating_sub(1));
                     list.rows.resize(list.rows.len().max(end + 1), None);
                     groups.resize(list.rows.len(), None);
-                    for index in start as usize..=end {
-                        groups[index] = if op.op == "SYNC" {
+                    for (index, group) in groups
+                        .iter_mut()
+                        .enumerate()
+                        .take(end + 1)
+                        .skip(start as usize)
+                    {
+                        *group = if op.op == "SYNC" {
                             op.items
                                 .get(index - start as usize)
                                 .and_then(|item| item.group.as_ref())

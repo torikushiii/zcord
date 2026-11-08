@@ -397,7 +397,7 @@ pub(crate) fn video_box(app: &DiscordApp, video: Video<'_>, cx: &App) -> AnyElem
         });
     } else if let Some(state) = &state {
         if let Some(error) = &state.error {
-            body = body.child(error_overlay(error, &video.url));
+            body = body.child(error_overlay(error, video.url));
         } else {
             // Until the first frame arrives the player is starting up, even before it reports
             // buffering.

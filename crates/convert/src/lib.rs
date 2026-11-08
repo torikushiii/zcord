@@ -100,7 +100,7 @@ pub fn bgra_to_nv12(
     dst_h: usize,
 ) -> Vec<u8> {
     let mut output = vec![0; dst_w.saturating_mul(dst_h).saturating_mul(3) / 2];
-    if dst_w == 0 || dst_h == 0 || dst_w % 2 != 0 || dst_h % 2 != 0 {
+    if dst_w == 0 || dst_h == 0 || !dst_w.is_multiple_of(2) || !dst_h.is_multiple_of(2) {
         return output;
     }
     let luma_len = dst_w * dst_h;
@@ -158,8 +158,8 @@ pub fn bgra_to_nv12(
         left,
     };
     if threads == 1 {
-        for (_, (luma, chroma)) in bands {
-            rows.convert(0, luma, chroma);
+        for (index, (luma, chroma)) in bands {
+            rows.convert(index * band, luma, chroma);
         }
     } else {
         std::thread::scope(|scope| {

@@ -55,11 +55,11 @@ struct CreateThread<'a> {
     location: &'static str,
 }
 
-fn create_thread_request<'a>(
+fn create_thread_request(
     client: &Client,
     channel_id: u64,
     message_id: u64,
-    name: &'a str,
+    name: &str,
 ) -> RequestBuilder {
     client
         .post(create_thread_url(channel_id, message_id))
@@ -84,10 +84,10 @@ struct StandaloneThread<'a> {
     location: &'static str,
 }
 
-fn standalone_thread_request<'a>(
+fn standalone_thread_request(
     client: &Client,
     channel_id: u64,
-    name: &'a str,
+    name: &str,
     private: bool,
 ) -> RequestBuilder {
     client

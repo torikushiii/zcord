@@ -19,9 +19,7 @@ impl Denoiser {
             self.state = Some(DenoiseState::new());
             self.primed = false;
         }
-        let Some(state) = self.state.as_mut() else {
-            return None;
-        };
+        let state = self.state.as_mut()?;
         // nnnoiseless expects i16-scaled samples in 480-sample blocks, and its
         // first block fades in: https://docs.rs/nnnoiseless/0.5.2/nnnoiseless/struct.DenoiseState.html
         let mut mono = [0.0; RNNOISE_FRAME_SAMPLES];

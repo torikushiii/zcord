@@ -199,8 +199,7 @@ fn write_spool_frames(
     writer.write_all(&target.0.to_le_bytes())?;
     writer.write_all(&target.1.to_le_bytes())?;
     let mut total = SPOOL_HEADER;
-    let mut count = 0;
-    for frame in frames {
+    for (count, frame) in frames.enumerate() {
         ensure!(keep_going(), "spool cancelled");
         ensure!(count < MAX_FRAMES, "too many animation frames");
         ensure!(total + 4 + frame_bytes <= SPOOL_LIMIT, "spool too large");
@@ -210,7 +209,6 @@ fn write_spool_frames(
         writer.write_all(&delay.to_le_bytes())?;
         writer.write_all(frame.buffer().as_raw())?;
         total += 4 + frame_bytes;
-        count += 1;
     }
     writer.flush()?;
     Ok(total)

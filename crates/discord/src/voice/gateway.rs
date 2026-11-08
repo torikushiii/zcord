@@ -344,11 +344,10 @@ impl Connection {
                             log::info!("Voice gateway closed: {code}");
                             return close_outcome(code);
                         }
-                        Message::Ping(_) => {
-                            if socket.flush().await.is_err() {
+                        Message::Ping(_)
+                            if socket.flush().await.is_err() => {
                                 return Outcome::Reconnect;
                             }
-                        }
                         _ => {}
                     }
                     continue;
@@ -361,10 +360,11 @@ impl Connection {
                 continue;
             }
             self.on_datagram(&udp_buffer[..size], events).await;
-            if audio_out.is_none() && self.audio.is_some() {
-                if let Some(audio) = &mut self.audio {
-                    audio_out = audio.take_outgoing();
-                }
+            if audio_out.is_none()
+                && self.audio.is_some()
+                && let Some(audio) = &mut self.audio
+            {
+                audio_out = audio.take_outgoing();
             }
         }
     }

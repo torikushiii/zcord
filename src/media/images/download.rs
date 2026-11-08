@@ -239,7 +239,7 @@ impl Service {
         counter.store(0, Ordering::Relaxed);
         let directory = directory.to_path_buf();
         let pruning = self.pruning.clone();
-        let _ = tokio::task::spawn_blocking(move || {
+        drop(tokio::task::spawn_blocking(move || {
             if let Err(error) = prune(&directory, limit) {
                 log::warn!(
                     "Image cache could not be pruned at {}: {error}",
@@ -247,7 +247,7 @@ impl Service {
                 );
             }
             pruning.store(false, Ordering::Release);
-        });
+        }));
     }
 }
 

@@ -252,10 +252,9 @@ impl Cache {
     ) {
         if self.widget_configs_by_app.len() >= CACHE_LIMIT
             && !self.widget_configs_by_app.contains_key(&application_id)
+            && let Some(any) = self.widget_configs_by_app.keys().next().copied()
         {
-            if let Some(any) = self.widget_configs_by_app.keys().next().copied() {
-                self.widget_configs_by_app.remove(&any);
-            }
+            self.widget_configs_by_app.remove(&any);
         }
         self.widget_configs_by_app.insert(application_id, config);
     }
@@ -315,14 +314,14 @@ pub(super) fn missing_ids<T>(
 
 // Only successful lookups populate this cache; network failures must remain retryable.
 pub(super) fn insert_missing(map: &mut HashMap<u64, Instant>, id: u64, now: Instant) {
-    if map.len() >= CACHE_LIMIT && !map.contains_key(&id) {
-        if let Some(oldest) = map
+    if map.len() >= CACHE_LIMIT
+        && !map.contains_key(&id)
+        && let Some(oldest) = map
             .iter()
             .min_by_key(|(_, fetched)| **fetched)
             .map(|(id, _)| *id)
-        {
-            map.remove(&oldest);
-        }
+    {
+        map.remove(&oldest);
     }
     map.insert(id, now);
 }
@@ -361,10 +360,11 @@ pub(super) fn insert_cached<T>(
 }
 
 pub(super) fn insert_bounded<T>(map: &mut HashMap<u64, Arc<T>>, key: u64, value: Arc<T>) {
-    if map.len() >= CACHE_LIMIT && !map.contains_key(&key) {
-        if let Some(any) = map.keys().next().copied() {
-            map.remove(&any);
-        }
+    if map.len() >= CACHE_LIMIT
+        && !map.contains_key(&key)
+        && let Some(any) = map.keys().next().copied()
+    {
+        map.remove(&any);
     }
     map.insert(key, value);
 }

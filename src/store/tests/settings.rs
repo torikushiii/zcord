@@ -615,7 +615,7 @@ fn frecency_partial_updates_merge_onto_the_known_state() {
     assert_eq!(
         store.apply(settings_update(
             2,
-            &frecency_proto(&[first.clone()], true),
+            &frecency_proto(std::slice::from_ref(&first), true),
             false
         )),
         Change::FavoriteGifs
@@ -625,7 +625,7 @@ fn frecency_partial_updates_merge_onto_the_known_state() {
         store.apply(settings_update(2, &versions, true)),
         Change::None
     );
-    assert_eq!(store.favorite_gifs(), [first.clone()]);
+    assert_eq!(store.favorite_gifs(), std::slice::from_ref(&first));
 
     let unchanged = field(2, &[uint(2, 0), field(1, &favorite_entry(&first))].concat());
     assert_eq!(
@@ -670,8 +670,8 @@ fn frecency_partial_updates_are_ignored_before_the_state_is_known() {
 fn malformed_frecency_updates_clear_known_state() {
     let mut store = Store::from_ready(ready());
     let gif = favorite_gif("https://klipy.com/gifs/existing", 1);
-    store.set_frecency(frecency_proto(&[gif.clone()], false));
-    assert_eq!(store.favorite_gifs(), [gif.clone()]);
+    store.set_frecency(frecency_proto(std::slice::from_ref(&gif), false));
+    assert_eq!(store.favorite_gifs(), std::slice::from_ref(&gif));
     assert_eq!(
         store.apply(settings_update(2, &[18, 5, 10], false)),
         Change::FavoriteGifs

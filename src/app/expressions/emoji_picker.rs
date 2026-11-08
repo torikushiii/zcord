@@ -1054,50 +1054,6 @@ fn suggestion_row(
         }))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{Entry, HoverUpdate, next_hovered};
-    use crate::store::{EmojiAccess, EmojiChoice};
-
-    fn entry(shortcode: &str) -> Entry {
-        (
-            EmojiChoice::Unicode {
-                emoji: "🙂".to_owned(),
-                shortcode: shortcode.to_owned(),
-            },
-            EmojiAccess::Usable,
-        )
-    }
-
-    #[test]
-    fn hover_keeps_the_latest_cell_despite_stale_leave_events() {
-        let first = entry("first");
-        let second = entry("second");
-
-        let hovered = next_hovered(None, HoverUpdate::Enter(&first));
-        assert_eq!(hovered.as_ref(), Some(&first));
-
-        // Cell B's enter can arrive before cell A's leave; the stale leave must
-        // not blank the footer.
-        let hovered = next_hovered(hovered.as_ref(), HoverUpdate::Enter(&second));
-        let hovered = next_hovered(hovered.as_ref(), HoverUpdate::Leave);
-        assert_eq!(hovered.as_ref(), Some(&second));
-
-        // Leaving the grid keeps the last preview until the rows rebuild.
-        let hovered = next_hovered(hovered.as_ref(), HoverUpdate::Leave);
-        assert_eq!(hovered.as_ref(), Some(&second));
-    }
-
-    #[test]
-    fn hover_resets_when_the_rows_rebuild() {
-        let first = entry("first");
-        let hovered = next_hovered(None, HoverUpdate::Enter(&first));
-        assert!(hovered.is_some());
-        assert_eq!(next_hovered(hovered.as_ref(), HoverUpdate::Reset), None);
-        assert_eq!(next_hovered(None, HoverUpdate::Reset), None);
-    }
-}
-
 fn sticker_strip(
     app: &DiscordApp,
     stickers: Vec<PickerSticker>,
@@ -1147,4 +1103,48 @@ fn sticker_strip(
                         ))
                 })),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Entry, HoverUpdate, next_hovered};
+    use crate::store::{EmojiAccess, EmojiChoice};
+
+    fn entry(shortcode: &str) -> Entry {
+        (
+            EmojiChoice::Unicode {
+                emoji: "🙂".to_owned(),
+                shortcode: shortcode.to_owned(),
+            },
+            EmojiAccess::Usable,
+        )
+    }
+
+    #[test]
+    fn hover_keeps_the_latest_cell_despite_stale_leave_events() {
+        let first = entry("first");
+        let second = entry("second");
+
+        let hovered = next_hovered(None, HoverUpdate::Enter(&first));
+        assert_eq!(hovered.as_ref(), Some(&first));
+
+        // Cell B's enter can arrive before cell A's leave; the stale leave must
+        // not blank the footer.
+        let hovered = next_hovered(hovered.as_ref(), HoverUpdate::Enter(&second));
+        let hovered = next_hovered(hovered.as_ref(), HoverUpdate::Leave);
+        assert_eq!(hovered.as_ref(), Some(&second));
+
+        // Leaving the grid keeps the last preview until the rows rebuild.
+        let hovered = next_hovered(hovered.as_ref(), HoverUpdate::Leave);
+        assert_eq!(hovered.as_ref(), Some(&second));
+    }
+
+    #[test]
+    fn hover_resets_when_the_rows_rebuild() {
+        let first = entry("first");
+        let hovered = next_hovered(None, HoverUpdate::Enter(&first));
+        assert!(hovered.is_some());
+        assert_eq!(next_hovered(hovered.as_ref(), HoverUpdate::Reset), None);
+        assert_eq!(next_hovered(None, HoverUpdate::Reset), None);
+    }
 }

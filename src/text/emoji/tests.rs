@@ -291,18 +291,18 @@ fn emoji_api_encode_emoji_skips_locked_code_and_tokens() {
         _ => None,
     };
     assert_eq!(
-        encode_emoji("hi :wave: :smile:", &resolve),
+        encode_emoji("hi :wave: :smile:", resolve),
         "hi <:wave:123> \u{1F604}"
     );
-    assert_eq!(encode_emoji(":locked:", &resolve), ":locked:");
-    assert_eq!(encode_emoji("` :wave: `", &resolve), "` :wave: `");
+    assert_eq!(encode_emoji(":locked:", resolve), ":locked:");
+    assert_eq!(encode_emoji("` :wave: `", resolve), "` :wave: `");
     assert_eq!(
-        encode_emoji("```\n:wave:\n```", &resolve),
+        encode_emoji("```\n:wave:\n```", resolve),
         "```\n:wave:\n```"
     );
-    assert_eq!(encode_emoji("<:a:1>", &resolve), "<:a:1>");
+    assert_eq!(encode_emoji("<:a:1>", resolve), "<:a:1>");
     assert_eq!(
-        encode_emoji("https://example.test/:wave:", &resolve),
+        encode_emoji("https://example.test/:wave:", resolve),
         "https://example.test/:wave:"
     );
 }

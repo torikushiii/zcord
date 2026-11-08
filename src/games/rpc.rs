@@ -445,13 +445,12 @@ mod unix {
 
     impl Drop for Socket {
         fn drop(&mut self) {
-            if let Ok(metadata) = fs::symlink_metadata(&self.path) {
-                if metadata.file_type().is_socket()
-                    && metadata.dev() == self.device
-                    && metadata.ino() == self.inode
-                {
-                    let _ = fs::remove_file(&self.path);
-                }
+            if let Ok(metadata) = fs::symlink_metadata(&self.path)
+                && metadata.file_type().is_socket()
+                && metadata.dev() == self.device
+                && metadata.ino() == self.inode
+            {
+                let _ = fs::remove_file(&self.path);
             }
         }
     }

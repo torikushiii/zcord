@@ -919,9 +919,7 @@ fn snap_composer_cursor(input: &Entity<TextareaState>, previous: &Cell<usize>, c
 fn snap_target(range: &std::ops::Range<usize>, previous: usize, cursor: usize) -> usize {
     if previous == range.start {
         range.end
-    } else if previous == range.end {
-        range.start
-    } else if cursor - range.start <= range.end - cursor {
+    } else if previous == range.end || cursor - range.start <= range.end - cursor {
         range.start
     } else {
         range.end

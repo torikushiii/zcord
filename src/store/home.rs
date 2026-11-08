@@ -212,10 +212,10 @@ impl Store {
 
     pub fn accept_request_locally(&mut self, channel_id: u64) -> Change {
         let location = self.source_channels.get(&channel_id).copied();
-        if let (Some(source), Some(location)) = (&mut self.source, location) {
-            if let Some(channel) = location.get_mut(source) {
-                channel.is_message_request = Some(false);
-            }
+        if let (Some(source), Some(location)) = (&mut self.source, location)
+            && let Some(channel) = location.get_mut(source)
+        {
+            channel.is_message_request = Some(false);
         }
         self.rebuild_structure(None);
         Change::Structure
@@ -304,7 +304,7 @@ impl Store {
         }
     }
 
-    fn sort_private_list<'a>(&self, list: &mut [&'a PrivateChannel]) {
+    fn sort_private_list(&self, list: &mut [&PrivateChannel]) {
         list.sort_by(|left, right| {
             self.private_activity(right.channel.id)
                 .cmp(&self.private_activity(left.channel.id))

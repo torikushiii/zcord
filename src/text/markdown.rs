@@ -1,6 +1,7 @@
 use crate::text::emoji;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
 pub enum Block {
     Paragraph(Vec<Span>),
     Heading {
@@ -183,27 +184,25 @@ impl Parser {
             if next_fence.is_some_and(|(open, _)| open < at) {
                 next_fence = fence_pair(content, at);
             }
-            if let Some((open, close)) = next_fence {
-                if open == at {
-                    self.flush_paragraph(&mut blocks, &mut paragraph);
-                    let raw = &content[open + 3..close];
-                    let (language, code) = match raw.split_once('\n') {
-                        Some((token, code)) if language_token(token) => {
-                            (Some(token.to_owned()), code)
-                        }
-                        _ => (None, raw),
-                    };
-                    blocks.push(Block::CodeBlock {
-                        language,
-                        code: code.strip_suffix('\n').unwrap_or(code).to_owned(),
-                    });
-                    at = close + 3;
-                    if content[at..].starts_with('\n') {
-                        at += 1;
-                    }
-                    next_fence = fence_pair(content, at);
-                    continue;
+            if let Some((open, close)) = next_fence
+                && open == at
+            {
+                self.flush_paragraph(&mut blocks, &mut paragraph);
+                let raw = &content[open + 3..close];
+                let (language, code) = match raw.split_once('\n') {
+                    Some((token, code)) if language_token(token) => (Some(token.to_owned()), code),
+                    _ => (None, raw),
+                };
+                blocks.push(Block::CodeBlock {
+                    language,
+                    code: code.strip_suffix('\n').unwrap_or(code).to_owned(),
+                });
+                at = close + 3;
+                if content[at..].starts_with('\n') {
+                    at += 1;
                 }
+                next_fence = fence_pair(content, at);
+                continue;
             }
             if line_end < at {
                 line_end = content[at..].find('\n').map_or(content.len(), |n| at + n);
@@ -264,22 +263,22 @@ impl Parser {
                     }
                     continue;
                 }
-                if let Some(body) = prefix.strip_prefix("-# ") {
-                    if body.chars().any(|c| !c.is_whitespace()) {
-                        self.flush_paragraph(&mut blocks, &mut paragraph);
-                        blocks.push(Block::Subtext(self.inline(
-                            body,
-                            Style::default(),
-                            None,
-                            true,
-                        )));
-                        at = if inline_end == line_end {
-                            after_line
-                        } else {
-                            inline_end
-                        };
-                        continue;
-                    }
+                if let Some(body) = prefix.strip_prefix("-# ")
+                    && body.chars().any(|c| !c.is_whitespace())
+                {
+                    self.flush_paragraph(&mut blocks, &mut paragraph);
+                    blocks.push(Block::Subtext(self.inline(
+                        body,
+                        Style::default(),
+                        None,
+                        true,
+                    )));
+                    at = if inline_end == line_end {
+                        after_line
+                    } else {
+                        inline_end
+                    };
+                    continue;
                 }
             }
             let end = next_fence.map_or(after_line, |(open, _)| open.min(after_line));

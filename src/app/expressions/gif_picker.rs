@@ -134,9 +134,8 @@ fn image_rendition(src: &str) -> Option<String> {
     let path = url.path().to_owned();
     let (stem, _) = path.rsplit_once('.')?;
     let path = if host == "media.tenor.com" {
-        let mut segments = stem.trim_start_matches('/').splitn(2, '/');
-        let id = segments.next()?;
-        let name = segments.next()?;
+        let (id, name) = stem.trim_start_matches('/').split_once('/')?;
+
         let base = id.get(..id.len().checked_sub(5)?)?;
         if !id[base.len()..].starts_with("AAA") {
             return None;

@@ -5,6 +5,9 @@ edition = "2024"
 publish = false
 license = "GPL-3.0-only"
 
+[lints]
+workspace = true
+
 [dependencies]
 zcord-convert = { path = "crates/convert" }
 zcord-discord = { path = "crates/discord" }
@@ -79,6 +82,11 @@ windows = { version = "0.62.2", features = [
 
 [workspace]
 members = ["crates/convert", "crates/discord"]
+
+[workspace.lints.clippy]
+chunks_exact_to_as_chunks = "allow"
+too_many_arguments = "allow"
+type_complexity = "allow"
 
 [profile.dev]
 debug = "line-tables-only"

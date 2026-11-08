@@ -262,7 +262,7 @@ impl Session {
 
     fn command(&self, command: commands::Command) {
         let generation = self.inner.generation.load(Ordering::Acquire);
-        if generation % 2 == 0 || *self.inner.control.borrow() != Control::Running {
+        if generation.is_multiple_of(2) || *self.inner.control.borrow() != Control::Running {
             log::debug!("Dropping gateway command while disconnected/connecting");
             return;
         }
@@ -424,7 +424,7 @@ impl Session {
 
     fn voice_command(&self, payload: serde_json::Value) {
         let generation = self.inner.generation.load(Ordering::Acquire);
-        if generation % 2 == 0 || *self.inner.control.borrow() != Control::Running {
+        if generation.is_multiple_of(2) || *self.inner.control.borrow() != Control::Running {
             log::debug!("Deferring voice state update until the gateway is ready");
             return;
         }

@@ -227,9 +227,7 @@ impl Store {
                     .flatten()
                     .filter_map(|m| m.user.as_ref())
                 {
-                    if !self.users.contains_key(&user.id) {
-                        self.users.insert(user.id, map_user(user));
-                    }
+                    self.users.entry(user.id).or_insert_with(|| map_user(user));
                 }
                 if let Some(position) = position {
                     if let Some(social) = self.social.guilds.get(&guild_id) {
@@ -265,13 +263,13 @@ impl Store {
         self.index_channels();
     }
 
-    pub(super) fn thread_list_sync(&mut self, sync: Box<model::ThreadListSync>) -> Change {
+    pub(super) fn thread_list_sync(&mut self, sync: model::ThreadListSync) -> Change {
         let model::ThreadListSync {
             guild_id,
             threads,
             most_recent_messages,
             members,
-        } = *sync;
+        } = sync;
         let current_user_id = self.current_user_id;
         let thread_ids: Vec<_> = threads.iter().map(|thread| thread.id).collect();
         for thread in &threads {
@@ -393,7 +391,7 @@ impl Store {
             let guild_index = update
                 .guild_id
                 .and_then(|id| source.guilds.iter().position(|g| g.id == id))
-                .or_else(|| match existing {
+                .or(match existing {
                     Some(
                         SourceChannel::Guild { guild, .. } | SourceChannel::Thread { guild, .. },
                     ) => Some(guild),

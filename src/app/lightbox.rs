@@ -122,70 +122,6 @@ impl Lightbox {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::Lightbox;
-    use crate::{media::images::ImageSpec, store::Media};
-
-    fn media(url: &str, width: u32, height: u32) -> Media {
-        Media {
-            url: url.into(),
-            source: url.into(),
-            width,
-            height,
-            animated: false,
-        }
-    }
-
-    #[test]
-    fn gifv_lightboxes_keep_the_video_and_a_loading_poster() {
-        let still = media("https://media.discordapp.net/preview.png", 400, 300);
-        let video = media("https://media.discordapp.net/clip.mp4", 720, 1280);
-        let lightbox = Lightbox::gifv(&still, Some(&video), 512);
-        assert_eq!(lightbox.spec, video.video_spec());
-        assert_eq!(lightbox.poster, Some(still.spec()));
-        assert_eq!((lightbox.width, lightbox.height), (720, 1280));
-        assert_eq!(lightbox.url, video.source);
-        assert_eq!(lightbox.preview, 512);
-    }
-
-    #[test]
-    fn gifv_lightboxes_support_image_only_and_unknown_video_dimensions() {
-        let still = media("https://media.discordapp.net/clip.gif", 400, 300);
-        let image = Lightbox::gifv(&still, None, 512);
-        assert_eq!(image.spec, still.spec());
-        assert_eq!(image.poster, None);
-        assert_eq!((image.width, image.height), (400, 300));
-
-        let video = media("https://media.discordapp.net/clip.mp4", 0, 0);
-        let fallback = Lightbox::gifv(&still, Some(&video), 512);
-        assert_eq!((fallback.width, fallback.height), (400, 300));
-        assert!(matches!(fallback.spec, ImageSpec::Video { .. }));
-    }
-
-    #[test]
-    fn lightboxes_only_stream_flagged_animations_or_gif_urls() {
-        for extension in ["jpg", "png", "avif"] {
-            let still = media(
-                &format!("https://media.discordapp.net/photo.{extension}?size=8192"),
-                8192,
-                6144,
-            );
-            let lightbox = Lightbox::gifv(&still, None, 512);
-            assert!(!lightbox.animated);
-            assert_eq!(lightbox.spec, still.spec());
-            assert_eq!((lightbox.width, lightbox.height), (8192, 6144));
-        }
-        let gif = media("https://media.discordapp.net/clip.GIF?token=keep", 400, 300);
-        assert!(Lightbox::gifv(&gif, None, 512).animated);
-        let mut webp = media("https://media.discordapp.net/clip.webp", 400, 300);
-        webp.animated = true;
-        assert!(Lightbox::gifv(&webp, None, 512).animated);
-        let video = media("https://media.discordapp.net/clip.mp4", 400, 300);
-        assert!(!Lightbox::gifv(&gif, Some(&video), 512).animated);
-    }
-}
-
 pub(super) fn gifv_opener(
     app: &DiscordApp,
     still: &Media,
@@ -815,4 +751,68 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
             }))
             .into_any_element(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Lightbox;
+    use crate::{media::images::ImageSpec, store::Media};
+
+    fn media(url: &str, width: u32, height: u32) -> Media {
+        Media {
+            url: url.into(),
+            source: url.into(),
+            width,
+            height,
+            animated: false,
+        }
+    }
+
+    #[test]
+    fn gifv_lightboxes_keep_the_video_and_a_loading_poster() {
+        let still = media("https://media.discordapp.net/preview.png", 400, 300);
+        let video = media("https://media.discordapp.net/clip.mp4", 720, 1280);
+        let lightbox = Lightbox::gifv(&still, Some(&video), 512);
+        assert_eq!(lightbox.spec, video.video_spec());
+        assert_eq!(lightbox.poster, Some(still.spec()));
+        assert_eq!((lightbox.width, lightbox.height), (720, 1280));
+        assert_eq!(lightbox.url, video.source);
+        assert_eq!(lightbox.preview, 512);
+    }
+
+    #[test]
+    fn gifv_lightboxes_support_image_only_and_unknown_video_dimensions() {
+        let still = media("https://media.discordapp.net/clip.gif", 400, 300);
+        let image = Lightbox::gifv(&still, None, 512);
+        assert_eq!(image.spec, still.spec());
+        assert_eq!(image.poster, None);
+        assert_eq!((image.width, image.height), (400, 300));
+
+        let video = media("https://media.discordapp.net/clip.mp4", 0, 0);
+        let fallback = Lightbox::gifv(&still, Some(&video), 512);
+        assert_eq!((fallback.width, fallback.height), (400, 300));
+        assert!(matches!(fallback.spec, ImageSpec::Video { .. }));
+    }
+
+    #[test]
+    fn lightboxes_only_stream_flagged_animations_or_gif_urls() {
+        for extension in ["jpg", "png", "avif"] {
+            let still = media(
+                &format!("https://media.discordapp.net/photo.{extension}?size=8192"),
+                8192,
+                6144,
+            );
+            let lightbox = Lightbox::gifv(&still, None, 512);
+            assert!(!lightbox.animated);
+            assert_eq!(lightbox.spec, still.spec());
+            assert_eq!((lightbox.width, lightbox.height), (8192, 6144));
+        }
+        let gif = media("https://media.discordapp.net/clip.GIF?token=keep", 400, 300);
+        assert!(Lightbox::gifv(&gif, None, 512).animated);
+        let mut webp = media("https://media.discordapp.net/clip.webp", 400, 300);
+        webp.animated = true;
+        assert!(Lightbox::gifv(&webp, None, 512).animated);
+        let video = media("https://media.discordapp.net/clip.mp4", 400, 300);
+        assert!(!Lightbox::gifv(&gif, Some(&video), 512).animated);
+    }
 }

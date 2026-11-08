@@ -49,7 +49,7 @@ fn keeps_this_platforms_executables_and_skips_bad_entries() {
     assert!(catalog.matches("/tmp/bad.exe", String::new).is_none());
     assert!(catalog.matches("/tmp/none.exe", String::new).is_none());
     assert!(catalog.matches("/tmp/badargs.exe", String::new).is_none());
-    assert_eq!(catalog.name(1).as_deref(), Some("Kept"));
+    assert_eq!(catalog.name(1), Some("Kept"));
     assert_eq!(catalog.name(2), None);
 }
 

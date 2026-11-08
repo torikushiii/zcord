@@ -271,9 +271,7 @@ impl VoiceManager {
             shared.deaf = deaf;
         }
         shared.flags.set(shared.mute, shared.deaf);
-        if shared.desired.is_none() {
-            return None;
-        }
+        shared.desired?;
         shared.dirty = true;
         Some(op4(&shared))
     }

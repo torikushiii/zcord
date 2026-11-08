@@ -233,10 +233,10 @@ impl Presence {
             }
             activities.push(activity);
         }
-        if settings.show_current_game != Some(false) {
-            if let Some(activity) = &self.local_activity {
-                activities.push(activity.clone());
-            }
+        if settings.show_current_game != Some(false)
+            && let Some(activity) = &self.local_activity
+        {
+            activities.push(activity.clone());
         }
         Some(json!({"op":3,"d":{
             "status":status.wire(),"since":if status == SelfStatus::Idle { now_ms } else { 0 },

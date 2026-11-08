@@ -13,9 +13,7 @@ pub(super) fn first_frame_png(bytes: &[u8], size: u32) -> Option<Vec<u8>> {
                 .ok()?
                 .into_frames();
             let first = frames.next()?.ok()?;
-            if frames.next().is_none() {
-                return None;
-            }
+            let _second = frames.next()?;
             first
         }
         ImageFormat::WebP => {

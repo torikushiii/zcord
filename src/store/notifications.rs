@@ -400,10 +400,10 @@ impl Store {
     }
 }
 
-fn override_for<'a>(
-    settings: &'a model::UserGuildSettings,
+fn override_for(
+    settings: &model::UserGuildSettings,
     channel_id: u64,
-) -> Option<&'a model::ChannelOverride> {
+) -> Option<&model::ChannelOverride> {
     settings
         .channel_overrides
         .iter()

@@ -320,10 +320,10 @@ pub(crate) async fn run(output: watch::Sender<Option<Arc<Catalog>>>) {
                 continue;
             }
         };
-        if let Some(path) = &path {
-            if let Err(error) = write_cache(path, &catalog) {
-                log::warn!("Could not cache the detectable game list: {error}");
-            }
+        if let Some(path) = &path
+            && let Err(error) = write_cache(path, &catalog)
+        {
+            log::warn!("Could not cache the detectable game list: {error}");
         }
         output.send_replace(Some(Arc::new(catalog)));
         tokio::time::sleep(MAX_AGE).await;

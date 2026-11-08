@@ -12,12 +12,11 @@ impl Session {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .set_local_activity(activity);
-        if changed {
-            if let Err(error) = self.refresh_presence() {
-                if !matches!(error, Error::Closed) {
-                    log::warn!("Could not refresh local game activity: {error}");
-                }
-            }
+        if changed
+            && let Err(error) = self.refresh_presence()
+            && !matches!(error, Error::Closed)
+        {
+            log::warn!("Could not refresh local game activity: {error}");
         }
     }
 

@@ -231,8 +231,8 @@ impl Element for AnimatedImage {
                 let frame = match (started_at, global_id) {
                     _ if !animate => 0,
                     _ if streamed.is_some() => 0,
-                    (Some(started_at), _) => frame_index_at(&image, started_at, plays, window, cx),
-                    (None, Some(global_id)) => frame_index(&image, global_id, window, cx),
+                    (Some(started_at), _) => frame_index_at(image, started_at, plays, window, cx),
+                    (None, Some(global_id)) => frame_index(image, global_id, window, cx),
                     // Without an id there is nowhere to keep the clock; frame 0 is the
                     // only stable choice, matching `Img`'s stateless path.
                     (None, None) => 0,

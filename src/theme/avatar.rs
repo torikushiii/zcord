@@ -389,7 +389,7 @@ struct StatusTooltip {
 impl RenderOnce for StatusTooltip {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let key = ("status-tooltip", self.user_id);
-        let hovered = window.use_keyed_state(key.clone(), cx, |_, _| false);
+        let hovered = window.use_keyed_state(key, cx, |_, _| false);
         let shown = *hovered.read(cx);
         div()
             .id(key)

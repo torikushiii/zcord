@@ -6,6 +6,9 @@ publish = false
 license = "GPL-3.0-only"
 description = "Discord's gateway, REST API, models and voice for zcord, without any UI"
 
+[lints]
+workspace = true
+
 [features]
 # Protobuf builders the app's store tests use to fake settings payloads.
 test-fixtures = []

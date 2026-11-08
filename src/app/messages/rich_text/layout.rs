@@ -409,7 +409,7 @@ fn build_atoms(pieces: &[Piece], fonts: &Fonts, wrap: bool, window: &mut Window)
                     } else if line.is_empty() {
                         Vec::new()
                     } else {
-                        vec![0..line.len()]
+                        std::iter::once(0..line.len()).collect()
                     };
                     for range in ranges {
                         let word = &line[range.clone()];

@@ -356,7 +356,7 @@ pub(super) fn box_shrink(pixels: &RgbaImage, factor: u32) -> RgbaImage {
             let row = (y * factor + offset) * source_width * 4;
             for (x, sum) in sums.iter_mut().enumerate() {
                 let start = row + x * factor * 4;
-                for pixel in raw[start..start + factor * 4].chunks_exact(4) {
+                for pixel in raw[start..start + factor * 4].as_chunks::<4>().0 {
                     sum[0] += u32::from(pixel[0]);
                     sum[1] += u32::from(pixel[1]);
                     sum[2] += u32::from(pixel[2]);

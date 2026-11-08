@@ -431,15 +431,12 @@ impl Store {
                     .iter_mut()
                     .flat_map(|guild| guild.threads.iter_mut().flatten())
                     .find(|thread| thread.id == thread_id)
-            {
-                if thread
+                && thread
                     .last_message_id
                     .flatten()
                     .is_none_or(|last| last < message.id)
-                {
-                    thread.message_count =
-                        Some(thread.message_count.unwrap_or(0).saturating_add(1));
-                }
+            {
+                thread.message_count = Some(thread.message_count.unwrap_or(0).saturating_add(1));
             }
             self.refresh_thread_chips(thread_id);
         }
@@ -470,14 +467,13 @@ impl Store {
         if message.id > previous {
             self.read_state_mut(message.channel_id, previous);
         }
-        if let Some(source) = &mut self.source {
-            if let Some(channel) = self
+        if let Some(source) = &mut self.source
+            && let Some(channel) = self
                 .source_channels
                 .get(&message.channel_id)
                 .and_then(|i| i.get_mut(source))
-            {
-                channel.last_message_id = Some(Some(previous.max(message.id)));
-            }
+        {
+            channel.last_message_id = Some(Some(previous.max(message.id)));
         }
         self.refresh_request_preview(&message, message.id >= previous);
         self.update_forum_post_message(&message);

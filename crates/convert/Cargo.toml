@@ -6,4 +6,7 @@ publish = false
 license = "GPL-3.0-only"
 description = "Pixel format conversion for zcord's screen sharing, kept apart so dev builds can optimize it"
 
+[lints]
+workspace = true
+
 [dependencies]

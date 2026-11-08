@@ -418,7 +418,7 @@ fn thread_creation_and_management_permissions() {
         .owner_id = Some(99);
     assert!(!store.can_manage_thread(3001));
 
-    let mut store = Store::from_ready(ready_with_permissions(
+    let store = Store::from_ready(ready_with_permissions(
         vec![thread("3001", "2002", false, "2026-09-10T12:00:00Z")],
         274_877_910_016 | (1 << 35) | (1 << 34),
     ));

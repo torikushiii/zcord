@@ -164,7 +164,7 @@ fn extensions(transport_sequence: u16, repaired: bool) -> ([u8; EXTENSION_PREAMB
     elements.extend_from_slice(&transport_sequence.to_be_bytes());
     elements.push((6 << 4) | 2);
     elements.extend_from_slice(&[0, 0, 0]);
-    elements.push((7 << 4) | 0);
+    elements.push(7 << 4);
     elements.push(1);
     elements.push(((if repaired { 12 } else { 11 }) << 4) | 2);
     elements.extend_from_slice(b"100");

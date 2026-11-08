@@ -372,10 +372,7 @@ impl Store {
             .expect("listed messages have a valid timestamp")
     }
 
-    pub(super) fn thread_members_update(
-        &mut self,
-        update: Box<model::ThreadMembersUpdate>,
-    ) -> Change {
+    pub(super) fn thread_members_update(&mut self, update: model::ThreadMembersUpdate) -> Change {
         let current_user_id = self.current_user_id;
         for member in &update.added_members {
             if let Some(user) = member

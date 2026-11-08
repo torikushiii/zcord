@@ -43,23 +43,23 @@ impl Store {
     }
 
     pub(super) fn register_author(&mut self, user: &model::User) {
-        if user.username.is_empty() {
-            if let Some(existing) = self.users.get_mut(&user.id) {
-                if let Some(name) = &user.global_name {
-                    existing.real_name.clone_from(name);
-                }
-                if let Some(avatar) = &user.avatar {
-                    existing.avatar = Some(avatar.clone());
-                }
-                if let Some(discriminator) = &user.discriminator {
-                    existing.discriminator = Some(discriminator.clone());
-                }
-                mapping::refresh_name(existing);
-                existing.bot |= user.bot;
-                existing.verified_bot |= model::verified_bot(user.bot, user.public_flags);
-                apply_cosmetics(existing, user);
-                return;
+        if user.username.is_empty()
+            && let Some(existing) = self.users.get_mut(&user.id)
+        {
+            if let Some(name) = &user.global_name {
+                existing.real_name.clone_from(name);
             }
+            if let Some(avatar) = &user.avatar {
+                existing.avatar = Some(avatar.clone());
+            }
+            if let Some(discriminator) = &user.discriminator {
+                existing.discriminator = Some(discriminator.clone());
+            }
+            mapping::refresh_name(existing);
+            existing.bot |= user.bot;
+            existing.verified_bot |= model::verified_bot(user.bot, user.public_flags);
+            apply_cosmetics(existing, user);
+            return;
         }
         let mut mapped = map_user(user);
         if let Some(existing) = self.users.get(&user.id) {
