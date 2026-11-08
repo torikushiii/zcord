@@ -319,6 +319,23 @@ impl Store {
         }
     }
 
+    fn embed_text(&self, message: &model::Message, guild_id: Option<u64>) -> String {
+        message
+            .embeds
+            .iter()
+            .map(|embed| {
+                [&embed.title, &embed.description]
+                    .into_iter()
+                    .flatten()
+                    .map(|text| self.preview_text(text, guild_id, &message.mentions))
+                    .filter(|text| !text.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .find(|text| !text.is_empty())
+            .unwrap_or_default()
+    }
+
     fn alert(
         &self,
         context: &Context<'_>,
@@ -331,8 +348,11 @@ impl Store {
             &message.mentions,
         );
         let body = if body.is_empty() {
+            let embed = self.embed_text(message, context.guild.map(|guild| guild.id));
+            if !embed.is_empty() {
+                embed
             // Discord's own notifications name the first file.
-            if let Some(attachment) = message.attachments.first() {
+            } else if let Some(attachment) = message.attachments.first() {
                 if attachment.filename.is_empty() {
                     "Uploaded a file".to_owned()
                 } else {
@@ -348,15 +368,15 @@ impl Store {
         };
         let guild = context.guild;
         let title = match guild {
-            Some(guild) => {
-                let place = context
-                    .category
-                    .and_then(|id| guild.categories.iter().find(|category| category.id == id))
-                    .map(|category| category.name.as_str())
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or(&guild.name);
-                format!("{author} (#{}, {place})", context.channel.name)
-            }
+            Some(guild) => match context
+                .category
+                .and_then(|id| guild.categories.iter().find(|category| category.id == id))
+                .map(|category| category.name.as_str())
+                .filter(|name| !name.is_empty())
+            {
+                Some(category) => format!("{author} (#{}, {category})", context.channel.name),
+                None => format!("{author} (#{})", context.channel.name),
+            },
             None => author,
         };
         let avatar = guild

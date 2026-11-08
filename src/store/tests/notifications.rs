@@ -396,6 +396,23 @@ fn dnd_blocked_own_unknown_and_unviewable_messages_are_silent() {
 }
 
 #[test]
+fn embed_only_messages_read_as_the_embed_title_and_description() {
+    let mut embedded = message(2003, 2, "");
+    embedded.embeds = vec![model::Embed {
+        title: Some("Shop Status".into()),
+        description: Some("Your shop has finished selling **videos**!".into()),
+        ..Default::default()
+    }];
+    let alert = store_default()
+        .message_alert(&embedded, NOW)
+        .expect("embed alerts");
+    assert_eq!(
+        alert.body,
+        "Shop Status Your shop has finished selling videos!"
+    );
+}
+
+#[test]
 fn server_levels_and_mentions_follow_the_settings() {
     assert!(
         store_default()
