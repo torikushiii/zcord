@@ -28,7 +28,6 @@ pub(in crate::app::profile) fn tag_icon(tag: &str) -> &'static str {
     }
 }
 
-/// Discord's tag ids read as sentence case ("better_than_you" → "Better than you").
 pub(in crate::app::profile) fn tag_label(tag: &str) -> String {
     if tag == "lfg" {
         return "LFG".to_owned();
@@ -128,8 +127,6 @@ pub(super) fn application_widget(
                 })
                 .collect(),
         ),
-        // Without the app's widget config, show the raw stats: the first text one (a region or
-        // server) under the username and the rest in the grid.
         None => {
             let subtitle = stats
                 .iter()
@@ -156,12 +153,9 @@ pub(super) fn application_widget(
             )
         }
     };
-    // Game widgets point the hero at identity data (a featured character's art) rather than an
-    // uploaded asset; both fill the same slot.
     let hero = config
         .and_then(|config| config.hero.as_ref())
         .and_then(|hero| widget_hero(application_id, hero, profile, cx));
-    // `widget_top_contained` layouts show their image as a square tile beside the text instead.
     let contained = config
         .and_then(|config| config.contained.as_ref())
         .and_then(|image| {
@@ -237,9 +231,6 @@ pub(super) fn application_widget(
                         .text_size(rpx(14.))
                         .line_height(rpx(18.))
                         .text_color(rgb(palette.text))
-                        // Apps fill subtitles with markdown, e.g. Example Music App's `[@name](profile url)`.
-                        // The body fills its parent, so this wrapper sizes it to the text and
-                        // the icon follows straight after, as on Discord.
                         .child(div().flex_initial().min_w_0().child(markdown(
                             app,
                             card,

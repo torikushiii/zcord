@@ -10,7 +10,6 @@ thread_local! {
     static MEDIA_LIMIT: std::cell::Cell<f32> = const { std::cell::Cell::new(f32::INFINITY) };
 }
 
-/// The widest message media may be, for columns narrower than the chat.
 pub(in crate::app) fn media_limit() -> f32 {
     MEDIA_LIMIT.get()
 }
@@ -153,7 +152,6 @@ pub(super) fn render_sticker(
         .into_any_element()
 }
 
-/// Two or more images and videos share Discord's mosaic; other files follow as cards.
 pub(super) fn render_attachments(
     app: &DiscordApp,
     attachments: &[Attachment],
@@ -349,7 +347,6 @@ fn attachment_box(
         })
         .children(child);
     match description {
-        // The badge sits outside the clipped image so its tooltip can overhang it.
         Some(text) => div()
             .relative()
             .flex_none()

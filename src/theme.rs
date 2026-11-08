@@ -183,8 +183,6 @@ fn palette() -> &'static Palette {
     unsafe { &*PALETTE.load(Ordering::Relaxed) }
 }
 
-/// The dark palette whatever the app's theme, for surfaces that stay dark in light mode, like a
-/// profile with a dark custom theme.
 pub fn dark_palette() -> &'static Palette {
     &ONYX
 }
@@ -289,7 +287,6 @@ pub fn status_color(status: Status) -> u32 {
     }
 }
 
-/// Avatar/status cutout rings need the opaque result of a row's translucent layer.
 pub fn composite(overlay: u32, background: u32) -> u32 {
     let color = rgb(background).blend(rgba(overlay));
     let channel = |value: f32| (value * 255.).round() as u32;
@@ -308,8 +305,6 @@ pub fn icon(name: &str, size: f32, color: u32) -> Svg {
         .text_color(rgb(color))
 }
 
-/// Device pixels per CSS pixel (display scale × zoom), as `f32` bits. Starts at 2 so images
-/// requested before the first root render are sharp on HiDPI screens.
 static IMAGE_SCALE: AtomicU32 = AtomicU32::new(0x4000_0000);
 
 pub fn set_image_scale(window: &Window, cx: &App) {

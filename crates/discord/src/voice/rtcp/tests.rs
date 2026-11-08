@@ -156,7 +156,6 @@ fn nack_pli_and_remb_are_parsed() {
             .keyframe
     );
 
-    // 6 Mbps for SSRC 42: exponent 5, mantissa 187500, after a count of one SSRC.
     let remb_for = |ssrc: u32| {
         let mut remb = 9u32.to_be_bytes().to_vec();
         remb.extend_from_slice(&0u32.to_be_bytes());

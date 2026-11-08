@@ -152,7 +152,6 @@ pub(crate) fn panel(app: &DiscordApp, cx: &App) -> Option<impl IntoElement + use
                     entity.update(cx, |app, cx| app.leave_voice(cx)).ok();
                 })
                 .map(|this| with_tooltip(this, app, Control::Disconnect, "Disconnect"))
-                // Lucide's handset tilted down into Discord's hang-up glyph.
                 .child(
                     theme::icon("phone", 20., theme::text()).with_transformation(
                         Transformation::rotate(radians(std::f32::consts::FRAC_PI_4 * 3.)),
@@ -268,8 +267,6 @@ fn with_tooltip(
         })
 }
 
-/// Discord's voice controls that zcord doesn't implement yet: shown for familiarity, with a
-/// tooltip saying so instead of doing nothing silently.
 pub(crate) fn unavailable(button: Stateful<Div>, feature: &'static str) -> Stateful<Div> {
     button.relative().child(theme::hover_tooltip(
         SharedString::from(format!("unavailable-{feature}")),

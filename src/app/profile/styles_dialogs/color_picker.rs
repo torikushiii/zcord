@@ -124,8 +124,6 @@ pub(super) fn color_picker(
                 }
             })
     };
-    // Theme colors suggest from the avatar, as Discord's do; a blank row holds the space while
-    // it's sampled.
     let suggestions = match picker.slot {
         ColorSlot::Name(_) => Some(preset_suggestions()),
         _ => editor
@@ -214,7 +212,6 @@ pub(super) fn color_picker(
         .inset_0()
         .occlude()
         .on_click(on_app(app, |app, cx| app.close_color_picker(cx)));
-    // Beside the swatch that opened it, like Discord's popout, moved inward where it won't fit.
     match picker.anchor {
         Some(anchor) => scrim
             .child(

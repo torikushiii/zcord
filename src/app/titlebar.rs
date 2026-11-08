@@ -104,7 +104,6 @@ fn inbox_button(app: &DiscordApp) -> impl IntoElement + use<> {
         .size(rpx(24.))
         .occlude()
         .when(app.inbox.is_some(), |this| this.bg(rgba(theme::selected())))
-        // The open inbox sits right under the button, where the tooltip would cover its header.
         .when(app.inbox.is_none(), |this| {
             this.child(theme::hover_tooltip_below("inbox-tooltip", "Inbox"))
         })

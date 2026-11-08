@@ -45,7 +45,6 @@ pub(in crate::app::profile) struct State {
     duration: Option<SelfStatus>,
     keyboard: bool,
     hovered: [bool; 3],
-    // Trigger, two surfaces, four status rows, then the first duration row.
     bounds: Rc<Cell<[Option<Bounds<Pixels>>; 8]>>,
     focus: RefCell<Option<[FocusHandle; 11]>>,
     close_task: Option<Task<()>>,
@@ -256,7 +255,6 @@ fn marker(status: SelfStatus) -> impl IntoElement {
 fn record(state: &State, index: usize) -> impl IntoElement {
     let bounds = state.bounds.clone();
     let open = state.open;
-    // Explicit origins keep the observer aligned to the row/surface, not its padding.
     canvas(
         move |value, window, _| {
             let mut saved = bounds.get();

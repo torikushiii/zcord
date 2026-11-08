@@ -109,8 +109,6 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// Keeps the popout while the pointer is on its card or on it, or while its reply box has
-    /// focus; otherwise closes it after a short grace period so the pointer can cross the gap.
     fn settle_activity_popout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(popout) = &mut self.activity_popout else {
             return;
@@ -163,7 +161,6 @@ impl DiscordApp {
         self.close_activity_popout(cx);
     }
 
-    /// Activity replies in the open channel need the game icon and its gradient colours.
     pub(crate) fn load_activity_reply_assets(&mut self, cx: &mut Context<Self>) {
         let ids: Vec<u64> = self
             .channel()

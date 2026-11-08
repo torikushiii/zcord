@@ -1,7 +1,3 @@
-//! Editing your own Board while the styles editor is open, as Discord's "Your Widgets" view:
-//! drag widgets to reorder them, remove them, and edit each game's comment and tags. Edits stay
-//! a draft until the save bar sends the whole list with `PUT /users/@me/widgets`.
-
 use gpui_component::input::{InputEvent, Textarea, TextareaState};
 
 use super::styles::StylesEditor;
@@ -11,14 +7,10 @@ use crate::discord::model::{ProfileWidget, WidgetGame};
 
 const COMMENT_LIMIT: usize = 200;
 const SHOWN_TAGS: usize = 4;
-/// Where a widget's handle sits inside its row, from the gutter's left and the card's top.
 const HANDLE_INSET: [f32; 2] = [8., 18.];
-/// The gutter left of each widget that its drag handle sits in; the tab's scroll area
-/// reaches into it while editing so the handles aren't clipped.
 pub(super) const HANDLE_GUTTER: f32 = 32.;
 
 const TAG_MENU_SIZE: [f32; 2] = [171., 398.];
-/// Discord's tag picker: one skill level, then any number of the rest.
 const SKILL_TAGS: [&str; 4] = ["casual", "intermediate", "expert", "better_than_you"];
 const RATING_TAGS: [&str; 5] = [
     "obsessed",
@@ -37,21 +29,16 @@ const LOOKING_TAGS: [&str; 5] = [
 
 #[derive(Default)]
 pub(crate) struct WidgetsUi {
-    /// Unsaved edits to the whole list; the save bar saves or resets them with the styles.
     draft: Option<Vec<ProfileWidget>>,
-    /// Bumped per edit, so a save can tell whether the draft changed while it ran.
     revision: u64,
     pub(crate) saving: bool,
     /// A style save finished while widgets were saving; its profile refresh waits for them.
     pub(crate) refresh_after_save: bool,
     pub(crate) error: Option<SharedString>,
     pub(crate) comment: Option<CommentEdit>,
-    /// The game whose tag picker is open, and the "+ Tags" pill it hangs from.
     pub(crate) tag_menu: Option<(u64, u64, Option<Bounds<Pixels>>)>,
-    /// The widget whose manage menu is open, beside its handle.
     pub(crate) manage_menu: Option<(u64, Option<Bounds<Pixels>>)>,
     pub(crate) expanded_tags: HashSet<(u64, u64)>,
-    /// The widget last picked up; it stays faded in place while gpui still has a drag.
     dragging: Option<u64>,
 }
 
@@ -72,7 +59,6 @@ impl WidgetsUi {
     }
 }
 
-/// The id a widget drag carries; its own type so no other drag lands here.
 #[derive(Clone, Copy)]
 struct WidgetDrag(u64);
 
@@ -96,8 +82,6 @@ impl Render for DraggedWidget {
                 .find(|widget| widget.id == self.id)?;
             super::board::widget_element(app, card, widget, true, cx)
         });
-        // The pointer grabbed the handle, which sits this far left of and below the card's
-        // corner.
         div()
             .ml(rpx(HANDLE_GUTTER - HANDLE_INSET[0]))
             .mt(rpx(-HANDLE_INSET[1]))
@@ -194,8 +178,6 @@ impl DiscordApp {
                         if let Some(profile) = editor.saved_profile.as_mut() {
                             let shown = ui.draft.take();
                             let profile = Arc::make_mut(profile);
-                            // Whatever the user moved to while saving stays as the next draft,
-                            // even when it matches the list from before the save.
                             if ui.revision != revision {
                                 let shown = shown.unwrap_or_else(|| profile.widgets.clone());
                                 ui.draft = (!same_widgets(&shown, &saved)).then_some(shown);
@@ -224,7 +206,6 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// Moves widget `id` to sit before `before`, or last.
     fn move_widget(&mut self, id: u64, before: Option<u64>, cx: &mut Context<Self>) {
         if before == Some(id) {
             return;
@@ -304,7 +285,6 @@ impl DiscordApp {
         );
     }
 
-    /// Toggles `tag`; a skill level replaces any other, and `None` clears it.
     fn toggle_widget_tag(
         &mut self,
         widget_id: u64,
@@ -390,7 +370,6 @@ impl DiscordApp {
     }
 }
 
-/// The Board tab while you style your own profile.
 pub(super) fn panel(
     app: &DiscordApp,
     card: &ProfileCard,
@@ -555,8 +534,6 @@ fn widget_row(
         .into_any_element()
 }
 
-/// The white line Discord draws where a dragged widget would land, shown while one is over
-/// `group`; `top` centres it in the gap above.
 fn drop_line(group: SharedString, top: f32) -> impl IntoElement {
     div()
         .absolute()
@@ -659,7 +636,6 @@ pub(super) fn popover_panel(
         .without_text_selection()
         .w(rpx(width))
         .map(|this| match max_height {
-            // Discord's scrolling menus leave the right padding to the scrollbar gutter.
             Some(height) => this
                 .max_h(rpx(height))
                 .overflow_y_scroll()

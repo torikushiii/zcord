@@ -150,7 +150,6 @@ struct ControlTip {
 
 impl RenderOnce for ControlTip {
     fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
-        // Fills the control, so the tooltip measures from it as if it were a direct child.
         div()
             .absolute()
             .inset_0()
@@ -160,8 +159,6 @@ impl RenderOnce for ControlTip {
     }
 }
 
-/// Plays `apply` towards `shown` after a toggle. With `toggles` at 0, or reduced motion, it
-/// settles at once, so opening a stream doesn't slide.
 pub(super) fn members_slide(
     element: Div,
     id: &'static str,
@@ -202,7 +199,6 @@ pub(crate) fn controls_fade(
         .into_any_element()
 }
 
-/// Discord's end reasons are codes, not sentences. Anything else is already readable.
 fn ended_message(reason: &str) -> &str {
     match reason {
         "stream_ended" | "user_requested" => "This stream has ended.",
@@ -407,7 +403,6 @@ pub(crate) fn voice_controls(app: &DiscordApp, in_popout: bool) -> Div {
             chevron_tint(tint),
         )
         .on_mouse_down(MouseButton::Left, move |event, _, cx| {
-            // The open menu closes on any press outside it, this one included.
             cx.stop_propagation();
             let position = event.position;
             menu.update(cx, |app, cx| app.toggle_call_audio_menu(position, cx))

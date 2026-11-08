@@ -106,7 +106,6 @@ pub(crate) fn remove_pasted(files: &[StagedFile], cx: &App) {
     .detach();
 }
 
-/// Staged files don't survive a restart, so anything left here is unreachable.
 pub(crate) fn clear_pasted(cx: &App) {
     let Some(root) = pasted_root() else {
         return;
@@ -117,7 +116,6 @@ pub(crate) fn clear_pasted(cx: &App) {
     .detach();
 }
 
-/// Windows hands screenshots over as bitmaps; Discord's client turns them into `image.png`.
 fn clipboard_png(bytes: &[u8], format: image::ImageFormat) -> Option<Vec<u8>> {
     let mut pixels = image::load_from_memory_with_format(bytes, format)
         .ok()?
@@ -386,7 +384,6 @@ impl DiscordApp {
         .detach();
     }
 
-    /// Staged ids are unique across channels, so the main and thread pane composers share this.
     fn staged_channel(&self, id: u64) -> Option<u64> {
         self.uploads
             .staged
@@ -456,7 +453,6 @@ impl DiscordApp {
         let pixels = theme::image_px(STAGED_PREVIEW);
         let (spec, dimensions) = if file.content_type.starts_with("video/") {
             let spec = ImageSpec::LocalVideo { path };
-            // Video dimensions aren't known locally, so keep the poster's shape at a large size.
             let dimensions = crate::media::video::resolve(&spec, pixels, cx).map(|poster| {
                 let size = poster.size(0);
                 let (width, height) = (size.width.0.max(1) as u32, size.height.0.max(1) as u32);

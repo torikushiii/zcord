@@ -23,7 +23,6 @@ fn heading(title: &'static str, nitro: bool) -> Div {
         })
 }
 
-/// Hovering a tile reveals its remove button.
 pub(super) const TILE_GROUP: &str = "styles-tile";
 
 pub(super) fn tile(id: &'static str, width: f32, height: f32) -> Stateful<Div> {
@@ -47,8 +46,6 @@ fn plain_tile(id: &'static str, width: f32, height: f32) -> Stateful<Div> {
         .cursor_pointer()
 }
 
-/// Whether the scope sets its own value, as opposed to the default or the main profile's
-/// showing through, which a reset would leave in place.
 pub(super) fn removable<T>(draft: &Option<Option<T>>, saved: &Option<T>) -> bool {
     match draft {
         Some(value) => value.is_some(),
@@ -64,8 +61,6 @@ fn image_removable(draft: &Option<ImageChange>, saved: &Option<SharedString>) ->
     }
 }
 
-/// The trash button in a tile's top-right corner, which resets that style to its default.
-/// Hidden until the tile is hovered, as the nameplate's is.
 fn remove_button(
     app: &DiscordApp,
     id: &'static str,
@@ -116,7 +111,6 @@ pub(super) fn editing_panel(app: &DiscordApp, editor: &StylesEditor, cx: &App) -
         .decoration
         .and_then(|sku| decoration_of(app, editor, sku));
     let nameplate_tile = nameplate_tile(app, editor, &shown, decoration.as_ref(), cx);
-    // Without Nitro the theme is the banner color, which only the main profile takes.
     let avatar_tile = tile("styles-avatar", TILE, TILE)
         .on_click(on_app(app, |app, cx| {
             app.open_style_dialog(StyleDialog::Image(ImageTarget::Avatar), cx)
@@ -186,7 +180,6 @@ pub(super) fn editing_panel(app: &DiscordApp, editor: &StylesEditor, cx: &App) -
         .into_any_element();
     let theme_tile = theme_tile(app, editor, &shown);
     let banner_fill = banner_color(editor, &shown);
-    // Dimmed on hover below, rather than taking the grey other tiles do.
     let banner_tile = plain_tile("styles-banner", TILE, TILE)
         .on_click(on_app(app, |app, cx| {
             app.open_style_dialog(StyleDialog::Image(ImageTarget::Banner), cx)
@@ -222,7 +215,6 @@ pub(super) fn editing_panel(app: &DiscordApp, editor: &StylesEditor, cx: &App) -
                 cx,
             );
         }))
-        // Discord sits the card 12px down and runs it past the tile's bottom edge.
         .items_start()
         .child(
             div()

@@ -73,7 +73,6 @@ impl Render for StatusSample {
 }
 
 fn draw(cx: &mut VisualTestContext) {
-    // A surface's measured height repositions its anchored child on the next frame.
     for _ in 0..3 {
         cx.update(|window, cx| {
             window.refresh();

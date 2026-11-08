@@ -384,7 +384,6 @@ async fn attempt(
 }
 
 fn close_outcome(code: Option<u16>, healthy: bool) -> Outcome {
-    // 4003 is the normal end of a QR session (~2-3 minutes), not an error.
     match code {
         Some(4003) => Outcome::Fresh,
         _ => Outcome::Retry { healthy },
@@ -447,7 +446,6 @@ fn decrypt(key: &RsaPrivateKey, encrypted: &str) -> Option<Vec<u8>> {
 
 fn parse_user_payload(payload: &[u8]) -> Option<RemoteUser> {
     let payload = std::str::from_utf8(payload).ok()?;
-    // Usernames may contain ':', so only the first three separators are split.
     let mut parts = payload.splitn(4, ':');
     let id = parts.next()?.parse().ok()?;
     let discriminator = parts.next()?.to_owned();
@@ -482,7 +480,6 @@ enum Exchange {
     Captcha(Captcha),
 }
 
-/// The gateway keeps getting heartbeats while a captcha is being solved.
 async fn trade(
     ticket: Ticket<'_>,
     socket: &mut Socket,

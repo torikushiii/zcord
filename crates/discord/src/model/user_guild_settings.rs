@@ -11,8 +11,6 @@ pub enum NotificationLevel {
     Inherit,
 }
 
-/// A guild channel's notification override: a mute (seconds, `-1` until unmuted, `None` to
-/// unmute) or a notification level.
 #[derive(Clone, Copy)]
 pub enum ChannelSetting {
     Mute(Option<i64>),
@@ -115,7 +113,6 @@ where
     Ok(parse_entries(entries))
 }
 
-/// The overrides arrive as a list, or as an object keyed by channel id.
 fn channel_overrides<'de, D>(d: D) -> Result<Vec<ChannelOverride>, D::Error>
 where
     D: Deserializer<'de>,

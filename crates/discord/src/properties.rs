@@ -56,7 +56,6 @@ fn valid_client_version(version: &str) -> bool {
         })
 }
 
-/// Loads the identity saved by the app; set once at startup, before anything talks to Discord.
 static IDENTITY_SOURCE: OnceLock<fn() -> IdentityCache> = OnceLock::new();
 
 pub fn set_identity_source(load: fn() -> IdentityCache) {
@@ -64,7 +63,6 @@ pub fn set_identity_source(load: fn() -> IdentityCache) {
 }
 
 fn identity() -> &'static Identity {
-    // Keep REST, media, and gateway versions fixed together until the next launch.
     static IDENTITY: OnceLock<Identity> = OnceLock::new();
     IDENTITY.get_or_init(|| {
         let cache = IDENTITY_SOURCE.get().map(|load| load()).unwrap_or_default();

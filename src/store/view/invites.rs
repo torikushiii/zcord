@@ -14,17 +14,14 @@ pub struct Invite {
     pub code: String,
     pub guild_id: u64,
     pub name: String,
-    /// Guild icon hash (`icons/{guild_id}/{hash}`).
     pub icon: Option<String>,
     pub banner: Option<InviteBanner>,
     pub description: Option<String>,
     pub tag: Option<GuildTag>,
     pub online: u32,
     pub members: u32,
-    /// Derived from the guild id snowflake.
     pub created_at: Timestamp,
     pub games: Vec<u64>,
-    /// `games` resolved through the public-application lookup, for icons.
     pub game_apps: Vec<InviteApp>,
     pub expires_at: Option<Timestamp>,
 }
@@ -124,13 +121,9 @@ impl Invite {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InviteBanner {
-    /// `profile.custom_banner_hash`
     Custom(String),
-    /// `profile.banner_hash`
     Banner(String),
-    /// `guild.banner`
     GuildBanner(String),
-    /// `guild.splash`
     Splash(String),
 }
 
@@ -158,7 +151,6 @@ impl InviteBanner {
 pub struct InviteApp {
     pub id: u64,
     pub name: String,
-    /// App icon hash (`app-icons/{id}/{hash}`).
     pub icon: Option<String>,
 }
 

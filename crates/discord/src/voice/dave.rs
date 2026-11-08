@@ -6,7 +6,6 @@ use std::{
 };
 
 pub(super) const SILENCE: [u8; 3] = [0xF8, 0xFF, 0xFE];
-/// How long the replaced group still decrypts packets sent before everyone switched.
 const RETIRED_FOR: Duration = Duration::from_secs(10);
 
 pub(super) enum EncryptOutcome {
@@ -35,11 +34,7 @@ fn encryption_plan(version: u16, ready: bool) -> EncryptPlan {
 
 pub(super) struct Dave {
     session: DaveSession,
-    /// The group a re-key (op 24) is replacing. Media goes on with it until Discord executes
-    /// the transition to the new group, as every member switches at that point, instead of
-    /// stopping for the seconds the new group takes.
     previous: Option<DaveSession>,
-    /// The replaced group after the switch, kept until the deadline for late packets.
     retired: Option<(DaveSession, Instant)>,
     version: u16,
     user_id: u64,
@@ -87,13 +82,10 @@ impl Dave {
         self.session.is_ready()
     }
 
-    /// Whether media can be encrypted or decrypted: with the current group, or with the one
-    /// a re-key is replacing.
     pub fn can_encrypt(&self) -> bool {
         self.session.is_ready() || self.previous.is_some()
     }
 
-    /// The session media is sent with: the replaced group until the switch, then the current.
     fn media_session(&mut self) -> Option<&mut DaveSession> {
         match &mut self.previous {
             Some(previous) => Some(previous),
@@ -101,7 +93,6 @@ impl Dave {
         }
     }
 
-    /// Switches media to the new group, keeping the replaced one briefly for decrypting.
     fn promote(&mut self) {
         if let Some(previous) = self.previous.take() {
             self.retired = Some((previous, Instant::now() + RETIRED_FOR));
@@ -209,9 +200,6 @@ impl Dave {
         let version = NonZeroU16::new(version)?;
         let fresh = DaveSession::new(version, self.user_id, self.channel_id, None).ok()?;
         let replaced = std::mem::replace(&mut self.session, fresh);
-        // Keep the group media goes through until the new one's transition executes. A group
-        // replaced before its own transition never carried media, so it's only dropped, as is
-        // one that never got ready, whose keys nobody holds.
         if self.previous.is_none() && replaced.is_ready() {
             self.previous = Some(replaced);
         }
@@ -261,8 +249,6 @@ impl Dave {
             return self.passthrough.then(|| packet.to_vec());
         }
         let passthrough = self.passthrough_allowed();
-        // Around a re-key, members switch groups at slightly different moments, so a packet
-        // may come with either group's keys: the one media uses first, then the others.
         if self
             .retired
             .as_ref()

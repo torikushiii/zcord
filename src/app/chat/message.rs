@@ -323,7 +323,6 @@ pub(super) fn passive_reply_pieces(mut pieces: Vec<Piece>) -> Vec<Piece> {
         if matches!(&piece.style.action, Some(Action::OpenUrl(_))) {
             piece.style.color.get_or_insert(rgb(theme::link()).into());
         }
-        // The whole preview jumps to the message; its contents aren't separate controls.
         piece.style.action = None;
     }
     pieces

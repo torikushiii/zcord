@@ -1,7 +1,3 @@
-//! Go Live sound on Windows: everything the system plays except zcord's own process tree,
-//! through process loopback (Windows 10 2004 and later), so viewers never hear the call
-//! echoed back. It goes out as 20 ms stereo Opus frames, as Discord's client sends it.
-
 use super::{AudioFrame, LiveShare};
 use opus::{Application, Bitrate, Channels, Encoder};
 use std::{
@@ -43,21 +39,14 @@ use windows::{
 
 const RATE: u32 = 48_000;
 const CHANNELS: u16 = 2;
-/// Samples of both channels in one 20 ms frame.
 const FRAME_VALUES: usize = RATE as usize / 50 * CHANNELS as usize;
 const FRAME_SAMPLES: u64 = RATE as u64 / 50;
-/// What Discord's client gives a stream's sound.
 const BITRATE: i32 = 64_000;
 const MAX_OPUS_PACKET: usize = 1275;
-/// The engine's buffer: how much sound one wake-up can bring.
 const BUFFER: Duration = Duration::from_millis(100);
-/// How often the thread looks at `stop` while nothing plays, when no event comes.
 const STOP_CHECK_MS: u32 = 100;
-/// 32-bit float samples, which the engine converts any device's sound to.
 const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
 
-/// Starts hearing the system's sound on its own thread until `stop`, sending each Opus frame
-/// to `frames`. A failure only ends the sound; the picture carries on without it.
 pub(crate) fn spawn(
     frames: SyncSender<AudioFrame>,
     stop: Arc<AtomicBool>,
@@ -74,7 +63,6 @@ pub(crate) fn spawn(
     Ok(())
 }
 
-/// Joins the multithreaded COM apartment for the life of the thread.
 struct Com(bool);
 
 impl Com {
@@ -91,7 +79,6 @@ impl Drop for Com {
     }
 }
 
-/// The event the engine signals when sound arrives, closed on drop.
 struct Event(HANDLE);
 
 impl Drop for Event {
@@ -152,7 +139,6 @@ fn run(frames: &SyncSender<AudioFrame>, stop: &AtomicBool, live: &LiveShare) -> 
     result
 }
 
-/// Reads the engine's packets into 20 ms frames and encodes them until `stop`.
 fn hear(
     capture: &IAudioCaptureClient,
     event: &Event,
@@ -164,7 +150,6 @@ fn hear(
         .map_err(|error| format!("No Opus encoder: {error}"))?;
     let _ = encoder.set_bitrate(Bitrate::Bits(BITRATE));
     let mut pending: Vec<f32> = Vec::with_capacity(FRAME_VALUES * 8);
-    // Samples per channel heard so far, and where `pending` starts among them.
     let (mut heard, mut pending_start) = (0u64, 0u64);
     let mut pcm = vec![0i16; FRAME_VALUES];
     let gone = |error: windows::core::Error| format!("The sound went away: {error}");
@@ -194,7 +179,6 @@ fn hear(
                 heard += u64::from(count);
             }
         }
-        // Muted, the engine is still drained so unmuting picks up the sound playing then.
         if !live.audio.load(Ordering::Acquire) {
             pending.clear();
             pending_start = heard;
@@ -209,7 +193,6 @@ fn hear(
             let sample = pending_start;
             pending_start += FRAME_SAMPLES;
             match frames.try_send(AudioFrame { opus, sample }) {
-                // A sender that fell behind loses a frame rather than delaying the sound.
                 Ok(()) | Err(TrySendError::Full(_)) => {}
                 Err(TrySendError::Disconnected(_)) => return Ok(()),
             }
@@ -218,7 +201,6 @@ fn hear(
     Ok(())
 }
 
-/// Signals once Windows has made the loopback stream.
 #[implement(IActivateAudioInterfaceCompletionHandler)]
 struct Activated(mpsc::Sender<()>);
 
@@ -232,7 +214,6 @@ impl IActivateAudioInterfaceCompletionHandler_Impl for Activated_Impl {
     }
 }
 
-/// A loopback stream of everything but `process` and the processes it started.
 fn activate(process: u32) -> Result<IAudioClient, String> {
     let mut parameters = AUDIOCLIENT_ACTIVATION_PARAMS {
         ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,

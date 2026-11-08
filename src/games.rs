@@ -13,8 +13,6 @@ use tokio::{sync::watch, task::JoinHandle};
 
 const INTERVAL: Duration = Duration::from_secs(15);
 
-/// What to publish as the user's activity, and the game detected running, if any. An app
-/// setting activity over RPC isn't a running game, so Discord's account panel leaves it out.
 #[derive(Clone, PartialEq)]
 pub struct GameActivity {
     pub activity: Value,

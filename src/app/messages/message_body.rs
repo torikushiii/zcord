@@ -26,7 +26,6 @@ pub struct BodyColors {
     pub muted: u32,
     pub faint: u32,
     pub link: Option<u32>,
-    /// Embeds draw quoted text muted; messages keep the surrounding colour.
     pub quote: Option<u32>,
 }
 
@@ -96,7 +95,6 @@ impl BodyContext<'_> {
     }
 }
 
-/// The emoji an action points at, for its hover card or info card.
 fn inspected(action: &Action) -> Option<Expression> {
     match action {
         Action::InspectEmoji { id, name, animated } => Some(Expression::Emoji {
@@ -285,8 +283,6 @@ fn render_block(
                     Some(start) => {
                         *counter += 1;
                         let id = ("marker", (context.message_id << 8) ^ u64::from(*counter));
-                        // Numbers hang left of the text like Discord's outside markers. They
-                        // stay rich text so they share the item text's baseline.
                         div()
                             .absolute()
                             .top_0()
@@ -336,13 +332,10 @@ fn render_block(
     }
 }
 
-/// Discord indents list text 16px and hangs the marker in that gutter.
 const LIST_INDENT: f32 = 16.;
-/// An emoji in running text, before a piece's scale; rich text draws it 1.375 times the 16px font.
 const INLINE_EMOJI: f32 = 22.;
 const LIST_MARKER_GAP: f32 = 4.;
 
-/// Disc, ring, then square by nesting depth, centred on the first line's x-height.
 fn list_bullet(depth: usize, color: u32) -> Div {
     let size = 5.;
     let bullet = div()
@@ -553,8 +546,6 @@ fn span_pieces(
                 style.scale = Some(2.6);
             }
             let mut pieces = emoji_pieces(text, &style);
-            // Standard emoji in a message show their name on hover and open an info card, as
-            // custom ones do; a hidden spoiler gives nothing away.
             if !hidden {
                 for piece in &mut pieces {
                     if let Content::Emoji(_, sequence) = &piece.content {
@@ -700,7 +691,6 @@ fn span_pieces(
                 )
                 .map(EmojiSource::Animated)
                 .or_else(|| {
-                    // The still keeps the emoji visible while the animation decodes.
                     images::resolve(
                         &ImageSpec::Emoji {
                             id: *id,

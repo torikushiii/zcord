@@ -1,4 +1,3 @@
-//! Unset wrappers read as on, the server's default.
 use super::*;
 
 const NOTIFICATIONS: u32 = 7;
@@ -163,7 +162,6 @@ pub(super) fn bool_field(out: &mut Vec<u8>, number: u32, value: bool) {
     push_bytes(out, number, &wrapper);
 }
 
-/// PATCH replaces whole top-level messages, so every field not `replaced` is copied over.
 pub(super) fn rebuild(
     preloaded: &[u8],
     top: u32,

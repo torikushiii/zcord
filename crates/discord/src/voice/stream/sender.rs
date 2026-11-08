@@ -40,9 +40,7 @@ const KEYFRAME_INTERVAL: Duration = Duration::from_secs(3);
 const SENDER_REPORT: Duration = Duration::from_secs(1);
 const MAX_PACKET: usize = 2048;
 const STATS_INTERVAL: Duration = Duration::from_secs(5);
-/// Sound that pauses this long (nothing playing sends nothing) starts a new talkspurt.
 const AUDIO_GAP: Duration = Duration::from_millis(100);
-/// Op 5's flag for a stream's sound: shared sound, not a microphone.
 const SOUNDSHARE: u32 = 2;
 
 pub(crate) struct SenderConfig {
@@ -163,8 +161,6 @@ struct Sender {
     pacer: Pacer,
     history: History,
     announced: bool,
-    /// Encoded size and rate of the latest frame, announced to Discord as the stream's
-    /// resolution and frame rate.
     frame_size: (u32, u32),
     frame_fps: u32,
     next_keyframe: Instant,
@@ -178,23 +174,15 @@ struct Sender {
     stats: Stats,
     audio_sequence: u16,
     audio_timestamp: u32,
-    /// When the last sound went out, to tell a pause from the next 20 ms frame.
     audio_sent: Option<Instant>,
-    /// The capture sample the last sent frame started at; the next frame's RTP time moves on
-    /// by the samples between them, dropped frames included.
     audio_sample: u64,
-    /// When the latest frame's RTP timestamp was taken, to carry it forward to a report's time.
     video_sent: Option<Instant>,
-    /// The sound's RTP clock starts here, at 48 kHz.
     audio_epoch: Instant,
-    /// Whether the stream carries sound, which announcing marks as speaking.
     sound: bool,
     audio_packets: u32,
     audio_octets: u32,
 }
 
-/// What the stream actually sent since the last log line, to tell a starved encoder from a
-/// slow pipeline when quality is poor.
 struct Stats {
     since: Instant,
     frames: u32,
@@ -304,8 +292,6 @@ impl Sender {
                         dave.add_user(id);
                     }
                 }
-                // Tell whoever connected about the stream again, sound included, in case the
-                // server doesn't pass it on to late viewers.
                 self.config.reannounce.store(true, Ordering::Release);
                 Ok(())
             }
@@ -532,7 +518,6 @@ impl Sender {
         .map_err(str::to_owned)?;
         let size = ((frame.width, frame.height), frame.fps);
         if self.announced && size != (self.frame_size, self.frame_fps) {
-            // A changed source or quality: tell Discord the new size once the stream is secure.
             self.config.reannounce.store(true, Ordering::Release);
         }
         (self.frame_size, self.frame_fps) = size;
@@ -551,7 +536,6 @@ impl Sender {
 
     async fn announce(&mut self, socket: &mut Socket) -> Result<(), String> {
         let (width, height) = self.frame_size;
-        // The cap for this height, not the current target, as Discord's client announces it.
         let streams = json!([{
             "type": "video", "rid": "100", "ssrc": self.video_ssrc, "active": true,
             "quality": 100, "rtx_ssrc": self.rtx_ssrc, "max_bitrate": max_bitrate(height),
@@ -568,7 +552,6 @@ impl Sender {
         )
         .await
         .map_err(|_| "Discord stream announcement failed".to_owned())?;
-        // Viewers play the audio SSRC only once it's marked as speaking shared sound.
         if self.sound {
             let _ = send_json(
                 socket,
@@ -576,7 +559,6 @@ impl Sender {
             )
             .await;
         }
-        // Discord creates the stream paused; the first frame exists before this is sent.
         let _ = send_json(
             socket,
             json!({"op": 22, "d": {"stream_key": self.config.key, "paused": false}}),
@@ -595,8 +577,6 @@ impl Sender {
         Ok(())
     }
 
-    /// Sends 20 ms of sound once the picture is announced, as an Opus RTP packet on the
-    /// stream's audio SSRC, encrypted end to end like the call's.
     async fn audio(
         &mut self,
         udp: &UdpSocket,
@@ -772,7 +752,6 @@ impl Sender {
         };
         let clear = rtcp::sender_report(self.video_ssrc, &stats);
         self.send_rtcp(udp, peer, clear).await;
-        // The sound gets its own report, which viewers line its clock up with the picture's by.
         if self.audio_packets > 0 {
             let stats = rtcp::SenderStats {
                 rtp_timestamp: rtp_at(self.audio_timestamp, self.audio_sent, now, 48),
@@ -876,8 +855,6 @@ impl Sender {
     }
 }
 
-/// A report pairs its RTP time with the moment it's sent, so the last packet's timestamp is
-/// carried forward to now at the clock's rate in kHz; through a pause it keeps counting.
 fn rtp_at(timestamp: u32, taken: Option<Instant>, now: Instant, khz: u128) -> u32 {
     let Some(taken) = taken else {
         return timestamp;
@@ -886,7 +863,6 @@ fn rtp_at(timestamp: u32, taken: Option<Instant>, now: Instant, khz: u128) -> u3
     timestamp.wrapping_add(ticks as u32)
 }
 
-/// The next sound frame, or never when the stream has no sound.
 async fn next_audio(
     audio: &mut Option<tokio::sync::mpsc::Receiver<AudioFrame>>,
 ) -> Option<AudioFrame> {

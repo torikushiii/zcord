@@ -74,8 +74,6 @@ impl CommandReceiver {
     }
 }
 
-/// Discord's zlib-stream: one persistent inflater per connection, including across
-/// sync-flush message boundaries.
 struct Decoder {
     inflater: Decompress,
     pending: Vec<u8>,
@@ -459,7 +457,6 @@ async fn drive(
                             command = stale;
                             command.presence_revision = Some(current);
                         }
-                        // Custom status may have expired while this command was throttled.
                         command.payload = payload;
                     }
                     let result = send(socket, std::mem::take(&mut command.payload)).await;
@@ -711,8 +708,6 @@ async fn drive(
                             {
                                 outgoing.push(true, command);
                             }
-                            // REST may be ahead of the Store: keep partial edits, but
-                            // reject full snapshots older than settings already forwarded.
                             if !state.forward_settings_update(update) {
                                 continue;
                             }

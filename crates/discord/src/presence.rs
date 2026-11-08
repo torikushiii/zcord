@@ -95,8 +95,6 @@ impl StatusDuration {
     }
 }
 
-/// Aggregated sessions/presences contain other clients' RPC activities and must never be
-/// copied into this client's outgoing presence.
 #[derive(Default)]
 pub(super) struct Presence {
     proto: Option<Vec<u8>>,

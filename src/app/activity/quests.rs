@@ -37,8 +37,6 @@ const CARD_HEADER: f32 = 150.;
 const CARD_MIDDLE: f32 = 104.;
 const CARD_FOOTER: f32 = 62.;
 const CARD_HEIGHT: f32 = CARD_HEADER + CARD_MIDDLE + CARD_FOOTER;
-/// `overflow_hidden` clips to a rectangle, so layers that reach a rounded box's corners round
-/// themselves to its radius less its 1px border.
 const CARD_RADIUS: f32 = 10.;
 const BANNER_RADIUS: f32 = 24.;
 const MOD_SUBTLE: u32 = 0x97979F1F;
@@ -672,8 +670,6 @@ fn all_quests(
         .into_any_element()
 }
 
-/// Animated art wakes the view it's drawn in on every frame, so a card playing a clip
-/// redraws just itself instead of the whole page.
 pub(crate) struct QuestCardView {
     app: WeakEntity<DiscordApp>,
     quest_id: u64,

@@ -26,32 +26,22 @@ use std::{
 };
 
 const MIN_BITRATE: u32 = 500_000;
-/// Discord's client sends a still of the stream once the picture isn't black, then this
-/// often, fitted inside 512 by 288 as a quality 92 JPEG.
 #[cfg(windows)]
 const PREVIEW_EVERY: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 const PREVIEW_WIDTH: usize = 512;
 const PREVIEW_HEIGHT: usize = 288;
 const PREVIEW_QUALITY: u8 = 92;
 
-/// Takes each stream preview, a JPEG data URI.
 pub(crate) type PreviewSink = Box<dyn FnMut(String) + Send>;
 
-/// 20 ms of the stream's sound as one stereo Opus packet.
 pub(crate) struct AudioFrame {
     pub opus: Vec<u8>,
-    /// Where the frame starts, in samples per channel since capture began. It counts frames
-    /// dropped on the way too, so the RTP clock can skip them instead of closing the gap.
     pub sample: u64,
 }
 
-/// What a running stream shows and how, which the user can change while it's live.
 pub(crate) struct LiveShare {
     picture: Mutex<(ScreenSource, StreamQuality)>,
-    /// Bumped on every picture change, so the capture loop knows to start over.
     version: AtomicU32,
-    /// Whether the system's sound goes out. Muted, it's still heard but nothing is sent, so
-    /// unmuting needs no new capture.
     pub audio: AtomicBool,
     #[cfg_attr(not(windows), allow(dead_code))]
     local: Arc<LocalPreview>,
@@ -104,8 +94,6 @@ impl LiveShare {
     }
 }
 
-/// Starts sending the system's sound, but zcord's own, as `frames` until `stop`, while
-/// `live` has sound on.
 pub(crate) fn spawn_audio(
     frames: SyncSender<AudioFrame>,
     stop: Arc<AtomicBool>,
@@ -179,7 +167,6 @@ pub(crate) fn thumbnail(source: &ScreenSource) -> Option<StreamFrame> {
     }
 }
 
-/// The app icon of a window source; screens have none.
 pub(crate) fn icon(source: &ScreenSource) -> Option<StreamFrame> {
     #[cfg(windows)]
     {
@@ -227,8 +214,6 @@ pub(crate) fn spawn(
     }
 }
 
-/// Streams `live`'s picture until `stop` or the source goes away, starting the capture and
-/// encoder over whenever the source or quality changes.
 #[cfg(windows)]
 fn run(
     live: &LiveShare,
@@ -238,7 +223,6 @@ fn run(
     frames: &SyncSender<EncodedFrame>,
     mut previews: PreviewSink,
 ) -> Result<(), String> {
-    // One clock across restarts, so viewers' timestamps keep counting up.
     let origin = Instant::now();
     let mut preview_due = Instant::now();
     while !stop.load(Ordering::Acquire) {
@@ -275,8 +259,6 @@ struct Picture<'a> {
     origin: Instant,
 }
 
-/// One capture of one source at one quality. Returns whether `live` changed, so the stream
-/// goes on with a new capture, rather than stopping.
 #[cfg(windows)]
 #[allow(clippy::too_many_arguments)]
 fn capture(
@@ -321,15 +303,11 @@ fn capture(
             }
             *preview_due = now + PREVIEW_EVERY;
         }
-        // Capture already paces frames to the stream's rate; this only stops bursts. Its
-        // timing jitters by a millisecond or two, so a strict interval would skip about one
-        // frame in six.
         if now.duration_since(last_frame) < frame_interval * 3 / 4 {
             continue;
         }
         last_frame = now;
         if encoder.is_none() {
-            // A source-sized stream keeps the size of its first frame; later frames scale to it.
             size = quality.frame_size(raw.width, raw.height);
             if size.0 == 0 || size.1 == 0 {
                 continue;
@@ -351,7 +329,6 @@ fn capture(
             applied_bitrate = target;
         }
         stats.raw_size = (raw.width, raw.height);
-        // Matches the converter: only a frame larger than the stream is scaled.
         stats.resized += u32::from(raw.width & !1 > size.0 || raw.height & !1 > size.1);
         let converting = Instant::now();
         let nv12 = bgra_to_nv12(
@@ -412,8 +389,6 @@ fn capture(
     Ok(false)
 }
 
-/// Whether a captured picture is still black, as a shared screen is until it first draws.
-/// Samples every 7th pixel of every 7th row.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn is_black(bgra: &[u8], stride: usize, width: u32, height: u32) -> bool {
     let row_bytes = width as usize * 4;
@@ -429,8 +404,6 @@ fn is_black(bgra: &[u8], stride: usize, width: u32, height: u32) -> bool {
     })
 }
 
-/// A still of the picture as Discord's client sends one: fitted inside 512 by 288, a
-/// quality 92 JPEG as a data URI.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn preview(bgra: &[u8], stride: usize, width: u32, height: u32) -> Option<String> {
     let (width, height) = (width as usize, height as usize);
@@ -481,15 +454,12 @@ fn local_frame(
     })
 }
 
-/// Where the capture loop spends its time, logged every few seconds to find a stalled stage.
 #[cfg(windows)]
 struct PipelineStats {
     since: Instant,
     captured: u32,
     encoded: u32,
     empty: u32,
-    /// The latest captured frame's size, and how many frames had to be resized to the
-    /// stream's, which costs far more than converting alone.
     raw_size: (u32, u32),
     resized: u32,
     convert: Duration,

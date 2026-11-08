@@ -154,8 +154,6 @@ pub fn render_reactions(
                 let (click, hover) = (entity.clone(), entity.clone());
                 let (emoji, hovered) = (reaction.emoji.clone(), reaction.clone());
                 pill()
-                    // Keyed by emoji, not position, so a hovered pill keeps its hover state when
-                    // another reaction before it goes.
                     .id(format!(
                         "reaction-{message_id}-{}",
                         crate::app::reaction_emoji_text(&reaction.emoji)

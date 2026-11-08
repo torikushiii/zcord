@@ -189,10 +189,7 @@ pub(crate) fn blurred_box(
         .h(rpx(height))
         .rounded(rpx(radius))
         .overflow_hidden()
-        // The placeholder would show as a pale rim around the image's rounded edge.
         .when(image.is_none(), |this| this.bg(rgba(theme::border())))
-        // GPUI clips children to the parent's rectangle, not its rounded corners,
-        // so the image must carry the radius itself and stay inside the box.
         .children(image.map(|image| {
             img(image)
                 .absolute()
@@ -234,8 +231,6 @@ pub(crate) fn spoiler_overlay(app: &DiscordApp, key: u64, radius: f32) -> Statef
         )
 }
 
-/// A play button over a video thumbnail. Linked videos get Discord's pill with an extra
-/// open-in-browser icon.
 fn play_badge(element: Div, pill: bool) -> Div {
     let badge = div()
         .flex()
@@ -341,8 +336,6 @@ fn video_media(
 ) -> Option<(AnyElement, f32)> {
     let video = embed.video.as_ref()?;
     let still = embed.thumbnail.as_ref().or(embed.images.first());
-    // The thumbnail can be letterboxed, so the box takes the video's shape and the thumbnail
-    // covers it.
     let shape = Some(video)
         .filter(|video| video.width > 0 && video.height > 0)
         .or(still);
@@ -445,9 +438,6 @@ fn gallery_grid(
         .into_any_element()
 }
 
-/// Discord's media mosaic (MediaMosaic CSS): two side by side, three as a large tile beside a
-/// stacked pair, four as a 2x2 grid, and more as rows of square thirds led by a full-width
-/// tile or a pair when the count isn't a multiple of three.
 pub(crate) fn mosaic(
     count: usize,
     width: f32,

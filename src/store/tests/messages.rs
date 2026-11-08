@@ -1359,16 +1359,12 @@ fn a_stale_refresh_cannot_erase_a_send_confirmed_after_the_request_started() {
         store.append_messages(2002, vec![confirmation.clone()], 50),
         0
     );
-    // A concurrent newer-page response may see the acknowledgement before an older
-    // latest-page response arrives. It must not release the outbox protection early.
     store.set_messages(2002, messages());
     assert_display_and_lookup_invariants(&store, &["A"]);
     let mut fresh = messages();
     fresh.push(confirmation);
     store.set_messages(2002, fresh);
     assert_display_and_lookup_invariants(&store, &["A"]);
-    // Once a history page has observed the confirmed send, ordinary history replacement
-    // may evict it again. It is no longer an outstanding outbox entry.
     store.set_around_messages(2002, messages());
     assert_display_and_lookup_invariants(&store, &[]);
 }

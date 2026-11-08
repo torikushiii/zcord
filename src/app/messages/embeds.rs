@@ -172,7 +172,6 @@ fn description_text(text: &str) -> Cow<'_, str> {
     let mut kept = String::with_capacity(text.len());
     let mut previous = None;
     for c in text.chars() {
-        // A dropped selector leaves `previous` alone, so a whole run of them goes.
         if selector(c) && unattached(previous) {
             continue;
         }
@@ -192,10 +191,7 @@ fn embed_card(color: Option<u32>, content_width: Option<f32>) -> Div {
         .gap(rpx(8.))
         .mt_1()
         .map(|this| match content_width {
-            // Resolve the card width before its percent-width text row is measured.
             Some(width) => this.w(rpx(width + EMBED_HORIZONTAL_INSET)).max_w_full(),
-            // A max width can't be both the limit and the parent's width, so the limit sits
-            // on the rows (`text_limit`) and the card keeps to its parent.
             None => this.max_w_full(),
         })
         .font_weight(FontWeight::NORMAL)
@@ -203,7 +199,6 @@ fn embed_card(color: Option<u32>, content_width: Option<f32>) -> Div {
         .pt(rpx(10.))
         .pr(rpx(EMBED_PADDING_RIGHT))
         .pb(rpx(16.))
-        // 1px border + 15px = Discord's 4px accent + 12px gutter.
         .pl(rpx(EMBED_PADDING_LEFT))
         .rounded(rpx(4.))
         .border_1()
@@ -332,8 +327,6 @@ pub fn render_embed(
 ) -> AnyElement {
     let key = |slot: u64| part_key(message_id, index as u64 * EMBED_SLOTS + slot);
     if embed.kind == EmbedKind::Components {
-        // Link-preview components live inside embeds, not message.components. Give
-        // each embed its own keys for markdown, spoilers, media, and link controls.
         return render_components(app, key(COMPONENT_SLOT), &embed.components, cx)
             .unwrap_or_else(|| div().into_any_element());
     }

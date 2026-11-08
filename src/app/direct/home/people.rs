@@ -13,7 +13,6 @@ pub(crate) fn friends_header(app: &DiscordApp) -> impl IntoElement + use<> {
             .flex_none()
             .items_center()
             .justify_center()
-            // Discord's tab `.item` min width, and 8px before its `.badge`.
             .min_w(rpx(40.))
             .gap(rpx(8.))
             .h(rpx(28.))
@@ -200,7 +199,6 @@ pub(crate) fn friends_page(app: &DiscordApp, cx: &App) -> AnyElement {
                 .min_w_0()
                 .h_full()
                 .children(app.home.search.as_ref().map(|search| {
-                    // Discord's `.searchBar`: 12px above, 8px below, 24px/16px at the sides.
                     div()
                         .flex()
                         .flex_none()
@@ -227,7 +225,6 @@ pub(crate) fn friends_page(app: &DiscordApp, cx: &App) -> AnyElement {
                         .child(theme::icon("search", 18., theme::muted()))
                 }))
                 .child(
-                    // Discord's `.tableHeader`.
                     div()
                         .flex_none()
                         .pt(rpx(16.))
@@ -294,8 +291,6 @@ pub(crate) fn friends_page(app: &DiscordApp, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// Discord's `.actionButton`: a 36px circle whose 20px icon brightens on hover and whose fill
-/// deepens while `row_group` is hovered.
 fn round_action(
     id: impl Into<ElementId>,
     icon: &'static str,
@@ -322,8 +317,6 @@ fn round_action(
         )
 }
 
-/// A disabled `round_action` that only explains itself, at Discord's disabled opacity. Friend
-/// request writes can trip Discord's captcha, so they point to the official client for now.
 fn muted_action(
     id: (&'static str, u64),
     icon: &'static str,
@@ -331,7 +324,6 @@ fn muted_action(
     row_group: SharedString,
 ) -> Stateful<Div> {
     let tip_key = (tip, id.1);
-    // The tooltip sits outside the dimmed circle so it keeps full opacity.
     div()
         .id(id)
         .relative()
@@ -350,7 +342,6 @@ fn muted_action(
                 .child(theme::icon(icon, 20., theme::text())),
         )
         .child(theme::hover_tooltip(tip_key, tip))
-        // Keeps the row's click (open DM) from firing through the button.
         .on_click(|_, _, cx| cx.stop_propagation())
 }
 
@@ -358,8 +349,6 @@ fn row_group(user_id: u64) -> SharedString {
     format!("people-row-{user_id}").into()
 }
 
-/// Discord's `.divider` between people rows: inset 30px/20px, hidden beside a hovered row so the
-/// row's rounded highlight stands alone.
 fn row_divider(app: &DiscordApp, above: u64, below: u64) -> Div {
     let hidden = matches!(app.home.hovered_row, Some(id) if id == above || id == below);
     div()
@@ -370,8 +359,6 @@ fn row_divider(app: &DiscordApp, above: u64, below: u64) -> Div {
         .when(!hidden, |this| this.bg(rgba(theme::border_subtle())))
 }
 
-/// Discord's `.peopleListItem`: 14px/10px outside, 16px/10px inside, and a height that comes from
-/// its content rather than a fixed value.
 pub(super) fn people_row(app: &DiscordApp, id: ElementId, user_id: u64) -> Stateful<Div> {
     let hover = app.entity.clone();
     div()
@@ -463,7 +450,6 @@ fn friend_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement + us
     );
     people_row(app, ("friend", user_id).into(), user_id)
         .cursor_pointer()
-        // Like Discord: a friend opens the DM, someone with a pending request their profile.
         .on_click(move |_, window, cx| {
             entity
                 .update(cx, |app, cx| {
@@ -485,8 +471,6 @@ fn friend_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement + us
         ))
         .child(div().flex().flex_col().flex_1().min_w_0().map(|this| {
             if pending {
-                // Like suggestions: the username sits under the name instead of
-                // appearing on hover, since a request is usually from a stranger.
                 let username = username.unwrap_or(line);
                 this.child(name_line(user_id, &name, None, tag))
                     .child(subtext_line(("friend-status", user_id), &username, None))
@@ -532,7 +516,6 @@ fn friend_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement + us
         )
 }
 
-/// A suggested user with the name Discord matched them by, plus add and dismiss buttons.
 fn suggestion_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement + use<> {
     let user = app.store.user(user_id);
     let name = app.store.friend_name(user_id);

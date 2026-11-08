@@ -10,16 +10,13 @@ pub struct Outbox {
 pub struct OutboxEntry {
     pub id: u64,
     pub author_id: Option<u64>,
-    /// Content inventory type: 1 PLAYED_GAME, 2 WATCHED_MEDIA, 3 TOP_GAME, ...
     pub content_type: u8,
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
-    /// Live entries ("listening now") stay flagged live after they lapse; this says when.
     pub expires_at: Option<String>,
     pub kind: OutboxKind,
     pub traits: Vec<OutboxTrait>,
     pub participants: Vec<u64>,
-    /// The entry exactly as received; replies must echo it byte-for-byte.
     pub raw: std::sync::Arc<Value>,
 }
 
@@ -75,7 +72,6 @@ pub enum OutboxKind {
     },
     Listened {
         tracks: Vec<ListenedTrack>,
-        /// Listening sessions carry no start/end; this is when the session last changed.
         last_update: Option<String>,
     },
     LaunchedActivity {
@@ -239,7 +235,6 @@ fn outbox_traits(traits: &Value) -> Vec<OutboxTrait> {
         .collect()
 }
 
-/// The content inventory inbox; `entries` keeps only the ranked list, in rank order.
 #[derive(Clone, Debug)]
 pub struct ContentInbox {
     pub entries: Vec<OutboxEntry>,

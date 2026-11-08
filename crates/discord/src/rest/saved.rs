@@ -11,7 +11,6 @@ fn saved_messages_request(client: &Client) -> RequestBuilder {
     client.get(format!("{SAVED}?bookmark_ids=true"))
 }
 
-/// Pages run newest first; `before` is the `saved_at` of the last bookmark already loaded.
 fn bookmarks_request(client: &Client, before: Option<&str>) -> RequestBuilder {
     let request = client
         .get(format!("{SAVED}/bookmarks"))
@@ -39,7 +38,6 @@ fn unsave_request(client: &Client, channel_id: u64, message_id: u64) -> RequestB
     client.delete(saved_url(channel_id, message_id))
 }
 
-/// An account that has never saved a message gets this instead of an empty list.
 const UNKNOWN_SAVED_MESSAGES: u64 = 10133;
 
 fn never_saved(error: &Error) -> bool {

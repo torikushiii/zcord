@@ -239,7 +239,6 @@ impl Rest {
         let extension = if hash.starts_with("a_") { "gif" } else { "png" };
         let url =
             format!("https://cdn.discordapp.com/avatars/{user_id}/{hash}.{extension}?size=1024");
-        // The CDN client deliberately has no account authorization headers.
         let mut response = self
             .upload_client
             .get(url)

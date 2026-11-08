@@ -77,7 +77,6 @@ impl DiscordApp {
         editor.saved_profile = card.profile.clone();
         let identity = editor.identity.clone();
         self.profile_styles = Some(editor);
-        // No earlier editor's draft survives, so its previews can all go.
         self.prune_style_previews(false);
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             if let Some(editor) = &mut self.profile_styles {
@@ -226,7 +225,6 @@ impl DiscordApp {
         }
     }
 
-    /// Saved values for the editor's scope, read from the open profile and the store.
     pub(crate) fn saved_style_values(&self) -> StyleValues {
         let scope = self
             .profile_styles
@@ -251,7 +249,6 @@ impl DiscordApp {
         profile.map(guild_values).unwrap_or_default()
     }
 
-    /// The main profile's saved values, which a server scope falls back to.
     pub(crate) fn main_style_values(&self) -> StyleValues {
         let Some(card) = &self.profile else {
             return StyleValues::default();
@@ -337,7 +334,6 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// Edits that end up matching the saved values drop back to unchanged.
     pub(crate) fn update_style_draft(
         &mut self,
         update: impl FnOnce(&mut StyleDraft),
@@ -355,7 +351,6 @@ impl DiscordApp {
         editor.draft_revision += 1;
         normalize_draft(&mut editor.draft, &saved);
         editor.error = None;
-        // Only an image change can leave a preview behind; colors change on every drag.
         if draft_previews(&editor.draft) != before {
             self.prune_style_previews(true);
         }
@@ -628,7 +623,6 @@ impl DiscordApp {
                             editor.error = None;
                             editor.scope_revision += 1;
                         }
-                        // Edits made to these while saving stay as the next ones to save.
                         if let Some(editor) = app.profile_styles.as_mut().filter(|editor| {
                             Arc::ptr_eq(&editor.identity, &identity) && editor.scope == scope
                         }) {
@@ -649,7 +643,6 @@ impl DiscordApp {
                             .as_ref()
                             .is_some_and(|card| card.user_id == user_id)
                         {
-                            // A tag is account-wide, so every scope's profile has to reload.
                             let refreshed = if sent.2.is_some() {
                                 StyleScope::Main
                             } else {
@@ -678,8 +671,6 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// Also installed on the open card. Uploads still need the draft's data URI;
-    /// a server's recent avatar uses the user's CDN, not the guild's.
     pub(crate) fn preview_profile(&self) -> Option<Arc<model::Profile>> {
         let card = self.profile.as_ref()?;
         let Some(editor) = self.profile_styles.as_ref().filter(|editor| {

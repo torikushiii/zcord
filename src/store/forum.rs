@@ -205,7 +205,6 @@ impl Store {
         }
     }
 
-    /// The forum's REQUIRE_TAG flag: new posts must carry at least one tag.
     pub fn forum_requires_tag(&self, forum_id: u64) -> bool {
         self.source_channel_guild(forum_id)
             .is_some_and(|(_, channel)| channel.flags.unwrap_or(0) & (1 << 4) != 0)
@@ -280,13 +279,11 @@ impl Store {
         Change::Structure
     }
 
-    /// Fills a post whose starter message was missing from the search page.
     pub fn apply_forum_starter(&mut self, message: &model::Message) -> bool {
         let missing = self
             .forum_posts
             .get(&message.channel_id)
             .is_some_and(|post| post.first_message.is_none());
-        // The starter shares the thread's id; an `around` fetch can return a neighbour instead.
         if !missing || message.id != message.channel_id {
             return false;
         }
@@ -298,7 +295,6 @@ impl Store {
         if !self.forum_posts.contains_key(&message.channel_id) {
             return;
         }
-        // Registers the author and their member entry so the card can name them.
         self.map_network_message(message, false);
         if let Some(post) = self.forum_posts.get_mut(&message.channel_id) {
             post.first_message = mapping::map_message(message);

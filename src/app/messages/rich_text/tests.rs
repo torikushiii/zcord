@@ -224,14 +224,12 @@ fn line_clamp_respects_cjk_boundaries_and_empty_trailing_lines(cx: &mut TestAppC
             assert!(text.is_char_boundary(fragment.range.end));
         }
 
-        // A trailing newline produces an empty extra line, but hiding it is not content.
         let pieces = [Piece::text("one\n", PieceStyle::default())];
         let mut cache = LayoutCache::new(true, false, Some(1));
         let layout = cache.get(&pieces, &fonts, Some(px(200.)), window);
         assert_eq!(layout.lines.len(), 1);
         assert_eq!(ellipsis_count(&layout), 0);
 
-        // Zero is a valid zero-height clamp and must not underflow the last-line logic.
         let mut cache = LayoutCache::new(true, false, Some(0));
         let layout = cache.get(&pieces, &fonts, Some(px(200.)), window);
         assert!(layout.lines.is_empty());

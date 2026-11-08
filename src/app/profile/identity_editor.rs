@@ -1,7 +1,3 @@
-//! Your full profile's name lines while you style it, as Discord's editor has them: the display
-//! name boxed with an Edit Style button, pronouns edited in place, and a picker for the server
-//! tag shown beside your name.
-
 use gpui_component::input::{Input, InputEvent, InputState, RopeExt, Textarea, TextareaState};
 use gpui_component::scroll::ScrollableElement as _;
 
@@ -11,7 +7,6 @@ use super::*;
 use crate::app::chat::{TEXTAREA_BUILTIN_INSET_X, TEXTAREA_BUILTIN_INSET_Y};
 use crate::store::{Guild, GuildTag, NameStyle};
 
-/// The longest display name and pronouns Discord takes, in characters.
 const NAME_LIMIT: usize = 32;
 const PRONOUNS_LIMIT: usize = 40;
 const TAG_MENU_WIDTH: f32 = 280.;
@@ -41,7 +36,6 @@ enum Hover {
     Tag,
 }
 
-/// The name wraps like Discord's, so it edits in a growing text area; pronouns stay one line.
 enum EditInput {
     Line(Entity<InputState>),
     Area(Entity<TextareaState>),
@@ -50,8 +44,6 @@ enum EditInput {
 struct Edit {
     field: Field,
     input: EditInput,
-    /// What the field opened with; finishing on it unchanged leaves the draft as it was, so
-    /// reopening a cleared field doesn't turn the inherited text it shows into an edit.
     opened_with: String,
     _events: Subscription,
 }
@@ -65,7 +57,6 @@ impl EditInput {
     }
 }
 
-/// `text` as one line of at most `limit` characters, or `None` when it already is.
 fn clamped(text: &str, limit: usize) -> Option<String> {
     let line = text.replace(['\n', '\r'], "");
     let clamped: String = line.chars().take(limit).collect();
@@ -73,8 +64,6 @@ fn clamped(text: &str, limit: usize) -> Option<String> {
 }
 
 impl IdentityUi {
-    /// Forgets the name and pronoun edits, which belong to one profile scope; the tag is
-    /// account-wide and stays.
     pub(super) fn leave_scope(&mut self) {
         self.editing = None;
         self.display_name = None;
@@ -85,11 +74,9 @@ impl IdentityUi {
 #[derive(Default)]
 pub(crate) struct IdentityUi {
     hovers: [HoverFade; 4],
-    /// The open tag picker, below the pill it hangs from.
     tag_menu: Option<Option<Bounds<Pixels>>>,
     tag_search: Option<Entity<InputState>>,
     editing: Option<Edit>,
-    /// Edits shown in the preview; saving them comes with the profile save.
     pub(crate) display_name: Option<String>,
     pub(crate) pronouns: Option<String>,
     /// `Some(None)` takes the tag off.
@@ -116,7 +103,6 @@ impl DiscordApp {
         };
         let (input, events) = match field {
             Field::Name => {
-                // Discord's field opens empty, with the current name faded behind it.
                 let area = cx.new(|cx| TextareaState::new(window, cx).auto_grow(1, 3));
                 area.update(cx, |area, cx| area.focus(window, cx));
                 let events =
@@ -136,7 +122,6 @@ impl DiscordApp {
                                         area.set_cursor_position(end, window, cx);
                                     });
                                 }
-                                // The field hugs its text, so it resizes as you type.
                                 cx.notify();
                             }
                             _ => {}
@@ -147,23 +132,23 @@ impl DiscordApp {
             Field::Pronouns => {
                 let input = cx.new(|cx| InputState::new(window, cx).default_value(current));
                 input.update(cx, |input, cx| input.focus(window, cx));
-                let events =
-                    cx.subscribe_in(&input, window, move |app, input, event, window, cx| {
-                        match event {
-                            InputEvent::PressEnter { .. } | InputEvent::Blur => {
-                                app.finish_identity_edit(cx);
-                            }
-                            InputEvent::Change => {
-                                let value = input.read(cx).value();
-                                if let Some(text) = clamped(&value, limit) {
-                                    input.update(cx, |input, cx| input.set_value(text, window, cx));
-                                }
-                                // The field hugs its text, so it resizes as you type.
-                                cx.notify();
-                            }
-                            _ => {}
+                let events = cx.subscribe_in(
+                    &input,
+                    window,
+                    move |app, input, event, window, cx| match event {
+                        InputEvent::PressEnter { .. } | InputEvent::Blur => {
+                            app.finish_identity_edit(cx);
                         }
-                    });
+                        InputEvent::Change => {
+                            let value = input.read(cx).value();
+                            if let Some(text) = clamped(&value, limit) {
+                                input.update(cx, |input, cx| input.set_value(text, window, cx));
+                            }
+                            cx.notify();
+                        }
+                        _ => {}
+                    },
+                );
                 (EditInput::Line(input), events)
             }
         };
@@ -180,7 +165,6 @@ impl DiscordApp {
         );
     }
 
-    /// Keeps what's typed in the field being edited; false when none was.
     pub(crate) fn finish_identity_edit(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(editor) = self.profile_styles.as_mut() else {
             return false;
@@ -203,7 +187,6 @@ impl DiscordApp {
             .take(field.limit())
             .collect();
         match field {
-            // The name field opens empty, so leaving it empty keeps the name it opened over.
             _ if text == opened_with.trim() => {}
             Field::Name => ui.display_name = Some(text),
             Field::Pronouns => ui.pronouns = Some(text),
@@ -248,13 +231,10 @@ impl DiscordApp {
     }
 }
 
-/// Whether the name, pronouns or server tag differ from what's saved, which the save bar asks
-/// about.
 pub(super) fn edited(app: &DiscordApp, editor: &StylesEditor) -> bool {
     changes(app, editor) != Changes::default()
 }
 
-/// The name, pronouns and tag edits that differ from what's saved, as the save sends them.
 #[derive(Default, PartialEq)]
 pub(super) struct Changes {
     pub(super) name: Option<String>,
@@ -281,8 +261,6 @@ pub(super) fn changes(app: &DiscordApp, editor: &StylesEditor) -> Changes {
         .map(|tag| tag.guild_id);
     Changes {
         name: ui.display_name.clone().filter(|name| *name != saved_name),
-        // Matching what shows changes nothing, and clearing a server's pronouns when it has none
-        // of its own leaves the main profile's showing, as before.
         pronouns: ui.pronouns.clone().filter(|pronouns| {
             *pronouns != shown_pronouns
                 && !(guild_id.is_some() && pronouns.is_empty() && own_pronouns.is_empty())
@@ -291,8 +269,6 @@ pub(super) fn changes(app: &DiscordApp, editor: &StylesEditor) -> Changes {
     }
 }
 
-/// Your pronouns as a scope stores them, and as its profile shows them: a server profile with
-/// none of its own shows the main profile's.
 pub(super) fn scope_pronouns(profile: Option<&model::Profile>, guild: bool) -> (String, String) {
     let main = profile
         .and_then(|profile| profile.user_profile.as_ref())
@@ -313,7 +289,6 @@ pub(super) fn scope_pronouns(profile: Option<&model::Profile>, guild: bool) -> (
     (own, shown)
 }
 
-/// Servers whose tag you could wear, in your server list's order, as Discord lists them.
 fn tag_options(app: &DiscordApp) -> Vec<(&Guild, GuildTag)> {
     app.store
         .guilds
@@ -322,7 +297,6 @@ fn tag_options(app: &DiscordApp) -> Vec<(&Guild, GuildTag)> {
         .collect()
 }
 
-/// The tag your profile shows while styling: the picked one, else the one you wear.
 pub(super) fn shown_tag(app: &DiscordApp, editor: &StylesEditor) -> Option<GuildTag> {
     let worn = || {
         app.store
@@ -352,8 +326,6 @@ fn track_hover(app: &DiscordApp, which: Hover) -> impl Fn(&bool, &mut Window, &m
     }
 }
 
-/// The rounded box behind a hovered field, fading in and out with the pointer; `held` keeps it
-/// shown, as while the field is being edited.
 fn hover_box(
     editor: &StylesEditor,
     which: Hover,
@@ -374,8 +346,6 @@ fn hover_box(
     editor.ui.identity.hovers[which as usize].fade(id, layer)
 }
 
-/// While `field` is being edited, a text field the size of what's typed in it: an invisible
-/// copy of the text sizes it, and the field sits over that.
 fn editing_input(
     editor: &StylesEditor,
     field: Field,
@@ -440,10 +410,6 @@ fn editing_input(
     )
 }
 
-/// The name field while it's edited, as Discord's: it opens empty over your name, faded, and
-/// what you type takes the name's font and effect. The styled text underneath also sizes the
-/// field, so it hugs the name and wraps at the card's edge; the text area over it only shows
-/// its caret and selection.
 fn name_input(
     editor: &StylesEditor,
     current: &str,
@@ -465,7 +431,6 @@ fn name_input(
     let font = crate::fonts::display_font(style.and_then(|style| style.font_id), cx);
     let text = area.read(cx).value().to_string();
     let empty = text.is_empty();
-    // Discord's placeholder is the name washed toward white, not just dimmed.
     let faded = style.map(|style| NameStyle {
         colors: style
             .colors
@@ -490,7 +455,6 @@ fn name_input(
                 ),
             ))
             .child(
-                // Stretched over the text area's own padding, so it wraps where the name does.
                 div()
                     .absolute()
                     .top(px(-TEXTAREA_BUILTIN_INSET_Y))
@@ -510,8 +474,6 @@ fn name_input(
     )
 }
 
-/// The display name in a box that shows on hover: click it to rename yourself, or use
-/// Discord's Edit Style button for its look.
 pub(super) fn name_field(
     app: &DiscordApp,
     editor: &StylesEditor,
@@ -563,7 +525,6 @@ pub(super) fn name_field(
         .on_hover(track_hover(app, Hover::Name))
         .map(|this| {
             if is_editing {
-                // Clicking anywhere else ends the edit, keeping what was typed.
                 let finish = app.entity.clone();
                 this.on_mouse_down_out(move |_, _, cx| {
                     finish
@@ -619,7 +580,6 @@ pub(super) fn name_field(
         .into_any_element()
 }
 
-/// Pronouns that turn into a text field when clicked, boxed on hover like Discord's.
 pub(super) fn pronouns_field(
     app: &DiscordApp,
     editor: &StylesEditor,
@@ -627,8 +587,6 @@ pub(super) fn pronouns_field(
     palette: ProfilePalette,
     cx: &App,
 ) -> AnyElement {
-    // `pronouns` already holds any edit, with cleared server pronouns falling back to the main
-    // profile's.
     let shown = pronouns.unwrap_or_default();
     let editing = editing_input(editor, Field::Pronouns, 14., 18., cx);
     let field = div()
@@ -683,7 +641,6 @@ pub(super) fn pronouns_field(
         .into_any_element()
 }
 
-/// The worn server tag with a chevron that opens the tag picker.
 pub(super) fn tag_pill(
     app: &DiscordApp,
     editor: &StylesEditor,
@@ -706,8 +663,6 @@ pub(super) fn tag_pill(
         .pr(rpx(6.))
         .rounded(rpx(8.))
         .cursor_pointer()
-        // Discord's pill is a fixed grey whatever the profile theme; hovered and open are a
-        // guess one step stronger.
         .bg(rgba(0x97979F1F))
         .on_hover(track_hover(app, Hover::Tag))
         .child(hover_box(
@@ -807,7 +762,6 @@ fn tag_row(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
         })
 }
 
-/// Discord's server tag picker: a search over the servers whose tag you could wear.
 pub(super) fn tag_menu(app: &DiscordApp, editor: &StylesEditor, cx: &App) -> Option<AnyElement> {
     let ui = &editor.ui.identity;
     let anchor = ui.tag_menu?;

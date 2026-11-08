@@ -44,7 +44,6 @@ pub fn default_avatar(
     )
 }
 
-/// A plain round avatar for `spec`, for users known only from an API response.
 pub fn spec_avatar(
     spec: &ImageSpec,
     user_id: u64,
@@ -99,7 +98,6 @@ pub fn webhook_avatar(
     )
 }
 
-/// A local `file` wins over `spec`; profile style previews show edits before they're uploaded.
 pub fn preview_avatar(
     user: Option<&User>,
     user_id: u64,
@@ -129,7 +127,6 @@ pub fn preview_avatar(
     )
 }
 
-/// Discord's grey stand-in avatar, which style previews use to show decorations on their own.
 pub fn placeholder_avatar(
     size: f32,
     decorated_with: Option<&Decoration>,
@@ -156,7 +153,6 @@ pub fn placeholder_avatar(
     )
 }
 
-/// Discord leaves avatar decorations off small avatars such as voice channel members.
 pub fn undecorated_member_avatar(
     store: &Store,
     guild_id: u64,
@@ -287,8 +283,6 @@ pub(super) fn decoration(
     )
 }
 
-/// The icon Discord puts before a user's activity line: a gamepad while playing, a note while
-/// listening.
 pub fn activity_icon(user: &User) -> Option<&'static str> {
     if user.playing {
         Some("gamepad-2")
@@ -377,8 +371,6 @@ pub fn avatar(
         }))
 }
 
-/// A hover target over the status indicator, holding its own hover so that avatars don't need
-/// app state for it.
 #[derive(IntoElement)]
 struct StatusTooltip {
     user_id: u64,
@@ -407,7 +399,6 @@ impl RenderOnce for StatusTooltip {
     }
 }
 
-/// Discord's phone mask: a body 1.5 times as tall as wide, with a screen and a home button.
 pub(super) fn mobile_status(width: f32, surface: u32) -> Div {
     let height = width * 1.5;
     div()

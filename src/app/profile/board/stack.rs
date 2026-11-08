@@ -38,7 +38,6 @@ pub(in crate::app::profile) fn card_stack(
     } = card.stack_hover[stack as usize];
     let panel = card.panel;
     let key = card.user_id ^ stack as u64;
-    // Never hovered yet: nothing to animate, so a fresh card doesn't play a settle on open.
     let animate = generation > 0 && !cx.reduce_motion();
     let peek = hover_card(app, ("profile-stack-peek", key), tab, palette)
         .absolute()

@@ -49,7 +49,6 @@ impl Captcha {
     }
 }
 
-/// Served on loopback at a path other local pages can't guess.
 pub(super) struct Page {
     pub(super) url: String,
     path: String,
@@ -147,7 +146,6 @@ async fn read_request(stream: &mut TcpStream) -> std::io::Result<Option<(String,
                     .flatten()
             })
             .unwrap_or(0);
-        // Bounded first: a huge Content-Length would otherwise overflow the sum below.
         if length > MAX_REQUEST {
             return Ok(None);
         }
@@ -182,7 +180,6 @@ fn page(captcha: &Captcha) -> String {
     };
     let sitekey = script(&captcha.sitekey);
     let rqdata = captcha.rqdata.as_deref().map_or("null".to_owned(), script);
-    // hCaptcha only accepts Discord's site key on Discord's host, which `host=` names.
     format!(
         r#"<!doctype html>
 <html lang="en">

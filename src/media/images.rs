@@ -47,7 +47,6 @@ pub enum ImageSpec {
     DefaultAvatar {
         index: u8,
     },
-    /// One of your earlier uploads, from `/users/@me/avatars`.
     ArchivedAvatar {
         user_id: u64,
         avatar_id: u64,
@@ -70,7 +69,6 @@ pub enum ImageSpec {
     },
     Sticker {
         id: u64,
-        /// Discord's `format_type`: 1 = PNG, 2 = APNG, 3 = Lottie, 4 = GIF.
         format: u8,
     },
     GuildTagBadge {
@@ -120,12 +118,10 @@ pub enum ImageSpec {
         guild_id: u64,
         hash: String,
     },
-    /// A guild's invite splash (`splashes/{guild_id}/{hash}.png`).
     GuildSplash {
         guild_id: u64,
         hash: String,
     },
-    /// Also where an invite profile's `custom_banner_hash` lives.
     DiscoverySplash {
         guild_id: u64,
         hash: String,
@@ -141,20 +137,16 @@ pub enum ImageSpec {
     Collectible {
         url: String,
     },
-    /// Application icons and covers (`app-icons/`) or uploaded widget assets (`app-assets/`).
     AppImage {
         application_id: u64,
         hash: String,
         uploaded: bool,
         animated: bool,
     },
-    /// A game's portrait cover (`app-icons/{application_id}/{hash}`). The CDN crops these to a
-    /// square unless asked to keep their aspect ratio.
     AppCover {
         application_id: u64,
         hash: String,
     },
-    /// SKU store art (`app-assets/{application_id}/store/{asset_id}`), e.g. wishlist cards.
     StoreAsset {
         application_id: u64,
         asset_id: u64,
@@ -174,7 +166,6 @@ impl ImageSpec {
             | ImageSpec::Banner { hash, .. }
             | ImageSpec::GuildBanner { hash, .. }
             | ImageSpec::GuildMemberBanner { hash, .. } => hash,
-            // Uploaded app assets carry no `a_` prefix; the widget config flags animated ones.
             ImageSpec::AppImage { animated: true, .. } => {
                 return Some(ImageSpec::Animated {
                     still: Box::new(self.clone()),
@@ -350,7 +341,6 @@ pub fn clear_cache(cx: &mut App) -> Task<Result<u64, String>> {
     })
 }
 
-/// True once a load of `spec` at `size` has given up, so callers stop showing a spinner.
 pub fn failed(spec: &ImageSpec, size: u32, cx: &App) -> bool {
     let Some(cache) = cx.try_global::<ImageCache>() else {
         return true;

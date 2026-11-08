@@ -176,7 +176,6 @@ fn activity_cards_compute_live_streak_and_most_played() {
             None,
         ),
     ];
-    // One entry at a time, so the sidebar's card limit doesn't hide any of them.
     let cards: Vec<_> = entries
         .into_iter()
         .flat_map(|entry| {

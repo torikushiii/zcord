@@ -18,13 +18,11 @@ const FLYOUT_WIDTH: f32 = 188.;
 const GEAR_SIZE: f32 = 40.;
 const RESOLUTIONS: [u32; 4] = [720, 1080, 1440, 0];
 const FRAME_RATES: [u32; 3] = [15, 30, 60];
-/// Discord's presets, best first; a preset streams at the first one the account may use.
 const GAMING: [(u32, u32); 4] = [(1440, 60), (1080, 60), (720, 60), (720, 30)];
 const SCREENSHARE: [(u32, u32); 2] = [(0, 15), (0, 5)];
 const FALLBACK: (u32, u32) = (720, 30);
 pub(super) const LOCKED: &str = "Needs Nitro or a boosted server";
 pub(super) const NITRO_PINK: u32 = 0xFF73FA;
-/// A failed preview upload is tried again a minute later, up to three tries in all.
 const PREVIEW_ATTEMPTS: u32 = 3;
 const PREVIEW_RETRY: Duration = Duration::from_secs(60);
 
@@ -41,17 +39,13 @@ pub(super) enum Flyout {
 pub(super) struct StreamMenu {
     open: bool,
     flyout: Flyout,
-    /// Flyouts lie outside the menu and the picker; a click there must not count as outside.
     pub(super) pointer_in_flyout: bool,
     gear_hovered: bool,
 }
 
-/// What the account and the call's server unlock, after Discord's stream quality table.
 #[derive(Clone, Copy)]
 struct Perks {
-    /// Nitro: source resolution.
     high: bool,
-    /// Nitro or Nitro Classic: 1080p, 1440p and 60fps.
     mid: bool,
     guild_tier: u8,
 }
@@ -179,7 +173,6 @@ impl DiscordApp {
         self.refresh_share_picker(cx);
     }
 
-    /// Takes effect on the next stream: the sound is set up when sharing starts.
     fn toggle_stream_audio(&mut self, cx: &mut Context<Self>) {
         let muted = !self.voice.stream_audio_muted;
         self.voice.stream_audio_muted = muted;
@@ -197,8 +190,6 @@ impl DiscordApp {
         self.refresh_share_picker(cx);
     }
 
-    /// Sends a still of the stream for Discord to show, unless previews are hidden. A newer
-    /// still replaces an upload still waiting to retry.
     pub(crate) fn upload_stream_preview(
         &mut self,
         stream_key: String,
@@ -220,7 +211,6 @@ impl DiscordApp {
                 });
                 let wait = match upload.await {
                     Ok(Ok(())) => return,
-                    // Discord limits how often previews change; wait at least as long as it asks.
                     Ok(Err(Error::RateLimited { retry_after })) => {
                         log::debug!("Stream preview rate limited for {retry_after:?}");
                         PREVIEW_RETRY.max(retry_after)
@@ -253,7 +243,6 @@ impl DiscordApp {
     }
 }
 
-/// The picker footer: the stream mode's summary, with the gear that opens its menu.
 pub(super) fn card(app: &DiscordApp, menu: &StreamMenu) -> Div {
     let mode = app.voice.stream_mode;
     let (title, description) = mode_label(mode);
@@ -365,7 +354,6 @@ fn shows_flyout_on_hover(app: &DiscordApp, row: Stateful<Div>, flyout: Flyout) -
     })
 }
 
-/// A checkbox row that stays open after the click, like Discord's menu toggles.
 fn toggle_row(
     app: &DiscordApp,
     key: &'static str,
@@ -446,9 +434,6 @@ fn mode_row(app: &DiscordApp, perks: Perks, mode: StreamMode) -> Stateful<Div> {
     )
 }
 
-/// Radio rows for one quality setting. Picking one switches to Custom, keeping the other
-/// setting at what the current mode streams, as Discord does. Options that need Nitro carry
-/// its badge; ones the account can't use stay dimmed.
 fn choice_flyout(
     app: &DiscordApp,
     perks: Perks,

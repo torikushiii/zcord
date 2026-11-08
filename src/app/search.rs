@@ -229,8 +229,6 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// Clears what's in the box, then closes the popover and results; `false` when nothing was
-    /// open.
     pub(super) fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(search) = self.active_search_mut() else {
             return false;
@@ -365,7 +363,6 @@ impl DiscordApp {
         }
     }
 
-    /// Moves the popover's highlight; `false` when the popover isn't open.
     pub(super) fn move_search(&mut self, step: isize, cx: &mut Context<Self>) -> bool {
         if !self.active_search().is_some_and(|search| search.popover) {
             return false;
@@ -387,7 +384,6 @@ impl DiscordApp {
         true
     }
 
-    /// While a filter is being typed its first suggestion is the default choice.
     fn chosen_row(&self, cx: &App) -> Option<Row> {
         let search = self.active_search().filter(|search| search.popover)?;
         let rows = self.search_rows(cx);
@@ -625,7 +621,6 @@ impl DiscordApp {
         }
     }
 
-    /// Returns how long to wait before asking again while Discord indexes.
     fn search_response(
         &mut self,
         scope: SearchScope,

@@ -61,8 +61,6 @@ pub fn show(title: &str, body: &str, icon: Option<&Path>, channel_id: u64, messa
     if let Some(icon) = icon {
         toast = toast.icon(icon, IconCrop::Circular, "");
     }
-    // Toasts are either short or ~25s, and short follows the system's notification timeout
-    // (5s by default).
     if crate::settings::notification_seconds() > 5 {
         toast = toast.duration(Duration::Long);
     }
@@ -82,9 +80,6 @@ fn shortcut_path() -> Option<PathBuf> {
     )
 }
 
-/// Windows drops a desktop app's toasts unless a Start Menu shortcut carries its app id.
-/// Creates the shortcut, or adds the id to one made without it, such as by an installer, while
-/// keeping what that shortcut opens.
 fn ensure_shortcut(shortcut: &Path) -> Result<(), String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let parent = shortcut

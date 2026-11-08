@@ -366,7 +366,6 @@ async fn activity_resources_recheck_cache_independently() {
             Instant::now(),
         );
     }
-    // The games request can remain blocked without delaying an already fetched outbox.
     drop(outboxes);
     assert!(outbox_load.await.is_ok());
     drop((games, identities, applications));

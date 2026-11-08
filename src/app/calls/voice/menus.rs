@@ -4,10 +4,8 @@ const MENU_ENTER: Duration = Duration::from_millis(150);
 const MENU_RISE: f32 = 6.;
 const SWITCH_SLIDE: Duration = Duration::from_millis(180);
 
-/// Noise suppression popover above the voice panel's waveform button. Rendered from the
-/// overlay view because deferred popups can't live inside the cached channel list view.
-/// The voice panel's popups. Rendered from the overlay view because deferred popups can't
-/// live inside the cached channel list view.
+/// Rendered from the overlay view because deferred popups can't live inside the cached
+/// channel list view.
 pub(crate) fn menu(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
     let menu = app.voice.menu.as_ref()?;
     let call = app.voice.call.as_ref();
@@ -139,8 +137,6 @@ fn popup(card: Stateful<Div>, menu: &Menu, cx: &App) -> AnyElement {
     .into_any_element()
 }
 
-/// Discord's settings toggle. `slide` carries the menu's animation id once the user has
-/// flipped it, so the knob and track ease into the new state instead of jumping.
 pub(crate) fn switch(id: &'static str, on: bool, slide: Option<u64>) -> AnyElement {
     const OFF_LEFT: f32 = 2.;
     const ON_LEFT: f32 = 18.;

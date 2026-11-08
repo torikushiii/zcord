@@ -1,8 +1,5 @@
 use gpui::{App, Global};
 
-/// `letter_spacing_em` is Discord's CSS tracking for this face. The face's
-/// binary weight is intentionally left alone; callers choose the shaping
-/// weight for their context.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct DisplayFont {
     pub family: &'static str,
@@ -16,9 +13,6 @@ struct Preset {
     letter_spacing_em: f32,
 }
 
-// Keyed by Discord's protocol ids; order is mirrored by `FONTS` and the availability
-// bitmask. Absent, default (11), deprecated (1, 2, 5, 9), and unknown ids have no preset,
-// so callers inherit the UI font.
 const PRESETS: [Preset; 11] = [
     Preset {
         id: 3,
@@ -77,7 +71,6 @@ const PRESETS: [Preset; 11] = [
     },
 ];
 
-// SFNT conversions of the supplied WOFF2 builds; see assets/fonts/display/NOTICE.md.
 pub(super) const FONTS: [&[u8]; 11] = [
     include_bytes!("../../assets/fonts/display/Sakura.ttf"),
     include_bytes!("../../assets/fonts/display/Jellybean.ttf"),
@@ -97,7 +90,6 @@ struct AvailableDisplayFonts(u16);
 
 impl Global for AvailableDisplayFonts {}
 
-/// Runs once at startup; render paths only read the cached bitmask.
 pub(super) fn cache_availability(cx: &mut App, font_names: &[String]) {
     let mut available = 0u16;
     for (index, preset) in PRESETS.iter().enumerate() {

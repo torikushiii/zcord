@@ -14,7 +14,6 @@ impl DiscordApp {
         dm.recipient_ids.first().copied().filter(|_| !dm.group)
     }
 
-    /// `None` when the selected page has no panel beside it.
     pub(crate) fn dm_panel_width(&self) -> Option<f32> {
         if !self.is_home() {
             return None;
@@ -46,7 +45,6 @@ impl DiscordApp {
         let channel_id = self.selected_channel_id;
         let request = Tokio::spawn(cx, async move {
             session
-                // Only the modal response carries the mutual servers and friends.
                 .profile(user_id, None, Some(channel_id), ProfileKind::Modal)
                 .await
         });

@@ -6,7 +6,6 @@ pub(super) fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
         let (key, dropped, evicted) = cache.borrow_mut().next();
         drop_images(evicted, cx);
         if dropped > 0 {
-            // Dropped entries may still be visible; repaint so `resolve` re-requests them.
             schedule_refresh(cache.clone(), cx);
         }
         let Some(key) = key else {
@@ -42,8 +41,6 @@ pub(super) fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
             let collectible = matches!(&request.0, ImageSpec::Collectible { .. });
             let streaming = stream::selected(&request.0);
             let cached = if matches!(lane, Lane::Gif) && !streaming {
-                // A cached animation is as large in memory as a fresh decode, so it waits its
-                // turn the same way.
                 let _permit = decode_permits(lane)
                     .acquire()
                     .await
@@ -62,7 +59,6 @@ pub(super) fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
                 return Ok(DecodeOutcome::Decoded(image, bytes, plays));
             }
             let source_spec = if streaming {
-                // Some embeds omit `animated`; never fetch the still-converted cache file.
                 stream::source_spec(&request.0)
             } else {
                 request.0.clone()
@@ -95,7 +91,6 @@ pub(super) fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
                 .acquire()
                 .await
                 .context("animation decode permits closed")?;
-            // The tile may have scrolled away while this job waited for a permit.
             if !still_wanted(&job_stamp) {
                 return Ok(DecodeOutcome::Cancelled);
             }
@@ -202,7 +197,6 @@ pub(super) fn start_next(cache: Rc<RefCell<Cache>>, cx: &App) {
                 cx.update(|cx| schedule_refresh(cache, cx));
             }
             if success {
-                // It may finish after whoever asked has gone, and never be asked for again.
                 let cache = cache.clone();
                 cx.update(|cx| schedule_purge(cache, cx));
             }
@@ -272,7 +266,6 @@ pub(super) fn output_size(width: u32, height: u32, size: u32, frames: usize) -> 
     fitted_size(width, height, size, frames, MAX_IMAGE)
 }
 
-/// The largest size up to `size` whose `frames` fit in `max_image` bytes.
 fn fitted_size(
     width: u32,
     height: u32,
@@ -387,9 +380,6 @@ pub(super) fn decode_with_budget(
 ) -> Result<(Arc<RenderImage>, usize)> {
     let (dimensions, source) = source_frames(bytes)?;
     valid_dimensions(dimensions)?;
-    // The target size depends on the real frame count, so hold decoded source frames only
-    // until the single pass is done. Above the budget, fall back to counting and resizing
-    // in two streaming passes instead of failing.
     let frame_bytes = u64::from(dimensions.0) * u64::from(dimensions.1) * 4;
     let mut source_frames = Vec::new();
     let mut over_budget = false;
@@ -413,7 +403,6 @@ pub(super) fn decode_with_budget(
         source_frames.push(frame);
     }
     if over_budget {
-        // The decoder went with the loop; free the frames it gave before decoding twice more.
         drop(source_frames);
         return decode_streaming(bytes, size, max_image);
     }

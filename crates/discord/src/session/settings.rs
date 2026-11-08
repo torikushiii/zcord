@@ -26,7 +26,6 @@ impl Session {
             .status()
     }
 
-    /// The cached absolute manual deadline, only while READY and still in the future.
     pub fn next_status_expiry(&self) -> Option<std::time::SystemTime> {
         self.status_generation().ok()?;
         let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
@@ -37,7 +36,6 @@ impl Session {
             .next_status_expiry_at(now)
     }
 
-    /// Reproject current account settings after a local status expiry.
     pub fn refresh_presence(&self) -> Result<(), Error> {
         let generation = self.status_generation()?;
         let command = {
@@ -58,10 +56,6 @@ impl Session {
             .map_err(|_| Error::Closed)
     }
 
-    /// Persist the account setting with CAS, then queue this socket's presence write.
-    /// Not retried after a reconnect; the next READY reflects whatever was saved.
-    /// A finite manual choice persists its absolute deadline and creation time. Online
-    /// and Forever clear old manual timing without changing the custom-status deadline.
     pub async fn set_status_for(
         &self,
         status: SelfStatus,
@@ -116,8 +110,6 @@ impl Session {
                 presence.revision,
             )
         };
-        // The setting is saved; the gateway's presence throttle (one write per 5s) only
-        // delays when other clients see it, so don't hold the caller for the socket write.
         self.inner
             .commands
             .send((generation, command))
@@ -135,7 +127,6 @@ impl Session {
             .unwrap_or_default()
     }
 
-    /// Not retried after a reconnect.
     pub async fn set_activity_privacy(
         &self,
         base: settings_proto::ActivityPrivacy,
@@ -154,8 +145,6 @@ impl Session {
         let Some(patch) =
             settings_proto::activity_privacy_patch(&proto, &desired).map_err(|_| Error::Decode)?
         else {
-            // Already saved elsewhere, possibly ahead of its gateway update: the cache still
-            // has to take the fetched settings, or the page falls back to the old value.
             if self.status_generation()? != generation {
                 return Err(Error::Closed);
             }

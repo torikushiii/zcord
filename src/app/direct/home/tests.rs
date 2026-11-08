@@ -82,7 +82,6 @@ fn request_age_follows_discords_buckets() {
     assert_eq!(ago(16 * 86_400), "16d ago");
     assert_eq!(ago(31 * 86_400), ">30d ago");
     assert_eq!(ago(359 * 86_400), ">30d ago");
-    // A year or more falls back to the full date.
     assert!(ago(400 * 86_400).contains(", 20"));
 }
 

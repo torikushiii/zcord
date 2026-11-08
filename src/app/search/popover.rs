@@ -157,7 +157,6 @@ pub(crate) fn popover(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
     let search = app.active_search().filter(|search| search.popover)?;
     let text = search.text(cx);
     let active = search_query::active_filter(&text);
-    // Date and `pinned:` filters are typed by hand, so they have nothing to suggest.
     if active.is_some_and(|(key, _)| filter_key(key).is_none()) {
         return None;
     }

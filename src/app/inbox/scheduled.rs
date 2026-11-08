@@ -5,7 +5,6 @@ use gpui_tokio::Tokio;
 use super::*;
 use crate::discord::model;
 
-/// Discord accepts send times up to eight days out.
 const LATEST: chrono::Duration = chrono::Duration::days(8);
 
 #[derive(Default)]

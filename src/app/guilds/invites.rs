@@ -12,7 +12,6 @@ impl DiscordApp {
         if self.invites.contains_key(code) {
             return;
         }
-        // Offline: leave the code unknown so a later render retries.
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;
         };

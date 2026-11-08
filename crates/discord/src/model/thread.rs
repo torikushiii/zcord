@@ -62,7 +62,6 @@ pub struct ThreadMemberUpdate {
     pub member: Option<Member>,
 }
 
-/// Body of `PATCH /channels/{thread}/thread-members/@me/settings`; unset fields are left out.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct ThreadSettings {
     #[serde(skip_serializing_if = "Option::is_none")]

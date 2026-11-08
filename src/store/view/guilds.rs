@@ -70,16 +70,13 @@ pub struct ThreadRow {
     pub owner_id: Option<u64>,
     pub joined: bool,
     pub muted: bool,
-    /// Thread notification level: 2 all messages, 4 only @mentions, 8 nothing; 0 when unset.
     pub notify: u32,
     pub archived: bool,
     pub locked: bool,
     pub private: bool,
     pub member_count: u32,
     pub member_ids: Vec<u64>,
-    /// Newest message: author and flattened text, cut to 200 bytes.
     pub recent: Option<(u64, String, Timestamp)>,
-    /// `archive_timestamp`, or the newest message's time when there is one.
     pub last_active: Option<Timestamp>,
 }
 
@@ -92,7 +89,6 @@ pub struct Channel {
     pub unread: bool,
     pub mentions: u32,
     pub new_posts: u32,
-    /// Display order; see `order_messages`.
     pub messages: Vec<Message>,
     pub messages_loaded: bool,
 }
@@ -104,7 +100,6 @@ impl Channel {
             .any(|message| message.send_order.is_some())
     }
 
-    /// Try ID-sorted lookup, falling back to a scan for out-of-order placeholders.
     pub fn message_index(&self, id: u64) -> Option<usize> {
         self.messages
             .binary_search_by_key(&id, |message| message.id)
@@ -127,7 +122,6 @@ impl Channel {
             .find(|message| message.delivery == Delivery::Sent)
     }
 
-    /// Retained outbox rows outside the loaded history page must not bridge pagination gaps.
     pub fn oldest_history_message(&self) -> Option<&Message> {
         self.messages.iter().find(|message| message.in_history())
     }
@@ -181,7 +175,6 @@ pub struct ForumPost {
     pub pinned: bool,
     pub locked: bool,
     pub archived: bool,
-    /// The starter message, which carries the post's body, media and reactions.
     pub first_message: Option<Message>,
     pub unread: bool,
 }

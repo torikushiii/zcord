@@ -28,7 +28,6 @@ pub struct VoiceMember {
 }
 
 impl Store {
-    /// The ongoing channel session, independent of this client's voice connection.
     pub fn voice_started_at(&self, guild_id: u64, channel_id: u64) -> Option<SystemTime> {
         let seconds = *self.voice_start_times.get(&(guild_id, channel_id))?;
         UNIX_EPOCH.checked_add(Duration::from_secs(seconds))
@@ -303,8 +302,6 @@ impl Store {
         members
     }
 
-    /// What the guild rail shows on a server's icon: a screen while anyone there is
-    /// streaming, otherwise a speaker while anyone is in a voice channel.
     pub fn guild_voice_activity(&self, guild_id: u64) -> Option<VoiceActivity> {
         let guild = self
             .source

@@ -12,7 +12,6 @@ impl From<discord::SelfStatus> for Status {
 }
 
 impl Store {
-    /// Confirmed account status only; never replace custom status or another client's activity.
     pub fn set_self_status(&mut self, status: discord::SelfStatus) {
         if let Some(user) = self.users.get_mut(&self.current_user_id) {
             user.status = status.into();
@@ -110,7 +109,6 @@ impl Store {
     }
 
     pub(super) fn settings_update(&mut self, update: Box<model::SettingsUpdate>) -> Change {
-        // Proto type 1 is PreloadedUserSettings, type 2 is FrecencyUserSettings.
         match update.settings.kind {
             1 => {}
             2 => return self.apply_frecency(&update),

@@ -33,7 +33,6 @@ pub(in crate::app::profile) fn board_panel(
         .into_any_element()
 }
 
-/// One Board widget; `editing` swaps game rows for the widget editor's controls.
 pub(in crate::app::profile) fn widget_element(
     app: &DiscordApp,
     card: &ProfileCard,
@@ -48,7 +47,6 @@ pub(in crate::app::profile) fn widget_element(
         }
         WidgetData::FavoriteGames { games } => ("Favorite Game", games),
         WidgetData::CurrentGames { games } => ("Games in Rotation", games),
-        // Discord shows both of these as cover grids rather than game rows.
         WidgetData::PlayedGames { games } => {
             return (!games.is_empty())
                 .then(|| covers_widget(app, card, widget.id, "Games I Like", games, palette, cx));
@@ -69,7 +67,6 @@ pub(in crate::app::profile) fn widget_element(
         }
         WidgetData::Unknown => return None,
     };
-    // Discord sets the favorite game's name bolder and larger than other lists.
     let featured = matches!(widget.data, WidgetData::FavoriteGames { .. });
     (!games.is_empty()).then(|| {
         games_widget(

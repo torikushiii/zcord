@@ -409,7 +409,6 @@ fn wishlist_prices_and_launched_activity_times_read_like_discord() {
     assert_eq!(price(1399, "usd", 2), "$13.99");
     assert_eq!(price(2049, "eur", 2), "€20.49");
     assert_eq!(price(150000, "idr", 0), "150000 IDR");
-    // A synthetic launched-game entry: no timestamps, only its snowflake id.
     assert_eq!(
         snowflake_time(1191169321074688097).unwrap().to_rfc3339(),
         "2024-01-01T00:01:37+00:00"

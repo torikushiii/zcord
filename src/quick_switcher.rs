@@ -23,14 +23,10 @@ pub struct Item {
     pub target: Target,
     pub kind: ItemKind,
     pub name: String,
-    /// Category name for channels (None when uncategorized), parent channel name for threads,
-    /// None for guilds.
     pub context: Option<String>,
-    /// Server name for channels/threads; None for guild items.
     pub guild_name: Option<String>,
     pub unread: bool,
     pub mentions: u32,
-    /// Char (not byte) indices into `name` that matched the query, ascending. Empty when no query.
     pub matched: Vec<usize>,
 }
 
@@ -47,7 +43,6 @@ pub struct Section {
     pub items: Vec<Item>,
 }
 
-/// Channels visited this session, most recent first.
 #[derive(Default)]
 pub struct Recent(VecDeque<u64>);
 

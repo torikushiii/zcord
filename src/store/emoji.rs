@@ -20,7 +20,6 @@ impl Store {
             if !self.has_nitro() {
                 return EmojiAccess::NeedsNitro;
             }
-            // DMs (guild 0) have no permission overwrites; Nitro covers every server's emoji.
             let external = guild_id == 0
                 || self
                     .permissions(channel_id)
@@ -42,8 +41,6 @@ impl Store {
         self.search_emoji_where(query, guild_id, channel_id, limit, |_| true)
     }
 
-    /// Like `search_emoji`, but only usable matches count toward `limit`, so custom emoji the
-    /// user can't send (every one in a DM without Nitro) never crowd out Unicode matches.
     pub fn search_usable_emoji(
         &self,
         query: &str,

@@ -37,8 +37,6 @@ pub(super) fn activity_art(card: &ProfileCard, entry: &OutboxEntry, cx: &App) ->
     }
 }
 
-/// Uploaded widget art, animated when the config marks it so; the still frame stands in while
-/// the animation decodes.
 pub(super) fn widget_art(
     application_id: u64,
     asset: &WidgetAsset,
@@ -120,8 +118,6 @@ pub(super) fn media(url: &str, size: f32, cx: &App) -> Option<Arc<Path>> {
     images::resolve(&spec, theme::image_px(size), cx)
 }
 
-/// Rich-presence art is often a GIF behind Discord's media proxy; Discord plays it, so play it
-/// here too, falling back to the still frame while it decodes.
 pub(crate) fn presence_art(
     url: &str,
     size: f32,

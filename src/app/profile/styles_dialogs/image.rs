@@ -11,7 +11,6 @@ pub(super) fn image_dialog(
     cx: &App,
 ) -> AnyElement {
     let user_id = app.store.current_user_id;
-    // Banners and animated avatars both need Nitro, so it badges every option it gates.
     let upload_premium = target == ImageTarget::Banner;
     let option = |id: &'static str, enabled: bool| {
         div()
@@ -55,8 +54,6 @@ pub(super) fn image_dialog(
     };
     let upload = option("image-upload", editor.nitro || !upload_premium)
         .when(editor.nitro || !upload_premium, |this| {
-            // The dialog stays up behind the file picker; a picked image replaces it with
-            // the editor, and cancelling leaves it open.
             this.on_click(on_app(app, move |app, cx| app.pick_style_image(target, cx)))
         })
         .child(label(
@@ -107,7 +104,6 @@ pub(super) fn image_dialog(
             })
         })
         .children(mosaic)
-        // Dims the stills so the label reads over bright frames; lifts a little on hover.
         .child(
             div()
                 .absolute()
@@ -129,7 +125,6 @@ pub(super) fn image_dialog(
                     hash: storage_hash.to_string(),
                 };
                 let pixels = theme::image_px(RECENT_AVATAR);
-                // Animated uploads play here, as on Discord; the still shows until they load.
                 let image = spec
                     .animated()
                     .and_then(|animated| animated::resolve(&animated, pixels, cx))
@@ -158,11 +153,9 @@ pub(super) fn image_dialog(
                     .bg(rgb(theme::base_lowest()))
                     .cursor_pointer()
                     .hover(|style| style.opacity(0.8))
-                    // Like an upload, it opens in the editor; left untouched it is reused.
                     .on_click(on_app(app, move |app, cx| {
                         app.edit_recent_avatar(id, storage_hash.clone(), cx)
                     }))
-                    // gpui clips children square; each picture rounds itself.
                     .children(image)
             });
             let empty = RECENT_AVATAR_SLOTS.saturating_sub(avatars.len());
@@ -231,7 +224,6 @@ pub(super) fn image_dialog(
         )
         .children(recent)
         .into_any_element();
-    // Discord's main profile can't drop an image here, but a server profile can fall back.
     let saved = app.saved_style_values();
     let has_own = match target {
         ImageTarget::Avatar => saved.avatar.is_some() || editor.draft.avatar.is_some(),
@@ -260,11 +252,10 @@ pub(super) fn image_dialog(
     shell(app, editor, Some("Select an Image"), 480., body, footer)
 }
 
-/// Discord dims everything outside the frame with a 9999px box-shadow. gpui would paint that
-/// under the frame as well, so the dimming is a border this thick whose inner edge is the frame.
+/// A box-shadow would paint under the frame as well, so the dimming is a border this thick
+/// whose inner edge is the frame.
 const IMAGE_EDIT_DIM: f32 = 480.;
 const ZOOM_SLIDER: f32 = 128.;
-/// The slider's handle stops this far from either end of its bar.
 const ZOOM_TRACK_INSET: f32 = 5.;
 
 pub(super) fn image_edit_dialog(
@@ -318,7 +309,6 @@ pub(super) fn image_edit_dialog(
                 .ok();
         })
         .child(
-            // Plays animated picks frame by frame; a still is one frame.
             animated::image(edit.preview.clone())
                 .object_fit(ObjectFit::Fill)
                 .id("image-edit-preview")

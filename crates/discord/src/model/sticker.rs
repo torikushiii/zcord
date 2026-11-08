@@ -1,7 +1,6 @@
 use super::serde_helpers::*;
 use serde::Deserialize;
 
-/// Full sticker metadata, separate from the minimal message sticker item.
 #[derive(Clone, Deserialize)]
 pub struct StickerDetails {
     #[serde(deserialize_with = "snowflake")]
@@ -10,7 +9,6 @@ pub struct StickerDetails {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
-    /// Discord's comma-separated autocomplete tags.
     #[serde(default)]
     pub tags: Option<String>,
     #[serde(default, deserialize_with = "default_value")]
@@ -19,15 +17,12 @@ pub struct StickerDetails {
     pub guild_id: Option<u64>,
     #[serde(default, deserialize_with = "optional_id")]
     pub pack_id: Option<u64>,
-    /// Discord sticker type: 1 = standard, 2 = guild, 0 = unknown.
     #[serde(rename = "type", default, deserialize_with = "default_value")]
     pub kind: u8,
-    /// `None` means availability was not reported.
     #[serde(default)]
     pub available: Option<bool>,
 }
 
-/// External guild metadata, kept separate from the joined-guild READY model.
 #[derive(Clone, Deserialize)]
 pub struct StickerGuild {
     #[serde(deserialize_with = "snowflake")]
@@ -40,16 +35,13 @@ pub struct StickerGuild {
     pub features: Option<Vec<String>>,
     #[serde(default, deserialize_with = "default_value")]
     pub approximate_presence_count: Option<u32>,
-    /// Discovery responses may include at most 30 stickers, not the full catalog.
     #[serde(default, deserialize_with = "optional_entries")]
     pub stickers: Option<Vec<StickerDetails>>,
-    /// Reported total, when present; do not infer it from the embedded catalog.
     #[serde(default, deserialize_with = "default_value")]
     pub sticker_count: Option<u32>,
 }
 
 impl StickerGuild {
-    /// Missing features remain unknown rather than implying an invite-only guild.
     pub fn discoverable(&self) -> Option<bool> {
         self.features
             .as_ref()
@@ -143,7 +135,6 @@ mod tests {
 
     #[test]
     fn sticker_guild_decodes_flat_discovery_metadata_and_partial_catalog() {
-        // Synthetic payload following the public discoverable-guild schema.
         let guild: StickerGuild = serde_json::from_value(json!({
             "id": "9007199254740993",
             "name": "External guild",

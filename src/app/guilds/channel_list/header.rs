@@ -163,7 +163,6 @@ pub(super) fn corner_cover() -> impl IntoElement {
         },
     )
     .absolute()
-    // Starts at the outer edge of the panel's 1px border.
     .top(px(-1.))
     .left(px(-1.))
     .size(rpx(RADIUS + 1.))
@@ -183,7 +182,6 @@ fn banner_glass(spec: &ImageSpec, solidity: f32, opacity: f32, cx: &App) -> Div 
                     if bounds.is_empty() {
                         return;
                     }
-                    // Fit the full banner before cropping to the fixed, rounded header.
                     let mut banner = bounds;
                     banner.origin.y -= rpx(solidity * (BANNER_HEIGHT - HEADER_HEIGHT))
                         .to_pixels(window.rem_size());

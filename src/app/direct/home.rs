@@ -95,14 +95,10 @@ pub(crate) struct Home {
     requests_tab: RequestsTab,
     previews_requested: HashSet<u64>,
     suggestions_loading: bool,
-    /// The people row under the pointer; the dividers on either side of it hide.
     hovered_row: Option<u64>,
-    /// The row the pointer last left, which plays its slide-back animation.
     left_row: Option<u64>,
-    /// Mutual server ids per message request sender, from their profile.
     mutuals: HashMap<u64, Vec<u64>>,
     mutuals_requested: HashSet<u64>,
-    /// Failed profile loads per sender, so a failing one is retried a few times, spaced out.
     mutuals_failures: HashMap<u64, u32>,
     requests_scroll: UniformListScrollHandle,
     applications: HashMap<u64, Arc<PublicApplication>>,
@@ -165,8 +161,6 @@ impl DiscordApp {
         self.load_quests(cx);
     }
 
-    /// Lets a failed sender profile load again once its row is next drawn, after a delay that
-    /// grows with each failure (at least what a rate limit asks), until it gives up.
     fn retry_request_profile(&mut self, user_id: u64, error: &Error, cx: &mut Context<Self>) {
         const ATTEMPTS: u32 = 3;
         const FIRST_DELAY: Duration = Duration::from_secs(15);
@@ -190,9 +184,6 @@ impl DiscordApp {
         .detach();
     }
 
-    /// Loads what the visible request rows show: message previews and each sender's mutual
-    /// servers. Like Discord, only rows on screen are fetched, all at once, so scrolling a new
-    /// row in costs one profile and one preview request.
     fn load_visible_requests(&mut self, rows: Vec<(u64, Option<u64>)>, cx: &mut Context<Self>) {
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;
@@ -255,8 +246,6 @@ impl DiscordApp {
                                 .collect();
                             app.home.mutuals.insert(user_id, ids);
                         }
-                        // Discord answers 404 for many request senders (deleted or private
-                        // accounts) and shows "No Mutual Servers" for them.
                         Ok((user_id, Err(Error::Http(404) | Error::Rejected { .. }))) => {
                             app.home.mutuals.insert(user_id, Vec::new());
                         }
@@ -332,7 +321,6 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// Discord keeps this list for eight hours before asking for a new one.
     pub(crate) fn load_user_affinities(&mut self, cx: &mut Context<Self>) {
         self.affinity_refresh = None;
         if !self.store.personalization_consented() {
@@ -362,8 +350,6 @@ impl DiscordApp {
         }));
     }
 
-    /// Fetches app icons for Active Now; Discord shows the game's icon even when the
-    /// presence carries no image of its own.
     pub(crate) fn load_active_now_apps(&mut self, cx: &mut Context<Self>) {
         if !self.showing_home_page() || self.home.page != HomePage::Friends {
             return;
@@ -503,8 +489,6 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// `READY` only carries the count; the list is fetched when the tab first opens, and again
-    /// after a reconnect replaces the store.
     fn load_friend_suggestions(&mut self, cx: &mut Context<Self>) {
         if self.home.suggestions_loading || self.store.friend_suggestions_loaded() {
             return;
@@ -541,7 +525,6 @@ impl DiscordApp {
         self.request_dm_call(channel_id);
     }
 
-    /// Creates the DM on Discord first when none exists yet.
     pub(crate) fn open_dm(&mut self, user_id: u64, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(channel_id) = self.store.dm_channel_with(user_id) {
             self.select_dm(channel_id, window, cx);

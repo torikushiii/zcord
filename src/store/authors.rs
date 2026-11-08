@@ -1,6 +1,5 @@
 use super::*;
 
-// Partial user objects omit these fields when unchanged; only an explicit null clears them.
 fn apply_cosmetics(target: &mut User, user: &model::User) {
     if let Some(decoration) = &user.avatar_decoration_data {
         target.decoration = decoration.as_ref().map(map_decoration);

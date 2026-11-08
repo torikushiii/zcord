@@ -2,10 +2,8 @@ use super::*;
 
 const BLUR_SOURCE: u32 = 64;
 const BLUR_SIGMA: f32 = 5.;
-/// A small texture stretched over a large box fades out by half a texel at its edges.
 const BLUR_MIN_TEXTURE: u32 = 384;
 const BLUR_CACHE_LIMIT: usize = 64;
-/// Path, sigma bits, saturation bits, and the width scaled to first (0 keeps the source's).
 type BlurKey = (Arc<Path>, u32, u32, u32);
 
 #[derive(Default)]
@@ -39,9 +37,6 @@ pub fn blurred_with(
     blurred_at_width(spec, source, 0, sigma, saturation, cx)
 }
 
-/// Like `blurred_with`, but scaled to `width` pixels wide before blurring, so `sigma` is in
-/// pixels of the size it's drawn at whatever the file's own size. A zero `sigma` only scales
-/// and desaturates.
 pub fn blurred_at_width(
     spec: &ImageSpec,
     source: u32,
@@ -57,8 +52,6 @@ pub fn blurred_at_width(
         if let Some(image) = cache.entries.get(&key) {
             return image.clone();
         }
-        // Live render elements keep their own Arc, so evicting here only drops the cache's
-        // reference; dropping the atlas tiles of a still-painted image would force re-uploads.
         if cache.entries.len() >= BLUR_CACHE_LIMIT
             && let Some(oldest) = cache.order.pop_front()
         {

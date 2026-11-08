@@ -1,7 +1,6 @@
 use super::personal::{stat_value, widget_image_art};
 use super::*;
 
-/// The popout's compact take on the first game-account widget; the full card lives on the Board.
 enum Popout<'a> {
     Application(u64),
     Personal(u64, &'a Option<String>, &'a [PersonalSection]),
@@ -32,9 +31,6 @@ pub(in crate::app::profile) fn popout_widget(
 fn popout_widget_front(app: &DiscordApp, card: &ProfileCard, cx: &App) -> Option<AnyElement> {
     let palette = card.palette();
     let profile = card.profile.as_ref()?;
-    // Discord summarises the first Board widget it can show in the popout, in Board order:
-    // game lists become the Game Collection row, and application widgets count only when their
-    // config has a `mini_profile` surface.
     let application_id = profile
         .widgets
         .iter()
@@ -106,7 +102,6 @@ fn popout_widget_front(app: &DiscordApp, card: &ProfileCard, cx: &App) -> Option
             cx,
         )
     };
-    // The mini surface may leave out its text or image; the Board's `widget_top` fills them in.
     let mini = config.and_then(|config| config.mini.as_ref());
     let title = mini
         .and_then(|mini| mini.text.as_ref())
@@ -308,7 +303,6 @@ fn popout_personal(
     .into_any_element()
 }
 
-/// The popout sums up the Board's game lists as one row of icons.
 fn game_collection(
     app: &DiscordApp,
     card: &ProfileCard,
@@ -320,7 +314,6 @@ fn game_collection(
     if ids.is_empty() {
         return None;
     }
-    // Discord showed 3 icons and "+13" for 17 games, so the count leaves out one more than shown.
     let hidden = ids.len().saturating_sub(COLLECTION_SHOWN + 1);
     let shown = if hidden == 0 {
         ids.len().min(COLLECTION_SHOWN + 1)

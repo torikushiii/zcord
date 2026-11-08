@@ -20,7 +20,6 @@ const ROW_PADDING: f32 = 8.;
 const AVATAR: f32 = 32.;
 const AVATAR_GAP: f32 = 12.;
 const NAMEPLATE_OPACITY: f32 = 0.6;
-/// Rows clip rectangularly, so nameplate art inside them is rounded to this too.
 pub(crate) const ROW_RADIUS: f32 = 8.;
 pub(crate) const NAMEPLATE_DIM: u32 = 0xB3;
 const NAMEPLATE_FADE: f32 = 50.;
@@ -41,7 +40,6 @@ impl Layout {
         self.lead
     }
 
-    /// `lead` rows (the Activity section) sit above the member rows.
     pub fn sync(&mut self, state: &ListState, list: Option<&MemberList>, lead: usize) {
         let count = lead + list.map_or(0, |list| list.rows.len());
         let old = state.item_count();
@@ -56,15 +54,12 @@ impl Layout {
         } else if count < old {
             state.splice(count..old, 0);
         }
-        if count != old {
-            // Only the final row has bottom padding; keep the retained rows measured.
-            if let Some(last) = count.min(old).checked_sub(1) {
-                state.remeasure_items(last..last + 1);
-            }
+        if count != old
+            && let Some(last) = count.min(old).checked_sub(1)
+        {
+            state.remeasure_items(last..last + 1);
         }
 
-        // Members and placeholders share a fixed height. Only becoming or ceasing to
-        // be a group header changes an existing row's layout, not presence or SYNC data.
         if count == old {
             let mut same = true;
             let mut positions = self.groups.iter().copied();
@@ -418,7 +413,6 @@ fn activity_line(
             };
             Some(img(source).size(rpx(STATUS_EMOJI)).flex_none())
         });
-    // The emoji draws as an image, so the text drops the one `custom_text` put in front.
     let text = match status {
         Some(status) if emoji.is_some() => status.text.clone().unwrap_or_default(),
         _ => activity,
@@ -447,7 +441,6 @@ fn activity_line(
     )
 }
 
-/// `surface` keeps the hover of one place's copy from showing another's tooltip.
 pub(crate) fn activity_prefix(
     surface: &'static str,
     user_id: u64,
@@ -507,7 +500,6 @@ pub(crate) fn activity_prefix(
     )
 }
 
-/// A game outranks background listening, which shows as `artist · custom status`.
 fn member_activity(user: &User) -> Option<(String, Option<&'static str>)> {
     let listening = user.listening.as_ref().filter(|_| {
         user.activity_kind == Some(2) || (user.custom_status.is_some() && user.game.is_none())
@@ -518,7 +510,6 @@ fn member_activity(user: &User) -> Option<(String, Option<&'static str>)> {
             .as_deref()
             .map(str::trim)
             .filter(|text| !text.is_empty());
-        // A custom status without displayable text leaves the listening text in `activity`.
         let custom = user
             .activity
             .as_deref()
@@ -568,8 +559,6 @@ pub(crate) fn nameplate_layer(
     member_nameplate_layer(nameplate, user_id, height, hovered, 0., cx)
 }
 
-/// A nameplate as the member list shows it, dimmed under a soft tint, on a row with
-/// rounded corners.
 pub(crate) fn member_nameplate_layer(
     nameplate: &Nameplate,
     user_id: u64,
@@ -595,8 +584,6 @@ pub(crate) fn member_nameplate_layer(
     Some(plate_stack(wash, image))
 }
 
-/// A nameplate as collectible previews show it: undimmed art over a stronger, even tint.
-/// Clipping is rectangular, so a row with rounded corners rounds the art itself.
 pub(crate) fn rounded_nameplate_layer(
     nameplate: &Nameplate,
     user_id: u64,
@@ -669,7 +656,6 @@ fn palette_wash(color: u32, hovered: bool, radius: f32) -> AnyElement {
         .into_any_element()
 }
 
-/// Dims the art behind a name. Its row has to clip, since this reaches a row's height past it.
 pub(crate) fn nameplate_mask(dim: Rgba) -> [AnyElement; 2] {
     let full_row = rpx(ROW_HEIGHT);
     [

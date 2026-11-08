@@ -40,7 +40,6 @@ use crate::{
 
 pub const WIDTH: f32 = 303.;
 const HEADER_HEIGHT: f32 = 48.;
-/// Discord's banner is 135px tall in its 240px sidebar; keep the height and crop wider.
 const BANNER_HEIGHT: f32 = 135.;
 const BANNER_HOVER_FADE: Duration = Duration::from_millis(150);
 pub(crate) const FOLD: Duration = Duration::from_millis(200);
@@ -118,7 +117,6 @@ impl BannerHover {
         if self.hovered == hovered {
             return false;
         }
-        // Reverse an interrupted fade from its current opacity, not an endpoint.
         self.from = self.opacity(now);
         self.hovered = hovered;
         self.started = Some(now);
@@ -126,10 +124,8 @@ impl BannerHover {
     }
 }
 
-/// Flatten the channel hierarchy only when the server or its structure changes.
 pub(crate) struct Rows {
     state: ListState,
-    /// Live window-space bounds of the bottom account strip, shared with its popout.
     pub(crate) account_bounds: profile::AccountPanelBounds,
     rows: Vec<Row>,
     guild_id: Option<u64>,
@@ -171,7 +167,6 @@ impl Rows {
         self.sync_with_banner(guild, None, selected_channel_id, |_| 0, |_| 0, None);
     }
 
-    /// Returns whether the category is now collapsed.
     pub(crate) fn toggle_collapsed(&mut self, id: u64) -> bool {
         let now = Instant::now();
         let from = self.openness(id, now);
@@ -188,7 +183,6 @@ impl Rows {
         collapsed
     }
 
-    /// 1 when the category is expanded, 0 when collapsed, in between while it folds.
     fn openness(&self, id: u64, now: Instant) -> f32 {
         self.folds
             .get(&id)
@@ -221,15 +215,11 @@ impl Rows {
             .flat_map(|guild| &guild.categories)
             .enumerate()
         {
-            // Channels outside any category sit in group 0, which Discord shows without a header.
             if group.id != 0 {
                 rows.push(Row::Category(category));
             }
-            // Collapsing channels stay listed until they have folded away.
             let collapsed = self.collapsed.contains(&group.id) && !self.folding(group.id, now);
             for (channel, entry) in group.channels.iter().enumerate() {
-                // Discord keeps the selected and the joined voice channel visible under a
-                // collapsed category.
                 let joined = voice_channel_id == Some(entry.id);
                 if collapsed && entry.id != selected_channel_id && !joined {
                     continue;
@@ -294,8 +284,6 @@ impl Rows {
         }
     }
 
-    /// How solid the header should be: 0 with the banner fully shown, rising to 1 as the
-    /// banner scrolls up under the header. None when the server has no banner.
     fn header_solidity(&self, rem_size: Pixels) -> Option<f32> {
         self.banner.as_ref()?;
         let top = self.state.logical_scroll_top();

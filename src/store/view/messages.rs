@@ -134,7 +134,6 @@ impl Timestamp {
         if today { self.time() } else { self.full() }
     }
 
-    /// "Jan 2017"
     pub fn month_year(self) -> String {
         let month = MONTHS[(self.month as usize).saturating_sub(1) % 12];
         format!("{} {}", &month[..3], self.year)
@@ -149,7 +148,6 @@ impl Timestamp {
 #[derive(Clone, PartialEq, Eq)]
 pub struct Media {
     pub url: String,
-    /// Page-facing original URL (pre-proxy) for opening in a browser.
     pub source: String,
     pub width: u32,
     pub height: u32,
@@ -182,7 +180,6 @@ pub enum EmbedKind {
     Gifv,
     Video,
     Link,
-    /// OpenGraph pages; Discord shows their thumbnail as the large image under the text.
     Article,
     Components,
 }
@@ -316,7 +313,6 @@ pub enum Delivery {
 pub struct Sticker {
     pub id: u64,
     pub name: String,
-    /// Discord's `format_type`: 1 = PNG, 2 = APNG, 3 = Lottie, 4 = GIF.
     pub format: u8,
 }
 
@@ -337,7 +333,6 @@ impl Sticker {
 
 pub(crate) struct SendOrder {
     pub nonce: u64,
-    /// Part of the current loaded history span, rather than a retained outbox-only row.
     pub history_seen: bool,
 }
 
@@ -376,10 +371,8 @@ pub(crate) fn is_forwardable(message: &model::Message) -> bool {
 
 pub struct Message {
     pub id: u64,
-    /// Composer order, retained through confirmation until replacing history observes it.
     pub(crate) send_order: Option<SendOrder>,
     pub author_id: u64,
-    /// Webhook names and avatars belong to the message, not the shared user cache.
     pub webhook: Option<WebhookAuthor>,
     pub timestamp: Timestamp,
     pub delivery: Delivery,
@@ -397,7 +390,6 @@ pub struct Message {
     pub mentions_me: bool,
     pub uploads: Vec<PendingUpload>,
     pub thread: Option<MessageThread>,
-    /// The message a pin notice points at.
     pub reference_id: Option<u64>,
     pub call: Option<CallRecord>,
 }
@@ -458,7 +450,6 @@ pub struct Forward {
 
 const ATTACHMENT_IS_SPOILER: u64 = 1 << 3;
 
-/// What the app reads off an attachment: spoilers, and whether it shows as a video or image.
 pub trait AttachmentExt {
     fn spoiler(&self) -> bool;
     fn is_video(&self) -> bool;

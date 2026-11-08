@@ -21,8 +21,6 @@ enum AddNote {
     Failed(&'static str),
 }
 
-/// In-flight writes and their failures. The buttons themselves follow the store, which only
-/// changes when the gateway confirms a relationship.
 #[derive(Default)]
 pub(crate) struct Friends {
     busy: HashSet<u64>,
@@ -95,12 +93,10 @@ impl DiscordApp {
         .detach();
     }
 
-    /// `PUT` both sends a request to this user and accepts theirs.
     pub(crate) fn add_friend(&mut self, user_id: u64, cx: &mut Context<Self>) {
         self.write_relationship(user_id, false, cx);
     }
 
-    /// Ignores or cancels a pending request. A friend goes through `ask_remove_friend`.
     pub(crate) fn drop_friend_request(&mut self, user_id: u64, cx: &mut Context<Self>) {
         self.write_relationship(user_id, true, cx);
     }

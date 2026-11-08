@@ -246,7 +246,6 @@ fn saved_colors_always_take_priority_over_an_avatar_palette() {
 
 #[test]
 fn dialog_background_matches_discord_lab_midpoint_and_lightness_limits() {
-    // Reference values from Chroma's Lab mix followed by Discord's HSL lightness clamp.
     for (primary, secondary, expected) in [
         (0x336699, 0x993366, 0x1D141F),
         (0x339966, 0x993366, 0x1C1917),

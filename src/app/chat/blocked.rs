@@ -25,7 +25,6 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// Blocking someone hides or shows rows far from any message that changed.
     pub(in crate::app) fn remeasure_message_lists(&self) {
         self.messages.remeasure();
         if let Some(pane) = &self.thread_pane {
@@ -96,7 +95,6 @@ pub(super) fn blocked_row(
         .child({
             let grouped = grouped && index != run.start;
             if pane {
-                // Pane rows add their own group spacing, which the passive renderer leaves out.
                 let compact = crate::settings::display().message_display_compact;
                 div()
                     .when(!grouped, |this| {

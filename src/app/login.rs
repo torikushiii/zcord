@@ -436,7 +436,6 @@ fn qr_modules(matrix: Rc<QrMatrix>) -> impl IntoElement {
             let width = matrix.width.max(1);
             let module = bounds.size.width / width as f32;
             let color = rgb(0x000000);
-            // Horizontal runs keep the quad count low and avoid hairline seams between modules.
             for (y, row) in matrix.dark.chunks(width).enumerate() {
                 let mut x = 0;
                 while x < row.len() {

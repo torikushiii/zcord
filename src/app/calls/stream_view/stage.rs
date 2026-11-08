@@ -39,7 +39,6 @@ pub(crate) fn stage_area(
         })
 }
 
-/// Places a stage over the chat column, leaving the chat itself uncovered while it's open.
 pub(crate) fn stage_frame(
     app: &DiscordApp,
     area: Stateful<Div>,

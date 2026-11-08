@@ -75,7 +75,6 @@ fn invite_view_prefers_custom_banner_and_resolves_game_icons() {
         })
     );
 
-    // Without a banner the splash is used; a guild-less invite has no card.
     let splash: model::Invite = serde_json::from_value(json!({
         "code": "splash",
         "guild_id": "1",

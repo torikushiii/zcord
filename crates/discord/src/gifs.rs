@@ -1,7 +1,3 @@
-//! GIF picker providers.
-//!
-//! Klipy is served through Discord's own API and `rest::Rest`. Tenor and Giphy are third
-//! parties, so their requests go through a bare client that carries no Discord credentials.
 use super::{Error, properties};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -14,8 +10,6 @@ const GIPHY_KEY: &str = "Gc7131jiJuvI7IdN0HZ1D7nh0ow5BU6g";
 const GIPHY_BASE: &str = "https://api.giphy.com/v1";
 const PAGE_LIMIT: &str = "50";
 
-/// Tenor's animated renditions the image pipeline can decode, smallest first. It also serves
-/// mp4/webm, which it cannot animate.
 const TENOR_FORMATS: [&str; 4] = ["tinygif", "nanogif", "webp", "gif"];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -43,9 +37,7 @@ impl GifProvider {
 pub struct Gif {
     pub id: String,
     pub title: String,
-    /// Page URL, sent as the message content.
     pub url: String,
-    /// Animated gif/webp rendition shown in the picker grid.
     pub src: String,
     pub width: u32,
     pub height: u32,

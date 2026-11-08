@@ -26,8 +26,6 @@ pub(super) struct SharePicker {
     thumbnails: HashMap<usize, Arc<RenderImage>>,
     icons: HashMap<usize, Arc<RenderImage>>,
     pub(super) stream_menu: stream_quality::StreamMenu,
-    /// Fills in icons and thumbnails; closing the picker drops it, so a reopened picker never
-    /// receives an older one's images.
     _loading: Option<Task<()>>,
 }
 
@@ -56,7 +54,6 @@ impl DiscordApp {
         });
         self.views.overlays.update(cx, |_, cx| cx.notify());
         let loading = cx.spawn(async move |this, cx| {
-            // Icons come first: reading one is quick, while a thumbnail waits for a captured frame.
             let icons = cx
                 .background_executor()
                 .spawn({
@@ -246,8 +243,6 @@ fn source_tile(
     let entity = app.entity.clone();
     let image = picker.thumbnails.get(&index).cloned();
     let group = SharedString::from(format!("share-source-{index}"));
-    // Like Discord, hovering a source dims it behind a Share Screen button, and a click
-    // anywhere on it starts the stream.
     div()
         .id(("share-source", index))
         .group(group.clone())

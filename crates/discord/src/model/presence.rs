@@ -42,7 +42,6 @@ pub struct ClientStatus {
 }
 
 impl ClientStatus {
-    /// Discord's rule: a web session doesn't stop someone counting as on mobile.
     pub fn mobile_only(&self) -> bool {
         let online = |status: &Option<String>| status.as_deref() == Some("online");
         online(&self.mobile) && !online(&self.desktop) && !online(&self.vr)
@@ -69,10 +68,8 @@ pub struct Activity {
     pub application_id: Option<u64>,
     #[serde(default, deserialize_with = "default_value")]
     pub platform: Option<String>,
-    /// Bitfield; `1 << 8` marks an embedded Discord Activity.
     #[serde(default, deserialize_with = "default_value")]
     pub flags: u64,
-    /// Unix ms. Used as the timer start when `timestamps.start` is missing.
     #[serde(default, deserialize_with = "optional_id")]
     pub created_at: Option<u64>,
     #[serde(default, deserialize_with = "default_value")]
@@ -111,7 +108,6 @@ pub struct ActivityEmoji {
     pub animated: bool,
 }
 
-/// How likely the current user is to talk to someone, which Discord ranks per account.
 #[derive(Clone, Deserialize)]
 pub struct UserAffinity {
     #[serde(deserialize_with = "snowflake")]

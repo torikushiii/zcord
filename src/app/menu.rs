@@ -1,6 +1,3 @@
-//! Discord's popup menu pieces, shared by the stream settings, the live stream menu and the
-//! composer's right-click menu.
-
 use gpui::{prelude::*, *};
 use std::cell::Cell;
 
@@ -108,8 +105,6 @@ pub(in crate::app) trait PopupButton:
         open: impl Fn(&App) -> bool + 'static,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
-        // Every press on the button replaces the mark, so one left by a press that never became
-        // a click can't swallow a later one.
         self.capture_any_mouse_down(move |event, _, cx| {
             CLOSING_PRESS
                 .set((event.button == MouseButton::Left && open(cx)).then_some(event.position));

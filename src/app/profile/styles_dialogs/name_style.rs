@@ -1,7 +1,6 @@
 use super::collectibles::item_size;
 use super::*;
 
-/// Display name fonts in the dialog's order, by Discord id.
 const FONTS: [(&str, u32); 12] = [
     ("gg sans", 11),
     ("Tempo", 12),
@@ -16,7 +15,6 @@ const FONTS: [(&str, u32); 12] = [
     ("Headbang", 15),
     ("Journal", 16),
 ];
-/// Discord's stand-in profile, drawn behind effect and frame grid items.
 const SAMPLE_PROFILE: &str = "https://cdn.discordapp.com/assets/content/a859611882903f1102a796c08c68278917821af3e87eb9191df74bf78426971d.png";
 
 fn sample_profile(width: f32, cx: &App) -> Option<Img> {
@@ -27,8 +25,6 @@ fn sample_profile(width: f32, cx: &App) -> Option<Img> {
         .map(|path| img(path).object_fit(ObjectFit::Cover))
 }
 
-/// An effect over the sample profile, filling its grid item. Hovered, it plays the effect's
-/// layers rather than the still thumbnail.
 pub(super) fn effect_grid_art(
     editor: &StylesEditor,
     sku_id: u64,
@@ -121,11 +117,9 @@ fn set_name_style(
     })
 }
 
-/// A font or effect tile: Discord's 4-column grid in the 384px options column.
 const NAME_TILE: [f32; 2] = [90., 68.];
 const NEW_FONTS: [u32; 2] = [15, 16];
 
-/// Discord's own colors on each effect's tile, whatever colors the user picked.
 fn effect_sample(effect_id: u32) -> Vec<u32> {
     match effect_id {
         SOLID_EFFECT => vec![0xD4D5D8],
@@ -396,7 +390,6 @@ pub(super) fn name_style_dialog(
     shell(app, editor, None, 836., body, footer)
 }
 
-/// A random font, effect and preset, never the current combination.
 fn surprise(current: &NameStyle) -> NameStyle {
     let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -428,9 +421,6 @@ fn surprise(current: &NameStyle) -> NameStyle {
 }
 
 const NAME_PREVIEW_WIDTH: f32 = 410.;
-/// Discord's preview: the profile card, a chat message and a member row overlapping down the
-/// right of the dialog, over the profile's theme and a faded banner, with a toggle that shows
-/// the message and member row in light mode.
 fn name_style_preview(
     app: &DiscordApp,
     editor: &StylesEditor,
@@ -626,8 +616,6 @@ fn name_style_preview(
                 if selected { 0xDCDCDF } else { 0x96979E },
             ))
     };
-    // `min_w_0` and the clip hold it to its column; otherwise the note's unwrapped
-    // width and the frame art stretch it past the dialog's edge.
     div()
         .relative()
         .flex()

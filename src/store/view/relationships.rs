@@ -22,7 +22,6 @@ pub struct Relationship {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FriendSuggestion {
     pub user_id: u64,
-    /// The name Discord matched them by, such as their Steam name.
     pub reason: Option<String>,
 }
 

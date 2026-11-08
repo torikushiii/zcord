@@ -39,8 +39,6 @@ fn failed_refresh_retains_content_and_retries_join_the_tail_without_blocking_oth
     };
     sends.push(10, "A".into(), Some(reply.clone()), Vec::new(), None);
     sends.push(20, "Other".into(), None, Vec::new(), None);
-    // A failed refresh does not drain the queue. A later submission initiates another
-    // refresh even when an unrelated response already set at_present.
     assert!(sends.should_stage(10, true, false));
     sends.push(10, "B".into(), None, Vec::new(), None);
     sends.push(10, "Retry".into(), Some(reply), Vec::new(), None);

@@ -10,23 +10,18 @@ pub(crate) fn load(path: &Path) -> Option<[u32; 2]> {
     palette(&decode(ImageReader::open(path).ok()?)?)
 }
 
-/// The theme colors Discord's color picker suggests for an avatar: its two main colors, then
-/// the main one lightened and saturated (tinycolor's `lighten(15).saturate(30)`) at the other
-/// three corners of a tetrad. `bytes` is the image Discord samples, the avatar at 96px.
 pub(crate) fn suggestions(bytes: &[u8]) -> Option<[u32; 5]> {
     let [primary, secondary] = palette(&decode(ImageReader::new(Cursor::new(bytes)))?)?;
     let [a, b, c] = tetrad(primary);
     Some([primary, secondary, a, b, c])
 }
 
-/// `primary` brightened, turned 270°, 180° and 90°.
 fn tetrad(primary: u32) -> [u32; 3] {
     let [hue, saturation, lightness] = rgb_to_hsl(primary);
     let (saturation, lightness) = ((saturation + 0.3).min(1.), (lightness + 0.15).min(1.));
     [270., 180., 90.].map(|turn| hsl_to_rgb([(hue + turn) % 360., saturation, lightness]))
 }
 
-/// The first frame, for animated images.
 fn decode<R: BufRead + Seek>(reader: ImageReader<R>) -> Option<RgbaImage> {
     let mut reader = reader.with_guessed_format().ok()?;
     let mut limits = Limits::default();
@@ -37,7 +32,6 @@ fn decode<R: BufRead + Seek>(reader: ImageReader<R>) -> Option<RgbaImage> {
     Some(reader.decode().ok()?.to_rgba8())
 }
 
-/// Hue in degrees, saturation and lightness in 0..=1, unrounded like tinycolor's.
 fn rgb_to_hsl(color: u32) -> [f64; 3] {
     let [r, g, b] = [16, 8, 0].map(|shift| f64::from((color >> shift) & 0xFF) / 255.);
     let (max, min) = (r.max(g).max(b), r.min(g).min(b));
@@ -102,14 +96,12 @@ fn hsl_to_rgb([hue, saturation, lightness]: [f64; 3]) -> u32 {
 }
 
 fn palette(image: &RgbaImage) -> Option<[u32; 2]> {
-    // Discord samples every tenth pixel and quantizes five colors, using the first two.
     let mut samples = Vec::new();
     for pixel in image.pixels().step_by(10) {
         let [r, g, b, a] = pixel.0;
         if a < 125 || (r > 250 && g > 250 && b > 250) {
             continue;
         }
-        // This port strides by the channel count too; repeat samples to retain each one.
         samples.extend_from_slice(&[r, g, b, r, g, b, r, g, b]);
     }
     if samples.is_empty() {
@@ -152,7 +144,6 @@ mod tests {
 
     #[test]
     fn suggestions_brighten_the_main_color_around_a_tetrad() {
-        // Discord's picker, for an avatar whose main colors are #21333c and #7c93a1.
         assert_eq!(tetrad(0x21333C), [0x338723, 0x874423, 0x762387]);
         for color in [0x21333C, 0xFFFFFF, 0x000000, 0x5865F2] {
             assert_eq!(hsl_to_rgb(rgb_to_hsl(color)), color);

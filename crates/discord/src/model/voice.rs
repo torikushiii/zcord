@@ -35,7 +35,6 @@ pub struct ChannelInfo {
 pub struct ChannelInfoEntry {
     #[serde(deserialize_with = "snowflake")]
     pub id: u64,
-    // A status-only update must not clear the session; explicit null ends it.
     #[serde(default, deserialize_with = "nullable")]
     pub voice_start_time: Option<Option<u64>>,
 }

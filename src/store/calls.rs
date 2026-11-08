@@ -33,7 +33,6 @@ impl Store {
             return Change::None;
         }
         if create {
-            // Our voice state can arrive before the call announcement.
             let voice_states = self
                 .dm_calls
                 .remove(&update.channel_id)

@@ -66,7 +66,6 @@ impl Packet {
     }
 }
 
-/// RFC 6184.
 pub(crate) fn packetize(
     frame: &[u8],
     sequence: &mut u16,

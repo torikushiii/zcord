@@ -41,10 +41,6 @@ fn fallback_selection_freezes_media_but_only_retries_failed_attachments() {
     );
 }
 
-// 4x2 canvas. Frame 0 is a 2x2 opaque red square at the origin and is disposed to
-// background. Frame 1 is a 2x2 alpha-blended subframe at x=2, with one blue pixel
-// and transparent padding. If disposal is skipped, frame 0's red square remains on
-// frame 1.
 const DISPOSAL_OFFSET_WEBP: &[u8] = &[
     0x52, 0x49, 0x46, 0x46, 0x86, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x58,
     0x0a, 0x00, 0x00, 0x00, 0x12, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x01, 0x00, 0x00, 0x41, 0x4e,
@@ -287,7 +283,6 @@ fn collectible_apng_preserves_the_source_play_count() {
         let source = apng(1, 1, &[80, 80], plays);
         assert_eq!(source_play_count(&source).unwrap(), NonZeroU32::new(plays));
     }
-    // The PNG decoder ignores animation-control values above its 31-bit limit.
     assert_eq!(
         source_play_count(&apng(1, 1, &[80, 80], u32::MAX)).unwrap(),
         None
@@ -506,13 +501,10 @@ fn webp_disposes_first_frame_before_offset_alpha_blend() {
     assert_eq!(image.delay(0).numer_denom_ms(), (50, 1));
     assert_eq!(image.delay(1).numer_denom_ms(), (50, 1));
 
-    // Opaque red becomes BGRA after process_frame.
     assert_eq!(&image.as_bytes(0).unwrap()[..4], &[0, 0, 255, 255]);
 
     let second = image.as_bytes(1).unwrap();
     assert_eq!(&second[..8], &[0u8; 8]);
-    // image-webp's fixed-point blend yields 254 for an opaque pixel over a
-    // transparent one.
     let blue = &second[8..12];
     assert!(blue[0] >= 254, "blue channel {}", blue[0]);
     assert_eq!(&blue[1..], &[0, 0, 255]);
@@ -624,7 +616,6 @@ fn invalid_dimensions_counts_and_garbage_are_rejected() {
 fn decode_falls_back_to_streaming_with_identical_output() {
     let input = apng(64, 32, &[50, 100, 120], 0);
     let (single, single_bytes) = decode_with_budget(&input, 16, u64::MAX, MAX_IMAGE).unwrap();
-    // Two 64x32 frames need 16KB, so one frame fits and the second triggers fallback.
     let budget = u64::from(64_u32 * 32 * 4);
     let (streamed, streamed_bytes) = decode_with_budget(&input, 16, budget, MAX_IMAGE).unwrap();
     assert_eq!(single_bytes, streamed_bytes);
@@ -657,7 +648,6 @@ fn cache_uses_all_workers_and_evicts_only_old_unheld_lru_entries() {
     assert!(next(&mut cache).is_none());
     assert_eq!(cache.running[Lane::Gif as usize], DOWNLOADS);
 
-    // At max-1 workers a non-empty cache must still admit the last worker.
     cache.running[Lane::Gif as usize] = DOWNLOADS - 1;
     let mb = 1024 * 1024;
     let stale = now - VISIBLE_GRACE - Duration::from_secs(1);
@@ -723,7 +713,6 @@ fn cache_starts_without_evicting_fresh_or_held_entries() {
     assert!(has(&cache, &fresh_key));
     assert_eq!(cache.bytes, 256 * mb);
 
-    // Once released, the old held entry is evictable again.
     drop(held);
     cache.request(&ImageSpec::DefaultAvatar { index: 23 }, 16, now);
     let (key, _, evicted) = cache.next();
@@ -779,7 +768,6 @@ fn effects_share_a_larger_ready_decode_and_unseen_animations_go() {
     };
     let old = Instant::now() - UNSEEN_DROP - Duration::from_secs(1);
     assert_eq!(cache.serving_size(&effect, 600), 600);
-    // The stream player holds a registered effect's still image too.
     let registered = blank_image();
     put_ready(
         &mut cache,
@@ -983,7 +971,6 @@ fn queued_small_images_are_served_while_the_gif_lane_is_full() {
         32,
     );
     cache.request(&emoji.0, emoji.1, now);
-    // A fresh GIF request is ahead in the queue; its full lane must not block the emoji.
     cache.request(&ImageSpec::DefaultAvatar { index: 100 }, 16, now);
     assert_eq!(next(&mut cache), Some(emoji));
     assert_eq!(cache.running[Lane::Small as usize], 1);
@@ -1207,8 +1194,6 @@ fn hundred_millisecond_frames_render_about_ten_times_per_second(cx: &mut TestApp
     let sibling_initial = sibling_renders.get();
     assert_eq!(initial, 1);
 
-    // 165 draws per simulated second; only the animation's own wakeups may
-    // dirty the cached panel.
     let step = Duration::from_nanos(1_000_000_000 / 165);
     for _ in 0..165 {
         clock.background_executor.advance_clock(step);

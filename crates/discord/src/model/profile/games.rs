@@ -31,7 +31,6 @@ pub struct LinkedApplication {
 #[derive(Clone, Debug, Deserialize)]
 pub struct GameWebsite {
     pub url: String,
-    /// IGDB website category: 1 is the official game site.
     #[serde(default, deserialize_with = "default_value")]
     pub category: u64,
 }
@@ -40,7 +39,6 @@ pub struct GameWebsite {
 pub struct GameMedia {
     #[serde(default, deserialize_with = "default_value")]
     pub cover_url: Option<String>,
-    /// Some games ship covers as an asset hash instead, served from `app-icons/{game_id}/`.
     #[serde(default, deserialize_with = "default_value")]
     pub cover_hash: Option<String>,
 }
@@ -210,13 +208,11 @@ pub struct ApplicationIdentity {
 pub struct IdentityProfile {
     #[serde(default, deserialize_with = "default_value")]
     pub username: Option<String>,
-    // Discord nests these under `data.dynamic`; flattening keeps the stat list at hand.
     #[serde(default, rename = "data", deserialize_with = "identity_stats")]
     pub stats: Vec<IdentityStat>,
 }
 
 impl IdentityProfile {
-    /// The URL and natural size of an `Image` stat, e.g. `featured_played_character_image`.
     pub fn image(&self, key: &str) -> Option<(&str, Option<u32>, Option<u32>)> {
         self.stats.iter().find_map(|stat| {
             if stat.name != key {
@@ -235,7 +231,6 @@ fn identity_stats<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<IdentityStat>, 
     struct Data {
         #[serde(default, deserialize_with = "entries")]
         dynamic: Vec<IdentityStat>,
-        // Some apps (Example Team Game) only ship `primary`; others ship both.
         #[serde(default)]
         primary: Value,
     }
@@ -297,7 +292,6 @@ pub struct IdentityStat {
 pub enum StatValue {
     Text(String),
     Number(f64),
-    /// An image object (`primary` values or `dynamic` type 3); `url` is its `proxy_url` (or `url`).
     Image {
         url: String,
         width: Option<u32>,

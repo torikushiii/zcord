@@ -7,9 +7,7 @@ const MAX_CACHE: u64 = 512 * 1024 * 1024;
 const MAX_VIDEO_CACHE: u64 = 256 * 1024 * 1024;
 const MAX_FRAMES_CACHE: u64 = 1536 * 1024 * 1024;
 const PRUNE_THRESHOLD: u64 = 64 * 1024 * 1024;
-/// Cache hits older than this get their mtime refreshed so pruning stays LRU.
 const TOUCH_INTERVAL: Duration = Duration::from_secs(60 * 60);
-/// Leave freshly written files alone; a reader may be about to open them.
 const PRUNE_MIN_AGE: Duration = Duration::from_secs(60);
 
 pub(super) fn cache_directory<'a>(
@@ -48,8 +46,6 @@ impl Service {
                     std::fs::create_dir_all(&directory)?;
                     std::fs::create_dir_all(&video_directory)?;
                     std::fs::create_dir_all(&frames_directory)?;
-                    // Run all of them even if one fails, so no directory can grow
-                    // unbounded because another one errored.
                     let images = prune(&directory, MAX_CACHE);
                     let videos = prune(&video_directory, MAX_VIDEO_CACHE);
                     let frames = prune(&frames_directory, MAX_FRAMES_CACHE);
@@ -116,7 +112,6 @@ impl Service {
         Ok(path)
     }
 
-    /// The original bytes of a file on Discord's CDN, unlike the sized copies `load` caches.
     pub(crate) async fn fetch_original(&self, url: &str) -> Option<Vec<u8>> {
         let url = reqwest::Url::parse(url).ok().filter(allowed_url)?;
         let response = self.client.get(url).send().await.ok()?;
@@ -353,16 +348,12 @@ pub(super) fn prune_with(
         if total <= limit {
             break;
         }
-        // A file modified just now may still be opened by the UI that requested
-        // it; leave it for a later prune.
         if now
             .duration_since(modified)
             .map_or(true, |age| age < PRUNE_MIN_AGE)
         {
             continue;
         }
-        // A reader (or the platform) can prevent removal. Skip it and keep
-        // pruning the rest instead of abandoning the whole pass.
         if remove(&path).is_err() {
             continue;
         }

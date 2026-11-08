@@ -1,7 +1,6 @@
 use super::application::{Tile, tag_label};
 use super::*;
 
-/// The URL of an identity-data image: an image stat, or a text stat some apps fill with a URL.
 fn data_image(
     profile: Option<&IdentityProfile>,
     key: &str,
@@ -18,8 +17,6 @@ fn data_image(
     })
 }
 
-/// Art for a widget image field. Data images fall back to the field's `fallback` when the account
-/// has no such data, as Example Team Game' default hero does.
 pub(crate) fn widget_image_art(
     application_id: u64,
     image: &WidgetImage,
@@ -40,9 +37,8 @@ pub(crate) fn widget_image_art(
     }
 }
 
-/// Discord pins the hero art to the card's top-right, fills the header's height and fades it
-/// in from the left. gpui's `ObjectFit::Cover` always centres and there's no image mask, so the
-/// art is sized by hand and painted under an edge fade.
+/// gpui's `ObjectFit::Cover` always centres and there's no image mask, so the art is sized by
+/// hand and painted under an edge fade.
 pub(super) fn widget_hero(
     application_id: u64,
     image: &WidgetImage,
@@ -73,7 +69,6 @@ fn hero_aspect(width: Option<u32>, height: Option<u32>) -> f32 {
     }
 }
 
-/// The size to request the hero art at so it still covers the slot once fitted.
 fn hero_longest(aspect: f32) -> f32 {
     HERO_WIDTH.max(HERO_HEIGHT * aspect).max(HERO_HEIGHT)
 }
@@ -129,8 +124,6 @@ fn hero_art(art: AnyElement, aspect: f32) -> AnyElement {
         .into_any_element()
 }
 
-/// A user-built card: an optional header, a wide cover image with a caption, and a grid of
-/// titled images laid out like an application widget's collection.
 pub(super) fn personal_widget(
     card: &ProfileCard,
     widget_id: u64,
@@ -300,7 +293,6 @@ pub(crate) fn stat_value(value: &StatValue) -> String {
     }
 }
 
-/// Readable fallback for raw stat keys ("achievement_num") when an app has no widget config.
 pub(crate) fn stat_name(name: &str) -> String {
     let name = name
         .strip_suffix("_num")

@@ -5,7 +5,6 @@ const PAGER_SPAN: u64 = 2;
 const SPINNER_SIZE: f32 = 16.;
 const SORT_MENU_WIDTH: f32 = 170.;
 const CARD_WIDTH: f32 = RESULTS_WIDTH - 1. - 32. - 2.;
-/// The press that closes the menu also clicks its button, which must not reopen it.
 const SORT_REOPEN_GUARD: Duration = Duration::from_millis(200);
 const SORTS: [(SearchSort, &str); 3] = [
     (SearchSort::Newest, "Newest"),

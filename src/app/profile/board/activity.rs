@@ -23,7 +23,6 @@ pub(in crate::app::profile) fn activity(
     let entries: Vec<_> = outbox
         .iter()
         .filter(|entry| !matches!(entry.kind, OutboxKind::Unknown))
-        // The live entry for the game being played is the current-activity card instead.
         .filter(|entry| !current.is_some_and(|current| current.id == entry.id && live(entry, now)))
         .collect();
     if game.is_none() && listening.is_none() && entries.is_empty() {
@@ -167,7 +166,6 @@ fn current_game(
                             )),
                         })
                         .children(badge.map(|badge| {
-                            // Composite over the modal surface so the artwork cannot show through.
                             let backdrop = card
                                 .theme()
                                 .and_then(|theme| theme.modal_background().as_solid())
@@ -255,8 +253,6 @@ fn current_game(
         )
 }
 
-/// The playing app's `activity_accessory` widget surface ("Current Mood: …"), a strip along the
-/// bottom of the popout's activity card. Discord shows "–" while the value is empty.
 fn activity_accessory(
     app: &DiscordApp,
     card: &ProfileCard,
@@ -310,7 +306,6 @@ fn activity_accessory(
             .flex()
             .items_center()
             .gap(rpx(8.))
-            // Flush with the card's edges, under a divider, like Discord's footer strip.
             .mx(rpx(-8.))
             .mb(rpx(-8.))
             .px(rpx(10.))
@@ -339,7 +334,6 @@ fn activity_accessory(
     )
 }
 
-/// "Playing", or "Playing on Xbox" plus the console's glyph for presences from a console.
 fn playing_heading(game: &GameActivity, palette: ProfilePalette) -> Div {
     let platform = match game.platform.as_deref() {
         Some("xbox") => Some(("Xbox", Some("connections/xbox"))),
@@ -479,8 +473,6 @@ pub(in crate::app::profile) fn popout_playing(
                                 .bg(palette.hover)
                                 .child(theme::icon("gamepad-2", 28., palette.muted)),
                         })
-                        // The panel is translucent, so the ring composites it over the popout
-                        // surface or the artwork shows through.
                         .children(badge.map(|badge| {
                             let surface = card
                                 .theme()
@@ -561,8 +553,6 @@ pub(in crate::app::profile) fn popout_playing(
     )
 }
 
-/// Discord's elapsed-time clock: "6:10", "1:02:03".
-/// `modal` sizes the card like the full profile's current-game card.
 pub(in crate::app::profile) fn listening(
     app: &DiscordApp,
     card: &ProfileCard,
@@ -761,7 +751,6 @@ pub(in crate::app::profile) fn listening(
                                             .child(clock(total)),
                                     )
                             }))
-                            // Without an end time Discord counts up like a game session.
                             .when(progress.is_none(), |this| {
                                 this.children(elapsed.map(|elapsed| {
                                     div()
@@ -791,7 +780,6 @@ pub(super) fn clock(elapsed: Duration) -> String {
 }
 
 fn live(entry: &OutboxEntry, now: DateTime<Utc>) -> bool {
-    // A lapsed session keeps its live trait; Discord dates it like any other entry.
     entry.traits.contains(&OutboxTrait::Live)
         && entry
             .expires_at
@@ -921,7 +909,6 @@ fn activity_row(
             .or(last_update)
             .or(entry.started_at.as_deref())
             .and_then(parse)
-            // Launched activities carry no timestamps at all; the entry id is still a snowflake.
             .or_else(|| snowflake_time(entry.id))
             .map_or_else(String::new, |at| format!("{} ago", span(now - at)))
     };
@@ -942,7 +929,6 @@ fn activity_row(
                 .justify_center()
                 .size(rpx(ACTIVITY_ART))
                 .rounded(rpx(ACTIVITY_RADIUS))
-                // Transparent icons (NIKKE's wordmark) sit on the card itself, as in Discord.
                 .map(|this| match art {
                     Some(path) => this.child(
                         img(path)
@@ -1010,8 +996,6 @@ pub(super) fn parse(value: &str) -> Option<DateTime<Utc>> {
         .map(|at| at.with_timezone(&Utc))
 }
 
-/// Spans as Discord words them ("23h" reads "1d", 11 days "2w"): each unit rounds to the
-/// nearest whole, and a unit takes over once the smaller one would reach its threshold.
 pub(super) fn span(delta: chrono::TimeDelta) -> String {
     let seconds = delta.num_seconds().max(0) as f64;
     let minutes = (seconds / 60.).round() as i64;
@@ -1037,8 +1021,6 @@ fn plural(count: i64, unit: &str) -> String {
     }
 }
 
-/// Shows the presence image's hover text (`large_text`/`small_text`) above it, as Discord does.
-/// The small image sits on the large one, so its tooltip takes precedence.
 fn art_tooltip(
     art: Div,
     app: &DiscordApp,

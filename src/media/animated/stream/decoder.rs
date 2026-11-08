@@ -8,7 +8,6 @@ pub(super) struct Core {
     pub(super) count: usize,
     pub(super) position: Duration,
     pub(super) base: Duration,
-    /// How many times to play before holding the last frame; `None` loops forever.
     plays: Option<NonZeroU32>,
     cycles: u64,
     pub(super) terminal: bool,
@@ -148,7 +147,6 @@ impl Core {
         }
         let started = Instant::now();
         let mut latest = None;
-        // Whether `latest` has been through its source's `render` already.
         let mut rendered = false;
         for _ in 0..DECODE_SLICE {
             if !wanted() {
@@ -171,7 +169,6 @@ impl Core {
                         .plays
                         .is_some_and(|plays| self.cycles >= u64::from(plays.get()))
                     {
-                        // Played out: the last frame shown stays.
                         self.terminal = true;
                         break;
                     }
@@ -184,8 +181,6 @@ impl Core {
                         && let Some(expected) = self.source.target()
                         && let Ok(spool) = SpoolFrames::open(file, expected)
                     {
-                        // A frame read from the old source needs that source's resize and
-                        // colour order; the spool's frames are stored done.
                         if !rendered {
                             latest = latest
                                 .map(|(frame, start, end)| (self.source.render(frame), start, end));

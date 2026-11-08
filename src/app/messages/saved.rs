@@ -178,8 +178,6 @@ impl DiscordApp {
         let request = Tokio::spawn(cx, async move {
             session.unsave_message(channel_id, message_id).await
         });
-        // Removed up front so the UI answers at once; a failed delete reloads what Discord
-        // still holds, bringing the entry and its reminder back.
         cx.spawn(async move |this, cx| {
             let failed = match request.await {
                 Ok(Ok(_)) => return,

@@ -64,7 +64,6 @@ pub(super) fn connections(profile: &model::Profile, palette: ProfilePalette) -> 
     ))
 }
 
-/// Icon and brand color, drawn on the white connection tile.
 fn connection_icon(kind: &str) -> Option<(&'static str, u32)> {
     Some(match kind {
         "github" => ("connections/github", 0x181717),
@@ -93,7 +92,6 @@ fn connection_icon(kind: &str) -> Option<(&'static str, u32)> {
     })
 }
 
-/// Public profile link for platforms Discord links out to; the rest render without the arrow.
 fn connection_url(account: &model::ConnectedAccount) -> Option<String> {
     let (name, id) = (&account.name, &account.id);
     Some(match account.kind.as_str() {

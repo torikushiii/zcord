@@ -80,7 +80,6 @@ fn enqueue<T: Send + 'static>(
     Ok(receiver)
 }
 
-/// Blocks, so call it off the UI thread.
 pub fn load() -> Result<Option<String>, CredentialError> {
     let result = enqueue(load_now).map_err(|_| CredentialError::Unavailable)?;
     match result.recv_timeout(TIMEOUT) {
@@ -144,7 +143,6 @@ fn save_now(token: &str) -> keyring::Result<()> {
 
 fn clear_now() -> keyring::Result<()> {
     let mut result = Ok(());
-    // A failed migration must not resurrect a logged-out or invalid token.
     for service in [SERVICE, LEGACY_SERVICE] {
         match entry(service).and_then(|entry| entry.delete_credential()) {
             Ok(()) | Err(keyring::Error::NoEntry) => {}

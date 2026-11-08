@@ -1,7 +1,6 @@
 use super::application::tag_pill;
 use super::*;
 
-/// A grid of game covers, two rows deep until "Show more", each naming its game on hover.
 pub(super) fn covers_widget(
     app: &DiscordApp,
     card: &ProfileCard,
@@ -30,9 +29,6 @@ pub(super) fn covers_widget(
             .into_any_element()
     };
     let (first, rest) = games.split_at(games.len().min(COLLAPSED_COVERS));
-    // Rows past the first two grow or shrink on "Show more"/"Show less". Covers are a fixed size,
-    // so the full height is known up front. The clip exists only while animating: a clipped box
-    // that ends at zero height (or scrolls fully out of view) leaks a 1px line of its images.
     let toggling = card
         .widget_toggles
         .get(&widget_id)
@@ -164,13 +160,11 @@ fn cover_art(game: &crate::discord::model::Game, cx: &App) -> Option<Arc<Path>> 
             };
             images::resolve(&spec, theme::image_px(COVER_HEIGHT), cx)
         }
-        // Without a cover, the square icon is cropped into the portrait slot.
         (None, None, Some(hash)) => app_asset(game.id, hash, COVER_HEIGHT, cx),
         (None, None, None) => None,
     }
 }
 
-/// Warm the same static image-cache keys the hidden tabs will use, without rendering them.
 pub(in crate::app::profile) fn prefetch_images(card: &ProfileCard, current: Option<u64>, cx: &App) {
     for id in card
         .profile
@@ -214,7 +208,6 @@ pub(super) fn games_widget(
     palette: ProfilePalette,
     cx: &App,
 ) -> AnyElement {
-    // The editor lists every game, since each one carries its own controls.
     let expanded = editing || card.expanded_widgets.contains(&widget_id);
     let shown = if expanded {
         games.len()
@@ -241,8 +234,6 @@ pub(super) fn games_widget(
         .child(div().flex().flex_col().gap(rpx(16.)).mt(rpx(16.)).children(
             games[..shown].iter().enumerate().map(|(index, game)| {
                 let row = game_row(app, card, widget_id, game, featured, editing, palette, cx);
-                // Rows vary in height, so newly shown ones fade and slide in rather than
-                // growing to a precomputed height like the cover grids.
                 match card.widget_toggles.get(&widget_id) {
                     Some((generation, at))
                         if expanded && index >= COLLAPSED_GAMES && at.elapsed() < WIDGET_TOGGLE =>

@@ -22,8 +22,6 @@ const SIDEBAR: f32 = 48.;
 pub(super) const HEIGHT: f32 = 488.;
 pub(super) const PANEL_WIDTH: f32 = SIDEBAR + COLUMNS as f32 * CELL + 24.;
 const VISIBLE_SUGGESTIONS: usize = 14;
-/// Window height the autocomplete leaves for the title bar, the channel header and its own
-/// title, besides the composer's measured height.
 const SUGGESTION_RESERVED_HEIGHT: f32 = 150.;
 const SUGGESTION_ROW: f32 = 36.;
 const MAX_STICKER_SUGGESTIONS: usize = 6;
@@ -31,10 +29,7 @@ const GRID_EMOJI: f32 = 40.;
 const PICKER_RISE: f32 = 8.;
 const PICKER_ENTER: Duration = Duration::from_millis(150);
 const PICKER_EXIT: Duration = Duration::from_millis(100);
-/// A press that closed the picker via mouse-down-outside must not reopen it from
-/// the toggle button handling the same press.
 const REOPEN_GUARD: Duration = Duration::from_millis(150);
-/// Representative emoji for the Unicode category buttons, in `emoji::categories()` order.
 const CATEGORY_ICONS: [(&str, &str); 8] = [
     ("People", "😀"),
     ("Nature", "🐱"),
@@ -63,10 +58,6 @@ enum HoverUpdate<'a> {
     Reset,
 }
 
-/// The footer keeps the last emoji the pointer entered. In particular, moving
-/// from cell A to cell B can deliver B's enter before A's leave, and leaving
-/// the grid entirely matches Discord by keeping the preview. Only rebuilding
-/// the rows (a search change) resets it.
 fn next_hovered(current: Option<&Entry>, update: HoverUpdate<'_>) -> Option<Entry> {
     match update {
         HoverUpdate::Enter(entry) => Some(entry.clone()),
@@ -101,12 +92,10 @@ pub(crate) struct EmojiPicker {
     hovered: Option<Entry>,
     closing: bool,
     swapped: bool,
-    /// Unique per open, so reopening replays the entry animation.
     animation: u64,
     _search_events: Subscription,
 }
 
-/// Composer autocomplete state; the suggestions themselves are derived from the text.
 #[derive(Default)]
 pub(crate) struct Suggest {
     index: usize,
@@ -115,8 +104,6 @@ pub(crate) struct Suggest {
 }
 
 impl DiscordApp {
-    /// Toggles the picker; `position` is where the triggering press happened, and the
-    /// picker opens above-left of it.
     pub(crate) fn toggle_emoji_picker(
         &mut self,
         target: PickerTarget,
@@ -133,9 +120,6 @@ impl DiscordApp {
             self.close_emoji_picker(cx);
             return;
         }
-        // A closing picker reaches the guard below: it keeps the press that
-        // started the close from reopening the picker. If the close task is
-        // late and the guard has expired, opening drops the task instead.
         if self
             .emoji
             .closed_at
@@ -160,7 +144,6 @@ impl DiscordApp {
         self.open_emoji_picker(target, position, true, window, cx);
     }
 
-    /// Removes the composer picker at once (no exit animation) and returns its anchor.
     pub(super) fn take_emoji_picker(&mut self) -> Option<Point<Pixels>> {
         let picker = self.emoji.picker.take_if(|picker| {
             matches!(picker.target, PickerTarget::Composer | PickerTarget::Pane)
@@ -170,7 +153,6 @@ impl DiscordApp {
         Some(picker.position)
     }
 
-    /// `swapped` opens in place of the GIF picker's tab, without the entry animation.
     fn open_emoji_picker(
         &mut self,
         target: PickerTarget,
@@ -253,8 +235,6 @@ impl DiscordApp {
         self.emoji.closing = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(PICKER_EXIT).await;
             this.update(cx, |app, cx| {
-                // A newer open replaces the picker and cancels this task; if the
-                // task still runs, only remove the exact picker it started with.
                 let still_closing = app
                     .emoji
                     .picker
@@ -287,7 +267,6 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// Shift-click (or shift-enter) keeps the picker open, like Discord.
     fn pick_emoji(
         &mut self,
         choice: &EmojiChoice,
@@ -376,7 +355,6 @@ impl DiscordApp {
         }
     }
 
-    /// Moves the highlighted suggestion; returns false when no list is showing.
     pub(crate) fn move_emoji_suggestion(&mut self, delta: isize, cx: &mut Context<Self>) -> bool {
         let Some((_, choices)) = self.emoji_suggestions(cx) else {
             return false;
@@ -393,7 +371,6 @@ impl DiscordApp {
         true
     }
 
-    /// Inserts the highlighted (or given) suggestion; returns false when no list is showing.
     pub(crate) fn accept_emoji_suggestion(
         &mut self,
         index: Option<usize>,
@@ -437,8 +414,6 @@ fn build_rows(app: &DiscordApp, query: &str, cx: &App) -> (Vec<Row>, Vec<Section
             rows.push(Row::Emojis(chunk.to_vec()));
         }
     };
-    // An unavailable emoji (its server lost the boost tier) can't be sent anywhere, so it only
-    // stays visible, dimmed, while browsing its own server.
     let shown = |(choice, access): &Entry| match choice {
         EmojiChoice::Custom(custom) => {
             *access != EmojiAccess::Unavailable || custom.guild_id == guild_id
@@ -533,8 +508,6 @@ pub(in crate::app) fn choice_name(choice: &EmojiChoice) -> &str {
     }
 }
 
-/// Resolves an emoji through the image service. The footer uses this path for
-/// its single animated preview; other previews use [`emoji_preview_image`] instead.
 pub(crate) fn emoji_image(choice: &EmojiChoice, size: f32, animate: bool, cx: &App) -> AnyElement {
     let image: Option<ImageSource> = match choice {
         EmojiChoice::Custom(custom) => images::resolve(
@@ -562,8 +535,6 @@ pub(crate) fn emoji_image(choice: &EmojiChoice, size: f32, animate: bool, cx: &A
         .into_any_element()
 }
 
-/// Picker cells and autocomplete rows share frame-timed playback, with a still
-/// fallback while the animation is decoding.
 fn emoji_preview_image(choice: &EmojiChoice, size: f32, animate: bool, cx: &App) -> AnyElement {
     if animate
         && let EmojiChoice::Custom(custom) = choice
@@ -930,7 +901,6 @@ pub(crate) fn suggestions(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
     let fits = (room / SUGGESTION_ROW).max(3.) as usize;
     let visible = choices.len().min(VISIBLE_SUGGESTIONS).min(fits);
     let choices = Rc::new(choices);
-    // Rows are rendered lazily, so only guild names are gathered up front.
     let guild_names: Rc<std::collections::HashMap<u64, SharedString>> = Rc::new(
         app.store
             .guilds
@@ -940,8 +910,6 @@ pub(crate) fn suggestions(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
     );
     let entity = app.entity.clone();
     let animate = crate::settings::emoji_animation();
-    // Virtualized: a short query can match thousands of emoji, and only the
-    // visible rows should resolve images.
     let list = uniform_list("emoji-suggestions", choices.len(), move |range, _, cx| {
         range
             .map(|index| {
@@ -993,14 +961,10 @@ fn suggestion_row(
 ) -> Stateful<Div> {
     let hover = entity.clone();
     let click = entity.clone();
-    // Discord's `.autocompleteRow` (8px sides) around a `.base` (8px padding, 3px radius): a
-    // 20px emoji and 14px/16px text make the 36px row.
     div()
         .id(("emoji-suggestion", index))
         .flex()
         .items_center()
-        // Full width so the server name can fill the rest and sit at the right edge; the
-        // list pads the 8px row inset.
         .w_full()
         .px(rpx(8.))
         .h(rpx(SUGGESTION_ROW))
@@ -1033,7 +997,6 @@ fn suggestion_row(
                 .child(emoji_preview_image(choice, 20., animate, cx)),
         )
         .child(
-            // `.autocompleteRowContentPrimary`: keeps its width, shrinking only when crowded.
             div()
                 .flex_shrink(1.)
                 .min_w_0()
@@ -1042,7 +1005,6 @@ fn suggestion_row(
                 .child(format!(":{}:", choice_name(choice))),
         )
         .children(source.map(|source| {
-            // `.autocompleteRowContentSecondary`: fills the rest, 16px in, right-aligned.
             div()
                 .flex_1()
                 .min_w_0()
@@ -1128,13 +1090,10 @@ mod tests {
         let hovered = next_hovered(None, HoverUpdate::Enter(&first));
         assert_eq!(hovered.as_ref(), Some(&first));
 
-        // Cell B's enter can arrive before cell A's leave; the stale leave must
-        // not blank the footer.
         let hovered = next_hovered(hovered.as_ref(), HoverUpdate::Enter(&second));
         let hovered = next_hovered(hovered.as_ref(), HoverUpdate::Leave);
         assert_eq!(hovered.as_ref(), Some(&second));
 
-        // Leaving the grid keeps the last preview until the rows rebuild.
         let hovered = next_hovered(hovered.as_ref(), HoverUpdate::Leave);
         assert_eq!(hovered.as_ref(), Some(&second));
     }

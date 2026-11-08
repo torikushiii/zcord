@@ -27,8 +27,6 @@ impl DiscordApp {
             widgets.refresh_after_save = true;
             return;
         }
-        // Refresh in place: a style save leaves the board, details and cosmetics intact, and
-        // the card keeps showing the saved preview until `profile_loaded` swaps in the response.
         self.request_profile(ProfileKind::Modal, true, cx);
     }
     pub(crate) fn request_profile(
@@ -126,7 +124,6 @@ impl DiscordApp {
                 }
             }
         }
-        // Start independent resources now, not after the full profile response or a tab switch.
         if card.identities.is_none() {
             card.identities_pending = true;
             let session = session.clone();
@@ -262,8 +259,6 @@ impl DiscordApp {
                 .ok();
             }));
         }
-        // The activity accessory needs the current game's config even when that app has no
-        // Board widget; `details_requested` above keeps this to one request per card.
         if let Some(application_id) = game_ids.first().copied() {
             card.load_widget_configs(session.clone(), vec![application_id], cx);
         }
@@ -400,7 +395,6 @@ impl DiscordApp {
         }
         if load_board {
             card.board_requested = true;
-            // Board metadata is independent of the user's activity history.
             card.load_applications(session.clone(), application_ids, cx);
             card.load_games(session.clone(), game_ids, cx);
             card.load_widget_configs(session.clone(), widget_application_ids, cx);

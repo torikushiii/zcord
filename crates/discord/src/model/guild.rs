@@ -16,7 +16,6 @@ pub struct GuildProperties {
     pub features: Option<Vec<String>>,
     #[serde(default, deserialize_with = "optional_level")]
     pub default_message_notifications: Option<NotificationLevel>,
-    /// The server tag members can wear; `Some(None)` when an update takes it away.
     #[serde(default, deserialize_with = "nullable")]
     pub profile: Option<Option<GuildProfile>>,
 }
@@ -94,7 +93,6 @@ impl Guild {
             .as_deref()
             .or(self.legacy.features.as_deref())
     }
-    /// The server tag and its badge hash, when the server offers one.
     pub fn tag(&self) -> Option<(&str, Option<&str>)> {
         let profile = self
             .properties

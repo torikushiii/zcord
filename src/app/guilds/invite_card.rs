@@ -13,7 +13,6 @@ const BANNER: f32 = 72.;
 const ICON: f32 = 62.;
 const ICON_RING: f32 = 4.;
 const GAME_ICON: f32 = 24.;
-/// The icon overhangs the banner by half its height, plus its ring.
 const ICON_OVERHANG: f32 = ICON / 2. + ICON_RING;
 const BUTTON_GREEN: u32 = 0x00863A;
 const BUTTON_GREEN_HOVER: u32 = 0x047B37;
@@ -119,7 +118,6 @@ fn invalid(sent: bool) -> Div {
 fn card(app: &DiscordApp, key: u64, invite: &Invite, cx: &App) -> AnyElement {
     let joined = app.store.guild_by_id(invite.guild_id).is_some();
     let icon_spec = invite.icon_spec();
-    // Without a banner, Discord shows the server icon blurred across the top.
     // Cover-fitted images sample their atlas tile's edge texels, which bleeds a neighbouring
     // tile's colour into a 1px line; the card border is painted over that edge.
     let fill = |image: Img| {
@@ -164,7 +162,6 @@ fn card(app: &DiscordApp, key: u64, invite: &Invite, cx: &App) -> AnyElement {
         let path = images::resolve(&game.icon_spec()?, theme::image_px(GAME_ICON), cx)?;
         Some(img(path).size(rpx(GAME_ICON)).flex_none().rounded(rpx(6.)))
     };
-    // A lone game is listed by name; several collapse to a row of icons.
     let games = match games.as_slice() {
         [] => None,
         [game] => Some(
@@ -333,7 +330,6 @@ fn count(color: u32, label: String) -> Div {
         .child(label)
 }
 
-/// 1234 -> "1,234"
 fn grouped(value: u32) -> String {
     let digits = value.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);

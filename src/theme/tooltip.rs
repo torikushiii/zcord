@@ -50,16 +50,12 @@ fn tooltip_arrow_up() -> Div {
     tooltip_arrow("tooltip-arrow-up", "tooltip-arrow-up-edge", 16., 9.).mb(rpx(-1.))
 }
 
-/// Tooltip shown centred below an element, arrow pointing up, for elements with no room above.
-/// Add it as a child of a `relative()` element while that element is hovered.
 pub fn tooltip_below(label: impl Into<SharedString>) -> impl IntoElement {
     TooltipBelow {
         label: label.into(),
     }
 }
 
-/// Shows a `tooltip_above` while the pointer is over its `relative()` parent, holding its own
-/// hover so that the parent's view needs no state for it.
 pub fn hover_tooltip(
     key: impl Into<ElementId>,
     label: impl Into<SharedString>,
@@ -96,7 +92,6 @@ pub fn hover_tooltip_body(key: impl Into<ElementId>, body: impl IntoElement) -> 
     }
 }
 
-/// A hover tooltip with a second, regular-weight line under a bold label.
 pub fn hover_tooltip_detail(
     key: impl Into<ElementId>,
     label: impl Into<SharedString>,
@@ -148,8 +143,6 @@ impl RenderOnce for HoverTooltip {
     }
 }
 
-/// Tooltip shown centred above an element, arrow pointing down. Add it as a
-/// child of a `relative()` element while that element is hovered.
 pub fn tooltip_above(label: impl Into<SharedString>) -> impl IntoElement {
     TooltipAbove {
         label: label.into(),
@@ -158,7 +151,6 @@ pub fn tooltip_above(label: impl Into<SharedString>) -> impl IntoElement {
     }
 }
 
-/// `relative` keeps the rise out of the anchor's layout.
 pub fn tooltip_entrance(body: Div, cx: &App) -> AnyElement {
     if cx.reduce_motion() {
         return body.into_any_element();
@@ -219,7 +211,6 @@ impl RenderOnce for TooltipAbove {
                 deferred(
                     anchored()
                         .anchor(Anchor::BottomCenter)
-                        // The arrow is 9px tall and overlaps the bubble's border by 1px.
                         .offset(point(px(0.), -rpx(8.).to_pixels(window.rem_size())))
                         .snap_to_window_with_margin(px(8.))
                         .child(tooltip_entrance(bubble, cx)),
@@ -229,7 +220,6 @@ impl RenderOnce for TooltipAbove {
     }
 }
 
-/// `body` centred above its `relative()` parent, over everything else.
 fn float_above(body: Div, cx: &App) -> Div {
     div()
         .absolute()
@@ -247,7 +237,6 @@ fn float_above(body: Div, cx: &App) -> Div {
         )
 }
 
-/// A tooltip bubble with no arrow holding `content`, centred above its `relative()` parent.
 pub fn tooltip_card_above(content: impl IntoElement, cx: &App) -> Div {
     float_above(div().child(content), cx)
 }

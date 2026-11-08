@@ -3,13 +3,10 @@ use super::*;
 
 const HOVER_FADE: Duration = Duration::from_millis(220);
 
-/// How far the nameplate tile has faded from its stand-in row (0) to your member row (1).
 #[derive(Default)]
 pub(crate) struct HoverFade {
     hovered: bool,
-    /// Bumped on every change to restart the animation.
     changes: u64,
-    /// The level when the current fade began, so leaving mid-fade reverses from there.
     from: f32,
     started: Option<Instant>,
 }
@@ -19,7 +16,6 @@ impl HoverFade {
         if self.hovered { 1. } else { 0. }
     }
 
-    /// A partial fade takes the matching share of the full duration.
     fn duration(&self) -> Duration {
         HOVER_FADE.mul_f32((self.target() - self.from).abs())
     }
@@ -44,7 +40,6 @@ impl HoverFade {
         self.started = Some(now);
     }
 
-    /// `layer` faded to the hover level, easing there after each change.
     pub(crate) fn fade(&self, id: &'static str, layer: Div) -> AnyElement {
         let (from, target, duration) = (self.from, self.target(), self.duration());
         if duration.is_zero() {
@@ -60,7 +55,6 @@ impl HoverFade {
     }
 }
 
-/// A stand-in member row that cross-fades to your real one, with a remove button, on hover.
 pub(super) fn nameplate_tile(
     app: &DiscordApp,
     editor: &StylesEditor,
@@ -212,7 +206,6 @@ pub(super) fn nameplate_tile(
         .into_any_element()
 }
 
-/// Discord's default display name font (gg sans) and plain-color effect.
 pub(super) const DEFAULT_FONT: u32 = 11;
 pub(crate) const SOLID_EFFECT: u32 = 1;
 
@@ -228,7 +221,6 @@ pub(super) fn banner_image(shown: &Shown, cx: &App) -> Option<AnyElement> {
     }
     let spec = shown.banner.as_ref()?;
     let path = images::resolve(spec, theme::image_px(TILE * 2.), cx)?;
-    // The tile's overflow clip is square, so the picture rounds its own corners.
     Some(
         img(path)
             .size_full()
@@ -238,14 +230,12 @@ pub(super) fn banner_image(shown: &Shown, cx: &App) -> Option<AnyElement> {
     )
 }
 
-/// Records where its parent was last painted, for placing popovers beside it.
 pub(crate) fn measure_into(cell: Rc<Cell<Option<Bounds<Pixels>>>>) -> impl IntoElement {
     canvas(move |bounds, _, _| cell.set(Some(bounds)), |_, _, _, _| {})
         .absolute()
         .size_full()
 }
 
-/// What a profile shows where it has no banner image: the theme's primary color.
 pub(super) fn banner_color(editor: &StylesEditor, shown: &Shown) -> u32 {
     if editor.nitro {
         shown.theme_colors.unwrap_or(DEFAULT_THEME)[0]
@@ -303,7 +293,6 @@ pub(super) fn theme_tile(app: &DiscordApp, editor: &StylesEditor, shown: &Shown)
             .child(swatch("styles-accent", ColorSlot::Accent, accent))
             .into_any_element()
     } else {
-        // Discord only takes a banner color on the main profile.
         let color = shown.accent_color.unwrap_or(DEFAULT_THEME[0]);
         base.justify_center()
             .bg(rgb(color))
@@ -314,14 +303,10 @@ pub(super) fn theme_tile(app: &DiscordApp, editor: &StylesEditor, shown: &Shown)
     }
 }
 
-/// Discord's starting gradient when no theme is set.
 pub(super) const DEFAULT_THEME: [u32; 2] = [0x5865F2, 0x232428];
 
-/// Height over width of profile effect thumbnails, which are all 450×880.
 const EFFECT_ASPECT: f32 = 880. / 450.;
 
-/// A miniature profile wearing the effect. With `animate`, it plays the effect's own layers,
-/// which are animated, instead of the still thumbnail.
 pub(super) fn effect_thumbnail(
     editor: &StylesEditor,
     sku_id: Option<u64>,
@@ -332,7 +317,6 @@ pub(super) fn effect_thumbnail(
 ) -> AnyElement {
     let item = sku_id.and_then(|sku| collectible_item(editor, sku));
     let pixels = theme::image_px(width.max(height));
-    // Effect art is drawn for a whole profile, so it spans the card's width from the top.
     let place = |this: Div| {
         this.absolute()
             .top_0()
@@ -343,7 +327,6 @@ pub(super) fn effect_thumbnail(
     let layers = item.filter(|_| animate).and_then(|item| {
         let mut layers: Vec<_> = item.effects.iter().enumerate().collect();
         layers.sort_by_key(|(_, layer)| layer.z_index);
-        // Only once every layer has decoded, so they start together.
         layers
             .into_iter()
             .map(|(index, layer)| {
@@ -390,7 +373,6 @@ pub(super) fn effect_thumbnail(
         .into_any_element()
 }
 
-/// A greyed-out miniature profile drawn behind effect and frame thumbnails.
 fn skeleton(width: f32) -> Div {
     let line = |w: f32| {
         div()
@@ -436,7 +418,6 @@ pub(super) fn frame_thumbnail(
         let item = owned.product.items.iter().find(|item| item.kind == 3)?;
         Some((owned.product.sku_id, item))
     });
-    // Back layers sit behind the card and front layers over it, as on a real profile.
     let layers = |front: bool| -> Vec<AnyElement> {
         frame
             .map(|(product_sku, item)| {

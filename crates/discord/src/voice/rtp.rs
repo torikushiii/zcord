@@ -14,9 +14,7 @@ pub(super) struct Header {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct PacketInfo {
     pub header: Header,
-    /// Fixed header, CSRCs, and the four-byte extension preamble; the AEAD AAD.
     pub aad_len: usize,
-    /// Start of the Opus payload after encrypted extension elements.
     pub payload_offset: usize,
 }
 

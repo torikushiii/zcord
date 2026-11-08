@@ -1,6 +1,3 @@
-//! State and actions behind the profile styles panel. The panel and its dialogs
-//! (`styles_panel`) only read this state and call these actions.
-
 mod actions;
 mod encoding;
 mod preview;
@@ -55,7 +52,6 @@ impl StyleScope {
     }
 }
 
-/// `type` of a collectible item: 0 decoration, 1 profile effect, 2 nameplate, 3 frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum CollectibleKind {
     Decoration,
@@ -79,9 +75,7 @@ impl CollectibleKind {
 #[derive(Clone)]
 pub(crate) struct OwnedCollectible {
     pub kind: CollectibleKind,
-    /// The item's SKU, which is what a save sends.
     pub sku_id: u64,
-    /// One product per item; bundle items get a product of their own.
     pub product: Arc<model::CollectibleProduct>,
     pub purchased_at: Option<SharedString>,
 }
@@ -112,14 +106,11 @@ pub(crate) enum ImageTarget {
 
 #[derive(Clone, PartialEq)]
 pub(crate) enum ImageChange {
-    /// A local file, already validated and encoded for upload. `preview` shows what will be
-    /// uploaded (the editor's cut), while `path` names the file the user picked.
     Upload {
         path: PathBuf,
         preview: PathBuf,
         data_uri: Arc<str>,
     },
-    /// One of `/users/@me/avatars`; avatars only.
     Recent {
         id: u64,
         storage_hash: SharedString,
@@ -145,13 +136,10 @@ pub(crate) struct StyleDraft {
     pub effect: Option<Option<u64>>,
     pub frame: Option<Option<u64>>,
     pub name_style: Option<Option<NameStyle>>,
-    /// Nitro: `[primary, accent]`.
     pub theme_colors: Option<Option<[u32; 2]>>,
-    /// Without Nitro the theme is a single banner color.
     pub accent_color: Option<Option<u32>>,
 }
 
-/// What the scope has saved; `None` means not set at this scope.
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct StyleValues {
     pub avatar: Option<SharedString>,
@@ -170,15 +158,12 @@ pub(crate) struct StylesEditor {
     pub scope: StyleScope,
     pub draft: StyleDraft,
     pub nitro: bool,
-    /// `None` until `/users/@me/collectibles-purchases` answers.
     pub owned: Option<Arc<Vec<OwnedCollectible>>>,
     pub shop: Option<Arc<Vec<OwnedCollectible>>>,
     pub recent_avatars: Option<Arc<Vec<RecentAvatar>>>,
     pub saving: bool,
     pub error: Option<SharedString>,
-    /// Panel and dialog presentation state, owned by the UI.
     pub ui: super::styles_panel::PanelUi,
-    /// Fetched baseline; the open card holds a derived preview while editing.
     pub(super) saved_profile: Option<Arc<model::Profile>>,
     identity: Arc<()>,
     scope_revision: u64,
@@ -209,7 +194,6 @@ impl StylesEditor {
         }
     }
 
-    /// Tells this editor apart from one opened later, for tasks that outlive it.
     pub(super) fn identity(&self) -> Arc<()> {
         self.identity.clone()
     }

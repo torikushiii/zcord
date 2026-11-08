@@ -297,8 +297,6 @@ impl VoiceManager {
             self.end_share(shared, Some(reason));
             return;
         }
-        // The sound is heard even while muted, so it can be unmuted live. It's optional: if
-        // Windows won't share it, the picture still goes out.
         let (audio_sender, audio_receiver) = std::sync::mpsc::sync_channel(8);
         let audio_frames = match stream::share::spawn_audio(audio_sender, stop.clone(), live) {
             Ok(()) => Some(audio_receiver),
@@ -343,7 +341,6 @@ impl VoiceManager {
         }
     }
 
-    /// Switches the running stream to another source or quality without ending it.
     pub fn change_share(&self, source: Option<ScreenSource>, quality: Option<StreamQuality>) {
         if let Some(live) = self
             .lock()

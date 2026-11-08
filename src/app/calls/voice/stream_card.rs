@@ -26,7 +26,6 @@ pub(super) struct StreamCard {
     user_id: u64,
     position: Point<Pixels>,
     preview: Option<String>,
-    /// `None` until first hovered, so a new card doesn't play the fade out.
     preview_hovered: Option<bool>,
 }
 

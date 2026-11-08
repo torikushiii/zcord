@@ -167,7 +167,6 @@ impl FrameSource for SpoolFrames {
     }
 }
 
-/// Writes the spool and returns its size.
 pub(super) fn write_spool(
     source: &Path,
     size: u32,
@@ -240,7 +239,6 @@ pub(super) fn spool_pool() -> &'static mpsc::Sender<SpoolJob> {
                         })
                     };
                     match write_spool(&job.source, job.size, &job.file, keep_going) {
-                        // Counted like decoded frames, so the frame cache stays in budget.
                         Ok(written) => {
                             if let Some(service) = job.service {
                                 service.record_frames_write(written);

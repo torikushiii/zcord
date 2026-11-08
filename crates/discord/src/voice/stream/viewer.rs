@@ -121,7 +121,6 @@ fn speaking_audio_ssrc(data: &Value, streamer_id: u64) -> Option<u32> {
     ssrc(data.get("ssrc"))
 }
 
-/// Op 12's top-level SSRCs can be 0 or absent while `streams` carries the real ones.
 fn stream_ssrcs(data: &Value) -> Option<(u32, u32)> {
     let streams = data.get("streams").and_then(Value::as_array);
     let video = ssrc(data.get("video_ssrc")).or_else(|| ssrc(streams?.first()?.get("ssrc")))?;

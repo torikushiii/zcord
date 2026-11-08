@@ -51,7 +51,6 @@ impl ProfileTheme {
         if crate::settings::profile_theme_sync() {
             return theme::is_light();
         }
-        // Discord selects the profile mode from the primary color's perceived brightness.
         let channel = |shift: u32| ((self.primary >> shift) & 0xFF) as f64;
         0.299 * channel(16) + 0.587 * channel(8) + 0.114 * channel(0) >= 127.5
     }
@@ -73,8 +72,6 @@ impl ProfileTheme {
         )
     }
 
-    /// Discord darkens and saturates the primary color for profile buttons. Fitted to one
-    /// capture: #B2563E gives #7E2916.
     pub(super) fn button(self) -> u32 {
         let channel = |shift: u32| ((self.primary >> shift) & 0xFF) as f32 / 255.;
         let mut hsl = Hsl::from_color(Srgb::new(channel(16), channel(8), channel(0)));
@@ -97,7 +94,6 @@ impl ProfileTheme {
             let channel = |shift: u32| ((color >> shift) & 0xFF) as f64 / 255.;
             Lab::from_color(Srgb::new(channel(16), channel(8), channel(0)))
         };
-        // The dialog uses a Lab midpoint with constrained lightness, not the card gradient.
         let midpoint: Srgb<f64> =
             Srgb::from_color(to_lab(self.primary).mix(to_lab(self.secondary), 0.5));
         let mut background = palette::Hsl::from_color(midpoint);
@@ -144,20 +140,15 @@ pub(super) fn contrast(foreground: u32, background: u32) -> f32 {
 
 #[derive(Clone, Copy)]
 pub(super) struct ProfilePalette {
-    /// The profile's custom theme is a light one.
     pub(super) light: bool,
-    /// The card is light, from a light theme or from no theme in the app's light mode.
     pub(super) surface_light: bool,
     pub(super) strong: u32,
     pub(super) text: u32,
     pub(super) muted: u32,
     pub(super) faint: u32,
-    /// Links in the bio; `None` keeps the app's link color.
     pub(super) link: Option<u32>,
     pub(super) panel: Hsla,
-    /// Filled buttons inside a panel (Play, Get on Steam, Browse the Shop).
     pub(super) button: Hsla,
-    /// Strips that sit a step above a panel, like the activity accessory footer.
     pub(super) raised: Hsla,
     pub(super) border: Hsla,
     pub(super) hover: Hsla,
@@ -169,8 +160,6 @@ pub(super) struct ProfilePalette {
 impl ProfilePalette {
     pub(super) fn of(theme: Option<ProfileTheme>) -> Self {
         let light = theme.is_some_and(ProfileTheme::is_light);
-        // A profile without a theme follows the app, so in light mode its surfaces are light
-        // too; a custom theme picks its own mode whatever the app's.
         let plain_light = theme.is_none() && theme::is_light();
         let dark = theme::dark_palette();
         let text_color = |light_color: u32, dark_color: u32, plain: fn() -> u32| match theme {
@@ -202,7 +191,6 @@ impl ProfilePalette {
             let Some(tint) = status_tint else {
                 return color;
             };
-            // Discord mixes the original token at 100% with its profile tint at 50%.
             let mixed: Srgb<u8> =
                 Srgb::from_color(Oklab::from_color(to_srgb(color)).mix(tint, 1. / 3.))
                     .into_format();
@@ -228,9 +216,6 @@ impl ProfilePalette {
                 Some(_) if light => Some(0x154C8A),
                 Some(_) => Some(dark.link),
             },
-            // Discord's dark profile surfaces are a faintly blue white over the card: #18181a,
-            // #2a2a2c and #2c2c30 on a black theme. A light theme lightens its color instead,
-            // and a plain light card darkens its white.
             panel: if light {
                 hsla(0., 0., 1., 0.2)
             } else if plain_light {
@@ -272,7 +257,6 @@ impl ProfilePalette {
                 theme.surface_color(theme.primary),
                 theme.surface_color(theme.secondary),
             ];
-            // Keep metadata readable even when the two custom stops have very different brightness.
             for color in [&mut palette.muted, &mut palette.faint] {
                 if backgrounds
                     .iter()
@@ -296,7 +280,6 @@ mod tests {
         assert_eq!(plain.status_surface, 0x17181B);
         assert!((plain.status_border.a - 41. / 255.).abs() < 0.001);
 
-        // Reference colors extracted from Discord's dark and light profile bubble CSS.
         for (primary, expected, border_alpha) in [
             (0xB2563E, 0x191211, 112. / 255.),
             (0xD99DA3, 0xFFEEEF, 51. / 255.),

@@ -39,8 +39,6 @@ pub struct BookmarkPage {
     pub has_more: bool,
 }
 
-/// No `SAVED_MESSAGE_DELETE` payload has been captured yet, so the ids are read from either the
-/// top level or `save_data`, which `SAVED_MESSAGE_CREATE` uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SavedMessageRemoved {
     pub channel_id: u64,

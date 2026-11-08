@@ -54,7 +54,6 @@ fn select_collectible(
     })
 }
 
-/// The None and Shop buttons that lead every collectible list.
 fn inventory_controls(
     app: &DiscordApp,
     kind: CollectibleKind,
@@ -85,7 +84,6 @@ fn inventory_controls(
     ]
 }
 
-/// A nameplate as it sits in the list: a stand-in avatar and name over the art.
 fn nameplate_item(
     app: &DiscordApp,
     editor: &StylesEditor,
@@ -163,8 +161,6 @@ enum ListCell {
     Item(u64),
 }
 
-/// One line of a collectible list. Only the lines in view are drawn: off-screen rows of
-/// rounded art otherwise leave streaks behind the scroll area, and the shop runs to hundreds.
 enum Line {
     Heading(&'static str, f32),
     Loading,
@@ -220,7 +216,6 @@ fn list_lines(
     lines
 }
 
-/// Tracks which collectible is under the pointer, so only that one plays its animation.
 fn hover_collectible(
     app: &DiscordApp,
     sku_id: u64,
@@ -354,7 +349,6 @@ fn render_line(
                 .flex()
                 .gap(rpx(GRID_GAP))
                 .pb(rpx(GRID_GAP))
-                // The None/Shop pair sits a little apart from the nameplate rows under it.
                 .when(
                     kind == CollectibleKind::Nameplate && matches!(cells[..], [ListCell::None, ..]),
                     |this| this.pb(rpx(16.)),
@@ -417,7 +411,6 @@ pub(super) fn collectible_dialog(
         })
         .size_full()
     });
-    // Effects and frames are tried on a whole profile card, which needs the room.
     let profile_preview = matches!(kind, CollectibleKind::Effect | CollectibleKind::Frame);
     let preview = collectible_preview(app, editor, kind, selected, &current, cx);
     let details = selected
@@ -517,7 +510,6 @@ fn collectible_preview(
         _ => current.decoration,
     }
     .and_then(|sku| decoration_of(app, editor, sku));
-    // The ring cuts the status out of the stage behind the avatar.
     let avatar_with = |size: f32, status: bool| {
         // Each copy keeps its own animation clock; sharing one, the copies' different-sized
         // images would keep resetting it to the first frame.
@@ -627,7 +619,6 @@ fn collectible_preview(
                                 .map(|tag| theme::guild_tag(tag, cx)),
                         ),
                 );
-            // Five member-list rows, centered on yours, the outer ones cut off by the box.
             div()
                 .relative()
                 .w(rpx(276.))
@@ -665,7 +656,6 @@ fn collectible_preview(
                 .as_deref()
                 .and_then(|product| product.items.iter().find(|item| item.kind == 1));
             let frame = frame.as_deref().and_then(super::frame::frame_item);
-            // A newly picked effect plays from its start.
             let (playing, clock) = &editor.ui.preview_effect;
             if playing.replace(effect_sku) != effect_sku {
                 clock.replace(None);

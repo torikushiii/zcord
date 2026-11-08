@@ -25,14 +25,10 @@ pub(in crate::app) struct ThreadPane {
     list: ListState,
     composer: Entity<TextareaState>,
     ack: Option<Task<()>>,
-    /// A forum post opened for the first time reads from its starter message, so the list
-    /// keeps returning to the top while older pages load, until the history is complete.
     seek_top: bool,
-    /// Read position when the pane opened, so the NEW divider stays put after the ack.
     unread_since: Option<u64>,
     menu: bool,
     menu_closed: Option<Instant>,
-    /// The menu shows the notification levels under "Notification Settings".
     notify_open: bool,
     _submit: Subscription,
 }
@@ -44,7 +40,6 @@ impl ThreadPane {
 }
 
 impl DiscordApp {
-    /// A guild channel or thread, or a DM; the side pane shows any of them.
     pub(crate) fn channel_by_id(&self, id: u64) -> Option<&Channel> {
         self.store
             .guilds
@@ -69,8 +64,6 @@ impl DiscordApp {
         let Some(pane) = &self.thread_pane else {
             return false;
         };
-        // A message request opens beside the requests list, like Discord's sidebar, and only
-        // there; a thread pane belongs to its guild.
         if self.store.private_channel(pane.id).is_some() {
             return self.showing_home_page() && self.home.page == HomePage::Requests;
         }
@@ -156,7 +149,6 @@ impl DiscordApp {
         let post = self.store.forum_post(thread_id).is_some();
         let last_read = self.store.last_read(thread_id);
         let seek_top = post && last_read.is_none();
-        // A post never opened is new from its starter message on.
         let unread_since = last_read.or(post.then_some(0));
         self.thread_pane = Some(ThreadPane {
             id: thread_id,
@@ -318,7 +310,6 @@ impl DiscordApp {
         self.seek_pane_top(channel_id, cx);
     }
 
-    /// Scrolls to the first loaded message; at the top the scroll handler fetches older pages.
     fn seek_pane_top(&mut self, channel_id: u64, cx: &mut Context<Self>) {
         let complete = self.history.complete.contains(&channel_id);
         let Some(pane) = self
@@ -357,7 +348,6 @@ impl DiscordApp {
         }
     }
 
-    /// Applies the change locally first; Discord echoes it back over the gateway.
     fn update_thread_settings(
         &mut self,
         thread_id: u64,
@@ -446,7 +436,6 @@ impl DiscordApp {
         }
     }
 
-    /// Sends text plus the pane's staged files to its thread; false when nothing could be sent.
     pub(crate) fn send_pane_content(
         &mut self,
         content: String,
@@ -586,7 +575,6 @@ fn post_menu(app: &DiscordApp, id: u64, notify_open: bool) -> impl IntoElement +
     let row = app.store.thread_row_by_id(id);
     let joined = row.as_ref().is_some_and(|row| row.joined);
     let muted = row.as_ref().is_some_and(|row| row.muted);
-    // An unset level behaves as "Only @mentions".
     let level = row.as_ref().map_or(0, |row| row.notify);
     let level = if level == 0 { 4 } else { level };
     let link = format!(
@@ -886,7 +874,6 @@ fn header(app: &DiscordApp, id: u64, name: &str) -> impl IntoElement + use<> {
         )
 }
 
-/// A message request's sidebar header, like Discord's: the sender's avatar and name, and close.
 fn dm_header(app: &DiscordApp, id: u64, cx: &App) -> impl IntoElement + use<> {
     let close = app.entity.clone();
     let name = app.store.private_channel_name(id);

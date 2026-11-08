@@ -23,8 +23,6 @@ fn upload_preview(client: &Client, stream_key: &str, thumbnail: &str) -> Request
 }
 
 impl Rest {
-    /// Sets the still Discord shows of this account's live stream; `thumbnail` is a JPEG
-    /// data URI.
     pub async fn upload_stream_preview(
         &self,
         stream_key: &str,

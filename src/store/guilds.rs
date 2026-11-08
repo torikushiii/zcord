@@ -82,7 +82,6 @@ impl Store {
             return Change::None;
         };
         guild.stickers = Some(stickers);
-        // Sticker catalogs live only in source metadata; no view rebuild is needed.
         Change::Structure
     }
 

@@ -180,7 +180,6 @@ pub(in crate::app::profile) fn more_button(
                 .shadow_lg()
                 .occlude()
                 .on_mouse_down_out(move |event, _, cx| {
-                    // The trigger closes on click; closing on mouse-down would reopen it.
                     if trigger_bounds
                         .get()
                         .is_some_and(|bounds| bounds.contains(&event.position))
@@ -382,7 +381,6 @@ fn friend_button(app: &DiscordApp, card: &ProfileCard, action: FriendAction) -> 
     let user_id = card.user_id;
     let palette = card.palette();
     let entity = app.entity.clone();
-    // A status badge, not a button: Discord only removes friends from the Home friends list.
     if action == FriendAction::Friends {
         return div()
             .id("profile-friend")

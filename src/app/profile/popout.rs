@@ -83,7 +83,6 @@ pub(super) fn popout(
                 Some(_) => rpx(THEME_BORDER * 2.).to_pixels(window.rem_size()),
                 None => px(2.),
             };
-            // Scroll the account content instead of letting window snapping cover its anchor.
             div()
                 .id("account-popout-scroll")
                 .flex()
@@ -114,7 +113,6 @@ pub(super) fn popout(
     let framed = framed(card, outer_width, outer, false, cx);
     let close = app.entity.clone();
     let in_status_menu = card.status_menu.hit_test();
-    // Keep the frame art that hangs past the card on screen, not just the card itself.
     let margin = |overflow: f32| rpx(overflow).to_pixels(window.rem_size()) + px(12.);
     deferred(
         anchored()
@@ -149,9 +147,6 @@ pub(super) fn popout(
     .into_any_element()
 }
 
-/// The popout the effect and frame dialogs try a choice on: your card wearing `effect` and
-/// `frame`, with an example button where its actions would be.
-/// `compact` stops after the names, as the name style dialog's card does.
 pub(super) fn style_preview(
     app: &DiscordApp,
     card: &ProfileCard,
@@ -192,7 +187,6 @@ pub(super) fn style_preview(
             Some(theme) => this.bg(theme.overlay()),
             None => this,
         })
-        // Discord's name style card has no status bubble.
         .child(header(app, card, &layout, surface, None, !compact, cx))
         .child(
             div()
@@ -245,7 +239,6 @@ pub(super) fn header(
         SystemTime::now(),
     )
     .cloned();
-    // Your own profile shows an "add status" prompt in place of an empty bubble.
     let prompt = status.is_none() && card.user_id == app.store.current_user_id;
     let status = status.or_else(|| {
         prompt.then(|| CustomStatus {
@@ -312,7 +305,6 @@ pub(super) fn header(
         .into_any_element()
 }
 
-// An emoji alone is a complete status, even while its image is still loading.
 fn active_custom_status(status: Option<&CustomStatus>, now: SystemTime) -> Option<&CustomStatus> {
     status.filter(|status| {
         !status.is_expired(now)
@@ -324,7 +316,6 @@ fn active_custom_status(status: Option<&CustomStatus>, now: SystemTime) -> Optio
     })
 }
 
-/// The styles editor whose draft this card previews: your own full profile while it's open.
 fn editing_styles<'a>(
     app: &'a DiscordApp,
     card: &ProfileCard,
@@ -360,7 +351,6 @@ pub(super) fn banner(
     let profile = card.profile.as_deref();
     let pixels = BANNER_SOURCE;
     let corner = rpx(layout.corner);
-    // While styling, the draft's banner, which may be a picked file not yet uploaded.
     let (spec, file) = match editing_styles(app, card) {
         Some(editor) => {
             let shown = super::styles_panel::shown(app, editor);

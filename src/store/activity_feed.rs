@@ -97,7 +97,6 @@ impl Store {
         self.content_inbox.as_ref()
     }
 
-    /// Distinct authors of ranked PLAYED_GAME entries, for member requests.
     pub fn activity_authors(&self) -> Vec<u64> {
         let mut authors = Vec::new();
         for entry in self.content_inbox.iter().flat_map(|inbox| &inbox.entries) {

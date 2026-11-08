@@ -31,46 +31,32 @@ const TILE_RADIUS: f32 = 8.;
 pub(crate) struct PanelUi {
     pub(crate) scope_menu: bool,
     pub(crate) dialog: Option<StyleDialog>,
-    /// Edits live: theme colors go straight to the draft, a name color to the open dialog.
     pub(crate) color_picker: Option<ColorPicker>,
     pub(crate) picker_bounds: PickerBounds,
-    /// Scroll position of the open collectible dialog's list.
     pub(crate) collectible_list: Option<ListState>,
     pub(crate) nameplate_hover: HoverFade,
-    /// The dialog collectible under the pointer, which plays its animation.
     pub(crate) hovered_collectible: Option<u64>,
-    /// When the effect dialog's preview started playing, and for which effect.
     pub(crate) preview_effect: (Cell<Option<u64>>, RefCell<Option<Instant>>),
-    /// Show/Hide Styles presses, which restart the panel's slide.
     pub(crate) panel_toggles: u64,
-    /// Bumped on every open, so each dialog pops in afresh.
     pub(crate) dialog_opens: u64,
-    /// Set while the dialog pops out; `dialog` clears once it finishes.
     pub(crate) dialog_closing: Option<Task<()>>,
-    /// The dialog replaced one still on screen, so the scrim is already up.
     pub(crate) dialog_swapped: bool,
     pub(crate) name_preview_light: bool,
     pub(crate) widgets: super::widget_editor::WidgetsUi,
     pub(crate) identity: super::identity_editor::IdentityUi,
-    /// The theme color picker's suggestions and the avatar they came from; `None` while the
-    /// avatar is still being sampled.
     pub(crate) theme_suggestions: Option<(AvatarSource, Option<[u32; 5]>)>,
 }
 
-/// `Shown`'s avatar: a CDN image, or a picked file not yet uploaded.
 type AvatarSource = (Option<ImageSpec>, Option<PathBuf>);
 
-/// The open dialog and its working copy, applied to the draft only on Apply.
 #[derive(Clone)]
 pub(crate) enum StyleDialog {
     Collectible {
         kind: CollectibleKind,
-        /// `None` is "Use Default".
         selected: Option<u64>,
     },
     NameStyle(NameStyle),
     Image(ImageTarget),
-    /// Cropping a picked avatar or banner before it goes in the draft.
     ImageEdit(ImageEdit),
 }
 
@@ -87,7 +73,6 @@ impl StyleDialog {
 pub(crate) struct ColorPicker {
     pub(crate) slot: ColorSlot,
     pub(crate) hsv: [f32; 3],
-    /// The swatch that opened it, which the picker sits beside.
     pub(crate) anchor: Option<Bounds<Pixels>>,
 }
 
@@ -95,22 +80,16 @@ pub(crate) struct ColorPicker {
 pub(crate) enum ColorSlot {
     Primary,
     Accent,
-    /// The single banner color of profiles without Nitro.
     Banner,
-    /// A custom display name color from the name style dialog: the stop it edits in a
-    /// Gradient or Prism, otherwise 0.
     Name(usize),
 }
 
-/// Where the picker's saturation square and hue bar were last painted, for mapping drags.
 #[derive(Clone, Default)]
 pub(crate) struct PickerBounds {
     pub(crate) square: Rc<Cell<Option<Bounds<Pixels>>>>,
     pub(crate) hue: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
-/// What the panel and its dialogs show: the draft over the scope's saved values, falling back
-/// to the main profile inside a server.
 #[derive(Default)]
 pub(super) struct Shown {
     pub avatar: Option<ImageSpec>,
@@ -171,7 +150,6 @@ pub(super) fn shown(app: &DiscordApp, editor: &StylesEditor) -> Shown {
     let main_banner = main.banner.clone().map(|hash| banner_hash(hash, false));
     let (avatar, avatar_file) = match &draft.avatar {
         Some(ImageChange::Upload { preview, .. }) => (None, Some(preview.clone())),
-        // Earlier uploads live under the archive, not beside the current avatar.
         Some(ImageChange::Recent { id, storage_hash }) => (
             Some(ImageSpec::ArchivedAvatar {
                 user_id,
@@ -217,8 +195,6 @@ pub(super) fn shown(app: &DiscordApp, editor: &StylesEditor) -> Shown {
     }
 }
 
-/// The item of `kind` inside an owned product, or the one already on the user when the
-/// inventory hasn't loaded.
 pub(super) fn collectible_item(
     editor: &StylesEditor,
     sku_id: u64,
@@ -276,7 +252,6 @@ pub(super) fn shown_name_style(style: &NameStyle) -> ShownNameStyle {
     }
 }
 
-/// Your name as the editor previews it: a rename typed into the profile, else your own.
 pub(super) fn own_name(app: &DiscordApp) -> String {
     app.profile_styles
         .as_ref()
@@ -368,8 +343,6 @@ impl DiscordApp {
         self.toggle_styles_panel(cx);
     }
 
-    /// Closes the styles editor's topmost layer for Escape: a picker or menu, then an open
-    /// dialog. Returns false when nothing was open, so Escape can close the profile itself.
     pub(crate) fn dismiss_styles_layer(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(editor) = &mut self.profile_styles else {
             return false;
@@ -390,7 +363,6 @@ impl DiscordApp {
         false
     }
 
-    /// Plays the pop-out, then drops the dialog.
     pub(crate) fn close_style_dialog(&mut self, cx: &mut Context<Self>) {
         let Some(editor) = &mut self.profile_styles else {
             return;
@@ -470,7 +442,6 @@ impl DiscordApp {
         }
     }
 
-    /// Samples the shown avatar for the theme picker's suggestions, once per avatar.
     fn load_theme_suggestions(&mut self, cx: &mut Context<Self>) {
         let Some(editor) = &self.profile_styles else {
             return;
@@ -534,7 +505,6 @@ impl DiscordApp {
         self.update_styles_ui(|ui| ui.color_picker = None, cx);
     }
 
-    /// Moves the open picker to `hsv` and writes the color where its slot lives.
     pub(crate) fn pick_style_color(&mut self, hsv: [f32; 3], cx: &mut Context<Self>) {
         let Some(editor) = &mut self.profile_styles else {
             return;
@@ -547,7 +517,6 @@ impl DiscordApp {
         let color = hsv_to_rgb(hsv);
         if let ColorSlot::Name(index) = slot {
             if let Some(StyleDialog::NameStyle(style)) = &mut editor.ui.dialog {
-                // Blended effects edit one stop; the rest take a single custom color throughout.
                 match style
                     .colors
                     .get_mut(index)

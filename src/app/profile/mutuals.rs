@@ -30,7 +30,6 @@ pub(super) fn mutuals_line(
             )
             .into_any_element()
         });
-        // Only a returned list has a Friends tab to open.
         let tab = (!friend_list.is_empty()).then_some(Tab::Friends);
         mutual_part(
             app,
@@ -88,7 +87,6 @@ pub(super) fn mutuals_row(parts: Vec<AnyElement>, palette: ProfilePalette) -> Op
     )
 }
 
-/// One "N Mutual …" entry: up to three overlapping icons, then the count, opening `tab` on click.
 fn mutual_part(
     app: &DiscordApp,
     id: &'static str,

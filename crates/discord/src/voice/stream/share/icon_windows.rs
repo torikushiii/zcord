@@ -23,10 +23,8 @@ use windows::{
 };
 
 const MAX_ICON: i32 = 256;
-/// A hung window must not stall the picker, so it gets this long to answer WM_GETICON.
 const MESSAGE_TIMEOUT_MS: u32 = 50;
 
-/// The window's own icon, falling back to its program's, as straight-alpha BGRA.
 pub(crate) fn window_icon(id: u64) -> Option<StreamFrame> {
     let hwnd = HWND(id as usize as *mut _);
     // The window owns the icons it hands out; only one extracted from the exe is ours to free.
@@ -96,7 +94,6 @@ fn pixels(icon: HICON) -> Option<StreamFrame> {
     let mut info = ICONINFO::default();
     unsafe { GetIconInfo(icon, &mut info) }.ok()?;
     let frame = read(&info);
-    // GetIconInfo hands back copies of both bitmaps, which the caller frees.
     unsafe {
         for bitmap in [info.hbmColor, info.hbmMask] {
             if !bitmap.0.is_null() {
@@ -108,7 +105,6 @@ fn pixels(icon: HICON) -> Option<StreamFrame> {
 }
 
 fn read(info: &ICONINFO) -> Option<StreamFrame> {
-    // Monochrome icons have no colour bitmap; they are rare enough to show the fallback.
     if info.hbmColor.0.is_null() {
         return None;
     }
@@ -126,7 +122,6 @@ fn read(info: &ICONINFO) -> Option<StreamFrame> {
     }
     let mut bgra = bits(info.hbmColor, width, height)?;
     if bgra.chunks_exact(4).all(|pixel| pixel[3] == 0) {
-        // Icons without alpha mark see-through pixels white in the AND mask instead.
         let mask = bits(info.hbmMask, width, height)?;
         for (pixel, mask) in bgra.chunks_exact_mut(4).zip(mask.chunks_exact(4)) {
             pixel[3] = if mask[0] == 0 { 255 } else { 0 };
@@ -139,7 +134,6 @@ fn read(info: &ICONINFO) -> Option<StreamFrame> {
     })
 }
 
-/// The bitmap as top-down 32-bit BGRA rows.
 fn bits(bitmap: HBITMAP, width: i32, height: i32) -> Option<Vec<u8>> {
     if bitmap.0.is_null() {
         return None;

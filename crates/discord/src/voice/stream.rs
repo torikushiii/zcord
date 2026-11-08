@@ -36,8 +36,6 @@ pub struct ScreenSource {
     pub is_window: bool,
 }
 
-/// Go Live quality in Discord's terms: `resolution` is the output height, and 0 keeps the
-/// source size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StreamQuality {
     pub resolution: u32,
@@ -54,10 +52,6 @@ impl StreamQuality {
     #[cfg_attr(not(windows), allow(dead_code))]
     const MAX_SOURCE_HEIGHT: u32 = 2160;
 
-    /// The encoded size for a captured frame. A preset fits the picture to its 16:9 box,
-    /// scaling up as Discord's client does, so a smaller window still streams at the preset's
-    /// height; source keeps the window's size, within 4K. NV12 needs both sides even, so an
-    /// odd last row or column is dropped first.
     #[cfg_attr(not(windows), allow(dead_code))]
     pub(crate) fn frame_size(self, source_width: u32, source_height: u32) -> (u32, u32) {
         let (width, height) = ((source_width & !1) as usize, (source_height & !1) as usize);
@@ -79,7 +73,6 @@ impl StreamQuality {
         (width as u32 & !1, height as u32 & !1)
     }
 
-    /// The bitrate to start at, before a frame shows the real height; source counts as large.
     pub(crate) fn initial_bitrate(self) -> u32 {
         max_bitrate(if self.resolution == 0 {
             u32::MAX
@@ -89,9 +82,6 @@ impl StreamQuality {
     }
 }
 
-/// The most a stream of frames `height` lines tall may send, as Discord's client caps it:
-/// 3.5 Mbit/s up to 720p and 9 Mbit/s above, whatever the frame rate.
-/// This matches the 9 Mbit/s estimate Discord sends back.
 pub(crate) fn max_bitrate(height: u32) -> u32 {
     if height > 720 { 9_000_000 } else { 3_500_000 }
 }

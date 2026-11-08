@@ -81,7 +81,6 @@ fn field_width(field: &EmbedField, cx: &App) -> f32 {
     widest(&field.name, FontWeight::SEMIBOLD).max(widest(&field.value, FontWeight::NORMAL))
 }
 
-/// Markdown markers count toward the width, so this runs a little wide for styled values.
 fn text_width(text: &str, weight: FontWeight, cx: &App) -> f32 {
     thread_local! {
         static WIDTHS: std::cell::RefCell<std::collections::HashMap<(String, u16), f32>> =

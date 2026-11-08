@@ -26,7 +26,6 @@ fn mentioning_message_increments_channel_and_guild_mentions() {
 #[test]
 fn own_message_does_not_increment_channel_mentions() {
     let mut store = Store::from_ready(ready());
-    // Older than the channel's read state so the own-message ack cannot mask the count.
     let message: model::Message = serde_json::from_value(json!({
         "id":"45", "channel_id":"2002", "guild_id":"200",
         "author":{"id":"1","username":"owner"},

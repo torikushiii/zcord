@@ -45,7 +45,6 @@ pub enum Action {
         name: SharedString,
         animated: bool,
     },
-    /// A standard emoji, by its character sequence.
     InspectDefaultEmoji(SharedString),
     OpenChannel {
         channel_id: u64,
@@ -167,14 +166,11 @@ impl RichText {
         self
     }
 
-    /// Caps the visible lines and ellipsizes the last one when later content is hidden.
-    /// A zero clamp intentionally hides all lines and produces zero height.
     pub fn line_clamp(mut self, lines: usize) -> Self {
         self.line_clamp = Some(lines);
         self
     }
 
-    /// Sets the gap after each emoji. Unset keeps the legacy 0.1em slot, centered around the image.
     pub fn emoji_gap(mut self, gap: Rems) -> Self {
         self.emoji_gap = Some(gap);
         self

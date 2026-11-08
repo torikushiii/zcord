@@ -24,8 +24,6 @@ use std::{
 };
 
 const WORKERS: usize = 4;
-// One more than shown + ready: a replaced frame stays pinned until the next scene swap, and
-// without a spare slot decoding stalls for that swap, capping playback near 20fps at 60Hz.
 const PLAYBACK_FRAMES: usize = 3;
 const IDLE: Duration = Duration::from_secs(1);
 const POLL: Duration = Duration::from_millis(16);
@@ -42,7 +40,6 @@ pub(super) fn selected(spec: &ImageSpec) -> bool {
     )
 }
 
-/// Tells playbacks apart in the decode workers; two may share one still image.
 fn next_key() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     NEXT.fetch_add(1, Ordering::Relaxed)
@@ -117,7 +114,6 @@ fn drain(retired: &Retirements, cx: &mut App) {
 fn release_with(retired: &Retirements, mut drop_image: impl FnMut(Arc<RenderImage>)) {
     for frame in retired.take() {
         drop_image(frame.image);
-        // Keep the slot occupied until every window's atlas has released the image.
         drop(frame._slot);
     }
 }
@@ -134,8 +130,6 @@ struct Demand {
     ready: Option<Prepared>,
     terminal: bool,
     slots: Arc<AtomicUsize>,
-    /// Set for playbacks on a caller's clock: frames already past are held back while
-    /// decoding catches up, so layers sharing that clock don't each show a different moment.
     follows_clock: bool,
     stale_skips: u8,
 }
@@ -214,7 +208,6 @@ impl Drop for DisplayLease {
     }
 }
 
-/// Where a playback may spool its frames, and the cache that counts the file once written.
 #[derive(Clone)]
 struct SpoolTarget {
     file: PathBuf,
@@ -232,8 +225,6 @@ struct Playback {
     current: Option<Rc<FrameImage>>,
     end: Duration,
     started: Option<Instant>,
-    /// A start time set by the caller, as for profile effect layers that play in step;
-    /// playback then follows it instead of pausing while unseen.
     clock: Option<Instant>,
     plays: Option<NonZeroU32>,
     shared: Arc<Mutex<Demand>>,
@@ -291,7 +282,6 @@ impl Playback {
 #[derive(Default)]
 struct Streams {
     entries: HashMap<gpui::ImageId, Rc<RefCell<Playback>>>,
-    /// Playbacks of a registered image on a caller's clock, dropped once unseen.
     clocked: HashMap<(gpui::ImageId, Instant), Rc<RefCell<Playback>>>,
     retired: Retirements,
 }
@@ -456,8 +446,6 @@ pub(super) fn forget(id: gpui::ImageId, cx: &App) -> bool {
     state.entries.remove(&id).is_some()
 }
 
-/// The frame of `still`'s animation to show now. With a `clock`, it plays from that start
-/// for the given number of plays (`None` loops forever) instead of on its own clock.
 pub(super) fn paint(
     still: &Arc<RenderImage>,
     animate: bool,

@@ -46,7 +46,6 @@ fn settings_state() -> (State, Presence) {
     (state, presence)
 }
 
-// The store's side of these updates is covered by the app's store tests.
 #[test]
 fn outdated_partial_settings_are_forwarded_without_changing_presence() {
     let (mut state, mut presence) = settings_state();

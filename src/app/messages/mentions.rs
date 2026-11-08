@@ -77,7 +77,6 @@ impl DiscordApp {
     }
 
     pub(super) fn reveal_suggestion(&self, index: usize) {
-        // The popup's title is child 0.
         self.suggest.scroll.scroll_to_item(index + 1);
     }
 
@@ -347,7 +346,6 @@ fn mention_name_boundary(content: &str, end: usize) -> bool {
     let Some(after) = content.get(end..) else {
         return false;
     };
-    // Combining marks belong to the name, not to the punctuation following it.
     (end == content.len()
         || content
             .grapheme_indices(true)
@@ -462,8 +460,6 @@ pub(crate) fn suggestions(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
 const EDITOR_SUGGESTION_WIDTH: f32 = 430.;
 const SUGGESTION_MAX_HEIGHT: f32 = 200.;
 
-/// Spans the composer like Discord's. In the narrower message editor it keeps a fixed width and
-/// is deferred and anchored, so a message being edited near the top of the chat doesn't clip it.
 pub(super) fn suggestion_popup(
     app: &DiscordApp,
     title: SharedString,
@@ -478,13 +474,10 @@ pub(super) fn suggestion_popup(
     place_suggestion_popup(app, panel)
 }
 
-/// The popup's chrome and title; callers add the rows and decide how they scroll. `strong` is
-/// the bold part after the title, like the `:query` in "Emoji matching :query".
 pub(crate) fn suggestion_panel(title: SharedString, strong: Option<SharedString>) -> Div {
     div()
         .flex()
         .flex_col()
-        // Discord's `.scroller` pads only the bottom; the title row brings its own top space.
         .pb(rpx(8.))
         .rounded(rpx(8.))
         .border_1()
@@ -493,8 +486,6 @@ pub(crate) fn suggestion_panel(title: SharedString, strong: Option<SharedString>
         .shadow_lg()
         .occlude()
         .child(
-            // Discord's `.contentTitle` (4px/0) inside a row's `.base` (8px) and the row's own
-            // 8px sides: 12px above and below, 16px in from the edge.
             div()
                 .flex()
                 .flex_none()

@@ -167,7 +167,6 @@ fn quick_reaction(
         ))
 }
 
-/// Discord's "Add Reaction" submenu: recent emoji by name, then the full picker.
 fn reaction_submenu(app: &DiscordApp, message_id: u64, cx: &App) -> Div {
     let rows = app
         .recent_emojis(cx)

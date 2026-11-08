@@ -15,7 +15,6 @@ impl BadgeTip {
             .and_then(|tier| tier.name.clone())
             .filter(|name| !name.is_empty());
         let name = Some(detail.name.clone()).filter(|name| !name.is_empty());
-        // Discord titles Nitro tiers "Nitro Opal"; other levelled badges put the badge name above the tier.
         let (category, title) = match tier_name {
             Some(tier) if detail.badge_id == 1 => (
                 None,
@@ -124,20 +123,13 @@ fn badge_tooltip(tip: &BadgeTip, cx: &App) -> impl IntoElement {
         .child(
             deferred(
                 anchored().anchor(Anchor::BottomCenter).child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .items_center()
-                        .child(body)
-                        // Overlaps the border by 1px so the arrow reads as part of the card.
-                        .child(
-                            theme::icon("tooltip-arrow-down", 12., theme::elevated())
-                                .h(rpx(6.))
-                                .mt(rpx(-1.)),
-                        ),
+                    div().flex().flex_col().items_center().child(body).child(
+                        theme::icon("tooltip-arrow-down", 12., theme::elevated())
+                            .h(rpx(6.))
+                            .mt(rpx(-1.)),
+                    ),
                 ),
             )
-            // Above the popout, which is itself deferred at priority 1.
             .with_priority(2),
         )
 }
@@ -189,7 +181,6 @@ pub(super) fn badges(
                         let rich = details
                             .and_then(|details| details.detail_for(badge))
                             .map(|detail| BadgeTip::of(badge, detail));
-                        // Warm the art before hover; the tooltip only renders what is cached.
                         if let Some(spec) = rich.as_ref().and_then(|tip| tip.art.as_ref()) {
                             images::resolve(spec, theme::image_px(BADGE_ART), cx);
                         }

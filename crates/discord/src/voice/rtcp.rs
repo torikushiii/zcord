@@ -1,4 +1,3 @@
-// RFC 5761 section 4: RTCP packet types occupy 192..=223, outside RTP's 0..=127.
 pub(super) fn packet_type(packet: &[u8]) -> Option<u8> {
     let packet_type = *packet.get(1)?;
     (192..=223).contains(&packet_type).then_some(packet_type)
@@ -50,7 +49,6 @@ pub(super) fn report_block_for(packet: &[u8], local_ssrc: u32) -> Option<ReportB
             };
             let ssrc = u32::from_be_bytes([block[0], block[1], block[2], block[3]]);
             if ssrc == local_ssrc {
-                // RFC 3550 section 6.4.1: cumulative lost is a signed 24-bit value.
                 let cumulative = i32::from_be_bytes([0, block[5], block[6], block[7]]);
                 return Some(ReportBlock {
                     ssrc,
@@ -64,7 +62,6 @@ pub(super) fn report_block_for(packet: &[u8], local_ssrc: u32) -> Option<ReportB
     None
 }
 
-/// RFC 4585 generic NACK, with one FCI per run of at most 17 lost packets.
 pub(super) fn generic_nack(sender: u32, media: u32, sequences: &[u16]) -> Vec<u8> {
     let mut sequences = sequences.to_vec();
     sequences.sort_unstable();
@@ -98,7 +95,6 @@ pub(super) fn generic_nack(sender: u32, media: u32, sequences: &[u16]) -> Vec<u8
     packet
 }
 
-/// RFC 4585 Picture Loss Indication.
 pub(super) fn pli(sender: u32, media: u32) -> Vec<u8> {
     let mut packet = vec![0x81, 206, 0, 2];
     packet.extend_from_slice(&sender.to_be_bytes());
@@ -116,7 +112,6 @@ pub(super) struct ReceiverReport {
     pub dlsr: u32,
 }
 
-/// RFC 3550 receiver report with one report block.
 pub(super) fn receiver_report(sender: u32, report: &ReceiverReport) -> Vec<u8> {
     let mut packet = vec![0x81, 201, 0, 7];
     packet.extend_from_slice(&sender.to_be_bytes());
@@ -131,7 +126,6 @@ pub(super) fn receiver_report(sender: u32, report: &ReceiverReport) -> Vec<u8> {
     packet
 }
 
-/// The LSR field of a sender report: the middle 32 bits of its NTP timestamp.
 pub(super) fn sender_report_lsr(packet: &[u8], ssrc: u32) -> Option<u32> {
     let mut offset = 0;
     while let Some(header) = packet.get(offset..offset + 4) {
@@ -207,8 +201,6 @@ pub(super) fn feedback(packet: &[u8], media_ssrc: u32) -> Option<Feedback> {
                 }
             }
             (206, 15) => {
-                // "REMB", then a byte counting the SSRCs listed after the bitrate, then a 6-bit
-                // exponent and 18-bit mantissa.
                 if body.len() >= 20 && body[12..16] == *b"REMB" {
                     let media = u32::from_be_bytes([body[8], body[9], body[10], body[11]]);
                     let listed = body[20..]

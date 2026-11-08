@@ -1,7 +1,3 @@
-//! The Edit Image dialog's state and actions. A picked avatar or banner is panned, zoomed and
-//! turned under a fixed frame, as in Discord's editor, and Apply uploads exactly what the
-//! frame shows. `styles_dialogs::image_edit_dialog` draws it.
-
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -21,41 +17,28 @@ use crate::{
     media::images::{self, ImageSpec},
 };
 
-/// The black stage the image is edited on: the 480px dialog less its 24px padding.
 pub(super) const STAGE: [f32; 2] = [432., 350.];
-/// At 1× the image fits the stage's width and 90% of its height, leaving a margin around
-/// tall frames.
 const FIT: [f32; 2] = [432., 315.];
 pub(super) const MAX_ZOOM: f32 = 2.;
 
 #[derive(Clone)]
 pub(crate) struct ImageEdit {
     pub(crate) target: ImageTarget,
-    /// The picked file, named in the upload, and its bytes, which Apply encodes.
     path: PathBuf,
     bytes: Arc<[u8]>,
-    /// The picked image's pixel size, before turning.
     natural: [u32; 2],
-    /// A screen-sized copy, already turned, in the BGRA gpui draws; every frame of an
-    /// animation, so it plays while being edited.
     pub(crate) preview: Arc<RenderImage>,
     preview_frames: Arc<Vec<image::Frame>>,
     pub(crate) quarter_turns: u8,
     pub(crate) zoom: f32,
-    /// How far the image's center sits from the stage's, in CSS pixels.
     pub(crate) offset: [f32; 2],
-    /// The pointer where a drag began, and the offset then.
     drag: Option<(Point<Pixels>, [f32; 2])>,
     pub(crate) applying: bool,
     pub(crate) error: Option<SharedString>,
-    /// A recent avatar being edited: its id and storage hash. Applied untouched, it is reused
-    /// as is rather than uploaded again.
     recent: Option<(u64, SharedString)>,
 }
 
 impl ImageEdit {
-    /// Decodes a picked image for the editor, keeping a preview at most `preview_px` on its
-    /// longer side. Runs off the main thread.
     pub(super) fn load(
         path: PathBuf,
         target: ImageTarget,
@@ -65,7 +48,6 @@ impl ImageEdit {
         Self::from_bytes(path, bytes, target, preview_px)
     }
 
-    /// Like `load`, for one of `/users/@me/avatars`, already downloaded to `path`.
     pub(super) fn load_recent(
         path: &Path,
         (id, storage_hash): (u64, SharedString),
@@ -90,7 +72,6 @@ impl ImageEdit {
     ) -> Result<Self, String> {
         let image = decode_style_still(&bytes)?;
         let natural = [image.width(), image.height()];
-        // Animations get half the resolution, which still fills the stage at 1×.
         let frames = animation_preview(&bytes, (preview_px / 2).max(1)).unwrap_or_else(|| {
             vec![preview_frame(
                 image,
@@ -115,7 +96,6 @@ impl ImageEdit {
         })
     }
 
-    /// The image's size at 1×, turned.
     fn base(&self) -> [f32; 2] {
         let [width, height] = self.natural.map(|side| side as f32);
         let scale = (FIT[0] / width).min(FIT[1] / height);
@@ -131,8 +111,6 @@ impl ImageEdit {
         self.base().map(|side| side * self.zoom)
     }
 
-    /// The largest shape of the upload's ratio that fits the image at 1×; it stays put while
-    /// the image zooms and pans under it.
     pub(crate) fn frame_size(&self) -> [f32; 2] {
         let [width, height] = self.base();
         let (ratio_width, ratio_height) = self.target.ratio();
@@ -144,7 +122,6 @@ impl ImageEdit {
         }
     }
 
-    /// Keeps the frame on the image.
     fn clamped(&self, offset: [f32; 2]) -> [f32; 2] {
         let (image, frame) = (self.image_size(), self.frame_size());
         [0, 1].map(|axis| {
@@ -157,7 +134,6 @@ impl ImageEdit {
         self.quarter_turns != 0 || self.zoom != 1. || self.offset != [0., 0.]
     }
 
-    /// The frame in the turned image's pixels.
     pub(crate) fn crop(&self) -> StyleCrop {
         let turned = if self.quarter_turns % 2 == 1 {
             [self.natural[1], self.natural[0]]
@@ -180,8 +156,6 @@ impl ImageEdit {
         }
     }
 
-    /// Turns the preview a quarter clockwise, carrying the pan with it. Returns the preview it
-    /// replaced, for the caller to free.
     fn rotate(&mut self) -> Arc<RenderImage> {
         let frames: Vec<_> = self
             .preview_frames
@@ -210,8 +184,6 @@ pub(super) fn drop_image_later(image: Arc<RenderImage>, cx: &mut App) {
     cx.defer(move |cx| cx.drop_image(image, None));
 }
 
-/// How much an animation's preview may hold, in bytes; longer ones preview their opening
-/// frames only, though Apply still encodes them whole.
 const ANIMATION_PREVIEW_BUDGET: usize = 192 * 1024 * 1024;
 
 fn preview_frame(image: image::DynamicImage, side: u32, delay: image::Delay) -> image::Frame {
@@ -227,8 +199,6 @@ fn preview_frame(image: image::DynamicImage, side: u32, delay: image::Delay) -> 
     image::Frame::from_parts(pixels, 0, 0, delay)
 }
 
-/// Every frame of an animated GIF or WebP, shrunk as it decodes so a long animation never
-/// sits in memory at full size. `None` for stills.
 fn animation_preview(bytes: &[u8], side: u32) -> Option<Vec<image::Frame>> {
     use image::{AnimationDecoder, ImageDecoder, ImageFormat};
     let cursor = std::io::Cursor::new(bytes);
@@ -267,7 +237,6 @@ fn animation_preview(bytes: &[u8], side: u32) -> Option<Vec<image::Frame>> {
     (preview.len() > 1).then_some(preview)
 }
 
-/// Holds the cut images, which the panel and profile preview show until the draft drops them.
 fn preview_directory() -> PathBuf {
     std::env::temp_dir().join("zcord-style-uploads")
 }
@@ -285,7 +254,6 @@ fn write_preview(extension: &str, bytes: &[u8]) -> Result<PathBuf, String> {
 /// but not yet put it in the draft.
 const PREVIEW_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// With `spare_recent`, files from the last `PREVIEW_GRACE` survive until a later prune.
 fn prune_previews(directory: &Path, keep: &[&Path], spare_recent: bool) {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return;
@@ -310,7 +278,6 @@ fn prune_previews(directory: &Path, keep: &[&Path], spare_recent: bool) {
     }
 }
 
-/// The previews a draft image shows; only the editor's own, never a picked file.
 pub(super) fn draft_previews(draft: &StyleDraft) -> Vec<&Path> {
     let directory = preview_directory();
     [&draft.avatar, &draft.banner]
@@ -324,8 +291,6 @@ pub(super) fn draft_previews(draft: &StyleDraft) -> Vec<&Path> {
 }
 
 impl DiscordApp {
-    /// Downloads one of the user's recent avatars and opens it in the editor, as Discord does.
-    /// Animated ones come down animated, so a crop keeps them moving.
     pub(crate) fn edit_recent_avatar(
         &mut self,
         id: u64,
@@ -348,7 +313,6 @@ impl DiscordApp {
         let preview_px = crate::theme::image_px(STAGE[0] * MAX_ZOOM);
         let recent = (id, storage_hash);
         let request = Tokio::spawn(cx, async move {
-            // Fall back to the still should the archive not serve this one animated.
             let path = match &animated {
                 Some(spec) => service.load(spec, 1024).await,
                 None => None,
@@ -389,8 +353,6 @@ impl DiscordApp {
         .detach();
     }
 
-    /// Deletes previews the draft no longer shows. Pass `spare_recent` while an editor is open,
-    /// since its Apply may be about to use a file it just wrote.
     pub(super) fn prune_style_previews(&self, spare_recent: bool) {
         let keep = self
             .profile_styles
@@ -449,7 +411,6 @@ impl DiscordApp {
         self.update_image_edit(|edit| edit.drag = None, cx);
     }
 
-    /// Zooms about the stage's center, so the spot under the frame stays under it.
     pub(crate) fn set_image_zoom(&mut self, zoom: f32, cx: &mut Context<Self>) {
         self.update_image_edit(
             |edit| {
@@ -487,8 +448,6 @@ impl DiscordApp {
         }
     }
 
-    /// Encodes what the frame shows and puts it in the draft, closing the editor; errors stay
-    /// in the editor so the user can try again or cancel.
     pub(crate) fn apply_image_edit(&mut self, cx: &mut Context<Self>) {
         let Some(editor) = self.profile_styles.as_ref() else {
             return;
@@ -527,8 +486,6 @@ impl DiscordApp {
         cx.spawn(async move |this, cx| {
             let result = encode.await;
             this.update(cx, |app, cx| {
-                // Cancelling, or opening another image since, abandons this one. The preview
-                // can't change while applying, so it tells this editor apart from a new one.
                 let still_open = app
                     .profile_styles
                     .as_ref()
@@ -627,7 +584,6 @@ mod tests {
 
     #[test]
     fn image_editor_fits_like_discord() {
-        // Measured from Discord's editor: a portrait avatar and a landscape banner.
         let avatar = edit([742, 1000], ImageTarget::Avatar);
         assert!(close(avatar.image_size(), [233.73, 315.]));
         assert!(close(avatar.frame_size(), [233.73, 233.73]));
@@ -658,7 +614,6 @@ mod tests {
         let [limit, _] = avatar.clamped([1000., 0.]);
         assert!((limit - 157.5).abs() < 0.01);
         avatar.offset = [limit, 0.];
-        // Dragged right, the frame shows the image's left edge.
         assert_eq!(avatar.crop().rect[0], 0);
     }
 
@@ -671,7 +626,6 @@ mod tests {
         let _ = banner.rotate();
         assert_eq!(banner.quarter_turns, 1);
         assert!(banner.frame_size()[0] > upright[0]);
-        // Down becomes left under a clockwise turn.
         assert!(banner.offset[0] < 0. && banner.offset[1] == 0.);
         let [x, y, width, height] = banner.crop().rect;
         assert!(x + width <= 2000 && y + height <= 1000);

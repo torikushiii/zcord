@@ -34,7 +34,6 @@ const MAX_WIDTH: f32 = 1400.;
 const MAX_HEIGHT: f32 = 1030.;
 const SIDEBAR_WIDTH: f32 = 252.;
 const CONTENT_WIDTH: f32 = 784.;
-/// Voice & Video's measured panel includes 16px padding on each side.
 const VOICE_CONTENT_WIDTH: f32 = 728.;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -57,9 +56,7 @@ struct PageInfo {
     group: &'static str,
     label: &'static str,
     icon: &'static str,
-    /// Headings inside the page, listed under it in the sidebar while it's selected.
     sections: &'static [&'static str],
-    /// Extra words the search box matches, beyond the label and section names.
     keywords: &'static [&'static str],
 }
 
@@ -250,12 +247,9 @@ pub(crate) struct SettingsPage {
     reveal_email: bool,
     reveal_phone: bool,
     closing: bool,
-    /// Unique per open, so reopening replays the entry animation.
     animation: u64,
-    /// Switches flipped since the dialog opened; only those slide, the rest render at rest.
     moved_switches: Vec<&'static str>,
     voice_audio: Option<voice_audio::VoiceAudio>,
-    /// Read once per open; the registry doesn't change behind our back.
     launch_on_startup: bool,
     cache_status: Option<SharedString>,
     _cache_clear: Option<Task<()>>,
@@ -286,7 +280,6 @@ impl DiscordApp {
         {
             return;
         }
-        // The search field draws its placeholder using the sidebar's own muted color.
         let search = cx.new(|cx| InputState::new(window, cx));
         let events = cx.subscribe_in(&search, window, |_, _, event, _, cx| {
             if let InputEvent::Change = event {
@@ -375,7 +368,6 @@ impl DiscordApp {
             settings.page = page;
             settings.spoiler_menu_open = false;
             settings.role_colors_menu_open = false;
-            // A section scroll still running belongs to the old page.
             settings._section_scroll = None;
             settings.scroll.set_offset(point(px(0.), px(0.)));
         }
@@ -478,7 +470,6 @@ pub(crate) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
     let closing = settings.closing;
     let reduce_motion = cx.reduce_motion();
     let close = app.entity.clone();
-    // Discord caps the dialog at 1400×1030 and centres it, keeping at least a 32px margin.
     let css = |length: Pixels| length / window.rem_size() * theme::BASE_FONT_SIZE;
     let viewport = window.viewport_size();
     let side = ((css(viewport.width) - MAX_WIDTH) / 2.).max(MARGIN);
@@ -1083,8 +1074,6 @@ fn content(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> impl IntoElem
                             Page::Accessibility => 16.,
                             _ => 48.,
                         }))
-                        // Voice & Video is the tallest page. At 80 its content overflows the pane by
-                        // the bottom padding alone, leaving a few pixels of empty scroll range.
                         .pb(rpx(if voice_page { 24. } else { 80. }))
                         // Each section is a direct child so the sidebar can scroll to it by index.
                         .children(

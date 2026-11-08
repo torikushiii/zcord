@@ -179,7 +179,6 @@ pub(super) fn history_bar(app: &DiscordApp, entity: WeakEntity<DiscordApp>) -> O
             |app, window, cx| app.jump_to_present(window, cx),
         )
     };
-    // The typing indicator overhangs the list's bottom, so the bar rises above it.
     let typing = if app.typing_users().is_empty() {
         0.
     } else {
@@ -219,7 +218,6 @@ pub(super) fn history_bar(app: &DiscordApp, entity: WeakEntity<DiscordApp>) -> O
         BarEnd::Loading => pulsing_ellipsis().into_any_element(),
     };
     let failed = id == "messages-failed";
-    // The full-width wrapper has no listeners, so clicks beside the bar still reach the list.
     Some(
         div()
             .absolute()

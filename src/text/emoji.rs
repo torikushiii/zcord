@@ -11,11 +11,7 @@ static BUNDLE: &[u8] = include_bytes!("../../assets/twemoji.bin");
 static SHORTCODES: &str = include_str!("../../assets/emoji_shortcodes.tsv");
 static CATEGORY_DATA: &str = include_str!("../../assets/emoji_categories.tsv");
 const MAX_SVG_SIZE: u64 = 1024 * 1024;
-/// SVG sizes each emoji can be drawn at. gpui rasterizes an SVG at twice its size and the GPU
-/// shrinks it to fit without mipmaps, so a raster much bigger than the emoji on screen comes
-/// out jagged; each size here serves emoji shown at up to twice it.
 const RASTER_SIZES: [u32; 6] = [16, 24, 32, 48, 64, 128];
-/// The size the bundle's SVGs are packed with; see `scripts/pack_twemoji.py`.
 const PACKED_SIZE: &str = r#"<svg width="128" height="128""#;
 
 struct Entry<'a> {
@@ -145,7 +141,6 @@ impl<'a> Bundle<'a> {
     }
 
     fn entry(&self, sequence: &str) -> Option<&Entry<'a>> {
-        // Twemoji preserves FE0F in ZWJ filenames: https://github.com/jdecked/twemoji#utilities
         let index = self.exact.get(sequence).or_else(|| {
             if sequence.contains('\u{FE0F}') {
                 self.unqualified.get(&sequence.replace('\u{FE0F}', ""))
@@ -176,7 +171,6 @@ fn segment_with_bundle<'a>(text: &'a str, bundle: Option<&Bundle<'_>>) -> Vec<Se
     if text.is_empty() {
         return Vec::new();
     }
-    // ASCII has no emoji bases; keycaps also need non-ASCII selectors or combining marks.
     if text.is_ascii() {
         return vec![Segment::Text(text)];
     }
@@ -195,7 +189,6 @@ fn segment_with_bundle<'a>(text: &'a str, bundle: Option<&Bundle<'_>>) -> Vec<Se
     let mut at = 0;
     while at < chars.len() {
         let c = chars[at];
-        // Skip non-emoji bases and bare text defaults: https://unicode.org/reports/tr51/#Emoji_Properties
         let skip = if c.is_ascii() {
             !matches!(c, '0'..='9' | '#' | '*')
                 || !matches!(chars.get(at + 1), Some('\u{FE0F}' | '\u{20E3}'))
@@ -242,7 +235,6 @@ fn segment_with_bundle<'a>(text: &'a str, bundle: Option<&Bundle<'_>>) -> Vec<Se
     output
 }
 
-/// The emoji's image, rasterized to suit `px` physical pixels on screen.
 pub fn image(sequence: &str, px: u32) -> Option<Arc<Image>> {
     bundle()?.entry(sequence)?.image(raster_index(px)).cloned()
 }
@@ -441,7 +433,6 @@ fn presented(chars: &[char]) -> bool {
 }
 
 fn text_default(c: char) -> bool {
-    // Emoji_Presentation=No requires VS16: https://unicode.org/reports/tr51/#Presentation_Style
     matches!(c as u32,
         0x23 | 0x2A | 0x30..=0x39 | 0xA9 | 0xAE | 0x203C | 0x2049 | 0x2122 | 0x2139
         | 0x2194..=0x2199 | 0x21A9..=0x21AA | 0x2328 | 0x23CF | 0x23ED..=0x23EF

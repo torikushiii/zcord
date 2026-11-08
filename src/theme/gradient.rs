@@ -385,7 +385,6 @@ impl Gradient {
         self.layers(None)
     }
 
-    /// The gradient with rounded corners; GPUI doesn't clip children to rounded corners.
     pub fn tile(&self, radius: Rems) -> impl IntoElement + use<> {
         self.layers(Some(radius))
     }
@@ -425,7 +424,6 @@ impl Gradient {
     }
 }
 
-/// `color-mix(in oklab, token 100%, other amount%)` normalizes the two percentages.
 fn mix_weight(amount: f32) -> f32 {
     amount / (100. + amount)
 }

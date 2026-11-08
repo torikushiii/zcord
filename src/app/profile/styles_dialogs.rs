@@ -46,7 +46,6 @@ const GUMMY_PRESETS: [[u32; 4]; 7] = [
     [0xD83A5F, 0xC94BCB, 0x8B5CFF, 0xB06CFF],
 ];
 
-/// The picker's suggestions for a name color, and for theme colors without an avatar to sample.
 pub(super) fn preset_suggestions() -> [u32; 5] {
     std::array::from_fn(|index| GUMMY_PRESETS[index][0])
 }
@@ -65,7 +64,6 @@ const PRISM_PRESETS: [[u32; 5]; 3] = [
     [0x7A0906, 0xC81E12, 0xF45A18, 0xFF9500, 0xFFD447],
 ];
 
-/// Every one-color effect shares these swatches, after a default of its own.
 const SINGLE_PRESETS: [[u32; 1]; 6] = [
     [0x24E36D],
     [0x1C98EB],
@@ -84,7 +82,6 @@ fn single_default(effect_id: u32) -> &'static [u32] {
     }
 }
 
-/// How many colors Discord stores for each name effect.
 fn effect_colors(effect_id: u32) -> usize {
     match effect_id {
         SOLID_EFFECT | 3 | 4 | 5 => 1,
@@ -94,8 +91,6 @@ fn effect_colors(effect_id: u32) -> usize {
     }
 }
 
-/// Keeps the palette when it has enough colors for `effect_id`, else starts from the effect's
-/// first preset, so a single color doesn't become a flat gradient.
 fn with_effect(style: &NameStyle, effect_id: u32) -> NameStyle {
     let count = effect_colors(effect_id);
     let palette = if style.colors.len() >= count {
@@ -122,7 +117,6 @@ fn with_preset(style: &NameStyle, preset: &[u32]) -> NameStyle {
     }
 }
 
-/// Gradient and Prism blend their colors in the swatches and custom tile.
 fn blends(effect_id: u32) -> bool {
     matches!(effect_id, 2 | 7)
 }
@@ -138,8 +132,6 @@ fn presets(effect_id: u32) -> Vec<&'static [u32]> {
     }
 }
 
-/// `colors` across a swatch: blended left to right, or in hard stripes. gpui clips to a
-/// rectangle, so the ends round themselves to `radius`.
 fn color_fill(colors: &[u32], blend: bool, radius: f32) -> Div {
     let segments: Vec<(u32, u32)> = if blend && colors.len() > 1 {
         colors.windows(2).map(|pair| (pair[0], pair[1])).collect()
@@ -165,7 +157,6 @@ fn color_fill(colors: &[u32], blend: bool, radius: f32) -> Div {
         }))
 }
 
-/// Discord's custom tile for blended effects: the current colors with a handle on each stop.
 fn custom_gradient(app: &DiscordApp, style: &NameStyle, selected: bool) -> AnyElement {
     let count = style.colors.len();
     let handles = style.colors.iter().enumerate().map(|(index, &color)| {
@@ -215,7 +206,6 @@ fn custom_gradient(app: &DiscordApp, style: &NameStyle, selected: bool) -> AnyEl
         .into_any_element()
 }
 
-/// "Acquired October 2026" from an ISO purchase time.
 fn acquired(purchased_at: &str) -> Option<String> {
     const MONTHS: [&str; 12] = [
         "January",
@@ -279,11 +269,6 @@ fn section_title(title: &'static str) -> Div {
         .child(title)
 }
 
-/// A dialog over a scrim; clicking the scrim or the close button cancels it. It pops in on
-/// open and back out while `close_style_dialog` waits to drop it.
-///
-/// Without a `title` the body lays out its own heading, edge to edge, under a corner close
-/// button.
 fn shell(
     app: &DiscordApp,
     editor: &StylesEditor,
@@ -307,7 +292,6 @@ fn shell(
     let opens = editor.ui.dialog_opens;
     div()
         .id("style-dialog-scrim")
-        // Their clicks stop here, so a selection they began would never see its mouse-up.
         .without_text_selection()
         .absolute()
         .inset_0()
@@ -387,7 +371,6 @@ fn close_button(app: &DiscordApp) -> Stateful<Div> {
         .on_click(on_app(app, |app, cx| app.close_style_dialog(cx)))
 }
 
-/// The open dialog and color picker, drawn over the whole window.
 pub(super) fn style_overlays(app: &DiscordApp, editor: &StylesEditor, cx: &App) -> Vec<AnyElement> {
     let dialog = editor.ui.dialog.as_ref().map(|dialog| match dialog {
         StyleDialog::Collectible { kind, selected } => {
@@ -433,7 +416,6 @@ mod tests {
             assert_eq!(next.colors.len(), effect_colors(effect_id));
             assert!(palette.starts_with(&next.colors));
         }
-        // Too few colors start the effect from its own first swatch instead of repeating one.
         let solid = with_effect(&style, SOLID_EFFECT);
         assert_eq!(with_effect(&solid, 2).colors, GRADIENT_PRESETS[0]);
         assert_eq!(with_effect(&solid, 7).colors, PRISM_PRESETS[0]);

@@ -80,7 +80,6 @@ pub fn init(cx: &mut App) {
     colors.skeleton = rgb(surface_highest()).into();
     theme.tokens = theme.colors.into();
 
-    // Input/selection behavior and Base scrollbars keep their own theme projection.
     let tokens = theme.semantic_tokens();
     let scrollbar = colors_for_scrollbar(theme);
     let border = theme.border;

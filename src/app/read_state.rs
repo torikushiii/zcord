@@ -25,7 +25,6 @@ impl DiscordApp {
         self.unread.since = Some(cursor);
         self.unread.bar = true;
         self.unread.ack_timer = None;
-        // The divider adds height to a row that may already be measured.
         self.messages.remeasure_items(0..self.messages.item_count());
         self.views.messages.update(cx, |_, cx| cx.notify());
         cx.notify();
@@ -82,8 +81,6 @@ impl DiscordApp {
         self.ack_channel_now(channel_id, false, cx);
     }
 
-    /// Marks the channel read here at once and tells Discord: right away when `immediate` or
-    /// the channel has mentions, otherwise after `ACK_SEND_DELAY`, as Discord's client does.
     fn ack_channel_now(&mut self, channel_id: u64, immediate: bool, cx: &mut Context<Self>) {
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;
@@ -120,7 +117,6 @@ impl DiscordApp {
             this.update(cx, |app, _| app.unread.outgoing_acks.remove(&channel_id))
                 .ok();
         });
-        // A newer ack for the channel replaces one still waiting, as Discord sends only the latest.
         self.unread.outgoing_acks.insert(channel_id, task);
     }
 

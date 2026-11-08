@@ -158,8 +158,6 @@ thread_local! {
 /// gpui-base drops any participant that did not register during a frame, clearing its
 /// selection. A reused cached view never prepaints its rich text, so a frame drawn for an
 /// unrelated panel would wipe the selection. Call this from a view that renders every frame.
-/// A `Selection` lives as long as its element state, which GPUI keeps for reused views and
-/// drops once the text leaves the tree, so whatever still upgrades is still on screen.
 pub(crate) fn keep_registered(window: &mut Window, cx: &mut App) {
     let window_id = window.window_handle().window_id();
     let live: Vec<_> = SELECTIONS.with_borrow_mut(|selections| {
@@ -393,7 +391,6 @@ fn word_at(text: &str, offset: usize) -> Range<usize> {
 }
 
 fn reading_order(position: Point<Pixels>) -> u64 {
-    // Order virtualized, currently rendered participants by their reading position.
     let ordered = |value: Pixels| {
         let bits = f32::from(value).to_bits();
         if bits & (1 << 31) == 0 {

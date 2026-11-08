@@ -108,7 +108,6 @@ where
     T: Sample,
     f32: FromSample<T>,
 {
-    // Preserve the device rate and channel layout; the input worker resamples once.
     queue
         .lock()
         .unwrap_or_else(PoisonError::into_inner)

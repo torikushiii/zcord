@@ -103,7 +103,6 @@ fn webhook_updates_and_other_messages_cannot_rename_previous_authors() {
             Some("first")
         );
     }
-    // Partial updates normally omit webhook_id; the remembered identity still applies.
     store.apply(Event::MessageUpdate(Box::new(
         serde_json::from_value(json!({
             "id": "500", "channel_id": "2002",

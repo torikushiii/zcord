@@ -70,9 +70,7 @@ pub struct Store {
     notification_settings: HashMap<Option<u64>, model::UserGuildSettings>,
     guild_notification_defaults: HashMap<u64, model::NotificationLevel>,
     request_previews: HashMap<u64, RequestPreview>,
-    /// From `READY`; stands in until `friend_suggestions` is fetched.
     friend_suggestion_count: u32,
-    /// `None` until the Suggestions tab first fetches the list.
     friend_suggestions: Option<Vec<FriendSuggestion>>,
     guild_indices: HashMap<u64, usize>,
     folder_layout: Option<Vec<settings_proto::GuildFolder>>,

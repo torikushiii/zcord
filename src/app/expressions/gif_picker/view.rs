@@ -145,7 +145,6 @@ pub(crate) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
             .into_any_element()
     };
     if modal {
-        // The panel's outside press closes it; the scrim only dims what's behind.
         return Some(
             deferred(
                 div()
@@ -292,7 +291,6 @@ fn header(
         .border_b_1()
         .border_color(rgba(theme::border()))
         .child(match app.gifs.style_target {
-            // As tall as the tabs it replaces, so the provider menu still lines up.
             Some(_) => div()
                 .flex()
                 .items_center()
@@ -398,7 +396,6 @@ pub(crate) fn tabs(app: &DiscordApp, selected: Tab) -> impl IntoElement {
         .child(tab("Emoji", Tab::Emoji))
 }
 
-/// Fits the picker between the window top and its anchor when the window is short or zoomed.
 pub(crate) fn panel_height(position: Point<Pixels>, window: &Window) -> Pixels {
     let rem = window.rem_size();
     let full = rpx(HEIGHT).to_pixels(rem);

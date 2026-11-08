@@ -173,7 +173,6 @@ fn active_card_frame() -> Div {
 
 fn service_icon(service: &str, size: f32) -> Div {
     if service == "Twitch" {
-        // Icons take one color, so the white panel of the logo is its own layer.
         return div()
             .relative()
             .flex_none()
@@ -352,7 +351,6 @@ fn active_card(
             .child(theme::icon("gamepad-2", size * 0.55, theme::muted()))
             .into_any_element()
     };
-    // `presence_art` and the app icon fill their parent, so each needs a sized box.
     let icon =
         div()
             .flex_none()

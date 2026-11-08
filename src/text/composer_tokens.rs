@@ -1,8 +1,3 @@
-//! Invisible custom-emoji tokens for the plain-text composer.
-//!
-//! A token is EM SPACE followed by two variation selectors from
-//! U+E0100..=U+E01EF. The pair is a base-240 index into a session registry.
-
 use std::{cell::RefCell, collections::HashMap, ops::Range};
 
 const EM_SPACE: char = '\u{2003}';
@@ -124,7 +119,6 @@ pub fn repair_with_removed(text: &str) -> Option<(String, Vec<Range<usize>>)> {
                 selectors += 1;
             }
             if selectors == 0 {
-                // A plain EM SPACE the user typed is not a token remnant.
                 output.push(c);
                 at += 1;
                 continue;

@@ -47,11 +47,8 @@ pub(crate) struct Voice {
     pub(crate) call_view: Option<CallView>,
     hovered_control: Option<Control>,
     status_hovered: bool,
-    /// Until the first hover the title sits still, so it doesn't play the slide-back
-    /// animation when the panel first appears.
     status_hovered_once: bool,
     menu: Option<Menu>,
-    /// Which menu the last mouse-down-outside closed, and when.
     menu_closed: Option<(MenuKind, Instant)>,
     menu_opened: u64,
     menu_close: Option<Task<()>>,
@@ -69,14 +66,11 @@ pub(crate) struct Voice {
     stream_custom: CustomStream,
     stream_preview_hidden: bool,
     stream_audio_muted: bool,
-    /// The stream preview upload in flight; a newer preview or the share ending drops it.
     preview_upload: Option<Task<()>>,
     stream_card: Option<stream_card::StreamCard>,
     stream_card_close: Option<Task<()>>,
     stream_card_hovered: bool,
-    /// `(channel, user)` to watch once the call that was joined for it connects.
     pending_watch: Option<(u64, u64)>,
-    /// The audio devices as last listed, for the device menus and Voice & Video settings.
     devices: Option<crate::discord::AudioDevices>,
     devices_loading: Option<Task<()>>,
     volume_slider: Option<device_menu::VolumeSlider>,
@@ -132,7 +126,6 @@ impl Voice {
     }
 }
 
-/// Voice panel controls that show a Discord-style tooltip while hovered.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Control {
     Signal,
@@ -162,22 +155,15 @@ struct Menu {
     kind: MenuKind,
     position: Point<Pixels>,
     closing: bool,
-    /// Unique per open, so reopening replays the entry animation.
     animation: u64,
-    /// The switch only slides after a click; opening shows it at rest.
     switch_moved: bool,
-    /// The stream menu's quality flyout is showing.
     flyout: bool,
-    /// The flyout lies outside the menu; a click there must not count as outside.
     pointer_in_flyout: bool,
     flyout_left: bool,
     device_flyout: Option<device_menu::Flyout>,
-    /// Dropped with the menu so its ticking stops.
     level: Option<Entity<device_menu::LevelBars>>,
 }
 
-/// `Pending` until Discord either finishes the DAVE handshake, which yields the privacy
-/// code, or reports that the call isn't end-to-end encrypted.
 #[derive(Clone, Default)]
 pub(crate) enum Encryption {
     #[default]
@@ -211,8 +197,6 @@ struct PingSample {
     ms: u32,
 }
 
-/// Heartbeats arrive about every 14 seconds, so this covers the graph's window with room
-/// to spare.
 const PING_HISTORY: usize = 64;
 
 impl Call {
@@ -299,7 +283,6 @@ impl DiscordApp {
 
     pub(crate) fn toggle_self_mute(&mut self, cx: &mut Context<Self>) {
         let voice = &mut self.voice;
-        // Unmuting while deafened undeafens too, like Discord.
         if voice.self_deaf {
             voice.self_deaf = false;
             voice.self_mute = false;
@@ -316,7 +299,6 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// Changing it by hand makes the Input Profile Custom, as in Discord.
     pub(crate) fn toggle_noise_suppression(&mut self, cx: &mut Context<Self>) {
         self.set_noise_suppression(!self.voice.noise_suppression, cx);
         crate::settings::update(cx, |settings| {
@@ -359,7 +341,6 @@ impl DiscordApp {
             self.close_menu(cx);
             return;
         }
-        // The press that closed this menu via mouse-down-outside must not reopen it here.
         let just_closed = voice.menu_closed.is_some_and(|(closed, at)| {
             closed == kind && at.elapsed() < Duration::from_millis(150)
         });
@@ -448,10 +429,6 @@ impl DiscordApp {
         });
     }
 
-    /// Rejoins the voice channel zcord was in when it last quit, like Discord's desktop client,
-    /// but only while Discord still lists us there: after a long absence it drops the stale
-    /// voice state for inactivity, and the call should stay ended. Runs once per launch, after
-    /// the first READY_SUPPLEMENTAL, which carries the initial voice states.
     pub(crate) fn restore_voice(&mut self, cx: &mut Context<Self>) {
         if std::mem::replace(&mut self.voice.restored, true) {
             return;
@@ -475,7 +452,6 @@ impl DiscordApp {
         }
     }
 
-    /// Repaints the channel list once a second for the call timer beside the joined channel.
     fn start_call_clock(&mut self, cx: &mut Context<Self>) {
         if self.voice.clock.is_some() {
             return;
@@ -577,7 +553,6 @@ impl DiscordApp {
                 } else {
                     voice.speaking.remove(&user_id)
                 };
-                // Speaking flips several times a second; only these two show it.
                 if changed {
                     self.views.channel_list.update(cx, |_, cx| cx.notify());
                     if self.voice.call_view.is_some() {
@@ -656,8 +631,6 @@ impl DiscordApp {
 }
 
 impl DiscordApp {
-    /// Connection stats show in the signal tooltip, which lives in the channel list, and in
-    /// the details menu, which lives in the overlay; only repaint the overlay when it's open.
     fn notify_voice_stats(&mut self, cx: &mut Context<Self>) {
         if self
             .voice

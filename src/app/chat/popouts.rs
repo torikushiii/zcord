@@ -14,7 +14,6 @@ const THREAD_MIN_WIDTH: f32 = 480.;
 const THREAD_MAX_WIDTH: f32 = 600.;
 const THREAD_WIDTH_SHARE: f32 = 0.35;
 const MAX_PREVIEW_AVATARS: usize = 5;
-/// The press that closes a popout also clicks its header button, which must not reopen it.
 const REOPEN_GUARD: Duration = Duration::from_millis(200);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -282,7 +281,6 @@ impl DiscordApp {
         .detach();
     }
 
-    /// Listed threads must be known to the store, so a click can open them like any channel.
     fn remember_threads(&mut self, threads: Vec<model::Channel>) -> Vec<ThreadRow> {
         threads
             .into_iter()

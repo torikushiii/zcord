@@ -337,7 +337,6 @@ fn nal_units(frame: &[u8]) -> impl Iterator<Item = &[u8]> {
     })
 }
 
-/// RFC 4588: the retransmission payload starts with the original sequence number.
 pub(crate) fn depacketize_rtx(payload: &[u8]) -> (u16, &[u8]) {
     if payload.len() < 2 {
         return (0, &[]);

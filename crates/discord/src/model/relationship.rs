@@ -20,7 +20,6 @@ pub struct Relationship {
     pub user: Option<User>,
 }
 
-/// An entry of `GET /friend-suggestions`, also the `FRIEND_SUGGESTION_CREATE` payload.
 #[derive(Clone, Deserialize)]
 pub struct FriendSuggestion {
     pub suggested_user: User,
@@ -28,7 +27,6 @@ pub struct FriendSuggestion {
     pub reasons: Vec<FriendSuggestionReason>,
 }
 
-/// Why Discord suggests someone; `name` is the matched name, such as their Steam name.
 #[derive(Clone, Deserialize)]
 pub struct FriendSuggestionReason {
     #[serde(default)]

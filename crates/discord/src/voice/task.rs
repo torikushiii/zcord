@@ -37,7 +37,6 @@ struct Task {
     endpoint: String,
 }
 
-// Private calls use the channel as the voice server identity, not the guild sentinel.
 fn server_id(guild_id: u64, channel_id: u64) -> u64 {
     if guild_id == 0 { channel_id } else { guild_id }
 }
@@ -58,7 +57,6 @@ struct StreamWatch {
 struct StreamShare {
     key: String,
     server_id: u64,
-    /// What's shared, which can change while live; `None` for a bare Go Live.
     live: Option<Arc<stream::share::LiveShare>>,
     rtc_server_id: Option<u64>,
     rtc_channel_id: Option<u64>,
@@ -88,7 +86,6 @@ struct Shared {
     stream: Option<StreamWatch>,
     share: Option<StreamShare>,
     frames: FrameSlot,
-    /// Outlives each share, so the app polls one slot for whatever it streams next.
     local_preview: Arc<stream::share::LocalPreview>,
     flags: AudioFlags,
     generation: u64,

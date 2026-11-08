@@ -332,7 +332,6 @@ async fn fake_login_gateway(listener: TcpListener, key_sender: oneshot::Sender<R
     while let Some(Ok(_)) = socket.next().await {}
 }
 
-/// Other local programs may probe the ephemeral port, so skip anything but the login POST.
 async fn accept_login(listener: &TcpListener) -> (TcpStream, String, Vec<u8>) {
     loop {
         let request = accept_request(listener).await;

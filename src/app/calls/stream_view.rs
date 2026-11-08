@@ -43,11 +43,8 @@ pub(crate) struct StreamView {
     popout_closed: Option<Subscription>,
 }
 
-/// It draws from the app, so it is only ever opened outside an update of the app: opening
-/// draws it at once.
 pub(crate) struct StreamPopout {
     app: WeakEntity<DiscordApp>,
-    /// Everything that repaints the main window's stage repaints the overlays view.
     _overlays: Subscription,
     pinned: bool,
     pin_hovered: bool,
@@ -61,7 +58,6 @@ impl StreamPopout {
         }
     }
 
-    /// Only Windows lets zcord raise a window above the others.
     fn pin_button(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
         if !cfg!(windows) {
             return None;
@@ -198,7 +194,6 @@ pub(super) fn render_image(frame: StreamFrame) -> Option<Arc<RenderImage>> {
     Some(Arc::new(RenderImage::new(vec![image::Frame::new(image)])))
 }
 
-/// The header and dock of a stage, which fade out while the pointer is idle.
 pub(super) struct StageControls {
     last_activity: Instant,
     over: bool,
@@ -236,8 +231,6 @@ impl DiscordApp {
         }
     }
 
-    /// The bars stay up while the pointer rests on them, and the stage's timer hides them
-    /// otherwise.
     fn stage_activity(&mut self, over_controls: bool, cx: &mut Context<Self>) {
         let Some(controls) = self.stage_controls() else {
             return;
@@ -290,19 +283,16 @@ impl DiscordApp {
         self.stream.stage_chat.is_some() && self.stage_open()
     }
 
-    /// A call can end from places without a window, which leaves its chat to close later.
     pub(crate) fn stage_chat_orphaned(&self) -> bool {
         self.stream.stage_chat.is_some() && !self.stage_open()
     }
 
-    /// Voice channels have their own text chat, which only opens from a stage.
     pub(super) fn open_stream_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((guild_id, channel_id)) = self.stage_channel() else {
             return;
         };
         let back = (self.selected_guild_id, self.selected_channel_id);
         if guild_id != 0 && self.selected_guild_id != guild_id {
-            // Passing through the guild's text channel must not dismiss the stage.
             let stage = (self.voice.call_view.take(), self.voice_lobby.take());
             self.select_guild(guild_id, window, cx);
             (self.voice.call_view, self.voice_lobby) = stage;
@@ -549,7 +539,6 @@ impl DiscordApp {
         }
     }
 
-    /// The chat stays open across the switch, since both stages share the call's channel.
     fn return_to_call(&mut self, cx: &mut Context<Self>) {
         self.close_stream(None, cx);
         self.open_call_view(cx);

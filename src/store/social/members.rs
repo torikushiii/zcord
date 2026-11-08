@@ -5,7 +5,6 @@ impl Store {
         if let (Some(guild_id), Some(member)) = (guild_id, profile.guild_member.as_ref()) {
             self.upsert_member(guild_id, profile.user.user.id, &member.member);
         }
-        // The top-level user wins when present; omitted cosmetics retain the nested user's data.
         self.absorb_user(&profile.user.user);
         if let Some(friends) = &profile.mutual_friends {
             for friend in friends {
@@ -129,8 +128,6 @@ impl Store {
             .unwrap_or(&user.real_name);
         Some([&user.username, &user.real_name, &nick.to_owned()].map(|name| name.to_lowercase()))
     }
-    /// Who a search filter could name, best match first: names starting with `query`, then
-    /// names containing it. An empty `query` matches everyone.
     pub fn search_users(
         &self,
         guild_id: Option<u64>,

@@ -130,7 +130,6 @@ impl DiscordApp {
             Some(guild_id) => self.select_guild_channel(guild_id, Some(channel_id), window, cx),
             None => self.open_home(window, cx),
         }
-        // Threads aren't in the channel list, so the server opens on another channel first.
         if self.selected_channel_id != channel_id {
             self.select_channel(channel_id, window, cx);
         }
@@ -192,9 +191,6 @@ impl DiscordApp {
         self.messages.offset_for_item(top.item_ix) + top.offset_in_item
     }
 
-    /// One frame of the eased scroll toward a jump target, centring it like Discord. The
-    /// target is recomputed every frame because rows measured on the way change its offset;
-    /// a far target is first approached by a jump to within a viewport.
     fn step_jump(&mut self, nonce: u64, window: &mut Window, cx: &mut Context<Self>) {
         let Some(jump) = self
             .jumps
@@ -255,7 +251,6 @@ impl DiscordApp {
     fn highlight_jump(&mut self, message_id: u64, cx: &mut Context<Self>) {
         let nonce = self.jumps.highlight.map_or(0, |(_, nonce)| nonce) + 1;
         self.jumps.highlight = Some((message_id, nonce));
-        // Clear it once faded, so scrolling the row back into view doesn't replay the flash.
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(JUMP_HIGHLIGHT).await;
             this.update(cx, |app, _| {
@@ -491,7 +486,6 @@ impl DiscordApp {
                                 });
                             }
                         }
-                        // A page may confirm an optimistic row without increasing the count.
                         if optimistic && inserted == 0 && app.selected_channel_id == channel_id {
                             let len = app.channel().map_or(0, |channel| channel.messages.len());
                             app.messages.remeasure_items(0..len);

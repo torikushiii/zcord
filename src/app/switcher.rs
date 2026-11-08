@@ -26,7 +26,6 @@ pub(crate) struct QuickSwitcher {
     selected: usize,
     scroll: ScrollHandle,
     closing: Option<Task<()>>,
-    /// Unique per open, so reopening replays the entry animation.
     animation: u64,
     _search_events: Subscription,
 }
@@ -36,7 +35,6 @@ impl QuickSwitcher {
         self.sections.iter().flat_map(|section| &section.items)
     }
 
-    /// Index of the item's element among the results' children, which include section headers.
     fn child_index(&self, item: usize) -> usize {
         let mut seen = 0;
         let mut child = 0;
@@ -90,7 +88,6 @@ impl DiscordApp {
         self.rebuild_quick_switcher(cx);
     }
 
-    /// Returns false when there was no open switcher to close.
     pub(crate) fn close_quick_switcher(
         &mut self,
         window: &mut Window,
@@ -150,8 +147,6 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// Moves the highlighted result by `delta`, wrapping like Discord. Returns false when the
-    /// switcher isn't open, so the arrow keys keep their usual meaning.
     pub(crate) fn move_quick_switcher(&mut self, delta: isize, cx: &mut Context<Self>) -> bool {
         let Some(switcher) = self
             .menus

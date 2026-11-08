@@ -105,8 +105,6 @@ pub(crate) fn dm_welcome(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
     dm_intro(app, app.selected_channel_id, cx)
 }
 
-/// The top of a DM's history. A message request also gets Discord's sidebar controls under
-/// the greeting: the sender's mutual servers, then Accept DM, Ignore and Report Spam.
 pub(crate) fn dm_intro(app: &DiscordApp, channel_id: u64, cx: &App) -> Option<AnyElement> {
     let dm = app.store.private_channel(channel_id)?;
     let name = app.store.private_channel_name(channel_id);

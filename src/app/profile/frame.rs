@@ -11,7 +11,6 @@ pub(super) fn frame_item(
     Some((product.sku_id, item))
 }
 
-/// How far the profile frame's art reaches past a card `width` wide, in CSS pixels.
 pub(super) fn frame_overflow(card: &ProfileCard, width: f32) -> Option<Edges<f32>> {
     Some(item_overflow(profile_frame(card)?.1, width))
 }
@@ -37,7 +36,6 @@ pub(super) fn framed(
     framed_with(profile_frame(card), width, body, fill, cx)
 }
 
-/// Wraps `body` in `frame`'s art, back layers behind it and front layers over it.
 pub(super) fn framed_with(
     frame: Option<(u64, &model::CollectibleItem)>,
     width: f32,
@@ -57,8 +55,6 @@ pub(super) fn framed_with(
         item.layers
             .iter()
             .filter(|layer| (layer.order == "front") == front)
-            // The full-profile dialog runs to the window's bottom edge, so Discord drops the
-            // bottom staple there and keeps it only on the popout.
             .filter(|layer| !(fill && layer.kind == "staple" && layer.anchor == "bottom"))
             .filter_map(|layer| {
                 let spec = ImageSpec::Collectible {
@@ -67,10 +63,6 @@ pub(super) fn framed_with(
                 let path = images::resolve(&spec, theme::image_px(frame_width), cx)?;
                 let image = img(path.clone()).w(rpx(frame_width)).flex_none();
                 let base = div().absolute().left(rpx(-overflow_x)).w(rpx(frame_width));
-                // Border art is a uniform strip of side rails with no fixed height; Discord repeats
-                // it down the card and masks it out of the overflow, where the staples sit. Pin one
-                // copy to each end of the card and let each fill half, so it fits any card up to
-                // twice the art's height without overlapping.
                 if layer.kind == "border" {
                     let half = |top: bool| {
                         div()

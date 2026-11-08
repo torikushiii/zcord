@@ -25,7 +25,6 @@ const GAP: f32 = 16.;
 const CARD_MIN_WIDTH: f32 = 360.;
 const PREVIEW_HEIGHT: f32 = 293.;
 const MOSAIC_GAP: f32 = 4.;
-/// Cards show this many tags, then a "+N" chip for the rest.
 const VISIBLE_TAGS: usize = 3;
 const MENU_WIDTH: f32 = 180.;
 
@@ -585,7 +584,6 @@ fn radio(checked: bool) -> Div {
         })
 }
 
-/// Lays cards into rows; the column count comes from the width measured on the previous frame.
 fn gallery_grid(app: &DiscordApp, cards: Vec<AnyElement>) -> impl IntoElement {
     let columns = app.forum_columns();
     let measured = columns.clone();
@@ -765,7 +763,6 @@ fn applied_tags<'a>(post: &ForumPost, tags: &'a [ForumTag]) -> Vec<&'a ForumTag>
         .collect()
 }
 
-/// The pin marker and the first few tags, shown over media or at the foot of the text box.
 fn tag_row(post: &ForumPost, tags: &[&ForumTag], cx: &App) -> Option<Div> {
     if tags.is_empty() && !post.pinned {
         return None;
@@ -901,7 +898,6 @@ fn text_preview(
         }))
 }
 
-/// One image fills the box, two split it, three or more put one large on the left.
 fn mosaic(media: &[ImageSpec], tags: Option<Div>, cx: &App) -> impl IntoElement {
     let radius = rpx(8.);
     let tile = |spec: &ImageSpec| {
@@ -1152,7 +1148,6 @@ pub(crate) fn relative_time(timestamp: Timestamp) -> String {
     }
 }
 
-/// Gallery cards say "Posted 5d ago" for the last month, ">30d ago" within the year, then the date.
 fn posted_label(created: Timestamp) -> String {
     match minutes_since(created) {
         Some(..43200) => format!("Posted {}", relative_time(created)),

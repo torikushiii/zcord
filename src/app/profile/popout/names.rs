@@ -11,8 +11,6 @@ pub(crate) fn display_names(
     let palette = card.palette();
     let user = app.store.user(card.user_id);
     let guild_id = card.guild_id.unwrap_or(0);
-    // Edits typed into your own profile show on every card of it; the full profile also edits
-    // these lines in place.
     let styling = editing_styles(app, card);
     let identity = styling.filter(|_| large);
     let username = profile
@@ -41,7 +39,6 @@ pub(crate) fn display_names(
         .map(str::to_owned)
         .or_else(|| user.map(|user| user.name.clone()))
         .unwrap_or_else(|| "Unknown User".to_owned());
-    // An emptied display name falls back to the username, as on Discord.
     let name = match styling.and_then(|editor| editor.ui.identity.display_name.clone()) {
         Some(edited) if edited.is_empty() => username.clone().unwrap_or(saved_name.clone()),
         Some(edited) => edited,
@@ -52,11 +49,8 @@ pub(crate) fn display_names(
         .and_then(|p| p.pronouns.clone())
         .filter(|p| !p.is_empty())
         .or_else(|| profile?.user_profile.as_ref()?.pronouns.clone())
-        // Discord renders pronouns as one line of HTML text, so newlines padding them out
-        // collapse to spaces there.
         .map(|p| p.split_whitespace().collect::<Vec<_>>().join(" "))
         .filter(|p| !p.is_empty());
-    // Cleared server pronouns show the main profile's, as they will once saved.
     let pronouns = match styling.and_then(|editor| editor.ui.identity.pronouns.clone()) {
         Some(edited) if edited.is_empty() && card.guild_id.is_some() => {
             Some(super::identity_editor::scope_pronouns(profile, false).0)
@@ -69,7 +63,6 @@ pub(crate) fn display_names(
         Some(editor) => super::identity_editor::shown_tag(app, editor),
         None => user.and_then(|user| user.tag.clone()),
     };
-    // The name style dialog's working copy previews before it reaches the draft.
     let edited_style = editing_styles(app, card).map(|editor| match &editor.ui.dialog {
         Some(super::styles_panel::StyleDialog::NameStyle(style)) => {
             Some(super::styles_panel::shown_name_style(style))

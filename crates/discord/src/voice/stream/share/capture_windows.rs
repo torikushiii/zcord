@@ -169,8 +169,6 @@ impl GraphicsCaptureApiHandler for Handler {
         for row in source[..source_len].chunks_exact(stride) {
             data.extend_from_slice(&row[..row_bytes]);
         }
-        // A full channel means the encoder is still busy; skipping a frame before it is encoded
-        // leaves the encoded stream intact, so it needs no keyframe.
         let _ = self.0.frames.try_send(RawFrame {
             width,
             height,

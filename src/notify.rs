@@ -24,7 +24,6 @@ pub fn show(title: &str, body: &str, icon: Option<&Path>, channel_id: u64, messa
     let _ = (title, body, icon, channel_id, message_id);
 }
 
-/// Windows toasts can't read every format the image cache holds, so this keeps a PNG beside it.
 pub fn toast_icon(cached: &Path) -> Option<PathBuf> {
     let icon = cached.with_extension("toast.png");
     if icon.is_file() {

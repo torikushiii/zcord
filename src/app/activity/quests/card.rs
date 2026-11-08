@@ -8,7 +8,6 @@ const RING_STROKE: f32 = 4.;
 const TEXT_BRAND: u32 = 0x94A8FF;
 const POSITIVE: u32 = 0x23A55A;
 const ORB_PURPLE: u32 = 0x5B3FD9;
-/// The video decoder only accepts MP4, so the still is cut from the clip's WebM twin.
 const ORB_VIDEO: &str = "https://cdn.discordapp.com/assets/content/f763593591e9ac5ee5abab6d8cce6c395263fa51f6c1e30c07cbfc793cd877d2.mp4";
 const ORB_STILL: &str = "https://cdn.discordapp.com/assets/content/fb761d9c206f93cd8c4e7301798abe3f623039a4054f2e7accd019e1bb059fc8.webm?format=webp";
 const ORB_ART_SIZE: u32 = 320;

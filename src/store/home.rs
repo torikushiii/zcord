@@ -370,7 +370,6 @@ impl Store {
             .min(u32::MAX as usize) as u32
     }
 
-    /// Returns whether anything changed, so the caller knows to repaint.
     pub fn set_conceal_usernames(&mut self, on: bool) -> bool {
         if !mapping::set_conceal_usernames(on) {
             return false;
@@ -486,8 +485,6 @@ impl Store {
             .min(u32::MAX as usize) as u32
     }
 
-    /// The home button's badge: DM mentions plus the friend and message requests waiting on
-    /// the user, leaving out spam, like Discord's.
     pub fn home_badge(&self) -> u32 {
         self.dm_mentions
             .saturating_add(self.pending_count())
@@ -524,7 +521,6 @@ impl Store {
         }
     }
 
-    /// Drops a suggestion that was dismissed here or elsewhere.
     pub fn remove_friend_suggestion(&mut self, user_id: u64) {
         match &mut self.friend_suggestions {
             Some(list) => list.retain(|suggestion| suggestion.user_id != user_id),
@@ -532,8 +528,6 @@ impl Store {
         }
     }
 
-    /// Suggestions for people the user has no relationship with yet; accepting one sends a
-    /// friend request, which moves them to Pending.
     pub fn friend_suggestions(&self) -> Vec<&FriendSuggestion> {
         self.friend_suggestions
             .iter()
@@ -567,8 +561,6 @@ impl Store {
             .collect();
     }
 
-    /// Friends and close contacts playing, streaming or listening to music, like Discord's
-    /// Active Now column.
     pub fn active_now(&self) -> Vec<u64> {
         let mut ids: Vec<u64> = self
             .friends()

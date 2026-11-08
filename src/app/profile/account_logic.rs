@@ -6,8 +6,6 @@ use crate::{
     discord::{Error, SelfStatus, StatusDuration},
 };
 
-/// Actions the bottom-left account popout can perform. Discord's other entries (editing
-/// profiles, account switching, clips and orbs) need APIs this client lacks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AccountAction {
     ViewProfile,
@@ -110,9 +108,6 @@ impl DiscordApp {
     }
 }
 
-/// A click handler bound to the app entity, matching the popout's existing handler shape.
-/// Viewing the full profile keeps global context. Status changes keep the popout open
-/// for progress/errors; settings and copying the ID close it first.
 pub(crate) fn account_action(
     app: &DiscordApp,
     action: AccountAction,

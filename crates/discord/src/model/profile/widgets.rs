@@ -4,8 +4,6 @@ use super::*;
 pub struct ProfileWidget {
     pub id: u64,
     pub data: WidgetData,
-    /// The widget's `data` as Discord sent it. Saving replaces the whole list, so widgets this
-    /// client can't fully model are sent back exactly as they came.
     pub raw: Value,
 }
 
@@ -27,8 +25,6 @@ impl<'de> Deserialize<'de> for ProfileWidget {
 }
 
 impl ProfileWidget {
-    /// The `{id, data}` entry Discord's `PUT /users/@me/widgets` takes for this widget. Only an
-    /// edited game list is rewritten, and each game keeps the fields Discord sent for it.
     pub fn body(&self) -> Value {
         let mut data = self.raw.clone();
         let original = WidgetData::deserialize(&self.raw).ok();
@@ -99,7 +95,6 @@ pub enum WidgetData {
         #[serde(default, deserialize_with = "default_value")]
         games: Vec<WidgetGame>,
     },
-    /// The profile Board labels this list "Games I Like".
     PlayedGames {
         #[serde(default, deserialize_with = "default_value")]
         games: Vec<WidgetGame>,

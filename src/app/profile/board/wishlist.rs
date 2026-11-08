@@ -76,8 +76,6 @@ fn shop_menu(
             16.,
             palette.strong,
         ))
-        // The menu closes itself on any outside mouse-down, which runs first; acting on the
-        // state from this render keeps a click on the button from reopening it.
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             entity
                 .update(cx, |app, cx| app.set_shop_menu(!open, cx))
@@ -169,7 +167,6 @@ fn shop_menu(
                             })
                     }),
             );
-        // A zero-width anchor at the button's bottom-right corner; the menu hangs left from it.
         this.child(
             div().absolute().top(relative(1.)).right_0().child(
                 deferred(
@@ -195,7 +192,6 @@ fn wishlist_tile(
     palette: ProfilePalette,
     cx: &App,
 ) -> impl IntoElement {
-    // Discord requests the scene at 1280px and the cut-out character at 640px.
     let store_art = |asset: Option<u64>, pixels: u32| {
         let spec = ImageSpec::StoreAsset {
             application_id: item.application_id?,
@@ -203,7 +199,6 @@ fn wishlist_tile(
         };
         images::resolve(&spec, pixels, cx)
     };
-    // Discord layers the cut-out character over its scene; the thumbnail stands in without them.
     let layers: Vec<_> = match (
         store_art(item.card_background_asset_id, 1280),
         store_art(item.card_image_asset_id, 640),
@@ -226,7 +221,6 @@ fn wishlist_tile(
         (Some(price), false) => format!("{} · {}", item.name, sku_price(price)),
         (None, false) => item.name.clone(),
     };
-    // Shop avatar decorations have no store art; preview them on the wishlist owner's avatar.
     let decoration = item
         .collectible
         .as_ref()

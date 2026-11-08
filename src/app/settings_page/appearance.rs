@@ -244,7 +244,6 @@ fn related_accessibility(
     )
 }
 
-/// A "Related Settings" link that opens another settings page.
 pub(super) fn related_setting(
     app: &DiscordApp,
     id: &'static str,
@@ -358,10 +357,8 @@ fn disabled_row(
     )
 }
 
-/// One choice in a `select_field`; `choose` runs after the menu closes.
 pub(super) type SelectOption = (&'static str, bool, Rc<dyn Fn(&mut App)>);
 
-/// A dropdown whose open state lives in the `SettingsPage` field `flag` points at.
 pub(super) fn select_field(
     app: &DiscordApp,
     id: &'static str,

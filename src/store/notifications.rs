@@ -21,7 +21,6 @@ struct Context<'a> {
 }
 
 impl Store {
-    /// A message's text for a toast or preview line, with mentions shown by name.
     pub(super) fn preview_text(
         &self,
         content: &str,
@@ -89,7 +88,6 @@ impl Store {
             })
     }
 
-    /// When an active timed mute ends, in Unix milliseconds; `None` if unmuted or muted indefinitely.
     pub fn guild_mute_end(&self, guild_id: u64, now_ms: u64) -> Option<u64> {
         let settings = self.notification_settings.get(&Some(guild_id))?;
         settings
@@ -189,7 +187,6 @@ impl Store {
             }
         }
         let mut level = self.effective_level(guild.id, &context, settings);
-        // A thread you haven't joined only reaches you by mentioning you.
         if context.thread
             && level == model::NotificationLevel::All
             && !self.thread_joins.contains_key(&context.channel.id)
@@ -351,7 +348,6 @@ impl Store {
             let embed = self.embed_text(message, context.guild.map(|guild| guild.id));
             if !embed.is_empty() {
                 embed
-            // Discord's own notifications name the first file.
             } else if let Some(attachment) = message.attachments.first() {
                 if attachment.filename.is_empty() {
                     "Uploaded a file".to_owned()

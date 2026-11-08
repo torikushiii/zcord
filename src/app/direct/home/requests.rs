@@ -70,7 +70,6 @@ pub(crate) fn requests_header(app: &DiscordApp) -> impl IntoElement + use<> {
                 .rounded_full()
                 .bg(rgb(theme::faint())),
         )
-        // Like Discord: no pill on Requests, and the spam count in the label.
         .child(tab(
             "requests-tab",
             RequestsTab::Requests,
@@ -91,14 +90,10 @@ pub(crate) fn requests_header(app: &DiscordApp) -> impl IntoElement + use<> {
 const REQUEST_ACTIONS: bool = false;
 const ACCEPT_FROM_DISCORD: &str = "Accept message requests from Discord for now";
 const IGNORE_FROM_DISCORD: &str = "Ignore message requests from Discord for now";
-/// Discord's message request avatar (`SIZE_40`).
 const REQUEST_AVATAR: f32 = 40.;
 const MUTUAL_ICON: f32 = 16.;
-/// Height of the request row's second line, which slides between mutual servers and preview.
 const REQUEST_LINE: f32 = 18.;
-/// How far each stacked server icon sits from the previous one.
 const MUTUAL_STEP: f32 = 12.;
-/// Discord's `LIST_ROW_HEIGHT`: a 1px top border over a 72px row.
 const REQUEST_ROW_HEIGHT: f32 = 73.;
 
 pub(crate) fn requests_page(app: &DiscordApp, _cx: &App) -> AnyElement {
@@ -150,7 +145,6 @@ pub(crate) fn requests_page(app: &DiscordApp, _cx: &App) -> AnyElement {
     }
     let entity = app.entity.clone();
     let now_ms = chrono::Utc::now().timestamp_millis();
-    // Virtualized like Discord's list: only rows on screen are built, and only they fetch.
     let list = uniform_list("requests-list", count, move |range, _, cx| {
         let Some(app_entity) = entity.upgrade() else {
             return Vec::new();
@@ -177,15 +171,12 @@ pub(crate) fn requests_page(app: &DiscordApp, _cx: &App) -> AnyElement {
                     {
                         missing.push((id, user_id));
                     }
-                    // Discord's border sits on top of every row but the first, and hides beside a
-                    // hovered row.
                     let above = index.checked_sub(1).and_then(|above| requests.get(above));
                     let border = above.is_some_and(|above| {
                         let lit = |row: u64| hovered == Some(row) || app.thread_pane_shows(row);
                         !lit(id) && !lit(above.channel.id)
                     });
                     Some(
-                        // Virtualized items size to their content unless told to fill the row.
                         div()
                             .flex()
                             .flex_col()
@@ -209,7 +200,6 @@ pub(crate) fn requests_page(app: &DiscordApp, _cx: &App) -> AnyElement {
                 .collect();
             (items, missing, app.live, app.entity.clone())
         };
-        // Fetching mutates the app, which can't happen mid-paint, so it waits for the frame.
         if live && !missing.is_empty() {
             cx.defer(move |cx| {
                 app_weak
@@ -226,8 +216,6 @@ pub(crate) fn requests_page(app: &DiscordApp, _cx: &App) -> AnyElement {
     page.child(list).into_any_element()
 }
 
-/// Discord's request age: minutes, hours and days up to 30, then ">30d ago" until 360 days,
-/// then the full date.
 pub(super) fn request_age(sent_ms: i64, now_ms: i64) -> String {
     let seconds = (now_ms - sent_ms).max(0) / 1000;
     match seconds {
@@ -246,8 +234,6 @@ pub(super) fn request_age(sent_ms: i64, now_ms: i64) -> String {
     }
 }
 
-/// One line of the latest message, as Discord previews it: line breaks become spaces, and
-/// user mentions and custom emoji read as names rather than raw markup.
 pub(super) fn request_preview_line(store: &Store, content: &str) -> String {
     let flat = content.replace(['\r', '\n'], " ");
     let mut out = String::with_capacity(flat.len());
@@ -296,8 +282,6 @@ pub(super) enum RequestButton {
     Report,
 }
 
-/// Discord's small request buttons. Each is muted with a tooltip while `REQUEST_ACTIONS` is
-/// off; Report has no client support yet, so it always is.
 pub(super) fn request_button(app: &DiscordApp, id: u64, kind: RequestButton) -> AnyElement {
     let (key, text, tip, background, hover) = match kind {
         RequestButton::Ignore => (
@@ -360,7 +344,6 @@ pub(super) fn request_button(app: &DiscordApp, id: u64, kind: RequestButton) -> 
                     entity
                         .update(cx, |app, cx| match kind {
                             RequestButton::Ignore => app.ignore_request(id, window, cx),
-                            // Discord's "not spam" accepts the request.
                             RequestButton::Accept | RequestButton::NotSpam => {
                                 app.accept_request(id, window, cx)
                             }
@@ -379,12 +362,10 @@ pub(super) fn request_button(app: &DiscordApp, id: u64, kind: RequestButton) -> 
         .flex_none()
         .child(div().opacity(0.5).child(button))
         .child(theme::hover_tooltip(tip_key, tip))
-        // Keeps the row's click (open DM) from firing through the button.
         .on_click(|_, _, cx| cx.stop_propagation())
         .into_any_element()
 }
 
-/// Up to three server icons and the count, like Discord's "3 Mutual Servers".
 pub(super) fn mutual_servers(app: &DiscordApp, guild_ids: &[u64], cx: &App) -> Div {
     let label = match guild_ids.len() {
         0 => "No Mutual Servers".to_owned(),
@@ -393,8 +374,6 @@ pub(super) fn mutual_servers(app: &DiscordApp, guild_ids: &[u64], cx: &App) -> D
     };
     let shown = guild_ids.len().min(3);
     let size = MUTUAL_ICON + 2.;
-    // Absolute positions inside a fixed-width box: the overlap is drawn, not laid out, so the
-    // label always starts after the last icon.
     let icons = guild_ids
         .iter()
         .take(shown)
@@ -442,7 +421,6 @@ fn request_row(app: &DiscordApp, dm: &PrivateChannel, now_ms: i64, cx: &App) -> 
     let username = user
         .filter(|user| !user.username.is_empty() && user.username != name && user.name != name)
         .map(|user| crate::settings::shown_username(&user.username));
-    // Discord dates the row by the preview message, falling back to the channel's last message.
     let sent_id = Some(app.store.latest_message_id(id))
         .filter(|id| *id != 0)
         .unwrap_or(0);
@@ -465,8 +443,6 @@ fn request_row(app: &DiscordApp, dm: &PrivateChannel, now_ms: i64, cx: &App) -> 
             .min_w_0()
             .h(rpx(REQUEST_LINE))
     };
-    // Both lines stack in a one-line window; hovering slides the stack up so the latest
-    // message replaces the mutual servers, like Discord's row and our account panel.
     let lines = div()
         .absolute()
         .left_0()
@@ -489,7 +465,6 @@ fn request_row(app: &DiscordApp, dm: &PrivateChannel, now_ms: i64, cx: &App) -> 
                     .child(label(("request-preview", id), &content)),
             ),
         );
-    // Only the row being entered or left animates, so rows never slide back on first paint.
     let animate = !cx.reduce_motion() && (hovered || app.home.left_row == Some(id));
     let second_line = if animate {
         lines
@@ -514,7 +489,6 @@ fn request_row(app: &DiscordApp, dm: &PrivateChannel, now_ms: i64, cx: &App) -> 
         .ml(rpx(0.))
         .mr(rpx(0.))
         .cursor_pointer()
-        // Discord's `.active` row: the one open in the sidebar keeps the hover fill.
         .when(active, |this| this.bg(rgba(theme::hover())))
         .on_click(move |_, window, cx| {
             entity
@@ -530,7 +504,6 @@ fn request_row(app: &DiscordApp, dm: &PrivateChannel, now_ms: i64, cx: &App) -> 
             cx,
         ))
         .child(
-            // Discord's `.userPreview`: 16px clear of the buttons.
             div()
                 .flex()
                 .flex_col()
@@ -564,7 +537,6 @@ fn request_row(app: &DiscordApp, dm: &PrivateChannel, now_ms: i64, cx: &App) -> 
                                 .child(username)
                         }))
                         .children(age.map(|age| {
-                            // `.timestampWithPreview`: 8px after the name, body-xs muted.
                             div()
                                 .flex_none()
                                 .ml(rpx(8.))
@@ -598,8 +570,6 @@ fn request_row(app: &DiscordApp, dm: &PrivateChannel, now_ms: i64, cx: &App) -> 
         }))
 }
 
-/// Replaces the composer while an unaccepted message request is open, in the main view or
-/// the side pane.
 pub(crate) fn request_bar(app: &DiscordApp, id: u64) -> Option<AnyElement> {
     let dm = app
         .store
@@ -659,7 +629,6 @@ pub(crate) fn request_bar(app: &DiscordApp, id: u64) -> Option<AnyElement> {
             })
         })
     };
-    // While request actions are off, each button dims, drops its click, and explains itself.
     let gate = |button: Stateful<Div>, key: &'static str, tip: &'static str| -> AnyElement {
         if REQUEST_ACTIONS {
             return button.into_any_element();

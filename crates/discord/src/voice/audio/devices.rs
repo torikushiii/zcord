@@ -4,20 +4,15 @@ static MISSING_DEVICES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AudioDevice {
-    /// The system's full name for the device, which zcord saves to open it again.
     pub name: String,
-    /// The name Discord shows: the adapter, such as "UGREEN HiTune Max5c".
     pub label: String,
-    /// The endpoint on it, such as "Headphones", when the system names one.
     pub detail: Option<String>,
     pub kind: AudioDeviceKind,
 }
 
-/// What a device is, for its icon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AudioDeviceKind {
     Bluetooth,
-    /// Sound through a monitor or TV, over HDMI or DisplayPort.
     Display,
     Headphones,
     Microphone,
@@ -29,7 +24,6 @@ pub enum AudioDeviceKind {
 pub struct AudioDevices {
     pub inputs: Vec<AudioDevice>,
     pub outputs: Vec<AudioDevice>,
-    /// What the system default currently is, shown under "Windows Default".
     pub default_input: Option<AudioDevice>,
     pub default_output: Option<AudioDevice>,
 }
@@ -69,8 +63,6 @@ fn describe(device: &cpal::Device) -> Option<AudioDevice> {
     })
 }
 
-/// Windows names an endpoint "Headphones (UGREEN HiTune Max5c)"; Discord shows the part in
-/// brackets as the name and the rest under it.
 fn split_name(name: &str) -> (String, Option<String>) {
     let parts = name
         .strip_suffix(')')

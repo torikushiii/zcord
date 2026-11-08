@@ -113,11 +113,9 @@ impl Store {
             user.playing = playing;
             user.activity_kind = current.as_ref().and_then(|(_, _, kind)| *kind);
             user.activity = current.map(|(text, _, _)| text);
-            // A custom status takes the activity line, but the game still shows on the profile.
             user.game = playing_activity(activities)
                 .filter(|activity| activity.kind == 0)
                 .map(game_activity);
-            // Activity type 2 is "Listening to", e.g. Spotify.
             user.listening = activities
                 .iter()
                 .find(|activity| activity.kind == 2)
@@ -131,7 +129,6 @@ impl Store {
                     .as_ref()
                     .is_some_and(|configured| same_custom_status(&custom, configured));
                 if same_as_settings {
-                    // Presence omits the expiry, but its emoji name and animation are newer.
                     custom.expires_at = own_custom.as_ref().and_then(|status| status.expires_at);
                     self.social.own_custom_status = Some(custom.clone());
                 } else if own_custom.is_some() {
@@ -140,10 +137,8 @@ impl Store {
                 user.custom_status = Some(custom);
             } else if let Some(configured) = own_custom {
                 if !configured.is_expired(SystemTime::now()) {
-                    // Sessions and presence often omit the custom activity that settings still hold.
                     show_custom_status(user, &configured);
                 } else {
-                    // The expired value stays stored so a later live echo still matches it.
                     user.custom_status = None;
                 }
             } else {

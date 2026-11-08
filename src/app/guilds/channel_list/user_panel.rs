@@ -9,8 +9,6 @@ pub(crate) const USER_PANEL_HEIGHT: f32 = 56.;
 const MUTED_GLOW: u32 = 0xD22D391F;
 const ACCOUNT_AVATAR_SIZE: f32 = 32.;
 
-/// The custom status (or the presence when there is none), which slides up to reveal the
-/// username while the panel is hovered, like Discord's.
 fn account_subtitle(
     user: &User,
     hovered: bool,
@@ -177,8 +175,6 @@ pub(super) fn account_identity(
         )
 }
 
-/// A mic or headphones button with Discord's chevron beside it, which opens that device's
-/// options menu.
 fn with_options(
     app: &DiscordApp,
     button: Stateful<Div>,
@@ -256,7 +252,6 @@ pub(super) fn account_row(
         .h(rpx(USER_PANEL_HEIGHT))
         .p(rpx(if compact { 4. } else { 12. }))
         .children(nameplate.map(|nameplate| {
-            // The nameplate bleeds one CSS pixel past the account strip's border.
             div()
                 .debug_selector(|| "account-nameplate".into())
                 .absolute()
@@ -544,7 +539,6 @@ pub(crate) fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<>
         )
         .id("account")
         .cursor_pointer()
-        // Translucent so a nameplate behind the panel stays visible.
         .hover(|style| style.bg(rgba(theme::account_hover())))
         .on_hover({
             let entity = app.entity.clone();
@@ -552,8 +546,6 @@ pub(crate) fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<>
                 entity
                     .update(cx, |app, cx| {
                         app.hover.account = *hovered;
-                        // Until the first hover the subtitle sits still, so it doesn't
-                        // play the slide-back animation when the panel first appears.
                         app.channel_rows.subtitle_hovered_once = true;
                         cx.notify();
                     })
@@ -629,8 +621,6 @@ pub(crate) fn user_panel(app: &DiscordApp, cx: &App) -> impl IntoElement + use<>
         ])
         .collect();
     let account = account_row(nameplate, identity, controls, compact)
-        // The account strip, not the outer footer: a connected voice panel must not move the
-        // popout or change the height available above the account row.
         .on_prepaint(move |bounds, _, _| account_bounds.set(Some(bounds)));
     div()
         .flex()

@@ -26,14 +26,10 @@ use crate::{
 
 const METER_TICK: Duration = Duration::from_millis(50);
 const AUTOMATIC_THRESHOLD: f32 = -50.;
-/// Room for about seven devices before the list scrolls.
 const DEVICE_LIST_MAX_HEIGHT: f32 = 380.;
 
-/// Voice & Video page state, created the first time the page is shown.
 pub(super) struct VoiceAudio {
     open_list: Option<DeviceKind>,
-    /// Each picker's button, measured every frame, so its list can match the button's width
-    /// and a click on it isn't taken for a click outside.
     triggers: [Rc<Cell<Option<Bounds<Pixels>>>>; 2],
     input_volume: Entity<SliderState>,
     output_volume: Entity<SliderState>,
@@ -44,7 +40,6 @@ pub(super) struct VoiceAudio {
     _subscriptions: Vec<Subscription>,
 }
 
-/// Applies the saved audio preferences to a session, before joining a call.
 pub(crate) fn apply_preferences(session: &Session, settings: &Settings) {
     session.set_input_device(settings.voice_input_device.clone());
     session.set_output_device(settings.voice_output_device.clone());
@@ -567,7 +562,6 @@ fn device_picker(
                     .shadow_lg()
                     .occlude()
                     .on_mouse_down_out(move |event, _, cx| {
-                        // The trigger closes on click; closing on mouse-down would reopen it.
                         if trigger
                             .get()
                             .is_some_and(|bounds| bounds.contains(&event.position))
@@ -661,7 +655,6 @@ pub(super) enum Source {
     Test(Rc<MicTest>),
 }
 
-/// Live mic level bar. Its own view, so its 20 fps repaint stays inside the settings dialog.
 pub(super) struct LevelMeter {
     source: Source,
     threshold: Option<f32>,

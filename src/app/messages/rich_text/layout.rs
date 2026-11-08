@@ -11,7 +11,6 @@ pub(super) struct Fonts {
     pub(super) font_size: Pixels,
     pub(super) line_height: Pixels,
     pub(super) emoji_size: Pixels,
-    /// `None` keeps the legacy centered 0.1em emoji slot.
     pub(super) emoji_gap: Option<Pixels>,
 }
 
@@ -555,8 +554,6 @@ fn layout_pieces(
             continue;
         }
         if let Some(limit) = wrap_width
-            // Zero-width intrinsic probes measure whole words. Splitting every
-            // word into glyphs here repeatedly shapes thousands of unused tails.
             && limit > Pixels::ZERO
             && x == Pixels::ZERO
             && atom.width - atom.trailing_space > limit

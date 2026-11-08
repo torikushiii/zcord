@@ -105,8 +105,6 @@ pub fn plain_text(blocks: &[Block]) -> String {
     plain_text_with(blocks, |_| None)
 }
 
-/// `resolve` names a user, channel or role mention or renders a timestamp; `None` keeps
-/// the raw form.
 pub fn plain_text_with(blocks: &[Block], resolve: impl Fn(&SpanKind) -> Option<String>) -> String {
     let mut text = String::new();
     let mut pending: Vec<&Block> = blocks.iter().rev().collect();
@@ -549,7 +547,6 @@ struct Delimiters {
 }
 
 impl Delimiters {
-    /// Whether an unclosed `character` run is waiting for its closer.
     fn waiting(&self, character: char, doubled: bool) -> bool {
         let group = match character {
             '*' => 0,
@@ -839,18 +836,12 @@ fn tokenize(text: &str, links: bool) -> Vec<Atom> {
             let mut size = rest
                 .find(|c: char| c.is_whitespace() || c == '<')
                 .unwrap_or(rest.len());
-            // Discord matches `**…**` and friends before autolinks, so a URL wrapped in
-            // formatting ends where the closing run starts. An underscore only closes at a word
-            // boundary, so `_` inside a URL path stays part of it.
             let candidate = &rest[..size];
             if let Some((close, _)) = candidate.char_indices().find(|&(index, c)| {
                 matches!(c, '*' | '_' | '~' | '|')
-                    // Check a run only once; repeatedly scanning its tail would be quadratic.
                     && (index == 0 || candidate.as_bytes()[index - 1] != c as u8)
-                    && delimiters.waiting(
-                        c,
-                        candidate.as_bytes().get(index + 1) == Some(&(c as u8)),
-                    )
+                    && delimiters
+                        .waiting(c, candidate.as_bytes().get(index + 1) == Some(&(c as u8)))
                     && (c != '_'
                         || !candidate[index..]
                             .trim_start_matches('_')

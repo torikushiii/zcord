@@ -95,7 +95,6 @@ pub(super) fn render_pane_row(
         .is_some_and(|since| {
             is_first_unread(messages, index, since, start, app.store.current_user_id)
         });
-    // A forum post's starter message shares the thread's id.
     let starter = post.is_some() && message.id == channel_id;
     div()
         .w_full()

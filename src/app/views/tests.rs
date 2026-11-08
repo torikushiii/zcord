@@ -42,8 +42,6 @@ impl Host {
         right_renders: Rc<Cell<usize>>,
         cx: &mut Context<Self>,
     ) -> Self {
-        // Deliberately observe the host while it is still being constructed,
-        // mirroring `DiscordApp::new` creating its cached panel views.
         let host = cx.entity();
         let left = cx.new(|cx| Panel::new(host.clone(), left_renders, cx));
         let right = cx.new(|cx| Panel::new(host, right_renders, cx));
@@ -255,8 +253,6 @@ fn cached_views_replay_deferred_popups(cx: &mut TestAppContext) {
     let initial = renders.get();
     assert!(initial > 0);
 
-    // Only the root notified/drew: the cached overlay is reused, deferred draw and
-    // all. The click is dispatched against this reused frame's replayed hitboxes.
     draw(cx);
     assert_eq!(renders.get(), initial);
     cx.simulate_click(point(px(160.), px(110.)), Modifiers::none());
@@ -308,8 +304,6 @@ fn a_cached_composer_does_not_clip_popups_that_overflow_upward(cx: &mut TestAppC
     cx.update(|window, cx| {
         let _ = window.draw(cx);
     });
-    // The 50px-tall view starts at y=100; its 80px popup is pinned to the bottom
-    // and must remain clickable above the view's own bounds.
     cx.simulate_click(point(px(50.), px(110.)), Modifiers::none());
     assert_eq!(clicks.get(), 1);
 }

@@ -53,15 +53,11 @@ const MAX_FRAMES: usize = 600;
 const MAX_DIMENSION: u32 = 4096;
 const DOWNLOADS: usize = 8;
 const DECODES: usize = 4;
-/// Emoji and stickers only queue a tiny decode each, so they get their own lane.
 const SMALL_DOWNLOADS: usize = 8;
 const SMALL_DECODES: usize = 2;
 const MAX_SOURCE_BYTES: u64 = 32 * 1024 * 1024;
 const STALE_AFTER: Duration = Duration::from_secs(2);
-/// An animation not shown for this long is dropped even under budget, so memory follows what
-/// is on screen rather than filling the budget with what was. Coming back decodes it again.
 const UNSEEN_DROP: Duration = Duration::from_secs(30);
-/// Elements only hold the image Arc during paint, so recent cache hits mark it visible.
 const VISIBLE_GRACE: Duration = Duration::from_secs(5);
 type Key = (ImageSpec, u32);
 
@@ -136,10 +132,8 @@ enum DecodeOutcome {
 
 enum Entry {
     Pending {
-        /// Last `state`/`resolve` request for this key, used to drop abandoned work.
         requested: Instant,
         queued: bool,
-        /// Refreshed on every request while the job is queued or in flight.
         wanted: Arc<Mutex<Instant>>,
     },
     Ready {
@@ -156,7 +150,6 @@ enum Entry {
 #[derive(Default)]
 struct Cache {
     entries: HashMap<ImageSpec, HashMap<u32, Entry>>,
-    /// Newest request at the front.
     queue: Vec<Key>,
     bytes: usize,
     clock: u64,
@@ -227,7 +220,6 @@ fn fallback_spec(spec: &ImageSpec, failed: bool) -> Option<ImageSpec> {
     }
 }
 
-/// Intrinsic APNG play counts are retained for collectibles; `None` means unbounded.
 pub(crate) fn play_count(spec: &ImageSpec, size: u32, cx: &App) -> Option<NonZeroU32> {
     let cache = cx.try_global::<AnimatedCache>()?.0.borrow();
     let size = cache.serving_size(spec, images::rounded_size(size));

@@ -57,27 +57,13 @@ pub enum Event {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum VoiceEvent {
-    Connecting {
-        guild_id: u64,
-        channel_id: u64,
-    },
-    Connected {
-        guild_id: u64,
-        channel_id: u64,
-    },
-    Disconnected {
-        reason: Option<String>,
-    },
-    Speaking {
-        user_id: u64,
-        speaking: bool,
-    },
+    Connecting { guild_id: u64, channel_id: u64 },
+    Connected { guild_id: u64, channel_id: u64 },
+    Disconnected { reason: Option<String> },
+    Speaking { user_id: u64, speaking: bool },
     PrivacyCode(Option<String>),
-    /// Round trip of the voice gateway's heartbeat, in milliseconds.
     Ping(u32),
-    /// Voice server host, without a scheme or port.
     Server(String),
-    /// Outbound packet loss from an RTCP receiver report, in percent.
     PacketLoss(f32),
     Stream(StreamEvent),
     Share(ShareEvent),
@@ -106,10 +92,7 @@ pub enum ShareEvent {
     Ended {
         reason: Option<String>,
     },
-    /// The users watching the stream, which Discord lists again on every change.
     Viewers(Vec<u64>),
-    /// A still of the shared picture, a JPEG data URI, for Discord to show as the stream's
-    /// preview.
     Preview {
         stream_key: String,
         thumbnail: String,

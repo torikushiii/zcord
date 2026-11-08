@@ -537,7 +537,6 @@ fn a_clocked_playback_holds_back_frames_already_past_while_catching_up() {
         registered.clocked(Instant::now(), None),
         playback(fixture.0.clone(), &retired),
     ];
-    // Far enough in that one slice of eight frames can't reach it.
     let target = Duration::from_secs(5);
     for playback in &both {
         let _lease = DisplayLease::new(&playback.shared, true);
@@ -740,8 +739,6 @@ fn end_of_source_swaps_to_a_ready_spool() {
 
 #[test]
 fn a_frame_read_before_a_spool_swap_is_still_processed() {
-    // Seven frames, then the end of the source, fill one decode slice exactly, so the
-    // slice's last frame was read from the source the swap replaces.
     let source = gif(DECODE_SLICE - 1);
     let fixture = Fixture::new(&source);
     let other = Fixture::new(&gif_colored(3, [7, 8, 9, 255]));

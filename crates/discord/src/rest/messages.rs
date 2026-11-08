@@ -27,8 +27,6 @@ pub(super) fn history_query(anchor: Anchor, limit: usize) -> Vec<(&'static str, 
     query
 }
 
-// `archived` is omitted on purpose: `true` restricts the search to archived posts only, and
-// leaving it out searches active and archived posts together.
 pub(super) fn forum_search_query(query: &ForumQuery) -> Vec<(&'static str, String)> {
     let sort_by = match query.sort {
         ForumSort::Activity => "last_message_time",
@@ -240,7 +238,6 @@ pub(super) fn uploads_body(files: &[UploadFile]) -> CreateUploads<'_> {
     }
 }
 
-// The whole `<uuid>/<name>` is one path segment, so its slash is encoded too.
 pub(super) fn delete_upload_url(uploaded_filename: &str) -> String {
     format!(
         "https://discord.com/api/v9/attachments/{}",
@@ -321,7 +318,6 @@ pub(super) async fn put_upload_watched(
     let body = Body::wrap_stream(upload_stream(handle, progress.clone()));
     let send = put_request(client, target_url, file, body).send();
     tokio::pin!(send);
-    // A stalled socket stops polling the body, so the body can't notice a cancel or a stall.
     let mut watch = tokio::time::interval((stall / 4).min(Duration::from_secs(1)));
     let mut seen = 0;
     let mut moved = tokio::time::Instant::now();

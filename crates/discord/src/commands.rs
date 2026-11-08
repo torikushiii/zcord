@@ -115,8 +115,6 @@ impl Commands {
                     .iter()
                     .position(|queued| queued.presence_revision.is_some())
             {
-                // The newest projection carries every older settings write, so it reports
-                // their completion; a real conflict is caught by the settings revision.
                 let queued = &mut self.queue[index];
                 if queued
                     .presence_revision
@@ -140,8 +138,6 @@ impl Commands {
         }
     }
 
-    /// A presence write that went stale while throttled hands its completion to the queued
-    /// newer projection. Returns the command when nothing newer is queued yet.
     pub fn hand_off(&mut self, mut command: Command) -> Option<Command> {
         let Some(queued) = self
             .queue
@@ -204,7 +200,6 @@ impl Commands {
             self.next_members = now + Duration::from_millis(300);
         }
         if command.presence_revision.is_some() {
-            // At most five updates per 20 seconds, including across a resumed socket.
             self.presence_after = now + Duration::from_secs(5);
         }
         self.record_send(now);

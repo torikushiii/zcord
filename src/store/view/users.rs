@@ -42,7 +42,6 @@ impl GuildTag {
 pub struct User {
     pub id: u64,
     pub username: String,
-    /// What the UI shows: `real_name`, truncated while Streamer Mode hides personal info.
     pub name: String,
     pub real_name: String,
     pub initials: String,
@@ -66,7 +65,6 @@ pub struct User {
     pub name_style: Option<NameStyle>,
 }
 
-/// A stream on an outside service such as Twitch, which is presence activity type 1.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiveStream {
     pub service: String,
@@ -79,12 +77,9 @@ pub struct LiveStream {
 pub struct GameActivity {
     pub name: String,
     pub application_id: Option<u64>,
-    /// Raw activity type (0 playing, 2 listening, ...).
     pub kind: u8,
     pub platform: Option<String>,
-    /// An embedded Discord Activity (`flags & (1 << 8)` or platform "embedded").
     pub embedded: bool,
-    /// The activity advertises a Play action (`flags & (1 << 5)`).
     pub playable: bool,
     pub started_at: Option<SystemTime>,
     pub ends_at: Option<SystemTime>,

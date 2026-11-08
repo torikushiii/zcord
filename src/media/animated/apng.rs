@@ -14,10 +14,8 @@ use image::{
 use png::{BlendOp, ColorType, DisposeOp, FrameControl, Transformations};
 use std::io::{BufRead, Seek};
 
-/// Matches `image`'s default allocation limit.
 const MAX_ALLOC: usize = 512 << 20;
 
-/// The image's size and its frames; a still PNG yields one.
 pub(super) fn frames<'a, R: BufRead + Seek + 'a>(reader: R) -> Result<((u32, u32), Frames<'a>)> {
     let mut decoder = png::Decoder::new_with_limits(reader, png::Limits { bytes: MAX_ALLOC });
     decoder.set_transformations(
@@ -33,8 +31,6 @@ pub(super) fn frames<'a, R: BufRead + Seek + 'a>(reader: R) -> Result<((u32, u32
     let animation = info.animation_control();
     let composer = Composer {
         remaining: animation.map_or(1, |actl| actl.num_frames),
-        // An APNG whose first fcTL comes after IDAT shows that image only to viewers
-        // without APNG support.
         skip_default: animation.is_some() && info.frame_control().is_none(),
         reader,
         canvas: RgbaImage::new(width, height),
@@ -50,10 +46,8 @@ struct Region {
     height: u32,
 }
 
-/// What the last frame asked to be done with its region before the next one draws.
 enum Disposal {
     Background(Region),
-    /// The region as it was before the frame drew over it.
     Previous(Region, RgbaImage),
 }
 
@@ -152,7 +146,6 @@ impl<R: BufRead + Seek> Composer<R> {
         ))
     }
 
-    /// The next frame as RGBA, with the fcTL that places it.
     fn read(&mut self) -> ImageResult<(RgbaImage, Option<FrameControl>)> {
         let size = self
             .reader
@@ -177,7 +170,6 @@ impl<R: BufRead + Seek> Composer<R> {
     }
 }
 
-/// fcTL delays are fractions of a second; a zero denominator means hundredths.
 fn delay(control: FrameControl) -> Delay {
     let denominator = match control.delay_den {
         0 => 100,

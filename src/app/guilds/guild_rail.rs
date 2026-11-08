@@ -30,7 +30,6 @@ const TOOLTIP_AVATAR_SIZE: f32 = 28.;
 const TOOLTIP_AVATAR_OVERLAP: f32 = 6.;
 const TOOLTIP_AVATAR_LIMIT: usize = 5;
 const ACTIVITY_TOOLTIP_MAX_WIDTH: f32 = 264.;
-/// Circle to square on hover-in is slower than the snap back on hover-out.
 const MORPH_IN: Duration = Duration::from_millis(300);
 const MORPH_OUT: Duration = Duration::from_millis(180);
 pub(crate) const FOLDER_FOLD: Duration = Duration::from_millis(200);
@@ -548,7 +547,6 @@ fn guild_icon(
 ) -> AnyElement {
     let pixels = theme::image_px(ICON);
     let spec = guild.icon_spec();
-    // Like Discord, animated icons only play while their rail item is hovered.
     let animated = spec
         .as_ref()
         .filter(|_| app.hover.rail == Some(guild.id) || crate::settings::always_animate())

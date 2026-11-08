@@ -1,4 +1,3 @@
-//! Guild folders and status from PreloadedUserSettings, favorite GIFs from FrecencyUserSettings.
 //! Schemas: https://github.com/discord-userdoccers/discord-protos/tree/master/discord_protos/discord_users/v1
 use base64::{Engine, engine::general_purpose::STANDARD};
 use std::collections::{HashMap, HashSet};
@@ -22,7 +21,6 @@ pub struct GuildFolder {
     pub color: Option<u32>,
 }
 
-/// PreloadedUserSettings AppearanceSettings.theme, an enum on the wire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AccountTheme {
     Dark,
@@ -71,7 +69,6 @@ pub struct StatusSettings {
     pub show_current_game: Option<bool>,
 }
 
-/// Manual presence timing, separate from CustomStatus.expires_at_ms.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct StatusTiming {
     pub expires_at_ms: u64,
@@ -326,7 +323,6 @@ pub fn decode(bytes: &[u8]) -> Result<Settings> {
             while let Some((field, wire)) = guilds.tag()? {
                 match field {
                     1 => entries.push(folder(guilds.bytes(wire)?)?),
-                    // Deprecated guild_positions is validated but does not define rail order.
                     2 => fixed_ids(&mut guilds, wire, &mut Vec::new())?,
                     _ => guilds.skip(field, wire, 0)?,
                 }
@@ -361,14 +357,10 @@ pub fn decode_base64(encoded: &str) -> Result<Settings> {
     decode(&STANDARD.decode(encoded).map_err(|_| DecodeError)?)
 }
 
-/// PATCH replaces the entire top-level status message. Preserve its opaque siblings
-/// (custom status, activity sharing and future fields), but send no other settings.
 pub fn status_patch(preloaded: &[u8], status: &str) -> Result<Vec<u8>> {
     status_patch_at(preloaded, status, 0, None)
 }
 
-/// Explicit selections replace manual timing. Unknown fields inside the status and
-/// creation wrappers survive even when Forever/Online clear their known values.
 pub fn status_patch_at(
     preloaded: &[u8],
     status: &str,
@@ -408,7 +400,6 @@ pub fn status_patch_at(
     }
     push_bytes(&mut wrapper, 1, status.as_bytes());
     push_bytes(&mut content, 1, &wrapper);
-    // fixed64, not a varint and not the nested custom-status expiration.
     push_varint(&mut content, (4 << 3) | 1);
     content.extend_from_slice(&expires_at_ms.to_le_bytes());
     if created_at_ms.is_some() || !created_wrapper.is_empty() {
@@ -420,8 +411,6 @@ pub fn status_patch_at(
     Ok(patch)
 }
 
-/// PATCH replaces the entire top-level appearance message. Preserve its opaque siblings
-/// (developer mode, client theme settings and future fields), but send no other settings.
 pub fn theme_patch(preloaded: &[u8], theme: AccountTheme) -> Result<Vec<u8>> {
     let mut content = Vec::new();
     for field in fields(preloaded)? {
@@ -459,7 +448,6 @@ pub fn status_timing(preloaded: &[u8]) -> Result<StatusTiming> {
     Ok(timing)
 }
 
-/// Required for a compare-and-swap PATCH so another client's edits cannot be lost.
 pub fn data_version(preloaded: &[u8]) -> Result<Option<u64>> {
     let mut version = None;
     for field in fields(preloaded)? {
@@ -633,7 +621,6 @@ fn favorite_entry_bytes(gif: &FavoriteGif) -> Vec<u8> {
     let mut entry = Vec::new();
     push_bytes(&mut entry, 1, gif.url.as_bytes());
     push_bytes(&mut entry, 2, &value);
-    // Map entries are a repeated message field, not bare key/value pairs.
     let mut wrapped = Vec::new();
     push_bytes(&mut wrapped, 1, &entry);
     wrapped

@@ -69,7 +69,6 @@ impl Cache {
         now: Instant,
     ) -> Option<Arc<model::Profile>> {
         let cached = self.profiles.get(&key)?;
-        // A full profile response includes everything the popout shows, so it can stand in.
         let covers = cached.kind == kind || cached.kind == ProfileKind::Modal;
         (covers && now.saturating_duration_since(cached.fetched) < PROFILE_TTL)
             .then(|| cached.profile.clone())
@@ -82,7 +81,6 @@ impl Cache {
         profile: Arc<model::Profile>,
         now: Instant,
     ) {
-        // A popout started before the modal must not replace its richer cached response.
         if kind == ProfileKind::Popout && self.profile(key, ProfileKind::Modal, now).is_some() {
             return;
         }
@@ -312,7 +310,6 @@ pub(super) fn missing_ids<T>(
         .collect()
 }
 
-// Only successful lookups populate this cache; network failures must remain retryable.
 pub(super) fn insert_missing(map: &mut HashMap<u64, Instant>, id: u64, now: Instant) {
     if map.len() >= CACHE_LIMIT
         && !map.contains_key(&id)

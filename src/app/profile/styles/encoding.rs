@@ -15,7 +15,6 @@ pub(super) fn prepare_style_image(
     })
 }
 
-/// Reads a picked avatar or banner, refusing other formats and anything over the upload limit.
 pub(crate) fn read_style_file(path: &Path) -> Result<Vec<u8>, String> {
     let extension = path
         .extension()
@@ -42,8 +41,6 @@ pub(crate) fn read_style_file(path: &Path) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-/// Where the image editor's frame sat: the image turned `quarter_turns` clockwise, then
-/// `rect` (`[x, y, width, height]`) cut from the turned image's pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct StyleCrop {
     pub quarter_turns: u8,
@@ -51,7 +48,6 @@ pub(crate) struct StyleCrop {
 }
 
 impl StyleCrop {
-    /// The largest centered cut of `target`'s shape, which uploads take without the editor.
     pub(crate) fn centered(width: u32, height: u32, target: ImageTarget) -> Self {
         let (ratio_width, ratio_height) = target.ratio();
         let (crop_width, crop_height) =
@@ -81,7 +77,6 @@ impl StyleCrop {
         self.quarter_turns.is_multiple_of(4) && self.rect == [0, 0, width, height]
     }
 
-    /// Turns and cuts one frame, then shrinks it to fit `target`'s upload size.
     fn apply(
         &self,
         image: image::RgbaImage,
@@ -111,7 +106,6 @@ impl StyleCrop {
 }
 
 impl ImageTarget {
-    /// Discord's upload shape: square avatars, 17:6 banners.
     pub(crate) fn ratio(self) -> (u64, u64) {
         match self {
             ImageTarget::Avatar => (1, 1),
@@ -168,8 +162,6 @@ fn gif_repeat(count: image::metadata::LoopCount) -> Repeat {
     }
 }
 
-/// Re-encodes animation frames as a GIF, cutting each one to `crop` when given. Returns the
-/// GIF and how many frames it holds.
 fn encode_style_gif<'a>(
     frames: image::Frames<'a>,
     (width, height): (u32, u32),
@@ -248,7 +240,6 @@ pub(super) fn webp_style_gif(
     Ok((frames > 1).then_some(gif))
 }
 
-/// A GIF's frames cut to `crop`; uncut GIFs upload as they are.
 fn cropped_style_gif(
     bytes: &[u8],
     crop: StyleCrop,
@@ -273,7 +264,6 @@ fn cropped_style_gif(
     Ok(gif)
 }
 
-/// The first frame of a picked image, which stills upload and the editor shows.
 pub(crate) fn decode_style_still(bytes: &[u8]) -> Result<image::DynamicImage, String> {
     let invalid = || "Could not decode this image.".to_owned();
     let format = image::guess_format(bytes).map_err(|_| invalid())?;
@@ -322,14 +312,10 @@ pub(super) fn encode_style_image(
     Ok(style_data_uri(extension, &encoded))
 }
 
-/// An encoded upload as the data URI Discord's profile endpoints take.
 pub(crate) fn style_data_uri(extension: &str, bytes: &[u8]) -> String {
     format!("data:image/{extension};base64,{}", STANDARD.encode(bytes))
 }
 
-/// The upload for a picked image: animated GIFs (and animated WebPs, as GIFs) for Nitro,
-/// otherwise a PNG still. `crop` is the editor's frame; without it the image is cut to
-/// `target`'s shape around its center. Returns the file extension and bytes.
 pub(crate) fn encode_style_bytes(
     bytes: &[u8],
     target: ImageTarget,

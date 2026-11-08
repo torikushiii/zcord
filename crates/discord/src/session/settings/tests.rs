@@ -118,7 +118,6 @@ fn expiry_refresh_withdraws_custom_activity_using_current_status_without_rest() 
     );
     initial.complete(Ok(()));
 
-    // A later choice must not be rolled back to the timer's original Online status.
     install("invisible", ("expiring", 42, "party", 1));
     session.refresh_presence().unwrap();
     let (generation, expired) = receiver.try_recv().unwrap();
@@ -128,7 +127,6 @@ fn expiry_refresh_withdraws_custom_activity_using_current_status_without_rest() 
     assert_eq!(expired.payload["d"]["activities"], serde_json::json!([]));
     assert_eq!(session.self_status(), Some(SelfStatus::Invisible));
 
-    // A replaced custom status is projected intact, never cleared by a captured expiry.
     install("dnd", ("replacement", 0, "", u64::MAX));
     session.refresh_presence().unwrap();
     let (_, replacement) = receiver.try_recv().unwrap();
@@ -143,7 +141,6 @@ fn expiry_refresh_withdraws_custom_activity_using_current_status_without_rest() 
     session.inner.generation.store(3, Ordering::Release);
     session.refresh_presence().unwrap();
     assert_eq!(receiver.try_recv().unwrap().0, 3);
-    // REST is deliberately unavailable in this fixture; all refreshes above are local.
     assert!(session.inner.rest.is_err());
 }
 

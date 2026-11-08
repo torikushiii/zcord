@@ -9,7 +9,6 @@ const INVITE_HOSTS: [(&str, bool); 3] = [
 const INVITE_LIMIT: usize = 3;
 const INVITE_CODE_MAX: usize = 32;
 
-/// Plain scan: codes inside markdown code spans or blocks are not skipped.
 pub fn invite_codes(content: &str) -> Vec<String> {
     let mut found: Vec<(usize, usize, bool)> = Vec::new();
     for (host, subdomains) in INVITE_HOSTS {

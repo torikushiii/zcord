@@ -433,7 +433,6 @@ fn animated_webp_bytes() -> Vec<u8> {
             out.push(0);
         }
     }
-    // The image crate's WebP encoder is still-only; wrap its lossless frames in an animation.
     let mut chunks = Vec::new();
     chunk(&mut chunks, b"VP8X", &[0x12, 0, 0, 0, 31, 0, 0, 15, 0, 0]);
     chunk(&mut chunks, b"ANIM", &[0, 0, 0, 0, 3, 0]);

@@ -1,7 +1,6 @@
 use super::*;
 use serde_json::{Value, json};
 
-// Synthetic identities and assets; large IDs retain snowflake parsing coverage.
 const PROFILE: &str = include_str!("../fixtures/profile_modal.json");
 const PRODUCTS: &str = include_str!("../fixtures/collectibles_products.json");
 
@@ -559,8 +558,6 @@ fn profile_widgets_decode_per_entry() {
         ]
     }))
     .unwrap();
-    // Only the entry without an id is dropped; a widget whose data doesn't parse is kept as
-    // `Unknown` so saving the list can't delete it.
     assert_eq!(profile.widgets.len(), 5);
     let WidgetData::FavoriteGames { games } = &profile.widgets[0].data else {
         panic!("wrong widget kind");
@@ -619,7 +616,6 @@ fn profile_widget_bodies_resend_unmodeled_data_and_write_edited_games() {
             }
         })
     );
-    // A widget this client can't model goes back exactly as Discord sent it.
     assert_eq!(
         widgets[1].body(),
         json!({"id": "11", "data": {"type": "brand_new_widget", "payload": {"nested": [1, 2]}}})
@@ -1647,7 +1643,6 @@ fn widget_configs_parse_data_collection_images_and_contained_top_image() {
 
 #[test]
 fn application_widget_configs_carry_the_popout_mini_profile() {
-    // Synthetic response for `/applications/{id}/widget-configs`.
     let config = parse_application_widget_configs(
         json!([{
             "config_id": "1191169182662656064",
@@ -1715,7 +1710,6 @@ fn widget_configs_carry_data_heroes() {
 
 #[test]
 fn widget_configs_carry_hero_fallbacks() {
-    // Synthetic config with an application-asset fallback.
     let config = parse_application_widget_configs(
         json!([{
             "application_id": "1191169081999360040",
@@ -1759,7 +1753,6 @@ fn widget_configs_carry_hero_fallbacks() {
         })
     );
 
-    // A fallback that cannot be resolved is dropped, but the data hero survives.
     let config = parse_application_widget_configs(
         json!([{
             "application_id": "7",
@@ -1793,7 +1786,6 @@ fn widget_configs_carry_hero_fallbacks() {
 
 #[test]
 fn application_widget_configs_carry_the_activity_accessory() {
-    // Synthetic response for `/applications/1191168989724672018/widget-configs`.
     let config = parse_application_widget_configs(
         json!([{
             "application_id": "1191168989724672018",
@@ -2073,7 +2065,6 @@ fn invite_links_extract_in_order_dedupe_and_cap() {
 
 #[test]
 fn invite_decodes_profile_counts_and_games() {
-    // Trimmed from GET /invites/sampleInviteOne?with_counts=true&with_expiration=true.
     let invite: Invite = serde_json::from_value(json!({
         "code": "sampleInviteOne",
         "expires_at": null,

@@ -125,7 +125,6 @@ fn only_a_known_non_online_future_manual_deadline_is_schedulable() {
         ));
         assert_eq!(presence.next_status_expiry_at(2_000), None);
     }
-    // A custom activity expiring first cannot shorten the separate manual deadline.
     let mut base = STANDARD
         .decode(status_fixture(Some("dnd"), Some(("expired", 0, "", 1))))
         .unwrap();
@@ -214,7 +213,6 @@ fn ready_unknown_does_not_force_online_and_reconnect_uses_current_settings() {
         Err(Error::SettingsOutdated)
     ));
     assert_eq!(presence.status(), Some(SelfStatus::DoNotDisturb));
-    // A fresh READY is authoritative even when this is a different account/version.
     presence.replace(Some(&STANDARD.encode(snapshot("idle", 1))));
     assert_eq!(presence.status(), Some(SelfStatus::Idle));
 }

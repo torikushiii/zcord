@@ -40,7 +40,6 @@ static RICH_TYPING: AtomicBool = AtomicBool::new(false);
 static WINDOW_FOCUSED: AtomicBool = AtomicBool::new(true);
 static DISPLAY_NAME_STYLES: AtomicBool = AtomicBool::new(true);
 static SWITCH_INDICATORS: AtomicBool = AtomicBool::new(false);
-/// `u32::MAX` while unset, which follows the message display's default.
 static GROUP_SPACING: AtomicU32 = AtomicU32::new(u32::MAX);
 static ROLE_COLORS: AtomicU8 = AtomicU8::new(0);
 static NOTIFICATION_DURATION: AtomicU32 = AtomicU32::new(DEFAULT_NOTIFICATION_SECONDS);
@@ -137,7 +136,6 @@ pub struct Settings {
     pub streamer: StreamerMode,
     #[serde(default)]
     pub reduce_motion: Option<bool>,
-    /// `None` until picked: on unless Reduced Motion was set by hand before the option existed.
     #[serde(default)]
     pub reduce_motion_sync: Option<bool>,
     #[serde(default)]
@@ -180,8 +178,6 @@ pub struct Settings {
     pub always_animate: bool,
     #[serde(default)]
     pub activity_toggle: bool,
-    /// The Input Profile picked in the mic's options; `None` until one is, which shows as
-    /// Voice Isolation while noise suppression is on.
     #[serde(default)]
     pub voice_input_profile: Option<InputProfile>,
 }
@@ -206,18 +202,13 @@ impl RoleColors {
     }
 }
 
-/// Discord's Input Profile presets for the microphone's processing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InputProfile {
-    /// Noise suppression on.
     VoiceIsolation,
-    /// No processing: noise suppression off.
     Studio,
-    /// Whatever the settings were set to by hand.
     Custom,
 }
 
-/// The Go Live picker's Stream Mode, which Discord calls a preset.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StreamMode {
     #[default]
@@ -226,7 +217,6 @@ pub enum StreamMode {
     Custom,
 }
 
-/// The resolution (output height, 0 for source) and frame rate picked under Custom.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CustomStream {
     pub resolution: u32,
@@ -409,7 +399,6 @@ pub fn apply_reduce_motion(cx: &mut App) {
     }
 }
 
-/// gpui never reads the system preference itself; only Windows' Animation effects is read.
 fn system_reduce_motion() -> bool {
     #[cfg(windows)]
     {
@@ -750,9 +739,6 @@ fn broadcaster_running() -> bool {
     })
 }
 
-/// Only a change in whether a broadcaster runs flips Streamer Mode, so a manual toggle sticks
-/// until the next start or exit. While auto is off nothing is polled, and the first poll after
-/// it comes back on only records the baseline.
 pub fn watch_broadcasters(cx: &mut App) {
     cx.spawn(async move |cx| {
         let mut last = Some(false);

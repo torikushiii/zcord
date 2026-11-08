@@ -1,7 +1,6 @@
 use super::wakeups::{Wake, schedule_wakeup, wake};
 use super::*;
 
-/// A frame change this close is worth waiting for the compositor instead of a timer.
 pub(super) const FRAME_LEAD: Duration = Duration::from_millis(8);
 
 pub struct AnimatedImage {
@@ -49,12 +48,6 @@ impl Fit {
     }
 }
 
-/// An animated [`RenderImage`] that wakes only when its current frame is due.
-///
-/// `Img` requests an animation frame on every frame while its image has more than one
-/// frame, which redraws the whole view at monitor refresh for a 30-100ms GIF. This
-/// element picks the frame from elapsed time and schedules one timer per view for the
-/// next change.
 pub fn image(image: Arc<RenderImage>) -> AnimatedImage {
     AnimatedImage {
         image,
@@ -78,7 +71,6 @@ impl AnimatedImage {
         self
     }
 
-    /// Uses an external timeline; a finite play count holds the final frame when exhausted.
     pub(crate) fn play_from(mut self, started_at: Instant, plays: Option<NonZeroU32>) -> Self {
         self.started_at = Some(started_at);
         self.plays = plays;
@@ -135,8 +127,6 @@ impl Element for AnimatedImage {
             |mut style, window, cx| {
                 let size = self.image.size(0);
                 let image_size = gpui::size(px(size.width.0 as f32), px(size.height.0 as f32));
-                // Match `Img`: intrinsic aspect only when a dimension is auto, otherwise
-                // an explicit size wins (Cover crops, it must not resize the element).
                 if matches!(style.size.width, Length::Auto)
                     || matches!(style.size.height, Length::Auto)
                 {
@@ -233,8 +223,6 @@ impl Element for AnimatedImage {
                     _ if streamed.is_some() => 0,
                     (Some(started_at), _) => frame_index_at(image, started_at, plays, window, cx),
                     (None, Some(global_id)) => frame_index(image, global_id, window, cx),
-                    // Without an id there is nowhere to keep the clock; frame 0 is the
-                    // only stable choice, matching `Img`'s stateless path.
                     (None, None) => 0,
                 };
                 if image.frame_count() == 0 {
@@ -255,7 +243,6 @@ impl Element for AnimatedImage {
     }
 }
 
-/// Canvas overlays use the same playback clock and per-view wakeups as animated elements.
 pub(crate) fn frame_index(
     image: &Arc<RenderImage>,
     id: &GlobalElementId,
@@ -325,8 +312,6 @@ struct AnimatedState {
     frame: usize,
 }
 
-// GPUI's test platform always reports its window inactive, so render-count tests
-// have to opt in to the active path explicitly.
 pub(super) fn window_active(window: &Window) -> bool {
     #[cfg(test)]
     if FORCE_ACTIVE.with(|active| active.get()) {
@@ -360,7 +345,6 @@ impl AnimatedState {
     }
 }
 
-/// The frame visible at `elapsed` and how long until the next one.
 pub(super) fn frame_at(
     image: &RenderImage,
     elapsed: Duration,

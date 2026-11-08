@@ -146,7 +146,6 @@ impl DiscordApp {
         }
     }
 
-    /// Drops the viewer's sort, layout and tag-matching choices; the tag filter itself stays.
     pub(crate) fn reset_forum_view(&mut self, cx: &mut Context<Self>) {
         let Some(forum_id) = self.selected_forum() else {
             return;
@@ -179,7 +178,6 @@ impl DiscordApp {
         self.reload_forum(forum_id, cx);
     }
 
-    /// Restarts paging for the current sort and tag filter; posts already known stay listed.
     fn reload_forum(&mut self, forum_id: u64, cx: &mut Context<Self>) {
         let page = self.forum_pages.entry(forum_id).or_default();
         page.generation += 1;
@@ -265,8 +263,6 @@ impl DiscordApp {
         .detach();
     }
 
-    /// Requests what a card needs but the search page lacked: authors missing from the member
-    /// cache, and starter messages of posts the search didn't return (pinned or older ones).
     fn fill_forum_posts(&mut self, forum_id: u64, cx: &mut Context<Self>) {
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;
@@ -335,14 +331,12 @@ const SEARCH_DELAY: Duration = Duration::from_millis(300);
 /// Post creation is untested against Discord, so New Post shows but stays disabled.
 const NEW_POST_ENABLED: bool = false;
 
-/// The forum's top card: it searches posts by title, and expands into the New Post form.
 pub(crate) struct ForumHeader {
     pub(crate) forum_id: u64,
     pub(crate) input: Entity<InputState>,
     pub(crate) body: Entity<TextareaState>,
     pub(crate) creating: bool,
     pub(crate) tags: Vec<u64>,
-    /// Post ids matching the search; `None` while the box is empty.
     pub(crate) results: Option<Vec<u64>>,
     pub(crate) searching: bool,
     pub(crate) posting: bool,
@@ -454,7 +448,6 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// Why New Post can't be used here, or `None` when it can.
     pub(crate) fn new_post_blocked(&self, forum_id: u64) -> Option<&'static str> {
         if !NEW_POST_ENABLED {
             Some("Creating posts isn't available in zcord yet")
@@ -599,8 +592,6 @@ impl DiscordApp {
     }
 }
 
-/// Discord's own reason when it gave one, since rejections (missing tag, permissions,
-/// slowmode) are otherwise indistinguishable.
 fn post_error(error: &crate::discord::Error) -> String {
     match error {
         crate::discord::Error::Rejected { message, .. } if !message.is_empty() => message.clone(),

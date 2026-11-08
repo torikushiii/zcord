@@ -3,8 +3,6 @@ use super::*;
 const MEMBER_AVATAR: f32 = 24.;
 const MEMBER_INDENT: f32 = 36.;
 
-/// "Voice Connected" slides up into "Voice Details" on hover, like the account panel's
-/// status line.
 pub(super) fn connected_title(details: bool, animate: bool, color: u32) -> AnyElement {
     const LINE: f32 = 20.;
     let lines = div()
@@ -132,8 +130,6 @@ pub(crate) fn member_row(
                     MEMBER_AVATAR,
                     cx,
                 ))
-                // Discord's speaking ring: 2px green over the avatar's edge, then a 1px gap
-                // in the background colour separating it from the picture.
                 .when(speaking, |this| {
                     this.child(
                         div()

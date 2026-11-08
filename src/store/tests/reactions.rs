@@ -83,7 +83,6 @@ fn receive_only_reaction_events_update_loaded_messages_in_order() {
     let reactions = &store.guilds[0].channel(2002).unwrap().messages[0].reactions;
     assert_eq!(reactions.len(), 2);
     assert_eq!(reactions[0].emoji.id, Some(99));
-    // The bulk event includes our already-counted reaction; only user 8 is new.
     assert_eq!(reactions[0].count, 2);
     assert_eq!(reactions[1].emoji.name, "new");
     assert_eq!(

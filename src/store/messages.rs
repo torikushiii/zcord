@@ -656,8 +656,6 @@ fn merge_history(
             })
             .and_then(|wire| mapped.iter_mut().find(|mapped| mapped.id == wire.id));
         if let Some(replacement) = replacement {
-            // Only a full history reload clears `send_order`; a page that loaded first must
-            // keep it so placeholders stay in place.
             replacement.send_order =
                 if replace && message.delivery == Delivery::Sent && !outstanding {
                     None
@@ -680,8 +678,6 @@ fn merge_history(
     inserted
 }
 
-/// Keep the server chronology intact and anchor placeholders to their next confirmed
-/// local successor. Acknowledgements can arrive out of order without swapping local sends.
 fn order_messages(messages: &mut Vec<Message>) {
     if messages
         .iter()

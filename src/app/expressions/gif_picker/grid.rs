@@ -3,12 +3,9 @@ use super::*;
 
 const COLUMN: f32 = (WIDTH - 2. - 2. * PADDING - GAP) / 2.;
 const TILE: f32 = 124.;
-/// Children need their own radius: `overflow_hidden` clips to the tile's rectangle, not its corners.
 const RADIUS: f32 = 4.;
-/// Tiles this far outside the viewport still render, so a fast scroll doesn't flash empty cells.
 const OVERSCAN: f32 = 240.;
 
-/// `favorite` is `None` where the Favorites tile doesn't belong, as in Choose GIF.
 pub(super) fn home_tiles(
     categories: Option<&Load<Rc<GifCategories>>>,
     favorite: Option<Option<&FavoriteGif>>,
@@ -120,7 +117,6 @@ pub(super) fn grid(
         .overflow_y_scroll()
         .track_scroll(&picker.scroll)
         .on_scroll_wheel(move |_, _, cx| {
-            // Tiles outside the viewport aren't rendered, so crossing a band needs a re-render.
             let next = (to_css(-scroll.offset().y, rem) / OVERSCAN) as i64;
             if band.replace(next) != next {
                 entity.update(cx, |_, cx| cx.notify()).ok();
@@ -367,7 +363,6 @@ pub(super) fn media(
             })
             .unwrap_or_else(|| div().into_any_element());
     }
-    // Discord's media proxy renders a still frame for its own videos while the clip decodes.
     let still = ImageSpec::VideoPoster {
         id: key,
         url: src.clone(),
@@ -398,8 +393,6 @@ pub(crate) fn category_previews(app: &DiscordApp, count: usize, cx: &App) -> Vec
     }
 }
 
-/// A playing provider GIF filling its parent, with corner radii `[tl, tr, br, bl]` since
-/// clipping alone won't round it. Shows a still frame until the animation decodes.
 pub(crate) fn gif_cell(src: &str, size: f32, [tl, tr, br, bl]: [f32; 4], cx: &App) -> AnyElement {
     let pixels = theme::image_px(size);
     let spec = ImageSpec::Media {

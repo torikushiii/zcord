@@ -85,7 +85,6 @@ impl GameActions {
                             .deeplink_uri
                             .as_deref()
                             .and_then(game_launch_url)
-                            // Browser deep links may be campaigns; use official-site metadata.
                             .filter(|url| !matches!(url.scheme(), "http" | "https"))
                             .map(|url| url.to_string())
                     })
@@ -167,7 +166,6 @@ fn game_action_button(
     url: String,
     palette: ProfilePalette,
 ) -> Stateful<Div> {
-    // Dark profiles use Discord's Midnight hover tint; light profiles use its standard tint.
     let hover = rgba(if palette.surface_light {
         0x97979F29
     } else {
@@ -198,7 +196,6 @@ fn game_action_button(
         })
 }
 
-/// Activities with the PLAY flag retain their separate Discord directory action.
 pub(super) fn play_button(game: &GameActivity, palette: ProfilePalette) -> Option<Stateful<Div>> {
     let application_id = game.application_id.filter(|_| game.playable)?;
     Some(

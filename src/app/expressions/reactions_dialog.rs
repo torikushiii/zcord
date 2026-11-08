@@ -1,7 +1,3 @@
-//! Discord's Reactions dialog, opened from a message's menu or a reaction tooltip's "N others":
-//! the message's reactions down the left, and everyone who reacted with the selected one on
-//! the right.
-
 use gpui_component::scroll::ScrollableElement as _;
 
 use super::super::*;
@@ -13,33 +9,26 @@ use crate::{
 const WIDTH: f32 = 480.;
 const HEIGHT: f32 = 800.;
 const REACTION_COLUMN: f32 = 122.;
-/// Users per `GET .../reactions/{emoji}` page, the most Discord serves at once.
 const PAGE: u32 = 100;
-/// Requests made per reaction, normal and burst pages together; Discord's own list stops
-/// growing long before this.
 const MAX_PAGES: usize = 10;
 
 #[derive(Default)]
 struct Reactors {
     users: Vec<model::User>,
     loading: bool,
-    /// Normal reactors come first; once they're all in, the burst (super) ones follow.
     burst: bool,
-    /// The last user of the current kind's list, which the next page starts after.
     after: Option<u64>,
     pages: usize,
     complete: bool,
 }
 
 pub(crate) struct ReactionsDialog {
-    /// Tells this opening apart from a later one, so replies to an earlier one are dropped.
     opening: u64,
     channel_id: u64,
     guild_id: Option<u64>,
     message_id: u64,
     selected: String,
     reactors: HashMap<String, Reactors>,
-    /// Held while open, so typing and Enter don't reach the message box behind it.
     focus: FocusHandle,
 }
 
@@ -118,7 +107,6 @@ impl DiscordApp {
             .or_else(|| self.thread_pane_channel().filter(holds))
     }
 
-    /// Loads the next page of `emoji`'s reactors, then keeps paging until all are in.
     fn load_reactors(&mut self, emoji: String, cx: &mut Context<Self>) {
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;

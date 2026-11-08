@@ -32,7 +32,6 @@ pub(crate) enum Expression {
         animated: bool,
     },
     Sticker(Sticker),
-    /// A standard emoji, by its character sequence.
     Default(String),
 }
 
@@ -114,7 +113,6 @@ impl Popout {
         if self.source_sticker.is_none() {
             return false;
         }
-        // Browsing previews never sends a sticker or changes the card's source server.
         self.expression = Expression::Sticker(sticker);
         true
     }
@@ -294,7 +292,6 @@ impl DiscordApp {
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;
         };
-        // Metadata is fetched only on click, never while moving over the message list.
         if !reserve_load(&mut self.expression_info.stickers, id) {
             return;
         }

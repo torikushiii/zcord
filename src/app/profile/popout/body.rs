@@ -161,7 +161,6 @@ fn account_menu(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &App)
         .into_any_element()
 }
 
-/// Stands in for the bio and roles while a profile nobody has opened before is fetched.
 pub(crate) fn skeleton(user_id: u64) -> impl IntoElement {
     let bar = |width: DefiniteLength, height: f32| {
         div()

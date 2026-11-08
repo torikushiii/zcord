@@ -199,7 +199,6 @@ async fn local_handshake_reaches_select_protocol() {
     .await
     .unwrap();
     assert!(matches!(outcome, Outcome::Fatal { .. }));
-    // Media goes to the voice server's UDP port, not the external port discovery reported.
     assert_eq!(connection.peer, Some(udp_address));
     server.await.unwrap();
 }

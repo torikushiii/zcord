@@ -11,10 +11,8 @@ use crate::{
 const WIDTH: f32 = 300.;
 const GRAPH_HEIGHT: f32 = 80.;
 const GRAPH_AXIS: f32 = 28.;
-/// Discord's graph covers the last few minutes of the call.
 const GRAPH_WINDOW: i64 = 5 * 60;
 
-/// Discord's "Voice Details" popup: connection stats and the call's privacy code.
 pub(super) fn card(
     app: &DiscordApp,
     call: &Call,
@@ -28,8 +26,6 @@ pub(super) fn card(
     } else {
         DetailsTab::Connection
     };
-    // Both tabs lay out in the same grid cell, the hidden one invisible, so the popup keeps
-    // the taller tab's height and switching tabs never resizes it.
     let privacy_shown = tab == DetailsTab::Privacy;
     let cell = |content: AnyElement, shown: bool| {
         div()
@@ -145,7 +141,6 @@ fn connection(call: &Call) -> impl IntoElement {
             .sum::<u64>()
             / recent.len() as u64
     });
-    // Discord names the server by the first label of its hostname.
     let server = call
         .server
         .as_deref()
@@ -217,12 +212,9 @@ fn stat(label: &'static str, value: String) -> impl IntoElement {
         )
 }
 
-/// Stepped ping line over the last few minutes, with minute gridlines and a 0–max scale on
-/// the right like Discord's.
 fn graph(samples: &[PingSample], now: i64) -> impl IntoElement {
     let start = now - GRAPH_WINDOW;
     let peak = samples.iter().map(|sample| sample.ms).max().unwrap_or(0);
-    // Two even steps from a short list of round numbers, so the labels stay readable.
     let step = [20, 25, 50, 75, 100, 150, 250, 500, 1000]
         .into_iter()
         .find(|step| step * 2 >= peak)
@@ -411,7 +403,6 @@ fn code_groups(code: &str) -> Vec<String> {
         .collect()
 }
 
-/// Discord lays the 30-digit code out as two rows of three five-digit groups.
 fn code_grid(groups: &[String], cx: &App) -> Div {
     let mono = cx.theme().mono_font_family.clone();
     let row = |groups: &[String]| {

@@ -69,7 +69,6 @@ fn context_row(
     })
 }
 
-/// The scrim swallows the click that dismisses the menu, so it doesn't also close the lightbox.
 pub(super) fn context_menu(
     app: &DiscordApp,
     lightbox: &Lightbox,

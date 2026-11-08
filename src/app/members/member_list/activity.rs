@@ -255,8 +255,6 @@ fn timer(seconds: i64) -> String {
     }
 }
 
-/// Discord's compact "ago" steps: seconds, minutes, hours under 12, days under 9, weeks
-/// under 4, then 30-day months.
 fn ago(seconds: i64) -> String {
     const MINUTE: i64 = 60;
     const HOUR: i64 = 60 * MINUTE;
@@ -287,7 +285,6 @@ const HERO_TITLE: u32 = 0xFFFFFFD9;
 const HERO_LABEL: u32 = 0xFFFFFFB3;
 const QUICK_REACTIONS: usize = 6;
 
-/// Discord tints activity heroes with a 45° gradient of the game icon's two main colours.
 fn hero_background(
     app: &DiscordApp,
     application_id: Option<u64>,
@@ -504,7 +501,6 @@ pub(in crate::app) fn popout(app: &DiscordApp, window: &Window, cx: &App) -> Opt
                         ),
                 )
                 .when(state.menu, |this| {
-                    // A layer of its own, so the popout's hero and reactions can't paint over it.
                     this.child(
                         div().absolute().top(rpx(24.)).left_0().size_0().child(
                             deferred(
@@ -729,7 +725,6 @@ fn popout_menu(app: &DiscordApp, user_id: u64, application_id: Option<u64>) -> i
         }))
 }
 
-/// The card a reply to someone's activity shows in chat (message component type 16).
 pub(in crate::app) fn dm_card(app: &DiscordApp, entry: &ActivityEntryView, cx: &App) -> AnyElement {
     let card = ActivityCard {
         entry_id: entry.entry_id,

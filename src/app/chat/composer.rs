@@ -7,7 +7,6 @@ use crate::app::messages::mentions;
 use gpui_component::{ActiveTheme, input::Paste};
 
 const PREVIEW_MAX_BYTES: u64 = 20 * 1024 * 1024;
-/// The typing indicator's strip, which overhangs the bottom of the message list.
 pub(super) const TYPING_HEIGHT: f32 = 24.;
 
 pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
@@ -325,8 +324,6 @@ pub(super) fn send_icon(
         )
 }
 
-/// Paints custom emoji over their invisible composer tokens (see `composer_tokens`).
-///
 /// Token positions come from the textarea's layout, which it records while painting, so this
 /// canvas must come after the textarea to read the current frame's layout instead of the last.
 pub(super) fn emoji_token_overlay(input: &Entity<TextareaState>) -> impl IntoElement + use<> {
@@ -336,11 +333,9 @@ pub(super) fn emoji_token_overlay(input: &Entity<TextareaState>) -> impl IntoEle
         move |_, _, window, cx| {
             let (tokens, clip, selected) = {
                 let state = input.read(cx);
-                // Paint runs every frame; skip the text copy unless a token can be present.
                 if !state.text().chars().any(composer_tokens::is_token_char) {
                     return;
                 }
-                // Keyed by occurrence, not offset, so typing before an emoji keeps its clock.
                 let mut seen = std::collections::HashMap::<u64, usize>::new();
                 let tokens: Vec<_> = composer_tokens::tokens_in(&state.value())
                     .into_iter()
@@ -370,7 +365,6 @@ pub(super) fn emoji_token_overlay(input: &Entity<TextareaState>) -> impl IntoEle
                     if range.start >= selected.start && range.end <= selected.end {
                         window.paint_quad(fill(bounds, cx.theme().selection));
                     }
-                    // Keep a still visible while loading or when animation is disabled.
                     let still = ImageSpec::Emoji {
                         id: token.id,
                         animated: false,
@@ -395,8 +389,6 @@ pub(super) fn emoji_token_overlay(input: &Entity<TextareaState>) -> impl IntoEle
                             |id, window| animated::frame_index(&image, id, window, cx),
                         )
                     });
-                    // Centred on the whole token: the EM SPACE plus whatever width the
-                    // selector boxes take.
                     let dimensions = image.size(frame);
                     let scale = size / px(dimensions.width.0.max(dimensions.height.0) as f32);
                     let fitted = gpui::size(
@@ -491,7 +483,6 @@ pub(super) fn staged_row(
         .pt(rpx(20.))
         .pl(rpx(10.))
         .pb(rpx(10.))
-        // The action bar hangs 24 past the last tile, and a scroller clips it otherwise.
         .pr(rpx(34.))
         .overflow_x_scroll()
         .when(app.compose.reply.is_none(), |this| this.rounded_t(rpx(8.)))
@@ -515,7 +506,6 @@ fn staged_preview(file: &StagedFile, cx: &App) -> Option<AnyElement> {
         let spec = ImageSpec::LocalGif {
             path: file.path.clone(),
         };
-        // A covered GIF would decode for nothing.
         let playing = (!file.spoiler)
             .then(|| animated::resolve(&spec, pixels, cx))
             .flatten();

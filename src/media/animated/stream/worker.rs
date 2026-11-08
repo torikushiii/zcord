@@ -2,8 +2,6 @@ use super::decoder::Core;
 use super::sources::{SourceKind, SpoolJob, spool_pool};
 use super::*;
 
-/// Catch-up slices in a row whose frame is already past, held back for a playback on a
-/// caller's clock; after that one shows anyway, so a decoder that can't keep up still moves.
 pub(super) const MAX_STALE_SKIPS: u8 = 16;
 
 pub(super) enum Command {

@@ -17,7 +17,6 @@ use super::{
 };
 use std::rc::Rc;
 
-/// The selected page's sections, in sidebar order.
 pub(super) fn page(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> Vec<AnyElement> {
     match settings.page {
         Page::Account => account(app, settings),
@@ -128,7 +127,6 @@ fn account(app: &DiscordApp, settings: &SettingsPage) -> Vec<AnyElement> {
     ]
 }
 
-/// `alice@gmail.com` becomes `*******@gmail.com`, like Discord.
 fn mask_email(email: &str) -> String {
     match email.split_once('@') {
         Some((_, domain)) => format!("*******@{domain}"),
@@ -136,7 +134,6 @@ fn mask_email(email: &str) -> String {
     }
 }
 
-/// Only the last four digits stay visible, like Discord.
 fn mask_phone(phone: &str) -> String {
     let digits: Vec<char> = phone.chars().filter(char::is_ascii_digit).collect();
     let last: String = digits[digits.len().saturating_sub(4)..].iter().collect();
@@ -614,7 +611,6 @@ fn chat(_app: &DiscordApp, cx: &App) -> AnyElement {
     )
 }
 
-/// A labelled switch row whose click flips `on` through `set`.
 pub(super) fn toggle_row(
     app: &DiscordApp,
     settings: &SettingsPage,

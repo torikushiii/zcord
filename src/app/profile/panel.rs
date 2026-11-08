@@ -55,7 +55,6 @@ impl DiscordApp {
         card.load_games(session.clone(), games, cx);
         card.load_linked_metadata(session, cx);
         if effect.is_some() {
-            // Dropped with the card when the selected DM changes.
             card._tasks.push(cx.spawn(async move |this, cx| {
                 loop {
                     cx.background_executor().timer(EFFECT_TICK).await;

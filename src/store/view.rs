@@ -65,7 +65,6 @@ mod tests {
             hour: 4,
             minute: 21,
         };
-        // Another test flips the clock format, so compare against `time()` itself.
         let time = at(11, 7).time();
         assert_eq!(at(11, 7).header_on(today), time);
         assert_eq!(at(11, 6).header_on(today), format!("Yesterday at {time}"));

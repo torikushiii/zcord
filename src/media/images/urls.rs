@@ -52,7 +52,6 @@ pub(crate) fn allowed_url(url: &reqwest::Url) -> bool {
         && url.port().is_none()
 }
 
-/// Spotify album art comes from a host outside Discord's CDN; only images may load it.
 fn spotify_image_url(url: &reqwest::Url) -> bool {
     url.scheme() == "https"
         && url.host_str() == Some("i.scdn.co")
@@ -61,7 +60,6 @@ fn spotify_image_url(url: &reqwest::Url) -> bool {
         && url.port().is_none()
 }
 
-/// GIF picker media is served by the providers' CDNs, outside Discord's proxy.
 pub(super) fn gif_provider_media_url(url: &reqwest::Url) -> bool {
     url.scheme() == "https"
         && url.host_str().is_some_and(|host| {
@@ -92,13 +90,10 @@ pub(crate) fn trusted_video_url(raw: &str) -> Option<String> {
         .and_then(|name| name.rsplit_once('.'))
         .map(|(_, extension)| extension.to_ascii_lowercase());
     let video_file = matches!(extension.as_deref(), Some("mp4" | "mov" | "webm" | "m4v"));
-    // Discord's external proxy only serves media it already resolved, and redirect-style
-    // sources (FxTwitter's `/2/go?url=…mp4`) end up with an extensionless proxy path.
     let proxied = url
         .host_str()
         .is_some_and(|host| host.starts_with("images-ext-"));
     let discord = allowed_url(&url) && (video_file || proxied);
-    // Official-client favorite GIFs can be videos on the providers' CDNs.
     let provider =
         matches!(extension.as_deref(), Some("mp4" | "webm")) && gif_provider_media_url(&url);
     if !discord && !provider {
@@ -117,8 +112,6 @@ pub(super) fn avif_proxy_image(spec: &ImageSpec, url: &reqwest::Url) -> bool {
             .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("avif"))
 }
 
-/// The 96px WebP of an avatar that Discord's color picker samples its suggestions from, which
-/// `image_url`'s power-of-two sizes can't request. Animated avatars sample their first frame.
 pub(crate) fn avatar_sample_url(spec: &ImageSpec) -> Option<reqwest::Url> {
     if !matches!(
         spec,
@@ -168,8 +161,6 @@ pub(super) fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
             format!("https://cdn.discordapp.com/emojis/{id}.webp?size={size}&animated={animated}")
         }
         ImageSpec::Sticker { id, format } => {
-            // APNG stickers are served from the same `.png` URL as static PNGs;
-            // the full file animates once decoded.
             let extension = match format {
                 1 | 2 => "png",
                 4 => "gif",
@@ -225,13 +216,11 @@ pub(super) fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
             if !valid_hash(asset) {
                 return None;
             }
-            // Only passthrough serves the animated APNG, and only `a_` presets have one.
             let passthrough = *animated && asset.starts_with("a_");
             format!(
                 "https://cdn.discordapp.com/avatar-decoration-presets/{asset}.png?size={size}&passthrough={passthrough}"
             )
         }
-        // `img.png` is the APNG twin of the webm Discord's client plays.
         ImageSpec::Nameplate { asset, animated } => {
             if !valid_nameplate(asset) {
                 return None;

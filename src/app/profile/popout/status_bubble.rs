@@ -52,8 +52,6 @@ pub(super) fn status_bubble(
                 )
                 .child(bubble(20.).left(rpx(10.)).top(rpx(-8.)))
                 .child(bubble(10.).left(rpx(-3.)).top(rpx(-15.)))
-                // The inner fill covers the circles inside the outline without clipping
-                // the portions that extend above it, just like Discord's nested span.
                 .child(
                     div()
                         .relative()
@@ -102,7 +100,6 @@ fn status_body(
         .font_weight(FontWeight::NORMAL)
         .text_color(palette.status_text);
     if prompt {
-        // Will open a set-status dialog once one exists.
         return body
             .cursor_pointer()
             .flex()
@@ -135,7 +132,6 @@ fn status_body(
         );
     }
     let mut pieces = emoji_pieces(text, &PieceStyle::default());
-    // As an inline piece, the emoji only indents the first line, not every wrapped line.
     if let Some(emoji) = status.emoji.as_ref() {
         let fallback = match emoji {
             StatusEmoji::Unicode(sequence) => sequence.clone(),

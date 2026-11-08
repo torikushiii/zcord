@@ -1,10 +1,3 @@
-//! Cached child views for the chat shell.
-//!
-//! `DiscordApp` only builds the layout skeleton and the overlays; each hot panel
-//! is a separate view entity so a notify from one panel does not dirty the rest.
-//! Every view observes `DiscordApp` with a strong entity handle but keeps only a
-//! weak handle for rendering, so the ownership graph is acyclic.
-
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -102,13 +95,11 @@ pub(crate) fn member_list_style(width: f32) -> StyleRefinement {
         .flex_none()
 }
 
-/// A forum post's pane splits the width with the forum; a channel thread's pane is a sidebar.
 pub(crate) fn thread_pane_style(forum: bool, dm: bool) -> StyleRefinement {
     let style = StyleRefinement::default().h_full();
     if forum {
         style.flex_1().min_w_0()
     } else if dm {
-        // Discord's message request sidebar takes about 37% of the content area.
         style
             .w(relative(0.37))
             .min_w(rpx(chat::THREAD_PANE_WIDTH))
@@ -229,7 +220,6 @@ impl Render for UserPanelView {
     }
 }
 
-/// The parent must be positioned and span the whole chat body.
 pub(crate) fn user_panel_overlay(views: &PanelViews) -> impl IntoElement + use<> {
     let measured = views.user_panel_height.clone();
     let sidebars = [views.guild_rail.entity_id(), views.channel_list.entity_id()];
@@ -340,7 +330,6 @@ impl MessagesView {
         if !enabled {
             self.active_now_clock = None;
         } else if self.active_now_clock.is_none() {
-            // Notify only this view; notifying the app would re-render every shell panel each second.
             self.active_now_clock = Some(cx.spawn(async move |this, cx| {
                 loop {
                     cx.background_executor().timer(Duration::from_secs(1)).await;
@@ -371,7 +360,6 @@ impl Render for MessagesView {
         let app = app.read(cx);
         let preferences = layout_preferences();
         if self.layout_preferences != preferences {
-            // Width is unchanged, so the lists won't invalidate these cached heights themselves.
             app.messages.remeasure();
             if let Some(pane) = &app.thread_pane {
                 pane.remeasure();

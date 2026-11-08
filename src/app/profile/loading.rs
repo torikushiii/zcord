@@ -26,7 +26,6 @@ impl DiscordApp {
         self.open_profile_at(user_id, position, anchor, ProfileOrigin::Member, cx);
     }
 
-    /// The strip's live bounds keep the popout above it as the window resizes.
     pub(crate) fn open_account_profile(
         &mut self,
         user_id: u64,
@@ -102,7 +101,6 @@ impl DiscordApp {
             return;
         };
         let (user_id, guild_id) = (card.user_id, card.guild_id);
-        // The full response also covers the popout; avoid fetching both variants on a cold open.
         if let Some(profile) = self
             .session
             .as_ref()
@@ -115,7 +113,6 @@ impl DiscordApp {
         self.prefetch_profile_details(false, cx);
         self.start_profile_game_timer(cx);
         if let Some(card) = &mut self.profile {
-            // Redraw when the wait runs out so the skeleton gives way to whatever has arrived.
             card._tasks.push(cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(POPOUT_WAIT).await;
                 this.update(cx, |_, cx| cx.notify()).ok();
@@ -144,7 +141,6 @@ impl DiscordApp {
         if self.profile.is_none()
             && let Some(user_id) = self.dm_profile.as_ref().map(|card| card.user_id)
         {
-            // The DM panel has no popout behind it, so the dialog gets a card of its own.
             self.profile = Some(ProfileCard::new(
                 user_id,
                 None,
@@ -160,7 +156,6 @@ impl DiscordApp {
         card.modal = true;
         card.opened = Instant::now();
         card.effect_started.replace(None);
-        // `side_panel` falls back to Activity when there is no Board.
         card.tab = tab;
         self.open_styles_editor(cx);
         self.load_profile(ProfileKind::Modal, cx);
@@ -180,7 +175,6 @@ impl DiscordApp {
             card.widget_toggles
                 .insert(widget_id, (generation, Instant::now()));
             cx.notify();
-            // Redraw once the animation ends so the rows drop their animation-only clip.
             cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(board::WIDGET_TOGGLE).await;
                 this.update(cx, |_, cx| cx.notify()).ok();
@@ -454,13 +448,11 @@ impl ProfileCard {
         next.activity_prompt = self.activity_prompt;
         next.scope_snapshots = std::mem::take(&mut self.scope_snapshots);
         next.profile = next.scope_snapshots.get(&guild_id).cloned().or_else(|| {
-            // A guild response includes the main profile; keep it usable offline too.
             self.profile
                 .as_ref()
                 .filter(|_| guild_id.is_none())
                 .map(|profile| scoped_profile(profile.clone(), None))
         });
-        // Dropping the old card cancels its callbacks, even after switching back to that scope.
         *self = next;
     }
 }

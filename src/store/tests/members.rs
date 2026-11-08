@@ -348,7 +348,6 @@ fn presence_game_activity_tracks_playing_and_clears() {
         Some(UNIX_EPOCH + Duration::from_millis(1_700_000_000_000))
     );
 
-    // An author refresh must keep the presence-derived game.
     let mut message = messages().remove(0);
     message.author.id = 2;
     message.author.username = "writer".into();
@@ -835,7 +834,6 @@ fn offline_profile_applies_server_cosmetics_without_replacing_global_ones() {
         [0x112233, 0x445566]
     );
 
-    // An unrelated partial update must not erase server-specific cosmetics.
     member_event(
         &mut store,
         json!({"guild_id": "200", "user": {"id": id.to_string()}, "nick": "Changed"}),
@@ -846,7 +844,6 @@ fn offline_profile_applies_server_cosmetics_without_replacing_global_ones() {
         [0x112233, 0x445566]
     );
 
-    // Explicitly removing an override restores the global cosmetics.
     value["guild_member"]["avatar"] = serde_json::Value::Null;
     value["guild_member"]["avatar_decoration_data"] = serde_json::Value::Null;
     value["guild_member"]["display_name_styles"] = serde_json::Value::Null;
@@ -944,7 +941,6 @@ fn own_presence_without_custom_status_keeps_the_configured_status() {
     store.apply(Event::PresenceUpdate(Box::new(empty)));
     assert!(store.user(1).unwrap().custom_status.is_some());
 
-    // With no settings custom status, presence still owns the status and can clear it.
     let mut store = Store::from_ready(ready());
     let custom: model::Presence = serde_json::from_value(json!({
         "user_id":"1",

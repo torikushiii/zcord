@@ -8,7 +8,6 @@ use crate::{
 };
 
 const MENU_WIDTH: f32 = 220.;
-/// Discord caps a group DM at ten people, the current user included.
 const GROUP_SIZE: usize = 10;
 pub(crate) const MUTE_CHOICES: [(&str, i64); 6] = [
     ("For 15 Minutes", 15 * 60),
@@ -37,7 +36,6 @@ pub(crate) enum DmDialog {
         input: Entity<InputState>,
         _events: Subscription,
     },
-    /// `channel_id` is the DM or group people are added to; `None` starts a new conversation.
     Recipients {
         channel_id: Option<u64>,
         selected: Vec<u64>,
@@ -193,7 +191,6 @@ impl DiscordApp {
                     .map(|dm| (dm.channel.id, dm.group, dm.recipient_ids.clone()));
                 match existing {
                     Some((id, true, _)) => self.add_group_recipients(id, selected, cx),
-                    // Adding people to a one-to-one DM starts a new group, as Discord does.
                     Some((_, false, mut recipients)) => {
                         recipients.extend(selected);
                         self.create_group_dm(recipients, window, cx);
@@ -867,7 +864,6 @@ pub(crate) fn header_actions(app: &DiscordApp, channel_id: u64) -> impl IntoElem
         })
 }
 
-/// Shown when the failure concerns this conversation or, for a one-to-one DM, its person.
 pub(crate) fn header_error(app: &DiscordApp, channel_id: u64) -> Option<impl IntoElement + use<>> {
     let person = app
         .store

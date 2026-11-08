@@ -19,9 +19,7 @@ pub(super) struct Social {
     pub names: HashMap<u64, String>,
     messages: HashMap<(u64, u64), MessageInfo>,
     pub revision: u64,
-    /// Non-friends Discord ranks close enough to share the friends' Active Now column.
     pub close_contacts: HashSet<u64>,
-    /// The current user's custom status from settings; a live presence status still wins.
     own_custom_status: Option<CustomStatus>,
 }
 
@@ -137,8 +135,6 @@ fn show_custom_status(user: &mut User, status: &CustomStatus) {
     user.custom_status = Some(status.clone());
 }
 
-/// Whether a live custom status is the same status as the settings-configured one. Custom
-/// emoji compare by id; their name and animation come from the live record.
 fn same_custom_status(a: &CustomStatus, b: &CustomStatus) -> bool {
     a.text == b.text
         && match (a.emoji.as_ref(), b.emoji.as_ref()) {

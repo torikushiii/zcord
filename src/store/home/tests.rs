@@ -168,7 +168,6 @@ fn friend_suggestions_follow_fetches_events_and_relationships() {
     store.apply(Event::FriendSuggestionDelete { user_id: 31 });
     assert_eq!(store.friend_suggestion_count(), 2);
 
-    // Sending a request moves the user to Pending, out of the suggestions.
     let outgoing: model::Relationship =
         serde_json::from_value(json!({"id": "30", "type": 4})).unwrap();
     store.apply(Event::RelationshipAdd(Box::new(outgoing)));

@@ -92,7 +92,6 @@ impl Store {
         read_state(source, &self.read_states, channel_id)?.last_message_id
     }
 
-    /// Returns the ack cursor and badge count for Discord, or None if `message_id` isn't read yet.
     pub fn mark_unread(&mut self, channel_id: u64, message_id: u64) -> Option<(u64, u32)> {
         let previous = self.last_read(channel_id)?;
         if message_id == 0 || message_id > previous {

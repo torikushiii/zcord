@@ -38,7 +38,6 @@ pub(crate) struct History {
     pub(in crate::app) older_retry_at: HashMap<u64, Instant>,
     pub(in crate::app) newer: HashSet<u64>,
     pub(in crate::app) reaction_requests: HashSet<(u64, u64, String)>,
-    /// Channels waiting for a latest-page fetch before jumping to the present.
     pub(in crate::app) pending_present: HashSet<u64>,
     pub(in crate::app) pending_jump: Option<u64>,
     pub(in crate::app) failed: HashSet<u64>,
@@ -48,7 +47,6 @@ pub(crate) struct History {
 
 pub(crate) struct Jumps {
     pub(in crate::app) scroll: Option<JumpScroll>,
-    /// Message flashed after a reply jump lands, with a per-jump id to replay the fade.
     pub(crate) highlight: Option<(u64, u64)>,
     pub(crate) missing: bool,
     pub(in crate::app) missing_nonce: u64,
@@ -56,11 +54,9 @@ pub(crate) struct Jumps {
 
 pub(crate) struct Unread {
     pub(crate) since: Option<u64>,
-    /// Whether the top "new messages" bar is still shown; `unread_since` keeps the divider.
     pub(crate) bar: bool,
     pub(crate) manual: Option<u64>,
     pub(in crate::app) ack_timer: Option<Task<()>>,
-    /// Acks waiting out `ACK_SEND_DELAY`, one per channel; leaving the channel doesn't stop them.
     pub(in crate::app) outgoing_acks: HashMap<u64, Task<()>>,
 }
 
@@ -72,7 +68,6 @@ pub(crate) struct Video {
     pub(in crate::app) dragged_at: Option<Instant>,
     pub(crate) seek_bounds: Rc<RefCell<Option<(u64, Bounds<Pixels>)>>>,
     pub(crate) volume_bounds: Rc<RefCell<Option<(u64, Bounds<Pixels>)>>>,
-    /// Hover over the active player's mute button and its volume popup.
     pub(in crate::app) volume_hover: [bool; 2],
 }
 
@@ -85,7 +80,6 @@ pub(crate) struct EmojiPopup {
 
 pub(crate) struct Stream {
     pub(crate) view: Option<calls::stream_view::StreamView>,
-    /// `(guild, channel)` to go back to when a stage's chat closes.
     pub(in crate::app) stage_chat: Option<(u64, u64)>,
     pub(in crate::app) nonce: u64,
     pub(crate) members_shown: bool,

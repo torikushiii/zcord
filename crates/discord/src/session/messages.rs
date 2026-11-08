@@ -91,7 +91,6 @@ impl Session {
         .await
     }
 
-    /// The ticket is taken here, before spawning, so sends keep composer order.
     fn begin_send(
         &self,
         channel_id: u64,
@@ -165,7 +164,6 @@ impl Session {
             .map_err(Clone::clone)?
             .upload_client
             .clone();
-        // Like the official client: a slot request and an upload per file, all at once.
         let created = std::sync::Mutex::new(Vec::new());
         let uploads = files.iter().map(|file| async {
             let slots = self

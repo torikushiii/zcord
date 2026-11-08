@@ -22,17 +22,14 @@ const RESOLUTIONS: [u32; 5] = [480, 720, 1080, 1440, 0];
 
 const ICON: f32 = 32.;
 const SPECTATOR_AVATAR: f32 = 24.;
-/// Avatars past this many fold into a "+N".
 const SPECTATORS_SHOWN: usize = 8;
 
-/// What the user is streaming, for the panel above Voice Connected.
 pub(super) struct ShareInfo {
     pub(super) name: String,
     pub(super) is_window: bool,
     pub(super) icon: Option<Arc<RenderImage>>,
     pub(super) quality: StreamQuality,
     pub(super) shares_audio: bool,
-    /// Everyone watching, from Discord's `STREAM_UPDATE`; it never lists the streamer.
     pub(super) viewers: Vec<u64>,
 }
 
@@ -102,7 +99,6 @@ impl DiscordApp {
     }
 }
 
-/// "1440p 60FPS", or "Source 15FPS" when the picture keeps the window's size.
 fn quality_label(quality: StreamQuality) -> String {
     let resolution = match quality.resolution {
         0 => "Source".to_owned(),
@@ -111,8 +107,6 @@ fn quality_label(quality: StreamQuality) -> String {
     format!("{resolution} {}FPS", quality.fps)
 }
 
-/// Discord only spells out the quality, with its Nitro mark, when it isn't the standard
-/// 720p at 30fps.
 fn shows_quality(quality: StreamQuality) -> bool {
     quality != StreamQuality::STANDARD
 }
@@ -397,8 +391,6 @@ fn flyout_heading(title: &'static str) -> Div {
         .child(title)
 }
 
-/// Frame rate and resolution radios that switch the running stream straight away. Options the
-/// account can't use stay dimmed.
 fn quality_flyout(app: &DiscordApp, current: StreamQuality) -> Stateful<Div> {
     let option = |key: (&'static str, u64), label: String, choice: StreamQuality, selected| {
         let allowed = stream_quality::may_stream(app, choice.resolution, choice.fps);

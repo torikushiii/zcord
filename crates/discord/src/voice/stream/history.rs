@@ -38,7 +38,6 @@ impl History {
         });
     }
 
-    /// Returns true when a requested packet is no longer cached and needs a fresh keyframe.
     pub fn request(&mut self, sequences: &[u16], now: Instant) -> bool {
         let mut missing = false;
         for &sequence in sequences.iter().take(MAX_REPAIRS) {

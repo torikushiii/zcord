@@ -22,7 +22,6 @@ pub(super) fn panel_header(app: &DiscordApp, editor: &StylesEditor, cx: &App) ->
         .h(rpx(49.))
         .px(rpx(8.))
         .py(rpx(4.))
-        // Discord rules the scope picker off from the tiles below.
         .border_b_1()
         .border_color(rgba(theme::border_subtle()))
         .child(
@@ -108,7 +107,6 @@ fn scope_icon(app: &DiscordApp, scope: StyleScope, size: f32, cx: &App) -> AnyEl
         .into_any_element()
 }
 
-/// The server list under the scope button, drawn over the panel.
 pub(crate) fn scope_menu(app: &DiscordApp, editor: &StylesEditor, cx: &App) -> Option<AnyElement> {
     if !editor.ui.scope_menu {
         return None;
@@ -190,8 +188,6 @@ pub(crate) fn scope_menu(app: &DiscordApp, editor: &StylesEditor, cx: &App) -> O
 
 const PANEL_SLIDE: Duration = Duration::from_millis(250);
 
-/// The panel, sliding out from under the card or back behind it. It stays mounted at zero
-/// width once hidden, so hiding can animate too.
 pub(crate) fn sliding_panel(
     app: &DiscordApp,
     editor: &StylesEditor,
@@ -225,7 +221,6 @@ pub(crate) fn sliding_panel(
     )
 }
 
-/// The tab hanging off the dialog's left edge while the panel is hidden.
 pub(crate) fn show_styles_tab(
     app: &DiscordApp,
     editor: &StylesEditor,
@@ -260,8 +255,6 @@ pub(crate) fn show_styles_tab(
         .into_any_element()
 }
 
-/// "Don't forget to save your changes!" under the dialog while the styles or widgets have
-/// unsaved edits; it saves and resets both.
 pub(crate) fn save_bar(app: &DiscordApp, editor: &StylesEditor) -> Option<AnyElement> {
     if editor.draft == StyleDraft::default()
         && editor.ui.widgets.draft().is_none()

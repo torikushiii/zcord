@@ -2,7 +2,6 @@ use chrono::{Local, TimeZone};
 
 use crate::settings;
 
-/// Renders a `<t:unix:style>` timestamp the way Discord shows it.
 pub fn format_timestamp(unix: i64, style: char) -> String {
     let Some(time) = Local.timestamp_opt(unix, 0).single() else {
         return unix.to_string();

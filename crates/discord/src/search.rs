@@ -30,7 +30,6 @@ pub struct SearchQuery {
     pub offset: usize,
 }
 
-/// Forum post order; `Created` is the forum's "Date Posted" sort.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ForumSort {
     #[default]
@@ -42,7 +41,6 @@ pub enum ForumSort {
 pub struct ForumQuery {
     pub sort: ForumSort,
     pub tags: Vec<u64>,
-    /// Posts must carry every tag instead of any of them.
     pub match_all: bool,
     pub offset: usize,
 }

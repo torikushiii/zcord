@@ -158,8 +158,6 @@ impl DiscordApp {
         crate::settings::set_display(cx, self.text_images());
         self.load_activity_reply_assets(cx);
         self.sync_thread_pane(&change, cx);
-        // Background channels only change badges, which nobody can see until a
-        // repaint; coalesce a burst into one refresh with the member sync timer.
         if is_background_change(&change, self.selected_channel_id) {
             self.arm_members_timer(cx);
             return;
@@ -210,7 +208,6 @@ impl DiscordApp {
             } if channel_id == self.selected_channel_id => {
                 self.messages.splice(removed..removed + 1, 0);
                 self.messages.splice(inserted..inserted, 1);
-                // Confirming a successor can also move earlier optimistic placeholders.
                 self.messages.remeasure_items(if placeholders {
                     0..len
                 } else {
@@ -220,7 +217,6 @@ impl DiscordApp {
             Change::MessageChanged { channel_id, index }
                 if channel_id == self.selected_channel_id =>
             {
-                // Author changes can also change whether the next row has a header.
                 self.messages.remeasure_items(index..(index + 2).min(len));
             }
             Change::MessageRemoved { channel_id, index }

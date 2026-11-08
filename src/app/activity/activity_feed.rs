@@ -21,8 +21,6 @@ pub(crate) struct ActivityFeed {
 }
 
 impl DiscordApp {
-    /// Fetch on connect (`force`) and on focus events. Never more often than the last
-    /// fetch's `wait_ms_until_next_fetch` (or the failure backoff) allows.
     pub(crate) fn refresh_activity_feed(&mut self, force: bool, cx: &mut Context<Self>) {
         if !self.window_active || !self.live || self.session.is_none() {
             return;
@@ -96,7 +94,6 @@ impl DiscordApp {
         }
     }
 
-    /// Back off at 1, 2, 4, 8 minutes plus jitter; the 4th consecutive failure clears the feed.
     fn activity_feed_failed(&mut self, cx: &mut Context<Self>) {
         let failures = self.activity_feed.failures + 1;
         self.activity_feed.failures = failures;
@@ -115,7 +112,6 @@ impl DiscordApp {
         self.schedule_next_activity_fetch(cx);
     }
 
-    /// A deadline that passes while the window is unfocused waits for the next focus event.
     fn schedule_next_activity_fetch(&mut self, cx: &mut Context<Self>) {
         if let Some(deadline) = self.activity_feed.fetch_at {
             self.schedule_activity_fetch(deadline, cx);
@@ -130,8 +126,6 @@ impl DiscordApp {
         self.views.members.update(cx, |_, cx| cx.notify());
     }
 
-    /// Cheap to repeat: ids already requested are skipped, so call it whenever the visible
-    /// cards may change.
     pub(crate) fn load_activity_assets(&mut self, cx: &mut Context<Self>) {
         let ids: Vec<u64> = self
             .activity_cards()
@@ -145,8 +139,6 @@ impl DiscordApp {
         self.load_games(ids, cx);
     }
 
-    /// Ticks once a second while the feed is loaded, repainting the member list only when
-    /// the selected guild shows a live timer.
     pub(crate) fn arm_activity_ticker(&mut self, cx: &mut Context<Self>) {
         if self.activity_ticker.is_some() {
             return;
@@ -197,7 +189,6 @@ impl DiscordApp {
 
     pub(crate) fn toggle_activity_expanded(&mut self, cx: &mut Context<Self>) {
         self.activity_feed.expanded = !self.activity_feed.expanded;
-        // The list caches row heights, and the Activity section is row 0.
         self.member_rows.remeasure_items(0..1);
         self.views.members.update(cx, |_, cx| cx.notify());
     }
@@ -257,8 +248,6 @@ impl DiscordApp {
         self.activity_feed.covers.get(&application_id).cloned()
     }
 
-    /// Two-colour palette of the application icon, computed off the main thread once the
-    /// icon file is cached; the member list is notified when it lands.
     pub(crate) fn ensure_activity_colors(&mut self, application_id: u64, cx: &mut Context<Self>) {
         if self.activity_feed.colors.contains_key(&application_id)
             || self
@@ -305,7 +294,6 @@ impl DiscordApp {
         self.activity_feed.colors.get(&application_id).copied()
     }
 
-    /// Replies to (or reacts on) an inbox entry in its author's DM, without navigating.
     pub(crate) fn send_activity_reply(
         &mut self,
         entry_id: u64,

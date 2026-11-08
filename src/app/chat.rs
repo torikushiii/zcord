@@ -174,7 +174,6 @@ fn forum_crumb(app: &DiscordApp) -> Option<impl IntoElement + use<>> {
     )
 }
 
-/// The composer and member list are separate sibling views.
 pub fn messages(app: &DiscordApp, cx: &App) -> AnyElement {
     if let Some(forum_id) = app.selected_forum() {
         return forum::render(app, forum_id, cx).into_any_element();

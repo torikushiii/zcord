@@ -243,7 +243,6 @@ fn ready_and_sessions_keep_configured_own_custom_status() {
     ));
     assert_eq!(status.expires_at, expires_at);
 
-    // A game-only session update keeps the configured status while updating the game.
     store.apply(Event::SessionsReplace(model::parse_entries(json!([{
         "session_id": "all",
         "status": "online",
@@ -256,7 +255,6 @@ fn ready_and_sessions_keep_configured_own_custom_status() {
     assert!(!user.playing);
     assert_eq!(user.custom_status.as_ref().unwrap().expires_at, expires_at);
 
-    // Listening-only session updates keep it too.
     store.apply(Event::SessionsReplace(model::parse_entries(json!([{
         "session_id": "all",
         "activities": [{"type": 2, "name": "Spotify"}]
@@ -266,7 +264,6 @@ fn ready_and_sessions_keep_configured_own_custom_status() {
     assert!(user.game.is_none());
     assert_eq!(user.custom_status.as_ref().unwrap().expires_at, expires_at);
 
-    // Empty activities clear game/listening but not the settings-owned status.
     store.apply(Event::SessionsReplace(model::parse_entries(json!([{
         "session_id": "all",
         "activities": []
@@ -300,7 +297,6 @@ fn authoritative_settings_clear_own_custom_status_across_sessions() {
     })));
     assert!(store.user(1).unwrap().custom_status.is_some());
 
-    // A full settings response without the custom-status field clears it.
     let clear = settings_fixtures::status_fixture(Some("idle"), None);
     store.apply(Event::SettingsUpdate(Box::new(model::SettingsUpdate {
         settings: model::SettingsProto {
@@ -319,7 +315,6 @@ fn authoritative_settings_clear_own_custom_status_across_sessions() {
     assert!(user.custom_status.is_none());
     assert_eq!(user.game.as_ref().unwrap().name, "Visual Studio Code");
 
-    // A partial update that omits the custom-status field preserves the known value...
     let set = settings_fixtures::status_fixture(Some("online"), Some(("back", 0, "\u{1f3ae}", 0)));
     store.apply(Event::SettingsUpdate(Box::new(model::SettingsUpdate {
         settings: model::SettingsProto {
@@ -347,7 +342,6 @@ fn authoritative_settings_clear_own_custom_status_across_sessions() {
         Some("back")
     );
 
-    // ...while an explicit empty/expired custom-status value clears it again.
     let clear = settings_fixtures::status_fixture(None, Some(("expired", 0, "", 1)));
     store.apply(Event::SettingsUpdate(Box::new(model::SettingsUpdate {
         settings: model::SettingsProto {
@@ -411,7 +405,6 @@ fn expired_configured_custom_status_is_not_restored_by_sessions_or_echoes() {
         expires_at
     );
 
-    // A live echo of the same expired status keeps the expiry instead of becoming immortal.
     let echo: model::Presence = serde_json::from_value(json!({
         "user_id":"1",
         "activities":[{"type":4,"state":"old"}]
@@ -422,7 +415,6 @@ fn expired_configured_custom_status_is_not_restored_by_sessions_or_echoes() {
     assert_eq!(status.expires_at, expires_at);
     assert!(status.is_expired(SystemTime::now()));
 
-    // Game-only snapshots must clear it and expose the real activity line.
     let game: model::Presence = serde_json::from_value(json!({
         "user_id":"1",
         "status":"online",
@@ -448,7 +440,6 @@ fn expired_configured_custom_status_is_not_restored_by_sessions_or_echoes() {
     assert_eq!(user.activity.as_deref(), Some("Listening to Spotify"));
     assert!(!user.playing);
 
-    // Empty snapshots leave no imported custom status/activity behind either.
     let empty: model::Presence = serde_json::from_value(json!({
         "user_id":"1",
         "activities":[]
@@ -504,7 +495,6 @@ fn identical_live_custom_status_keeps_configured_expiry_and_emoji_animation() {
         }) if name == "renamed"
     ));
 
-    // A following game-only snapshot keeps the same live emoji metadata and expiry.
     let game: model::Presence = serde_json::from_value(json!({
         "user_id":"1",
         "activities":[{"type":0,"name":"Visual Studio Code"}]
@@ -556,8 +546,6 @@ fn different_live_custom_status_supersedes_the_configured_fallback() {
     assert_eq!(live.text.as_deref(), Some("new"));
     assert!(live.expires_at.is_none());
 
-    // Once a different live status has superseded the settings value, an absent custom
-    // activity must not resurrect the old configured status.
     store.apply(Event::SessionsReplace(model::parse_entries(json!([{
         "session_id": "all",
         "activities": []
@@ -711,7 +699,6 @@ fn account_theme_follows_ready_and_full_and_partial_settings_updates() {
         Change::None
     );
 
-    // A partial update without the appearance field leaves the theme alone.
     let status = field(11, &field(1, &field(1, b"idle")));
     assert_eq!(
         store.apply(settings_update(1, &status, true)),
@@ -719,7 +706,6 @@ fn account_theme_follows_ready_and_full_and_partial_settings_updates() {
     );
     assert_eq!(store.account_theme(), Some(AccountTheme::Light));
 
-    // A full update without the appearance field clears it.
     assert_eq!(
         store.apply(settings_update(1, &status, false)),
         Change::Structure

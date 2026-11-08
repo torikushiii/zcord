@@ -26,8 +26,6 @@ pub struct Reaction {
     pub burst_me: bool,
 }
 
-/// One page of a reaction's users: normal reactions, or burst (super) ones, which Discord lists
-/// separately.
 #[derive(Clone, Copy)]
 pub struct ReactorPage {
     pub limit: u32,

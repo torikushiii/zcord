@@ -230,7 +230,6 @@ impl DiscordApp {
             self.end_self_preview(cx);
             return false;
         }
-        // The stage polls the same frames itself while it shows your stream.
         let playing = self.self_preview_shown() && self.window_active;
         let wanted = if self.watching_own_stream() {
             Some(STAGE_BOUNDS)
@@ -373,7 +372,6 @@ fn bar(top: bool) -> Div {
         ))
 }
 
-/// On the window, since the pointer can outrun the player.
 fn drag_listeners(app: &DiscordApp) -> impl IntoElement {
     let moved = app.entity.clone();
     let released = app.entity.clone();
@@ -388,7 +386,6 @@ fn drag_listeners(app: &DiscordApp) -> impl IntoElement {
                 let position = event.position;
                 moved
                     .update(cx, |app, cx| {
-                        // A release this view never heard, such as one outside the window.
                         if event.pressed_button == Some(MouseButton::Left) {
                             app.drag_self_preview(position, window, cx);
                         } else {
@@ -489,7 +486,6 @@ pub(crate) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
                 "Stream Settings",
             )
             .on_mouse_down(MouseButton::Left, move |event, _, cx| {
-                // The open menu closes on any press outside it, this one included.
                 cx.stop_propagation();
                 let position = event.position;
                 settings

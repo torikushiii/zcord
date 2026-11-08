@@ -60,7 +60,6 @@ pub(super) fn render(
     let style =
         style.filter(|_| surface == Surface::Field || crate::settings::display_name_styles());
     let font = fonts::display_font(style.and_then(|style| style.font_id), cx);
-    // Chat and member names inherit role/default colors, never profile colors or effects.
     let colors: Vec<Rgba> = style
         .filter(|_| surface != Surface::FontOnly)
         .map(|style| {
@@ -282,7 +281,6 @@ fn line_geometry(shaped: &[WrappedLine], metrics: &Metrics) -> Vec<Line> {
         });
         text_offset += clusters.len();
     }
-    // Combining marks/fallback-font runs in a grapheme move with the same transform.
     for line in &mut lines {
         let mut start = 0;
         while start < line.glyphs.len() {
@@ -358,7 +356,6 @@ fn layout(
         .filter(|_| metrics.wrap)
         .map(|width| width.max(px(1.)));
     let mut lines = line_geometry(&shape(text.clone(), metrics, wrap_width, window), metrics);
-    // Native wrapping knows word/Unicode boundaries. Refit its width to include CSS tracking.
     if let Some(width) = width.filter(|_| metrics.wrap && metrics.tracking > px(0.)) {
         for _ in 0..4 {
             let overflow = lines
@@ -525,7 +522,6 @@ impl Element for DisplayName {
         if playing {
             window.request_animation_frame();
         }
-        // Hover decorations belong to the current paint, not the cached layout.
         let style = window.text_style();
         effects::paint(
             self.effect,

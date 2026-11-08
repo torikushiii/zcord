@@ -29,7 +29,6 @@ pub(crate) async fn run(
 ) {
     let mut seen = HashMap::new();
     loop {
-        // Programs added by hand need no catalog, so the scan runs before one arrives too.
         let current = catalog.borrow().clone();
         let previous = seen.clone();
         let detected =

@@ -9,7 +9,6 @@ use crate::discord::model::{ChannelSetting, NotificationLevel};
 
 const BATCH: usize = 5;
 const MESSAGES: usize = 25;
-/// Discord rejects bulk acks with more read states than this.
 const BULK_ACK: usize = 100;
 
 #[derive(Default)]

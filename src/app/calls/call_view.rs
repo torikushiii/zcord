@@ -16,7 +16,6 @@ const STREAM_TILE: u32 = 0x1E1F22;
 
 pub(crate) struct CallView {
     pub(super) controls: StageControls,
-    /// `None` while an avatar's color is being read, or when it can't be.
     tints: HashMap<u64, Option<u32>>,
 }
 
@@ -32,7 +31,6 @@ impl DiscordApp {
         channel_id: u64,
         cx: &mut Context<Self>,
     ) {
-        // The first click only joins; clicking the channel again once in it opens the call.
         if self
             .voice
             .joined_call()
@@ -80,13 +78,11 @@ impl DiscordApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Switching stages keeps the way back to the text channel the chat first opened over.
         let back = self.stream.stage_chat.take();
         if self.voice.joined_call() == Some((guild_id, channel_id)) {
             self.voice_lobby = None;
             self.open_call_view(cx);
         } else {
-            // A stream stage outranks a lobby, so it has to go for this channel to show.
             self.close_stream(Some(window), cx);
             self.dismiss_call_view();
             self.voice_lobby = Some((guild_id, channel_id));
@@ -113,7 +109,6 @@ impl DiscordApp {
         self.refresh_call_tints(cx);
     }
 
-    /// Avatars load on their own schedule, so this runs on the call's clock until each is read.
     fn refresh_call_tints(&mut self, cx: &mut Context<Self>) {
         let Some((guild_id, channel_id)) = self.voice.joined_call() else {
             return;
@@ -156,7 +151,6 @@ impl DiscordApp {
     }
 }
 
-/// How many columns give the largest 16:9 tiles inside `width` by `height`, and their width.
 fn grid(count: usize, width: f32, height: f32) -> (usize, f32) {
     (1..=count.max(1))
         .map(|columns| {

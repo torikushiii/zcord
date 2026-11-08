@@ -167,7 +167,6 @@ impl DiscordApp {
                 ranges.push((page * 100, page * 100 + 99));
             }
         }
-        // A thread shows its parent channel's member list.
         let channel_id = self.thread_parent().unwrap_or(self.selected_channel_id);
         let key = (self.selected_guild_id, channel_id, ranges);
         if self.member_subscription.as_ref() == Some(&key) {

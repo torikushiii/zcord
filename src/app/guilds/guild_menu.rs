@@ -45,7 +45,6 @@ pub(crate) struct GuildMenu {
     guild_id: u64,
     position: Point<Pixels>,
     submenu: Submenu,
-    /// The flyout lies outside the menu's bounds; a click there must not count as outside.
     pointer_in_flyout: bool,
 }
 
@@ -219,7 +218,6 @@ fn panel(id: &'static str, width: f32) -> Stateful<Div> {
         .occlude()
 }
 
-/// Places a flyout panel beside the row that opened it, its first row level with that row.
 fn flyout(app: &DiscordApp, panel: Stateful<Div>) -> Div {
     let entity = app.entity.clone();
     div()
@@ -270,7 +268,6 @@ fn checkbox(checked: bool) -> Div {
         })
 }
 
-/// A flyout row that stays open after the click, like Discord's toggles.
 fn toggle_row(
     app: &DiscordApp,
     key: impl Into<ElementId>,

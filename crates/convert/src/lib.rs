@@ -1,4 +1,3 @@
-/// BT.709 limited range.
 pub fn nv12_to_bgra(y: &[u8], uv: &[u8], stride: usize, width: usize, height: usize) -> Vec<u8> {
     let mut bgra = vec![0; width.saturating_mul(height).saturating_mul(4)];
     if width == 0 || height == 0 || stride < width {
@@ -90,7 +89,6 @@ pub fn fit_dimensions(src_w: usize, src_h: usize, max_w: usize, max_h: usize) ->
     )
 }
 
-/// BT.709 limited range, the source fitted and centred inside `dst_w` × `dst_h` on black.
 pub fn bgra_to_nv12(
     bgra: &[u8],
     stride: usize,
@@ -114,15 +112,12 @@ pub fn bgra_to_nv12(
     {
         return output;
     }
-    // An odd last column or row is dropped, as a window's height often is odd; the rest is
-    // fitted to the output, read in place when it already fits exactly.
     let (even_w, even_h) = (src_w & !1, src_h & !1);
     if even_w < 2 || even_h < 2 {
         return output;
     }
     let (scaled_w, scaled_h) = fit_even(even_w, even_h, dst_w, dst_h);
     let unscaled = (scaled_w, scaled_h) == (even_w, even_h);
-    // Even offsets keep each 2×2 block on one chroma sample.
     let left = ((dst_w - scaled_w) / 2) & !1;
     let top = ((dst_h - scaled_h) / 2) & !1;
     let scaled;
@@ -136,8 +131,6 @@ pub fn bgra_to_nv12(
         };
         (scaled.as_slice(), scaled_w * 4)
     };
-    // Rows of 2×2 blocks are independent, so bands of them convert on separate threads; a
-    // 1080p frame on one core takes long enough to cap the frame rate.
     let pairs = scaled_h / 2;
     let threads = std::thread::available_parallelism()
         .map_or(1, |threads| threads.get())
@@ -172,8 +165,6 @@ pub fn bgra_to_nv12(
     output
 }
 
-/// The largest even size with the shape of `width` × `height` that fits inside `max_w` ×
-/// `max_h`, scaling up as well as down.
 pub fn fit_even(width: usize, height: usize, max_w: usize, max_h: usize) -> (usize, usize) {
     if width == 0 || height == 0 || max_w < 2 || max_h < 2 {
         return (0, 0);
@@ -185,8 +176,6 @@ pub fn fit_even(width: usize, height: usize, max_w: usize, max_h: usize) -> (usi
     (side(width, max_w), side(height, max_h))
 }
 
-/// Bilinear resize, for scaling a picture up: the box scaler only averages, which would
-/// turn each source pixel into a visible block. Bands of rows run on separate threads.
 pub fn resize_bilinear(
     bgra: &[u8],
     stride: usize,
@@ -240,8 +229,6 @@ pub fn resize_bilinear(
     output
 }
 
-/// Where output position `position` of `out_len` samples a line of `in_len`: its two
-/// neighbouring source positions and the second's weight out of 256, centres aligned.
 fn sample(position: usize, out_len: usize, in_len: usize) -> (usize, usize, u32) {
     let source = ((position as f64 + 0.5) * in_len as f64 / out_len as f64 - 0.5).max(0.);
     let first = (source as usize).min(in_len - 1);
@@ -251,10 +238,8 @@ fn sample(position: usize, out_len: usize, in_len: usize) -> (usize, usize, u32)
 }
 
 const MAX_THREADS: usize = 8;
-/// Below this many block rows a band isn't worth a thread.
 const MIN_PAIRS_PER_THREAD: usize = 32;
 
-/// The source picture and where it lands in the output, shared by every band.
 struct Rows<'a> {
     source: &'a [u8],
     stride: usize,
@@ -264,8 +249,6 @@ struct Rows<'a> {
 }
 
 impl Rows<'_> {
-    /// Converts the band of block rows starting at `first_pair`, whose luma rows (two per
-    /// block row) and chroma rows are `luma` and `chroma`.
     fn convert(&self, first_pair: usize, luma: &mut [u8], chroma: &mut [u8]) {
         let (width, dst_w, left) = (self.width, self.dst_w, self.left);
         let row_bytes = width * 4;
@@ -289,8 +272,6 @@ impl Rows<'_> {
                 *luma_upper = [luma_of(r0, g0, b0), luma_of(r1, g1, b1)];
                 *luma_lower = [luma_of(r2, g2, b2), luma_of(r3, g3, b3)];
                 let (r, g, b) = (r0 + r1 + r2 + r3, g0 + g1 + g2 + g3, b0 + b1 + b2 + b3);
-                // Sums of four pixels: the extra 2 bits of shift average them. The coefficients
-                // keep every result within 16..=240, so nothing needs clamping.
                 *uv = [
                     (((-26 * r - 86 * g + 112 * b + 512) >> 10) + 128) as u8,
                     (((112 * r - 102 * g - 10 * b + 512) >> 10) + 128) as u8,
@@ -300,7 +281,6 @@ impl Rows<'_> {
     }
 }
 
-/// BT.709 limited-range luma in 8-bit fixed point; always within 16..=235.
 #[inline(always)]
 fn luma_of(r: i32, g: i32, b: i32) -> u8 {
     (((47 * r + 157 * g + 16 * b + 128) >> 8) + 16) as u8
@@ -366,7 +346,6 @@ mod tests {
 
     #[test]
     fn bilinear_upscaling_blends_instead_of_blocking() {
-        // Black then white, doubled: the middle pixels land between the two.
         let source = [[0u8, 0, 0, 255], [255, 255, 255, 255]].concat();
         let wide = resize_bilinear(&source, 8, 2, 1, 4, 1);
         let blue: Vec<u8> = wide.chunks_exact(4).map(|pixel| pixel[0]).collect();
@@ -384,7 +363,6 @@ mod tests {
 
     #[test]
     fn an_odd_last_row_is_dropped_instead_of_scaling() {
-        // 4×3 red into 4×2: the third row is cut, the rest converts unscaled and unshifted.
         let mut picture = [0u8, 0, 255, 255].repeat(4 * 2);
         picture.extend([255u8; 16]);
         let nv12 = bgra_to_nv12(&picture, 16, 4, 3, 4, 2);

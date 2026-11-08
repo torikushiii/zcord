@@ -29,7 +29,6 @@ impl SpoilerMode {
     }
 }
 
-/// When stickers play, stored as `animate_stickers`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum StickerAnimation {
     #[default]

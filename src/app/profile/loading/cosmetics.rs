@@ -114,7 +114,6 @@ impl DiscordApp {
             self.start_style_effect_timer(cx);
         }
     }
-    /// Redraws the open profile on a tick, so effect layers can start and loop on time.
     pub(crate) fn start_style_effect_timer(&mut self, cx: &mut Context<Self>) {
         let Some(card) = self
             .profile

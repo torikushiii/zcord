@@ -214,7 +214,6 @@ impl Session {
         self.rest(async |rest| rest.fetch_note(user_id).await).await
     }
 
-    /// `None` means the invite code is invalid or expired; that result is cached too.
     pub async fn invite(&self, code: &str) -> Result<Option<Arc<model::Invite>>, Error> {
         let _request = self
             .request_lock(CacheRequest::Invite(code.to_owned()))

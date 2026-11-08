@@ -5,7 +5,6 @@ impl Session {
         self.join_voice(0, channel_id);
     }
 
-    /// Requests existing private-call state without joining or ringing.
     pub fn request_dm_call(&self, channel_id: u64) {
         self.command(commands::Command {
             payload: serde_json::json!({"op": 13, "d": {"channel_id": channel_id.to_string()}}),

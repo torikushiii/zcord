@@ -37,7 +37,6 @@ pub(super) struct MuteConfig {
     end_time: Option<String>,
 }
 
-/// `mute` is the chosen window in seconds (`-1` until unmuted); `None` unmutes.
 pub(super) fn mute_fields(mute: Option<i64>, now: DateTime<Utc>) -> (bool, Option<MuteConfig>) {
     match mute {
         Some(seconds) => (

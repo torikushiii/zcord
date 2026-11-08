@@ -1,10 +1,3 @@
-//! Decoding a large GIF or clip takes seconds; re-showing one reads these frames instead.
-//!
-//! Format (little-endian): magic `ZCFR`, version `3`, frame count `u32`, width `u32`,
-//! height `u32`, play count `u32` (0 = infinite); then per frame the delay numerator
-//! and denominator (`u32` each) followed by `width * height * 4` raw BGRA bytes,
-//! exactly as stored in `RenderImage`.
-
 use super::images::{touch_due, touch_modified};
 use anyhow::{Context, ensure};
 use gpui::RenderImage;
@@ -19,7 +12,6 @@ use std::{
 };
 
 const MAGIC: &[u8; 4] = b"ZCFR";
-/// Bumped when decoding changes, so frames saved by an older decoder are decoded again.
 const VERSION: u8 = 3;
 const HEADER_LEN: usize = 21;
 const FRAME_HEADER_LEN: usize = 8;
@@ -27,8 +19,6 @@ const MAX_DIMENSION: u32 = 4096;
 const MAX_FRAMES: u32 = 600;
 const MAX_BYTES: u64 = 256 * 1024 * 1024;
 
-/// Callers only save images produced by the animated and video decoders, which
-/// resize every frame to one target size.
 fn write(image: &RenderImage, plays: Option<NonZeroU32>, out: &mut impl Write) -> io::Result<u64> {
     let frame_count = u32::try_from(image.frame_count()).unwrap_or(u32::MAX);
     if frame_count == 0 {
@@ -117,8 +107,6 @@ pub(crate) async fn load(path: &Path) -> Option<(Arc<RenderImage>, usize, Option
     }
 }
 
-/// Reads frames straight into their buffers; `length` is the file's, checked against the
-/// header before anything large is allocated.
 fn decode(
     reader: &mut impl Read,
     length: u64,

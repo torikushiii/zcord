@@ -1,5 +1,3 @@
-//! The message box's right-click menu: suggestions, the send button and paste.
-
 use gpui::{prelude::*, *};
 use gpui_component::input::{Paste, TextareaState};
 
@@ -29,7 +27,6 @@ pub(in crate::app) struct ComposerMenu {
     target: ComposerTarget,
     position: Point<Pixels>,
     suggestions_open: bool,
-    /// The flyout lies outside the menu; a click there must not count as outside.
     pointer_in_flyout: bool,
 }
 
@@ -84,7 +81,6 @@ impl DiscordApp {
         }
     }
 
-    /// Pastes as Ctrl+V would, files and images included, into the box the menu belongs to.
     fn paste_into(&mut self, target: ComposerTarget, window: &mut Window, cx: &mut Context<Self>) {
         self.close_composer_menu(cx);
         let Some(input) = self.composer_for(target) else {
@@ -106,8 +102,6 @@ fn closes_flyout_row(app: &DiscordApp, key: &'static str, enabled: bool) -> Stat
     })
 }
 
-/// Shown like Discord's but dimmed, with a tooltip saying zcord doesn't do it yet. The tooltip
-/// sits beside the dimmed row rather than in it, so it keeps full opacity.
 fn unavailable(row: Stateful<Div>, key: &'static str) -> Stateful<Div> {
     div()
         .id(key)

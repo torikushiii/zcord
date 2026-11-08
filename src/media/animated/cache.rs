@@ -1,14 +1,10 @@
 use super::*;
 
-/// A just-decoded image may still be waiting for its debounced repaint.
 const FRESH_FOR: Duration = Duration::from_secs(1);
-/// Must stay under `STALE_AFTER`, or jobs for visible tiles get cancelled between repaints.
+// Must stay under `STALE_AFTER`, or jobs for visible tiles get cancelled between repaints.
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 
 impl Cache {
-    /// The size `spec` is served at for a request of `size`. A profile effect without a ready
-    /// decode at that size takes the smallest ready larger one, so cards of different sizes
-    /// share one copy instead of holding one each.
     pub(super) fn serving_size(&self, spec: &ImageSpec, size: u32) -> u32 {
         let Some(sizes) = self.entries.get(spec) else {
             return size;
@@ -26,8 +22,6 @@ impl Cache {
             .unwrap_or(size)
     }
 
-    /// Drops animations not shown for `UNSEEN_DROP`; also says whether any are left to check
-    /// again later.
     pub(super) fn purge_unseen(&mut self) -> (Vec<Arc<RenderImage>>, bool) {
         let mut purged = Vec::new();
         let mut remaining = false;
@@ -130,7 +124,6 @@ impl Cache {
                 if self.running[lane as usize] < lane.downloads() {
                     break Some((index, key, lane));
                 }
-                // Another lane may still have room; a full GIF lane must not block emoji.
                 index += 1;
                 continue;
             }
@@ -181,8 +174,6 @@ impl Cache {
 
     pub(super) fn evict(&mut self) -> Vec<Arc<RenderImage>> {
         let mut evicted = Vec::new();
-        // The budget is soft: reserve one future decode, and if only fresh or pinned entries
-        // are left, start anyway rather than stalling.
         while self.bytes + MAX_IMAGE > MAX_TOTAL {
             let candidate = self
                 .entries
@@ -251,7 +242,6 @@ pub(crate) fn drop_images(images: Vec<Arc<RenderImage>>, cx: &App) {
     }
     cx.spawn(async move |cx| {
         cx.update(|cx| {
-            // gpui's sprite atlas keeps every frame until drop_image is called.
             for image in images {
                 if !stream::forget(image.id, cx) {
                     cx.drop_image(image, None);
@@ -262,7 +252,6 @@ pub(crate) fn drop_images(images: Vec<Arc<RenderImage>>, cx: &App) {
     .detach();
 }
 
-/// Checks for unseen animations every `UNSEEN_DROP` while any are cached.
 pub(super) fn schedule_purge(cache: Rc<RefCell<Cache>>, cx: &App) {
     {
         let mut state = cache.borrow_mut();
@@ -289,7 +278,6 @@ pub(super) fn schedule_purge(cache: Rc<RefCell<Cache>>, cx: &App) {
     .detach();
 }
 
-/// Repaint while work is in flight so visible still fallbacks keep refreshing their stamps.
 pub(super) fn start_heartbeat(cache: Rc<RefCell<Cache>>, cx: &App) {
     {
         let mut state = cache.borrow_mut();

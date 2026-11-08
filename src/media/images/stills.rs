@@ -1,8 +1,6 @@
 use super::urls::{avif_proxy_image, rounded_size};
 use super::*;
 
-// gpui's `img()` decodes every frame of an animated file and keeps it in its asset cache.
-/// Rewrites a download before it's cached, at a target size.
 pub(super) type StillConversion = fn(&[u8], u32) -> Option<Vec<u8>>;
 
 pub(super) fn first_frame_png(bytes: &[u8], size: u32) -> Option<Vec<u8>> {
@@ -30,9 +28,6 @@ pub(super) fn first_frame_png(bytes: &[u8], size: u32) -> Option<Vec<u8>> {
     encode_png(&shrink(image, longest, size))
 }
 
-/// Collectible stills come at full resolution and gpui's `img()` keeps each one decoded at that
-/// size, so a profile frame's layers cost tens of megabytes apiece. Shrinking the shortest side
-/// to `size` keeps every fit sharp; animated files are left whole for the frame decoder.
 pub(super) fn downscaled_still(bytes: &[u8], size: u32) -> Option<Vec<u8>> {
     let format = image::guess_format(bytes).ok()?;
     let animated = match format {
@@ -59,7 +54,6 @@ pub(super) fn downscaled_still(bytes: &[u8], size: u32) -> Option<Vec<u8>> {
     encode_png(&shrink(image, shortest, size))
 }
 
-/// Scales `image` down so its `reference` side is at most `target`, keeping the aspect ratio.
 fn shrink(image: image::RgbaImage, reference: u32, target: u32) -> image::RgbaImage {
     let target = target.max(1);
     if reference <= target {
@@ -109,12 +103,9 @@ pub(super) fn file_name(spec: &ImageSpec, size: u32) -> String {
         && let Ok(url) = reqwest::Url::parse(url)
         && avif_proxy_image(spec, &url)
     {
-        // Downloads and decoded frames share this key; bypass pre-conversion cache entries.
         "avif-proxy-webp-v1".hash(&mut hasher);
     }
     if matches!(spec, ImageSpec::Collectible { .. }) {
-        // Bypass full-resolution stills written before `downscaled_still`, and effect frames
-        // decoded under the old 32 MB animation cap.
         "collectible-downscaled-v2".hash(&mut hasher);
     }
     let suffix = if still_spec(spec) { "-still" } else { "" };

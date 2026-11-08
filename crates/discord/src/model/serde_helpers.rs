@@ -76,7 +76,6 @@ pub fn optional_ids<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<u64>>,
     ids(d).map(Some)
 }
 
-// `wishlist_settings` is keyed by wishlist id ("1191169174274048062"), not an array.
 pub fn wishlist_ids<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u64>, D::Error> {
     let value = Value::deserialize(d)?;
     Ok(value

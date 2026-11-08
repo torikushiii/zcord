@@ -6,7 +6,6 @@ use serde::Deserialize;
 pub struct Embed {
     #[serde(default, rename = "type")]
     pub kind: Option<String>,
-    /// Legacy activity-card embeds carry flags 32; the component is the real card.
     #[serde(default)]
     pub flags: u64,
     #[serde(default)]

@@ -17,8 +17,6 @@ pub fn conceal(name: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Only a name that is the unique username itself is truncated; global names, legacy
-/// `name#1234` users and nicknames stay readable.
 fn shown_name(real: &str, username: &str, discriminator: Option<&str>) -> String {
     let unique = discriminator.is_none_or(|value| value == "0");
     if CONCEAL_USERNAMES.load(Ordering::Relaxed)
@@ -127,8 +125,6 @@ fn map_media(value: &model::EmbedMedia) -> Option<Media> {
     )
 }
 
-/// Kept without a proxy URL, unlike pictures: embed players have none, and the video is only
-/// sized and opened, never fetched as an image.
 fn map_video(value: &model::EmbedMedia) -> Option<Media> {
     map_media(value).or_else(|| {
         let url = nonempty(&value.url)?;
@@ -236,7 +232,6 @@ pub(super) fn map_embeds(embeds: &[model::Embed], flags: u64) -> Vec<Embed> {
             let Some(first) = mapped.last_mut() else {
                 continue;
             };
-            // Keep a follower's video when the group has none, so it stays playable.
             if first.video.is_none() {
                 first.video = embed.video.as_ref().and_then(map_video);
             }
@@ -359,7 +354,6 @@ fn map_component(component: &model::Component) -> Option<Component> {
     })
 }
 
-/// A type-16 activity card supersedes its legacy flagged embed (flags bit 5).
 fn embeds_without_activity_card(
     embeds: &[model::Embed],
     components: &[model::Component],
@@ -408,7 +402,6 @@ pub(super) fn message_thread(thread: &model::Channel) -> MessageThread {
     }
 }
 
-/// A THREAD_CREATED notice names its thread in `content` and `message_reference`, with no `thread`.
 fn thread_notice(message: &model::Message) -> Option<MessageThread> {
     if message.kind != 18 {
         return None;
@@ -698,8 +691,6 @@ pub(super) fn map_guild(
                 && discord::can_view(guild, c, source.user.id)
         })
         .collect();
-    // Discord lists voice and stage channels after text-like ones within each category,
-    // regardless of position.
     ordered.sort_by_key(|c| {
         (
             matches!(c.kind, Some(2 | 13)),

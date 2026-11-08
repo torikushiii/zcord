@@ -88,8 +88,6 @@ const NEWER_MESSAGES_THRESHOLD: usize = 8;
 
 pub(crate) const DISCORD_EPOCH_MS: u64 = 1_420_070_400_000;
 const ACK_DELAY: Duration = Duration::from_secs(1);
-/// Discord marks a channel read locally at once but sends the ack this much later, unless
-/// the channel has mentions or you asked for it.
 const ACK_SEND_DELAY: Duration = Duration::from_secs(3);
 const OLDER_RETRY_DELAY: Duration = Duration::from_secs(5);
 pub(crate) const MESSAGE_LIMIT: usize = 2000;
@@ -97,7 +95,6 @@ const TYPING_RESEND: Duration = Duration::from_secs(9);
 const TYPING_DURATION: Duration = Duration::from_secs(10);
 const COALESCE_DELAY: Duration = Duration::from_millis(150);
 const JUMP_STEP_FRACTION: f32 = 0.2;
-/// Targets further than this many viewports are first approached by an instant jump.
 const JUMP_GLIDE_VIEWPORTS: f32 = 3.;
 pub(crate) const JUMP_HIGHLIGHT: Duration = Duration::from_millis(2000);
 pub(crate) const JUMP_MISSING: Duration = Duration::from_secs(4);
@@ -167,7 +164,6 @@ pub(crate) struct Editing {
 pub(crate) struct FailedSend {
     reply: Option<ReplyTarget>,
     files: Vec<messages::attachments::StagedFile>,
-    /// Activity reply/reaction entry to re-attach when the send is retried.
     entry: Option<Arc<serde_json::Value>>,
     pub error: String,
 }
@@ -178,16 +174,13 @@ struct ForumPage {
     has_more: bool,
     loading: bool,
     loaded: bool,
-    /// Bumped whenever the query changes so a reply to an older query is dropped.
     generation: u64,
-    /// The viewer's Sort & View choices; `None` follows the forum's defaults.
     sort: Option<crate::discord::ForumSort>,
     gallery: Option<bool>,
     tags: Vec<u64>,
     match_all: bool,
     menu: bool,
     menu_closed: Option<Instant>,
-    /// Posts whose starter message or owner was already requested, so each is asked for once.
     requested: HashSet<u64>,
 }
 
@@ -267,7 +260,6 @@ pub struct DiscordApp {
     pending_token: Option<String>,
     pub(in crate::app) history: state::History,
     forum_pages: HashMap<u64, ForumPage>,
-    /// Gallery columns that fit the forum's last laid-out width.
     forum_columns: Rc<Cell<usize>>,
     forum_header: Option<guilds::forum_actions::ForumHeader>,
     pub(crate) invites: HashMap<String, InviteState>,
@@ -276,9 +268,7 @@ pub struct DiscordApp {
     pub(crate) revealed_spoilers: HashSet<(u64, u16)>,
     revealed_blocked_run_starts: HashSet<u64>,
     revealed_profiles: HashSet<u64>,
-    /// The window's height in `rpx` units, as of the last frame, for popups that must fit it.
     pub(crate) window_height: f32,
-    /// `rpx` per pixel as of the last frame, to measure laid-out elements in `rpx`.
     pub(crate) rpx_per_pixel: f32,
     reaction_tips: expressions::reaction_tooltip::ReactionTips,
     pub(crate) expression_info: expressions::expression_info::State,
@@ -606,8 +596,6 @@ impl DiscordApp {
             }
         })
         .detach();
-        // The dialog unmounting (cancel, confirm or external deletion) drops its focus;
-        // hand it back to the composer once the dialog is really gone.
         cx.on_blur(&app.delete_focus, window, |app, window, cx| {
             if app.compose.confirm_delete.is_none() {
                 app.focus_composer(window, cx);
@@ -645,7 +633,6 @@ impl DiscordApp {
         let weak = app.entity.clone();
         app.messages.set_scroll_handler(move |event, _, cx| {
             weak.update(cx, |app, cx| {
-                // Only user scrolling reaches this handler; it takes over from a reply jump.
                 app.jumps.scroll = None;
                 if event.visible_range.start < OLDER_MESSAGES_THRESHOLD {
                     app.fetch_older(cx);
@@ -795,7 +782,6 @@ impl DiscordApp {
         self.guild()?.channel(self.selected_channel_id)
     }
 
-    /// The Home screen (DMs and friends) is the selection without a guild.
     pub(crate) fn is_home(&self) -> bool {
         self.selected_guild_id == 0
     }
@@ -892,10 +878,7 @@ fn set_text(
     input.set_cursor_position(end, window, cx);
 }
 
-/// Keeps arrow-key movement from stopping between the invisible characters of a token.
 fn snap_composer_cursor(input: &Entity<TextareaState>, previous: &Cell<usize>, cx: &mut App) {
-    // Runs on every composer notify, cursor blink included; stay allocation-free unless the
-    // cursor moved and the text actually holds tokens.
     let state = input.read(cx);
     let cursor = state.cursor();
     let previous = previous.replace(cursor);

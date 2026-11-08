@@ -130,7 +130,6 @@ impl Store {
         let current_user_id = self.current_user_id;
         let own = event.user_id == Some(current_user_id);
         self.change_reactions(event.channel_id, event.message_id, |reactions| {
-            // Our optimistic toggle already added it; the echo must not double count.
             if own
                 && reactions
                     .iter()
@@ -150,7 +149,6 @@ impl Store {
                 .iter()
                 .position(|r| Self::same_emoji(&r.emoji, &event.emoji))
             {
-                // Our optimistic toggle already removed it.
                 if own && !reactions[index].me {
                     return;
                 }

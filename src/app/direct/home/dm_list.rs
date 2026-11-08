@@ -89,7 +89,6 @@ pub(crate) fn sidebar(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 .px_2()
                 .py_2()
                 .child(friends)
-                // Not built yet; shown so the layout matches Discord's.
                 .child(nav_row("home-library", "library", "Library", false, 0).opacity(0.5))
                 .child(
                     nav_row("home-quests", "laurel-wreath", "Quests", quests_selected, 0)

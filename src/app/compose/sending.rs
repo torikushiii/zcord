@@ -198,8 +198,6 @@ impl DiscordApp {
                     }
                     Err(error) => log::warn!("Reaction task failed: {error}"),
                 }
-                // Its users are fetched again only once Discord has the change, so they include
-                // or drop you; a queued follow-up change does this when it lands instead.
                 app.reaction_changed(message_id, &emoji, cx);
             })
             .ok();
@@ -343,8 +341,6 @@ impl DiscordApp {
                 .push(channel_id, content, reply, files, entry);
             self.history.pending_present.insert(channel_id);
             smooth_scroll::cancel(cx);
-            // Refresh even if another response already marked the channel present. A later
-            // submission retries a failed refresh.
             self.fetch_history(channel_id, None, window, cx);
         } else {
             self.dispatch_send(channel_id, content, reply, files, entry, window, cx);

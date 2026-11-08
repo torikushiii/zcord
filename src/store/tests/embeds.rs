@@ -53,7 +53,6 @@ fn embeds_map_kinds_text_fields_timestamps_and_proxy_only_media() {
         };
         assert!(mapping::map_embed(&wire).kind == expected);
         wire.color = Some(0);
-        // Articles keep their layout with a colour; Discord still puts the thumbnail below.
         if matches!(kind, Some("link" | "future")) {
             assert!(mapping::map_embed(&wire).kind == EmbedKind::Rich);
             wire.color = None;

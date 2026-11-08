@@ -356,7 +356,6 @@ pub(crate) fn sticker_image(
                     .into_any_element(),
             );
         }
-        // `img` would play these files itself, so a held sticker shows the first frame.
         if matches!(sticker.format, 2 | 4) {
             return animated::first_frame(&spec, pixels, cx).map(|frame| {
                 frame

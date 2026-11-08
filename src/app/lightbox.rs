@@ -46,15 +46,12 @@ pub(crate) struct Lightbox {
     poster: Option<ImageSpec>,
     width: u32,
     height: u32,
-    /// Pixel budget the chat thumbnail was requested at, for the loading fallback.
     preview: u32,
     url: String,
-    /// Key passed to `embeds::animated`; the source URL, as the chat thumbnail uses.
     key: String,
     zoomed: bool,
     menu: Menu,
     context_menu: Option<Point<Pixels>>,
-    /// Fetched when the details open, for media Discord doesn't report a size for.
     size: Option<u64>,
     scroll: ScrollHandle,
     drag: Option<Drag>,
@@ -73,7 +70,6 @@ pub(crate) struct LightboxEntry {
 
 #[derive(Clone, Copy)]
 struct ZoomMotion {
-    /// Unique per zoom, so each one replays its animation.
     id: u64,
     from: Bounds<Pixels>,
     to: Bounds<Pixels>,
@@ -86,8 +82,6 @@ struct Drag {
     moved: bool,
 }
 
-/// Where the open image came from. Attachments also give the file itself; embeds give the
-/// proxied copy, which stays on Discord's CDN whatever host the link points at.
 #[derive(Clone, Copy)]
 struct Origin<'a> {
     message: &'a Message,
@@ -282,7 +276,6 @@ impl DiscordApp {
         .detach();
     }
 
-    /// Zooms around `focus`, a window position over the image, or around its centre.
     fn toggle_lightbox_zoom(
         &mut self,
         focus: Option<Point<Pixels>>,
@@ -396,14 +389,12 @@ impl DiscordApp {
         }
     }
 
-    /// The URL holding the original file, on a host zcord is allowed to fetch from.
     fn lightbox_original(&self) -> Option<String> {
         let lightbox = self.lightbox.as_ref()?;
         let media = origin(self, lightbox).and_then(|origin| origin.media);
         Some(media.map_or_else(|| lightbox.url.clone(), |media| media.url.clone()))
     }
 
-    /// The original file when it can be fetched, otherwise the full-size cached copy.
     fn lightbox_bytes(&self, cx: &mut Context<Self>) -> Option<Task<Option<Vec<u8>>>> {
         let lightbox = self.lightbox.as_ref()?;
         let service = images::download_service(cx)?;
@@ -461,7 +452,6 @@ impl DiscordApp {
     }
 }
 
-/// GIFs stay GIFs so they paste animated; the clipboard adds its own PNG beside them.
 fn clipboard_image(bytes: Vec<u8>) -> Option<Image> {
     if image::guess_format(&bytes).ok()? == image::ImageFormat::Gif {
         return Some(Image::from_bytes(ImageFormat::Gif, bytes));
@@ -573,7 +563,6 @@ fn file_name(lightbox: &Lightbox, attachment: Option<&Attachment>) -> String {
 pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyElement> {
     let lightbox = app.lightbox.as_ref()?;
     let (width, height) = fitted_size(lightbox, window);
-    // Moving either way, the picture keeps the zoomed resolution, so it doesn't swap mid-way.
     let (width, height) = if lightbox.zoomed || lightbox.motion.is_some() {
         (width * ZOOM, height * ZOOM)
     } else {

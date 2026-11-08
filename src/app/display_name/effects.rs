@@ -237,8 +237,7 @@ fn ink_x(advance: Pixels, font_left: Pixels, font_right: Pixels, pad: Pixels) ->
     }
 }
 
-// GPUI's glyph pipeline has no gradient brush. Mask small fill strips over its cached glyph;
-// outlines and color emoji are painted separately, without reshaping or rasterizing text per frame.
+// GPUI's glyph pipeline has no gradient brush, so fill strips are masked over its cached glyphs.
 fn gradient_line(
     line: &Line,
     origin: Point<Pixels>,
@@ -347,7 +346,6 @@ pub(super) fn paint(
     window: &mut Window,
 ) {
     let main: Hsla = colors.first().copied().map(Into::into).unwrap_or(inherited);
-    // Chat's font-only path must not calculate decorative palettes/keyframes for every author.
     if matches!(effect, None | Some(Effect::Solid)) {
         for line in &layout.lines {
             for item in &line.glyphs {
@@ -514,9 +512,6 @@ pub(super) fn paint(
                     )
                 };
                 let stroke_radius = (unit * 1.2 + metrics.size * 0.04) / 2.;
-                // Discord gives the shadow a transparent stroke that its gradient still fills,
-                // so it's a stroke fatter than the letters and shows beneath their outline.
-                // One color per glyph keeps this to a ring of plain glyphs.
                 for item in line.glyphs.iter().filter(|item| !item.emoji) {
                     let color = shadow_at(item.center);
                     stroke_glyph(

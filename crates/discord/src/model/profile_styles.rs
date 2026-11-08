@@ -20,7 +20,6 @@ pub struct RecentAvatar {
     pub description: String,
 }
 
-/// Outer `None` omits a field; inner `None` sends Discord's reset value.
 #[derive(Clone, Default)]
 pub struct ProfileStylePatch {
     pub avatar: Option<Option<String>>,
@@ -34,11 +33,8 @@ pub struct ProfileStylePatch {
     pub display_name_colors: Option<Option<Vec<u32>>>,
     pub theme_colors: Option<Option<[u32; 2]>>,
     pub accent_color: Option<Option<u32>>,
-    /// The entire scope's effect/frame selection, not just the changed item.
     pub collectibles_sku_ids: Option<Vec<u64>>,
-    /// The display name, or the server nickname; empty resets it.
     pub name: Option<String>,
     pub pronouns: Option<String>,
-    /// The server whose tag to wear, or `Some(None)` to wear none. Account-wide.
     pub tag_guild: Option<Option<u64>>,
 }

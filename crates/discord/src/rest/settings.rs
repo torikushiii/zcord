@@ -36,7 +36,6 @@ impl Rest {
         self.update_preloaded_settings(proto, version).await
     }
 
-    /// CAS PATCH of PreloadedUserSettings; the server rejects a stale `required_data_version`.
     pub async fn update_preloaded_settings(
         &self,
         proto: &[u8],

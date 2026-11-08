@@ -3,7 +3,6 @@ use super::*;
 const RELATIONSHIPS_URL: &str = "https://discord.com/api/v9/users/@me/relationships";
 const FRIEND_SUGGESTIONS_URL: &str = "https://discord.com/api/v9/friend-suggestions";
 const INSTALLATION_URL: &str = "https://discord.com/api/v9/apex/experiments?surface=2";
-// `{"location":"user profile modal v2"}`; matches the official profile modal.
 const PROFILE_CONTEXT: &str = "eyJsb2NhdGlvbiI6InVzZXIgcHJvZmlsZSBtb2RhbCB2MiJ9";
 
 #[derive(Serialize)]

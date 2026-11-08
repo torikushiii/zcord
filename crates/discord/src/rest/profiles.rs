@@ -1,6 +1,5 @@
 use super::*;
 
-// Same parameters, in the same order, as the official client's popout and full profile requests.
 pub(super) fn profile_query(
     kind: ProfileKind,
     guild_id: Option<u64>,
@@ -128,7 +127,6 @@ impl Rest {
         response.json().await.map_err(|_| Error::Decode)
     }
 
-    /// `Ok(None)` means the user has no note; Discord answers 404 with code 10013.
     pub async fn fetch_user_affinities(&self) -> Result<Vec<model::UserAffinity>, Error> {
         let response = self
             .send(|| {
@@ -163,7 +161,6 @@ impl Rest {
             .map(str::to_owned))
     }
 
-    /// `Ok(None)` means Discord rejected the code (404, invite error 10006).
     pub async fn fetch_invite(&self, code: &str) -> Result<Option<model::Invite>, Error> {
         if code.len() < 2
             || code.len() > 32
@@ -194,8 +191,6 @@ impl Rest {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        // Discord answers at most 20 ids per request (its own client batches by 20); the rest
-        // would otherwise come back absent and be cached as missing.
         let mut games = Vec::with_capacity(ids.len());
         for chunk in ids.chunks(LOOKUP_BATCH) {
             let query: Vec<_> = chunk
@@ -243,8 +238,6 @@ impl Rest {
         Ok(applications)
     }
 
-    /// Replaces the user's whole widget list; array order is display order. Returns the list as
-    /// saved, with ids for widgets that had none.
     pub async fn put_widgets(
         &self,
         widgets: &[model::ProfileWidget],

@@ -61,19 +61,14 @@ const HERO_HEIGHT: f32 = 160.;
 const TILE_IMAGE: f32 = 48.;
 const CONTAINED_IMAGE: f32 = 96.;
 const PERSONAL_COVER: f32 = 480.;
-/// Share of the hero's width that fades in from transparent at its left edge.
 const HERO_FADE: f32 = 0.6;
-/// Detailed game lists collapse to two entries; cover grids show the full collection.
 const COLLAPSED_GAMES: usize = 2;
-/// Two rows of four, as Discord collapses its cover grids.
 const COLLAPSED_COVERS: usize = 8;
 const COVERS_PER_ROW: usize = 4;
-/// How long a widget's "Show more"/"Show less" takes to grow or shrink.
 pub(super) const WIDGET_TOGGLE: Duration = Duration::from_millis(250);
 const WISHLIST_GAP: f32 = 16.;
 const WISHLIST_BADGE: f32 = 26.;
 const WISHLIST_AVATAR: f32 = 64.;
-/// Discord draws avatar decorations 1.2x the avatar's size.
 const DECORATION_SCALE: f32 = 1.2;
 const SHOP_MENU_ENTER: Duration = Duration::from_millis(150);
 const MARATHON_SECONDS: u64 = 3 * 60 * 60;

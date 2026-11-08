@@ -4,21 +4,13 @@ use super::*;
 pub struct WidgetConfig {
     pub application_id: u64,
     pub display_name: Option<String>,
-    /// `widget_top.components.title.fields.text`
     pub title: Option<WidgetText>,
-    /// `widget_top` subtitles in numeric order (subtitle_2 before subtitle_10).
     pub subtitles: Vec<WidgetSubtitle>,
-    /// `widget_top.components.hero_image.fields.image`: an uploaded asset or an identity-data key.
     pub hero: Option<WidgetImage>,
-    /// `widget_top.components.contained_image.fields.image`.
     pub contained: Option<WidgetImage>,
-    /// `widget_bottom` stats in numeric order (stat_2 before stat_10).
     pub stats: Vec<WidgetStat>,
-    /// `widget_bottom` collection items in numeric order (item_2 before item_10).
     pub collection: Vec<WidgetItem>,
-    /// `surfaces.mini_profile`, the surface Discord renders in the profile popout.
     pub mini: Option<MiniProfile>,
-    /// `surfaces.activity_accessory`, the strip under the current-activity card.
     pub accessory: Option<WidgetAccessory>,
 }
 
@@ -42,8 +34,6 @@ pub struct MiniProfile {
 #[derive(Clone, Debug, PartialEq)]
 pub enum WidgetImage {
     Asset(WidgetAsset),
-    /// A key into identity stats; the UI resolves it to an image URL. `fallback` is the config's
-    /// stand-in art for when that stat is missing.
     Data {
         key: String,
         fallback: Option<Box<WidgetImage>>,
@@ -52,9 +42,7 @@ pub enum WidgetImage {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum WidgetText {
-    /// `value_type: "data"`: a key into identity stats, or "username".
     Data(String),
-    /// `value_type: "custom_string"`.
     Literal(String),
 }
 
@@ -116,7 +104,6 @@ pub fn parse_application_widget_configs(value: Value, application_id: u64) -> Op
                     _ => by_application.values().find_map(Value::as_array)?,
                 }
             }
-            // A few endpoints return the config object directly.
             _ if object.contains_key("surfaces") => {
                 return select_widget_config(application_id, std::slice::from_ref(&value));
             }
@@ -341,7 +328,6 @@ fn widget_image(field: &Value, assets: &HashMap<String, WidgetAsset>) -> Option<
     match field.get("value_type")?.as_str()? {
         "application_asset" => assets.get(value).cloned().map(WidgetImage::Asset),
         "data" if field.get("presentation_type").and_then(Value::as_str) == Some("image") => {
-            // Only data fields carry a fallback; an unresolvable one is simply dropped.
             let fallback = field
                 .get("fallback")
                 .and_then(|fallback| widget_image(fallback, assets))

@@ -34,10 +34,7 @@ const PADDING: f32 = 14.;
 const GAP: f32 = 14.;
 const SEARCH_DELAY: Duration = Duration::from_millis(300);
 const PICKER_EXIT: Duration = Duration::from_millis(100);
-/// A press that closed the picker via mouse-down-outside must not reopen it from
-/// the toggle button handling the same press.
 const REOPEN_GUARD: Duration = Duration::from_millis(150);
-/// `FavoriteGIF.format` in FrecencyUserSettings: 1 = IMAGE, 2 = VIDEO.
 const FORMAT_IMAGE: u32 = 1;
 const FORMAT_VIDEO: u32 = 2;
 
@@ -66,9 +63,7 @@ pub(crate) struct Gifs {
     trending: HashMap<GifProvider, Load<Rc<Vec<Gif>>>>,
     frecency_loading: bool,
     favorite_writes: u64,
-    /// The picker belongs to the thread pane's composer rather than the main one.
     pub(crate) pane: bool,
-    /// The picker is the profile editor's Choose GIF dialog, picking this image.
     style_target: Option<ImageTarget>,
 }
 
@@ -84,7 +79,6 @@ struct GifPicker {
     scroll: ScrollHandle,
     closing: bool,
     swapped: bool,
-    /// Picks which favorite fills the Favorites tile; rolled once per open, like Discord.
     favorite_pick: usize,
     animation: u64,
     _search_events: Subscription,
@@ -107,8 +101,6 @@ enum Preview {
 }
 
 impl Preview {
-    /// Video decoding runs one clip at a time, so provider videos whose animated-image
-    /// rendition sits at a predictable URL show that instead.
     fn of(src: &str, video: bool) -> Self {
         let video = video || is_video_path(src);
         match video.then(|| image_rendition(src)).flatten() {
@@ -231,7 +223,6 @@ impl DiscordApp {
         self.open_gif_picker(position, false, window, cx);
     }
 
-    /// Opens the picker as a centered dialog whose pick becomes the draft avatar or banner.
     pub(crate) fn open_style_gif_picker(
         &mut self,
         target: ImageTarget,
@@ -245,7 +236,6 @@ impl DiscordApp {
         self.open_gif_picker(Point::default(), false, window, cx);
     }
 
-    /// Starts loading the provider's categories, whose previews tile the Choose GIF option.
     pub(crate) fn preload_gif_categories(&mut self, cx: &mut Context<Self>) {
         let provider = settings::get(cx).gif_provider;
         self.gifs
@@ -254,7 +244,6 @@ impl DiscordApp {
         self.load_gif_categories(provider, cx);
     }
 
-    /// `swapped` opens in place of the emoji picker's tab, without the entry animation.
     fn open_gif_picker(
         &mut self,
         position: Point<Pixels>,
@@ -322,7 +311,6 @@ impl DiscordApp {
         self.gifs.closing = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(PICKER_EXIT).await;
             this.update(cx, |app, cx| {
-                // Only remove the exact picker this close started with; a newer open replaced it.
                 let still_closing = app
                     .gifs
                     .picker
@@ -523,7 +511,6 @@ impl DiscordApp {
 
     fn toggle_gif_provider_menu(&mut self, cx: &mut Context<Self>) {
         if let Some(picker) = &mut self.gifs.picker {
-            // The menu's outside-press handler closes it before this click lands.
             let just_closed = picker
                 .provider_menu_closed_at
                 .is_some_and(|at| at.elapsed() < REOPEN_GUARD);

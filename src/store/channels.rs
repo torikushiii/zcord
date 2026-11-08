@@ -49,7 +49,6 @@ impl Store {
             return false;
         }
         if let Some(SourceChannel::Private(_)) = self.source_channels.get(&channel_id) {
-            // Discord refuses replies until the request is accepted.
             return !self
                 .private_channel(channel_id)
                 .is_some_and(|dm| dm.message_request);

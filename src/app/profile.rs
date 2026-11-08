@@ -54,7 +54,6 @@ use palette::{ProfilePalette, ProfileTheme};
 use popout::popout;
 
 const POPOUT_WIDTH: f32 = 300.;
-/// Gap between the account panel and the popout above it, in CSS pixels.
 const ACCOUNT_GAP: f32 = 8.;
 const MODAL_WIDTH: f32 = 962.;
 const MODAL_HEIGHT: f32 = 800.;
@@ -70,7 +69,6 @@ const BACKDROP_OPACITY: f32 = 0.3;
 const BACKDROP_FADE: f32 = 280.;
 const EFFECT_TICK: Duration = Duration::from_millis(100);
 const ENTER: Duration = Duration::from_millis(180);
-/// Longest the popout shows its skeleton waiting for data before showing what it has.
 const POPOUT_WAIT: Duration = Duration::from_millis(1500);
 const EFFECT_HEIGHT_RATIO: f32 = 880. / 450.;
 const EFFECT_MAX_PX: u32 = 1200;
@@ -78,9 +76,7 @@ const THEME_OVERLAY: f32 = 0.6;
 const MAX_VISIBLE_BADGES: usize = 6;
 const BADGE_ART: f32 = 96.;
 const MUTUAL_ICON: f32 = 16.;
-/// Each stacked mutual icon starts 3px before the previous one ends.
 const MUTUAL_STEP: f32 = MUTUAL_ICON - 3.;
-/// Example questions Discord shows in your own empty status bubble.
 const STATUS_PROMPTS: [&str; 6] = [
     "Best thing you ate this week?",
     "What's on your mind?",
@@ -92,8 +88,6 @@ const STATUS_PROMPTS: [&str; 6] = [
 const THEME_BORDER: f32 = 2.;
 const BIO_LINES: usize = 3;
 
-/// Live window-space bounds of the bottom account strip, recorded by the channel list on
-/// prepaint and shared with the popout opened from it.
 pub(crate) type AccountPanelBounds = Rc<Cell<Option<Bounds<Pixels>>>>;
 
 struct ActivityPrompt {
@@ -118,10 +112,8 @@ const ACTIVITY_PROMPTS: [ActivityPrompt; 3] = [
 
 pub(crate) struct ProfileCard {
     user_id: u64,
-    /// The DM side panel's card, stored in `dm_profile` rather than `profile`.
     panel: bool,
     guild_id: Option<u64>,
-    /// Unlike `guild_id`, kept while viewing the main profile so the menu can switch back.
     pub(crate) source_guild_id: Option<u64>,
     pub(crate) more_menu_open: bool,
     hovered_action: Option<&'static str>,
@@ -143,10 +135,7 @@ pub(crate) struct ProfileCard {
     pub(crate) note: Option<String>,
     pub(crate) badge_details: Option<Arc<model::UserBadges>>,
     hovered_badge: Option<usize>,
-    /// `(widget id, game id)` of the Board cover under the pointer, for its name tooltip.
     pub(crate) hovered_cover: Option<(u64, u64)>,
-    /// Whether the pointer is over each rich-presence image (indexed by `ArtSlot`), for their
-    /// `large_text`/`small_text` tooltips. A small image sits on its large one, so both can be.
     pub(crate) hovered_art: [bool; 4],
     stack_hover: [StackHover; 2],
     pub(crate) widget_configs: HashMap<u64, Arc<model::WidgetConfig>>,
@@ -163,20 +152,13 @@ pub(crate) struct ProfileCard {
     avatar_theme_source: Option<ImageSpec>,
     effect: Option<Arc<model::CollectibleProduct>>,
     frame: Option<Arc<model::CollectibleProduct>>,
-    /// Effect and frame SKUs still being fetched.
     cosmetics_pending: HashSet<u64>,
     opened: Instant,
-    /// Set when every effect layer has decoded; all layers share this clock.
     effect_started: RefCell<Option<Instant>>,
     tab: Tab,
-    /// Index into `STATUS_PROMPTS`, rolled once per popout.
     status_prompt: usize,
-    /// Chosen once per opening, not during redraws or tab changes.
     activity_prompt: usize,
-    /// Game widgets opened past their first entries with "Show more".
     expanded_widgets: HashSet<u64>,
-    /// The last "Show more"/"Show less" per widget: a generation that restarts its animation, and
-    /// when it happened.
     pub(crate) widget_toggles: HashMap<u64, (u64, Instant)>,
     commands: Vec<model::ApplicationCommand>,
     commands_requested: bool,
@@ -187,9 +169,7 @@ pub(crate) struct ProfileCard {
 
 #[derive(Clone)]
 enum ProfileOrigin {
-    /// A member avatar or name; keeps its guild context and click-derived position.
     Member,
-    /// The bottom account strip; uses the global profile and follows the strip's bounds.
     Account(AccountPanelBounds),
 }
 
@@ -199,7 +179,6 @@ pub(crate) enum Stack {
     Activity,
 }
 
-/// `generation` counts pointer enters and leaves, restarting the lift animation on each.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct StackHover {
     hovered: bool,
@@ -244,12 +223,10 @@ impl ProfileCard {
         self.source_guild_id.is_some()
     }
 
-    /// Account popouts show account actions instead of server nickname and roles.
     pub(crate) fn is_account(&self) -> bool {
         matches!(&self.origin, ProfileOrigin::Account(_))
     }
 
-    /// `overflow` is the frame overflow in CSS pixels, from `frame::frame_overflow`.
     pub(crate) fn popout_position(&self, window: &Window, overflow: &Edges<f32>) -> Point<Pixels> {
         let ProfileOrigin::Account(panel) = &self.origin else {
             return self.position;
@@ -260,8 +237,6 @@ impl ProfileCard {
         account_popout_position(panel, overflow, window.rem_size())
     }
 
-    /// Reserves the frame's top overflow, the 12px viewport margin and the native client inset.
-    /// `None` for member popouts or before the account strip has painted.
     pub(crate) fn account_max_height(
         &self,
         window: &Window,
@@ -287,8 +262,6 @@ impl ProfileCard {
         }
     }
 
-    /// Everything the popout draws has arrived (or failed), so it can fill in at once
-    /// instead of growing as each request lands. `POPOUT_WAIT` caps the wait.
     fn ready(&self) -> bool {
         let settled = !self.modal_request_pending
             && !self.identities_pending
@@ -466,7 +439,6 @@ impl ProfileCard {
         }
     }
 
-    /// Partner applications and their games can have different IDs; follow both directions.
     fn load_linked_metadata(&mut self, session: Session, cx: &mut Context<DiscordApp>) {
         let game_ids = self
             .applications
@@ -532,8 +504,6 @@ impl Layout {
             status_left: 105.,
             status_right: 12.,
             status_overlap: 7.,
-            // Banner + lower half of the avatar + ring + 8px breathing room; the
-            // body's own 4px top padding brings the name 12px below the ring.
             header_min: 105. + 40. + 6. + 8. - inset,
             corner: if themed { 6. } else { 7. },
         }
@@ -650,7 +620,6 @@ fn effect_playback(
     let duration = u64::from(layer.duration).max(1);
     let since = elapsed.checked_sub(start)?;
     if layer.looped && layer.loop_delay == 0 {
-        // A continuous layer stays mounted: its APNG decides whether to loop or hold.
         return Some((0, started + Duration::from_millis(start)));
     }
     let (replay, cycle_start) = if layer.looped {
@@ -683,7 +652,6 @@ enum EffectLoad<T> {
     Failed,
 }
 
-/// Waits only for pending layers; failed layers are skipped once nothing is pending.
 fn settle_effect_layers<T>(layers: impl IntoIterator<Item = EffectLoad<T>>) -> Option<Vec<T>> {
     let mut pending = false;
     let mut ready = Vec::new();
@@ -709,7 +677,6 @@ fn effect_clip_geometry(
         .min(bounds.size.height / 2.);
     let mut rounded = bounds;
     if top_only {
-        // Keep the bottom arcs below the rectangular clip for the full-profile card.
         rounded.size.height += radius;
     }
     (rounded, radius)
@@ -748,7 +715,6 @@ fn effect_image(
             }
             let (rounded, radius) =
                 effect_clip_geometry(visible, corner, top_only, window.rem_size());
-            // Overflow clipping alone is rectangular; round only the effect's paint scope.
             window.with_content_mask(Some(ContentMask { bounds: visible }), |window| {
                 window.with_rounded_clip(rounded, radius, |window| image.paint(window, cx));
             });
@@ -775,8 +741,6 @@ fn effect_layers(
     effect_item_layers(item, &card.effect_started, width, corner, top_only, cx)
 }
 
-/// `item`'s layers over a card `width` wide, timed from `clock`, which starts once all of
-/// them have decoded.
 fn effect_item_layers(
     item: &model::CollectibleItem,
     clock: &RefCell<Option<Instant>>,
@@ -789,8 +753,6 @@ fn effect_item_layers(
     let size = theme::image_px(height).min(EFFECT_MAX_PX);
     let now = cx.background_executor().now();
     let started = *clock.borrow();
-    // Once the clock runs, a layer that has played its only time isn't asked for again, so
-    // its frames can go; an intro is often the largest layer.
     let states = item
         .effects
         .iter()
@@ -808,7 +770,6 @@ fn effect_item_layers(
                 animated::Load::Failed => EffectLoad::Failed,
             }
         });
-    // Showing a subset while another layer decodes makes intro layers pop in out of step.
     let Some(images) = settle_effect_layers(states) else {
         return Vec::new();
     };
@@ -843,18 +804,12 @@ fn effect_item_layers(
         .collect()
 }
 
-/// The banner behind the full profile and the name style preview, as Discord draws it: at
-/// half saturation, fitted to `width` and repeated down, faded out over its first 280px and
-/// blurred from half to fully over the same span. `None` until the banner has loaded.
 fn banner_backdrop(spec: &ImageSpec, width: f32, corner: f32, cx: &App) -> Option<AnyElement> {
     let pixels = theme::image_px(width);
     let sigma = BACKDROP_BLUR * pixels as f32 / width;
     let layer =
         |sigma: f32| images::blurred_at_width(spec, pixels, pixels, sigma, BACKDROP_SATURATION, cx);
     let (sharp, blurred) = (layer(0.)?, layer(sigma)?);
-    // Discord's two masks multiply to (1 - t)² for the sharp copy, which is exactly gpui's
-    // edge fade over the whole span, and to 1 - t² for the blurred one, which a shorter fade
-    // under a flat top follows closely.
     Some(
         div()
             .absolute()
@@ -878,11 +833,8 @@ fn banner_backdrop(spec: &ImageSpec, width: f32, corner: f32, cx: &App) -> Optio
     )
 }
 
-/// The band over which the blurred copy fades out, ending where the sharp one does.
 const BLURRED_BACKDROP_BAND: f32 = 200.;
 
-/// `image` repeated down the backdrop at full width, fading out over the `band` above its
-/// bottom edge.
 fn faded_banner(image: Arc<RenderImage>, band: f32, corner: f32, opacity: f32) -> impl IntoElement {
     div().absolute().inset_0().opacity(opacity).child(
         canvas(

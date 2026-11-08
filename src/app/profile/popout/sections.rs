@@ -29,8 +29,6 @@ pub(crate) fn bio(
     )
 }
 
-/// Profile text Discord renders as markdown (the bio, some widget fields), in the card's colours.
-/// `id` keys the parse cache, so give each field its own.
 pub(crate) fn markdown(
     app: &DiscordApp,
     card: &ProfileCard,
@@ -126,7 +124,6 @@ pub(crate) fn add_app_button(
         .as_ref()
         .filter(|application| application.installable())?;
     let palette = card.palette();
-    // Dimmed through an inner layer so the tooltip, a child of the button, stays opaque.
     let face = div()
         .flex()
         .size_full()

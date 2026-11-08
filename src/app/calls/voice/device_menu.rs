@@ -1,6 +1,3 @@
-//! The mic's and headphones' options menus beside them in the account panel, and the device
-//! rows the Voice & Video settings share with them.
-
 use std::time::Duration;
 
 use gpui::{prelude::*, *};
@@ -47,7 +44,6 @@ pub(crate) enum Flyout {
     OutputDevice,
 }
 
-/// The volume slider of the open device menu, made fresh each time one opens.
 pub(super) struct VolumeSlider {
     state: Entity<SliderState>,
     _changes: Subscription,
@@ -111,7 +107,6 @@ impl Render for LevelBars {
     }
 }
 
-/// One entry of a device list; `name: None` follows the system default.
 pub(crate) struct DeviceChoice {
     pub(crate) name: Option<String>,
     pub(crate) label: String,
@@ -131,7 +126,6 @@ fn icon(kind: Option<AudioDeviceKind>, direction: DeviceKind) -> &'static str {
     }
 }
 
-/// The system default first, showing what it currently is, then every device.
 pub(crate) fn choices(devices: Option<&AudioDevices>, kind: DeviceKind) -> Vec<DeviceChoice> {
     let (list, default) = match (devices, kind) {
         (Some(devices), DeviceKind::Input) => (&devices.inputs[..], devices.default_input.as_ref()),
@@ -155,7 +149,6 @@ pub(crate) fn choices(devices: Option<&AudioDevices>, kind: DeviceKind) -> Vec<D
     .collect()
 }
 
-/// The saved device as the lists show it; a saved device that's gone keeps its saved name.
 pub(crate) fn current(
     devices: Option<&AudioDevices>,
     kind: DeviceKind,
@@ -194,7 +187,6 @@ fn profile_label(profile: InputProfile) -> &'static str {
 }
 
 impl DiscordApp {
-    /// Lists the audio devices off the UI thread, for the device menus and settings.
     pub(crate) fn refresh_audio_devices(&mut self, cx: &mut Context<Self>) {
         self.voice.devices_loading = Some(cx.spawn(async move |this, cx| {
             let devices = cx
@@ -407,36 +399,27 @@ fn flyout_row(
         .child(theme::icon("chevron-right", 20., theme::muted()))
         .when(open, |this| {
             this.child(
-                div()
-                    .absolute()
-                    .top(rpx(-9.))
-                    .left(relative(1.))
-                    // The menus sit low in the window, so a long list slides up to fit.
-                    .child(
-                        anchored().snap_to_window_with_margin(px(8.)).child(
-                            // From the row's edge: past the menu's 8px padding and border, then
-                            // the gap. A margin, since the anchored list ignores the wrapper's
-                            // padding. The hover goes on the panel itself: it occludes, so a
-                            // wrapper would never see it.
-                            content()
-                                .ml(rpx(FLYOUT_OFFSET))
-                                .on_hover(move |hovered, _, cx| {
-                                    inside
-                                        .update(cx, |app, _| {
-                                            if let Some(menu) = app.voice.menu.as_mut() {
-                                                menu.pointer_in_flyout = *hovered;
-                                            }
-                                        })
-                                        .ok();
-                                }),
-                        ),
+                div().absolute().top(rpx(-9.)).left(relative(1.)).child(
+                    anchored().snap_to_window_with_margin(px(8.)).child(
+                        // A margin, since the anchored list ignores the wrapper's padding. The hover goes on the
+                        // panel itself: it occludes, so a wrapper would never see it.
+                        content()
+                            .ml(rpx(FLYOUT_OFFSET))
+                            .on_hover(move |hovered, _, cx| {
+                                inside
+                                    .update(cx, |app, _| {
+                                        if let Some(menu) = app.voice.menu.as_mut() {
+                                            menu.pointer_in_flyout = *hovered;
+                                        }
+                                    })
+                                    .ok();
+                            }),
                     ),
+                ),
             )
         })
 }
 
-/// Icon, name and the endpoint under it, as Discord lists devices. Menus show the name
-/// `bold`; the settings dropdown shows it plain.
 pub(crate) fn device_line(choice: &DeviceChoice, bold: bool) -> Div {
     div()
         .flex()

@@ -17,7 +17,6 @@ pub struct RegisteredGame {
     #[serde(default)]
     pub application_id: Option<u64>,
     pub name: String,
-    /// The executable's full path with forward slashes.
     pub exe: String,
     #[serde(default)]
     pub last_played_ms: u64,
@@ -95,7 +94,6 @@ fn with<T>(change: impl FnOnce(&mut Registry) -> T) -> T {
     change(&mut registry)
 }
 
-/// On failure the list stays dirty, so the next save or `flush` retries.
 fn save(registry: &mut Registry) {
     registry.saved_at = Some(Instant::now());
     let Some(path) = path() else {

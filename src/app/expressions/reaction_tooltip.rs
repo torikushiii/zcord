@@ -1,30 +1,19 @@
-//! The tooltip over a reaction naming who reacted, as Discord shows it: the emoji large beside
-//! ":name: reacted by A, B, C, and N others". The names come from
-//! `GET /channels/{id}/messages/{id}/reactions/{emoji}` when the reaction is first hovered.
-
 use super::super::*;
 use std::{collections::VecDeque, ops::Range, time::Duration};
 
 use crate::{discord::model, store::Reaction};
 
-/// Discord names at most three reactors and counts the rest.
 const NAMED_REACTORS: usize = 3;
 pub(crate) const FETCHED_REACTORS: u32 = 4;
-/// How long the tooltip outlasts the pointer, so it can cross the gap onto the tooltip.
 const LEAVE_GRACE: Duration = Duration::from_millis(150);
-/// Queued reactor fetches run one at a time this far apart, to stay under rate limits.
 const QUEUE_SPACING: Duration = Duration::from_millis(400);
 
 type ReactionKey = (u64, String);
 
 struct Reactors {
-    /// The reaction's count when these were fetched.
     count: u32,
-    /// Matches the fetch that owns this entry, so an older reply can't land in it.
     request: u64,
-    /// `None` while loading.
     users: Option<Vec<model::User>>,
-    /// Shown until a refetch replaces them.
     stale: bool,
     failed: bool,
 }
@@ -33,7 +22,6 @@ struct Reactors {
 pub(crate) struct ReactionTips {
     hovered: Option<ReactionKey>,
     over_tooltip: bool,
-    /// Bumped on every hover change, so a hide timer from an earlier leave does nothing.
     hover_changes: u64,
     requests: u64,
     users: HashMap<ReactionKey, Reactors>,
@@ -41,7 +29,6 @@ pub(crate) struct ReactionTips {
     pumping: bool,
 }
 
-/// Normal reactors first, then burst ones, at most `limit` and each person once.
 fn merge_reactors(
     normal: Vec<model::User>,
     burst: Vec<model::User>,
@@ -70,8 +57,6 @@ impl DiscordApp {
         let key = (message_id, reaction_emoji_text(&reaction.emoji));
         self.reaction_tips.hover_changes += 1;
         if hovered {
-            // The pointer is on a pill, so not on any tooltip, whatever a tooltip that unmounted
-            // without a leave last reported.
             self.reaction_tips.over_tooltip = false;
             self.reaction_tips.hovered = Some(key);
             self.load_reaction_users(message_id, &reaction.emoji, reaction.count, cx);
@@ -117,13 +102,10 @@ impl DiscordApp {
         .detach();
     }
 
-    /// A message's reactions changed on Discord: forgets who reacted to each of them.
     pub(crate) fn message_reactions_changed(&mut self, message_id: u64, cx: &mut Context<Self>) {
         self.forget_reactors(message_id, None, cx);
     }
 
-    /// Your own reaction landed on Discord: forgets who reacted with it, so the list includes or
-    /// drops you.
     pub(crate) fn reaction_changed(
         &mut self,
         message_id: u64,
@@ -133,9 +115,6 @@ impl DiscordApp {
         self.forget_reactors(message_id, Some(&reaction_emoji_text(emoji)), cx);
     }
 
-    /// Drops the users known for a message's reactions, all or only `emoji`'s. The hovered one
-    /// keeps showing what it had until the refetch lands, since unmounting the tooltip under the
-    /// pointer would lose its hover state.
     fn forget_reactors(&mut self, message_id: u64, emoji: Option<&str>, cx: &mut Context<Self>) {
         let matches = |(message, text): &ReactionKey| {
             *message == message_id && emoji.is_none_or(|emoji| emoji == text)
@@ -168,7 +147,6 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// The message is gone: forgets its reactions' users, and its tooltip if one is up.
     pub(crate) fn message_reactions_removed(&mut self, message_id: u64) {
         self.reaction_tips
             .users
@@ -191,7 +169,6 @@ impl DiscordApp {
         tips.hover_changes += 1;
     }
 
-    /// Fetches who reacted unless the list was already fetched at this `count`.
     fn load_reaction_users(
         &mut self,
         message_id: u64,
@@ -242,7 +219,6 @@ impl DiscordApp {
             let normal = session
                 .reaction_users(guild_id, channel_id, message_id, &text, page(false))
                 .await?;
-            // A reaction can be all or partly super reactions, which Discord lists apart.
             let burst = if normal.len() < FETCHED_REACTORS as usize {
                 session
                     .reaction_users(guild_id, channel_id, message_id, &text, page(true))
@@ -272,9 +248,6 @@ impl DiscordApp {
                     Ok(Err(error)) => log::warn!("Loading reactors failed: {error}"),
                     Err(error) => log::warn!("Reactor task failed: {error}"),
                 }
-                // A failed fetch keeps what the tooltip showed. Without anything to show, the
-                // tooltip goes, through the dismissal gpui wouldn't report. The entry stays,
-                // marked failed, so Who Reacted doesn't refetch it on every paint.
                 reactors.failed = true;
                 if reactors.users.is_none() && app.reaction_tips.hovered.as_ref() == Some(&key) {
                     app.dismiss_reaction_tooltip();
@@ -402,7 +375,6 @@ impl DiscordApp {
             .gap(rpx(12.))
             .p(rpx(16.))
             .rounded(rpx(4.))
-            // It floats over other messages, whose links and reactions mustn't take its clicks.
             .occlude()
             .on_hover(move |over, _, cx| {
                 hover
@@ -438,7 +410,6 @@ impl DiscordApp {
     }
 }
 
-/// `:name:` for a custom emoji or a Unicode one with a shortcode, else the emoji itself.
 fn emoji_label(emoji: &ReactionEmoji) -> String {
     match emoji.id {
         Some(_) => format!(":{}:", emoji.name),
@@ -447,7 +418,6 @@ fn emoji_label(emoji: &ReactionEmoji) -> String {
     }
 }
 
-/// The tooltip's text, and where its "N others" sits; Discord links that to the dialog.
 fn reacted_by(emoji: &str, names: &[String], count: u32) -> (String, Option<Range<usize>>) {
     let others = match (count as usize).saturating_sub(names.len()) {
         0 => None,

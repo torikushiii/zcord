@@ -190,9 +190,6 @@ fn snap(pixels: f32) -> f32 {
     (pixels / GRID_PX).round() * GRID_PX
 }
 
-/// Chrome's `kInverseDelta` in pixels: 12 frames (200ms) up to 120px, ramping to
-/// 6 frames (100ms) at 480px. A notch here is already Chrome's 100px wheel delta,
-/// so the thresholds apply without a line conversion.
 fn duration(delta: f32) -> f64 {
     let px = f64::from(delta).abs();
     let frames = 12.0 - (px - 120.0) * (12.0 - 6.0) / (480.0 - 120.0);
@@ -203,14 +200,11 @@ struct Segment {
     delta: f32,
     start: Instant,
     duration: f64,
-    /// The easing's control points; a retarget raises `y1` to carry speed.
     points: [f64; 4],
     ease: Bezier,
 }
 
 impl Segment {
-    /// `slope`, when given, replaces `y1` with `x1 * slope`, so the leg starts
-    /// at `slope` times its average speed.
     fn new(
         delta: f32,
         start: Instant,
@@ -253,8 +247,6 @@ impl Segment {
         self.ease.slope(self.time(now)) * f64::from(self.delta) / self.duration
     }
 
-    /// Chrome's `UpdateTarget`: the new leg starts at this one's speed, and is
-    /// cut short of `duration` when that speed would carry it there sooner.
     fn retarget(&self, delta: f32, now: Instant, duration: f64) -> Self {
         let distance = f64::from(delta);
         if distance.abs() < EPSILON_PX {
@@ -273,8 +265,6 @@ impl Segment {
     }
 }
 
-/// Chromium's `gfx::CubicBezier`: the unit cubic from (0, 0) to (1, 1),
-/// read as y of x.
 struct Bezier {
     ax: f64,
     bx: f64,
@@ -316,8 +306,6 @@ impl Bezier {
         (3.0 * self.ay * t + 2.0 * self.by) * t + self.cy
     }
 
-    /// The parameter where the curve reaches `x`: Newton's method, then
-    /// bisection (`SolveCurveX`).
     fn solve(&self, x: f64) -> f64 {
         let mut t = x;
         for _ in 0..4 {
@@ -429,8 +417,6 @@ mod tests {
 
     #[test]
     fn a_retarget_matches_chromiums_own_numbers() {
-        // cc's `EaseInOutUpdateTarget` test, on the curve it uses for desktop
-        // programmatic scroll and its constant 150ms legs.
         let points = [0.4, 0.0, 0.0, 1.0];
         let start = Instant::now();
         let at = |ms: u64| start + Duration::from_millis(ms);

@@ -123,7 +123,6 @@ impl Player {
         let (muted, volume) = {
             let mut state = self.state.lock().unwrap();
             state.muted = !state.muted;
-            // Unmuting at zero volume would stay silent, so restore full volume.
             if !state.muted && state.volume <= 0. {
                 state.volume = 1.;
             }
@@ -148,7 +147,6 @@ impl Player {
         }
     }
 
-    /// Applies a saved sound level; commands queue until the engine has loaded.
     pub(crate) fn restore_audio(&self, volume: f64, muted: bool) {
         let volume = volume.clamp(0., 1.);
         {
@@ -181,8 +179,6 @@ impl Player {
                     }
                     PlayerEvent::State => None,
                 };
-                // Videos play inline in messages or in the lightbox overlay; redraw only those
-                // views rather than refreshing every cached panel at the video's frame rate.
                 this.update(cx, |app, cx| {
                     app.views.messages.update(cx, |_, cx| cx.notify());
                     app.views.overlays.update(cx, |_, cx| cx.notify());
@@ -288,7 +284,6 @@ pub(crate) fn video_box(app: &DiscordApp, video: Video<'_>, cx: &App) -> AnyElem
     let has_frame = frame.is_some();
     let radius = video.radius;
     let fullscreen = video.fullscreen;
-    // The full-window player owns the controls while it is open.
     let covered = !fullscreen
         && app
             .video
@@ -389,7 +384,6 @@ pub(crate) fn video_box(app: &DiscordApp, video: Video<'_>, cx: &App) -> AnyElem
         .child(visual);
 
     if !active {
-        // The play button would sit on top of the spinner, so it waits for the poster.
         body = body.child(if poster_loading {
             theme::media_loading().into_any_element()
         } else {
@@ -399,8 +393,6 @@ pub(crate) fn video_box(app: &DiscordApp, video: Video<'_>, cx: &App) -> AnyElem
         if let Some(error) = &state.error {
             body = body.child(error_overlay(error, video.url));
         } else {
-            // Until the first frame arrives the player is starting up, even before it reports
-            // buffering.
             if state.buffering || (!has_frame && !state.paused && !state.ended) {
                 body = body.child(theme::media_loading());
             }
@@ -646,8 +638,6 @@ fn volume_control(app: &DiscordApp, key: u64, state: &PlayerView) -> impl IntoEl
                 .ok();
         });
 
-    // The popup's bottom padding bridges the gap to the button so the pointer can
-    // travel between them without either losing hover.
     let popup = div()
         .id(("video-volume", key))
         .absolute()

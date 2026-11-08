@@ -34,7 +34,6 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
         .as_ref()
         .filter(|_| card.user_id == app.store.current_user_id);
     let panel_open = styles.is_some_and(|editor| editor.expanded);
-    // The styles panel takes its width from the dialog rather than pushing it off screen.
     let panel_width = if panel_open {
         styles_panel::PANEL_WIDTH
     } else {
@@ -164,7 +163,6 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
         .occlude()
         .without_text_selection()
         .on_click(|_, _, cx| cx.stop_propagation())
-        // Clip the dialog surface, not the frame layers that extend beyond it.
         .child(
             div()
                 .absolute()
@@ -195,7 +193,6 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
                 .child(framed)
                 .child(side_panel(app, card, cx)),
         )
-        // After the card, so its frame art can't cover the tab.
         .children(
             styles
                 .filter(|_| !panel_open)
@@ -277,7 +274,6 @@ fn side_panel(app: &DiscordApp, card: &ProfileCard, cx: &App) -> AnyElement {
         .filter(|count| *count > 0)
         .map(|count| count as usize)
         .or_else(|| (!mutual_friends.is_empty()).then_some(mutual_friends.len()));
-    // Your own Board stays open while styling, so widgets can be added back to an empty one.
     let editing = app.profile_styles.as_ref().filter(|_| own_profile);
     let has_board = board::has_board(card) || editing.is_some();
     let has_wishlist = WISHLIST_TAB && board::has_wishlist(card);
