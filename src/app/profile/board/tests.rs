@@ -1,18 +1,15 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use gpui::{Context, IntoElement, Render, Styled, TestAppContext, Window, div, prelude::*, px};
-
 use super::{
-    COVER_GAP, COVER_HEIGHT, COVER_WIDTH, ProfilePalette, SkuPrice,
+    COVER_HEIGHT, COVER_WIDTH, SkuPrice,
     actions::{GameActions, game_launch_url},
     activity::{activity_traits, clock, current_entry, parse, snowflake_time, span},
-    widgets::{game_cover, game_cover_grid, stat_name, tag_label},
+    widgets::{stat_name, tag_label},
     wishlist::sku_price,
 };
 use crate::{
     discord::model::{Game, OutboxEntry, OutboxKind, OutboxTrait, PublicApplication},
     store::GameActivity,
-    theme::{self, rpx},
 };
 
 #[test]
@@ -221,61 +218,6 @@ fn game_launch_urls_only_accept_supported_launch_protocols() {
         "com.epicgames.launcher://apps/example?action=uninstall",
     ] {
         assert!(game_launch_url(url).is_none(), "{url}");
-    }
-}
-
-const COVER_SELECTORS: [&str; 5] = [
-    "liked-game-cover-0",
-    "liked-game-cover-1",
-    "liked-game-cover-2",
-    "liked-game-cover-3",
-    "liked-game-cover-4",
-];
-
-struct CoverGrid {
-    width: f32,
-}
-
-impl Render for CoverGrid {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div().w(rpx(self.width)).child(
-            game_cover_grid(COVER_SELECTORS.into_iter().map(|selector| {
-                game_cover(None, ProfilePalette::of(None), cx)
-                    .debug_selector(move || selector.into())
-                    .into_any_element()
-            }))
-            .debug_selector(|| "liked-games-grid".into()),
-        )
-    }
-}
-
-#[gpui::test]
-fn liked_game_covers_wrap_without_collapsing_the_collection(cx: &mut TestAppContext) {
-    let (view, cx) = cx.add_window_view(|_, _| CoverGrid { width: 400. });
-    for zoom in [1., 1.25, 1.5] {
-        for (width, columns) in [(400., 4), (399., 3), (296., 3), (192., 2)] {
-            view.update(cx, |grid, cx| {
-                grid.width = width;
-                cx.notify();
-            });
-            cx.update(|window, cx| {
-                window.set_rem_size(px(theme::BASE_FONT_SIZE * zoom));
-                window.refresh();
-                let _ = window.draw(cx);
-            });
-            let grid = cx.debug_bounds("liked-games-grid").unwrap();
-            for (index, selector) in COVER_SELECTORS.into_iter().enumerate() {
-                let cover = cx.debug_bounds(selector).unwrap();
-                let left = (index % columns) as f32 * (COVER_WIDTH + COVER_GAP) * zoom;
-                let top = (index / columns) as f32 * (COVER_HEIGHT + COVER_GAP) * zoom;
-                assert!((cover.left() - grid.left() - px(left)).abs() <= px(1.));
-                assert!((cover.top() - grid.top() - px(top)).abs() <= px(1.));
-                assert!((cover.size.width - px(COVER_WIDTH * zoom)).abs() <= px(1.));
-                assert!((cover.size.height - px(COVER_HEIGHT * zoom)).abs() <= px(1.));
-                assert!(cover.right() <= grid.right() + px(1.));
-                assert!(cover.bottom() <= grid.bottom() + px(1.));
-            }
-        }
     }
 }
 

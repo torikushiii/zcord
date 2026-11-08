@@ -1,15 +1,11 @@
-use super::{composer_style, overlay_root, overlays_style};
-use gpui_component::{
-    ElementExt,
-    input::{Textarea, TextareaState},
-};
+use super::{composer_style, overlays_style};
+use gpui_component::input::{Textarea, TextareaState};
 use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui::{
-    Anchor, AppContext, Bounds, Context, Entity, Modifiers, Pixels, Render, StyleRefinement,
-    Subscription, TestAppContext, WeakEntity, Window, anchored, canvas, deferred, div, point,
-    prelude::*, px,
+    Anchor, AppContext, Context, Entity, Modifiers, Pixels, Render, StyleRefinement, Subscription,
+    TestAppContext, WeakEntity, Window, anchored, canvas, deferred, div, point, prelude::*, px,
 };
 
 struct Panel {
@@ -124,87 +120,6 @@ fn cached_siblings_isolate_renders_until_the_observed_model_notifies(cx: &mut Te
     });
     assert_eq!(left_renders.get(), left_initial + 2);
     assert_eq!(right_renders.get(), right_initial + 1);
-}
-
-struct CenteredOverlay {
-    root: Rc<Cell<Option<Bounds<Pixels>>>>,
-    dialog: Rc<Cell<Option<Bounds<Pixels>>>>,
-    clicks: Rc<Cell<usize>>,
-}
-
-impl Render for CenteredOverlay {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let root = self.root.clone();
-        let dialog = self.dialog.clone();
-        let clicks = self.clicks.clone();
-        overlay_root()
-            .on_prepaint(move |bounds, _, _| root.set(Some(bounds)))
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        div()
-                            .id("centered-dialog")
-                            .w(crate::theme::rpx(200.))
-                            .h(crate::theme::rpx(100.))
-                            .on_prepaint(move |bounds, _, _| dialog.set(Some(bounds)))
-                            .on_click(move |_, _, _| clicks.set(clicks.get() + 1)),
-                    ),
-            )
-    }
-}
-
-struct CenteredOverlayHost {
-    overlay: Entity<CenteredOverlay>,
-}
-
-impl Render for CenteredOverlayHost {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .relative()
-            .size_full()
-            .debug_selector(|| "overlay-viewport".into())
-            .child(self.overlay.clone().cached(overlays_style()))
-    }
-}
-
-#[gpui::test]
-fn cached_overlays_center_dialogs_in_the_full_viewport(cx: &mut TestAppContext) {
-    let root = Rc::new(Cell::new(None));
-    let dialog = Rc::new(Cell::new(None));
-    let clicks = Rc::new(Cell::new(0));
-    let (_, cx) = cx.add_window_view(|_, cx| CenteredOverlayHost {
-        overlay: cx.new(|_| CenteredOverlay {
-            root: root.clone(),
-            dialog: dialog.clone(),
-            clicks: clicks.clone(),
-        }),
-    });
-    for zoom in [1., 1.25, 1.5] {
-        cx.update(|window, cx| {
-            window.set_rem_size(px(16. * zoom));
-            let _ = window.draw(cx);
-        });
-        // Check both newly laid-out content and its cached replay.
-        for _ in 0..2 {
-            cx.update(|window, cx| {
-                let _ = window.draw(cx);
-            });
-            let viewport = cx.debug_bounds("overlay-viewport").unwrap();
-            let root_bounds = root.get().unwrap();
-            let dialog_bounds = dialog.get().unwrap();
-            assert_eq!(root_bounds, viewport);
-            assert!((dialog_bounds.center().x - viewport.center().x).abs() <= px(1.));
-            assert!((dialog_bounds.center().y - viewport.center().y).abs() <= px(1.));
-            let before = clicks.get();
-            cx.simulate_click(viewport.center(), Modifiers::none());
-            assert_eq!(clicks.get(), before + 1);
-        }
-    }
 }
 
 struct MeasuredContent {

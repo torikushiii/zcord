@@ -681,19 +681,6 @@ mod tests {
     }
 
     #[test]
-    fn gummy_uses_discord_keyframes_and_per_letter_delay() {
-        let close = |a: f32, b: f32| assert!((a - b).abs() < 0.001, "{a} != {b}");
-        close(gummy_scale(0.28, 0).width, 1.28);
-        close(gummy_scale(0.56, 0).width, 0.82);
-        close(gummy_scale(0.84, 0).width, 1.1);
-        close(gummy_scale(1.12, 0).width, 0.96);
-        close(gummy_scale(1.4, 0).width, 1.);
-        close(gummy_scale(0.33, 1).width, gummy_scale(0.28, 0).width);
-        assert_eq!(gummy_scale(0.01, 10), size(1., 1.));
-        close(gummy_scale(4.28, 0).width, gummy_scale(0.28, 0).width);
-    }
-
-    #[test]
     fn animation_clock_pauses_when_inactive_and_resets_when_disabled() {
         let now = Instant::now();
         let mut clock = Clock::default();

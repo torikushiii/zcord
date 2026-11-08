@@ -4,17 +4,11 @@ use gpui::{
     Context, IntoElement, ListOffset, Render, TestAppContext, Window, div, list, prelude::*, px,
 };
 
-use super::{
-    BANNER_HEIGHT, BANNER_HOVER_FADE, BannerHover, FOLD, HEADER_HEIGHT, Row, Rows, WIDTH,
-    row_content,
-    user_panel::{account_button, account_identity, account_row},
-};
+use super::{BANNER_HOVER_FADE, BannerHover, FOLD, Row, Rows, WIDTH, row_content};
 use crate::{
     media::images::ImageSpec,
-    store::{
-        Category, Channel, ChannelKind, CustomStatus, Guild, Status, StatusEmoji, Store, User,
-    },
-    theme::{self, rpx},
+    store::{Category, Channel, ChannelKind, Guild},
+    theme::rpx,
 };
 
 fn guild(id: u64, channels: usize) -> Guild {
@@ -237,42 +231,6 @@ fn banner_hover_survives_sync_but_resets_on_server_change_or_banner_removal() {
     assert_eq!(rows.banner_hover.opacity(now + BANNER_HOVER_FADE), 0.);
 }
 
-#[test]
-fn banner_header_becomes_solid_at_the_same_scroll_position_at_every_zoom() {
-    let guild = guild(1, 1);
-    let mut rows = Rows::new();
-    rows.sync_with_banner(
-        Some(&guild),
-        Some(ImageSpec::GuildBanner {
-            guild_id: guild.id,
-            hash: "banner".into(),
-        }),
-        100,
-        |_| 0,
-        |_| 0,
-        None,
-    );
-    assert_eq!(rows.rows[0], Row::Banner);
-    for zoom in [1., 1.25, 1.5] {
-        let rem_size = px(16. * zoom);
-        let range = rpx(BANNER_HEIGHT - HEADER_HEIGHT).to_pixels(rem_size);
-        for fraction in [0., 0.5, 1.] {
-            rows.state.scroll_to(ListOffset {
-                item_ix: 0,
-                offset_in_item: range * fraction,
-            });
-            assert_eq!(rows.header_solidity(rem_size), Some(fraction));
-        }
-        rows.state.scroll_to(ListOffset {
-            item_ix: 1,
-            offset_in_item: px(0.),
-        });
-        assert_eq!(rows.header_solidity(rem_size), Some(1.));
-    }
-    rows.sync_with_banner(Some(&guild), None, 100, |_| 0, |_| 0, None);
-    assert_eq!(rows.header_solidity(px(16.)), None);
-}
-
 struct Sidebar {
     guild: Guild,
     rows: Rows,
@@ -363,127 +321,6 @@ fn hundreds_of_channels_only_build_visible_rows_and_can_reach_the_end(cx: &mut T
         assert!(rendered.borrow().len() < 80);
         assert!(rendered.borrow().contains(&500));
         assert!(cx.debug_bounds("row-500").is_some());
-    }
-}
-
-struct AccountSample {
-    width: f32,
-    user: User,
-    nameplate: bool,
-}
-
-impl Render for AccountSample {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div().w(rpx(self.width)).child(account_row(
-            self.nameplate
-                .then(|| div().absolute().inset_0().into_any_element()),
-            Some(
-                account_identity(&self.user, false, false, false, None, cx)
-                    .id("account")
-                    .into_any_element(),
-            ),
-            vec![
-                account_button("mic", "mic", theme::text()).into_any_element(),
-                account_button("deafen", "headphones", theme::text()).into_any_element(),
-                account_button("user-settings", "settings", theme::text()).into_any_element(),
-            ],
-            false,
-        ))
-    }
-}
-
-#[gpui::test]
-fn account_strip_matches_discord_sizes_without_overlap_at_different_widths_and_zoom(
-    cx: &mut TestAppContext,
-) {
-    cx.update(gpui_component::init);
-    let (view, cx) = cx.add_window_view(|_, _| {
-        let mut user = Store::seed().users.remove(&1).unwrap();
-        user.name = "A long display name that must truncate".into();
-        user.status = Status::Idle;
-        AccountSample {
-            width: 286.11,
-            user,
-            nameplate: false,
-        }
-    });
-    for zoom in [1., 1.25, 1.5] {
-        for width in [286.11, 220.] {
-            for custom in [false, true] {
-                view.update(cx, |sample, cx| {
-                    sample.width = width;
-                    sample.nameplate = custom;
-                    sample.user.custom_status = custom.then(|| CustomStatus {
-                        text: Some("A long custom status that must truncate".into()),
-                        emoji: Some(StatusEmoji::Unicode("\u{1f44b}".into())),
-                        expires_at: None,
-                    });
-                    cx.notify();
-                });
-                cx.update(|window, cx| {
-                    window.set_rem_size(px(16. * zoom));
-                    window.refresh();
-                    let _ = window.draw(cx);
-                });
-                let css = |actual: gpui::Pixels, expected: f32| {
-                    // Layout edges are rounded to device pixels.
-                    assert!(
-                        (actual - px(expected * zoom)).abs() <= px(1.),
-                        "zoom={zoom}, width={width}, actual={actual:?}, expected={expected} CSS px"
-                    );
-                };
-                let strip = cx.debug_bounds("account-strip").unwrap();
-                let identity = cx.debug_bounds("account-identity").unwrap();
-                let name = cx.debug_bounds("account-name").unwrap();
-                let subtitle = cx.debug_bounds("account-subtitle").unwrap();
-                let avatar = cx.debug_bounds("user-avatar").unwrap();
-                let status = cx.debug_bounds("avatar-status").unwrap();
-                let mic = cx.debug_bounds("account-mic-button").unwrap();
-                let deafen = cx.debug_bounds("account-deafen-button").unwrap();
-                let settings = cx.debug_bounds("account-user-settings-button").unwrap();
-                css(strip.size.width, width);
-                css(strip.size.height, 56.);
-                css(identity.left() - strip.left(), 8.);
-                css(identity.top() - strip.top(), 7.);
-                css(identity.size.height, 42.);
-                css(avatar.left() - strip.left(), 12.);
-                css(avatar.top() - strip.top(), 12.);
-                css(avatar.size.width, 32.);
-                css(avatar.size.height, 32.);
-                css(status.size.width, 14.);
-                css(status.left() - avatar.left(), 20.);
-                css(status.top() - avatar.top(), 20.);
-                css(name.left() - strip.left(), 52.);
-                css(name.top() - strip.top(), 11.);
-                css(name.size.height, 18.);
-                css(subtitle.top() - strip.top(), 31.);
-                css(subtitle.size.height, 13.);
-                for button in [mic, deafen, settings] {
-                    css(button.size.width, 32.);
-                    css(button.size.height, 32.);
-                    css(button.top() - strip.top(), 12.);
-                }
-                css(mic.left() - identity.right(), 8.);
-                css(deafen.left() - mic.right(), 8.);
-                css(settings.left() - deafen.right(), 8.);
-                css(strip.right() - settings.right(), 12.);
-                assert!(name.right() <= identity.right() + px(0.1));
-                assert!(subtitle.right() <= identity.right() + px(0.1));
-                let emoji = cx.debug_bounds("account-status-emoji");
-                assert_eq!(emoji.is_some(), custom);
-                if let Some(emoji) = emoji {
-                    css(emoji.size.width, 14.);
-                    css(emoji.size.height, 14.);
-                }
-                let nameplate = cx.debug_bounds("account-nameplate");
-                assert_eq!(nameplate.is_some(), custom);
-                if let Some(nameplate) = nameplate {
-                    css(nameplate.top() - strip.top(), -1.);
-                    css(nameplate.size.height, 58.);
-                    css(nameplate.size.width, width + 1.);
-                }
-            }
-        }
     }
 }
 

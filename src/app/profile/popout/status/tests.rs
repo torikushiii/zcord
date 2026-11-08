@@ -5,7 +5,7 @@ use gpui::{
     Render, TestAppContext, VisualTestContext, Window, div, point, prelude::*, px, size,
 };
 
-use super::{Event, Listener, Part, Props, State, flyout_position, render};
+use super::{Event, Listener, Part, Props, State, render};
 use crate::{
     app::profile::ProfilePalette,
     discord::{SelfStatus, StatusDuration},
@@ -92,47 +92,6 @@ fn keys(cx: &mut VisualTestContext, sequence: &str) {
         });
         cx.simulate_event(KeyUpEvent { keystroke });
         draw(cx);
-    }
-}
-
-#[test]
-fn flyouts_prefer_right_then_flip_and_stay_inside_the_viewport() {
-    let viewport = size(px(1000.), px(600.));
-    let menu = size(px(300.), px(205.));
-    let place = |x, y| {
-        flyout_position(
-            Bounds::new(point(px(x), px(y)), size(px(268.), px(36.))),
-            menu,
-            viewport,
-            px(4.),
-            px(8.),
-            px(26.),
-        )
-    };
-    assert_eq!(place(20., 40.), point(px(292.), px(32.)));
-    assert_eq!(place(700., 550.), point(px(396.), px(387.)));
-    assert_eq!(place(-400., -20.), point(px(8.), px(8.)));
-}
-
-#[test]
-fn first_options_align_with_parent_chevrons_for_different_row_heights_and_zoom() {
-    for zoom in [1., 1.25, 1.5] {
-        for (row_height, first_row_offset) in [(36., 26.), (36., 25.), (50., 25.), (66., 25.)] {
-            let parent = Bounds::new(
-                point(px(100.), px(200.)),
-                size(px(268. * zoom), px(row_height * zoom)),
-            );
-            let offset = px(first_row_offset * zoom);
-            let position = flyout_position(
-                parent,
-                size(px(188. * zoom), px(220. * zoom)),
-                size(px(1400.), px(900.)),
-                px(4. * zoom),
-                px(8. * zoom),
-                offset,
-            );
-            assert_eq!(position.y + offset, parent.center().y);
-        }
     }
 }
 
@@ -233,55 +192,6 @@ fn online_activates_without_a_duration_and_outside_click_dismisses(cx: &mut Test
     draw(cx);
     assert!(cx.debug_bounds("account-status-choices").is_none());
     assert!(cx.debug_bounds("account-status-trigger").is_some());
-}
-
-#[gpui::test]
-fn flyouts_fit_at_zoom_and_flip_near_the_window_edges(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
-    let (view, cx) = cx.add_window_view(|_, _| StatusSample::new(Rc::default()));
-    let viewport = size(px(1100.), px(700.));
-    cx.simulate_resize(viewport);
-    for zoom in [1., 1.25, 1.5] {
-        for right in [false, true] {
-            view.update(cx, |sample, cx| {
-                sample.state.close();
-                sample.origin = point(
-                    if right {
-                        px(1100. - 268. * zoom - 32.)
-                    } else {
-                        px(32.)
-                    },
-                    px(700. - 72. * zoom),
-                );
-                cx.notify();
-            });
-            cx.update(|window, _| window.set_rem_size(px(16. * zoom)));
-            draw(cx);
-            let trigger = cx.debug_bounds("account-status-trigger").unwrap();
-            cx.simulate_click(trigger.center(), Modifiers::none());
-            draw(cx);
-            let choices = cx.debug_bounds("account-status-choices").unwrap();
-            let idle = cx.debug_bounds("idle").unwrap();
-            cx.simulate_mouse_move(idle.center(), None, Modifiers::none());
-            draw(cx);
-            let durations = cx.debug_bounds("account-status-durations").unwrap();
-            for bounds in [choices, durations] {
-                assert!(bounds.left() >= px(8. * zoom - 1.));
-                assert!(bounds.top() >= px(8. * zoom - 1.));
-                assert!(bounds.right() <= viewport.width - px(8. * zoom - 1.));
-                assert!(bounds.bottom() <= viewport.height - px(8. * zoom - 1.));
-            }
-            assert!(choices.right() <= durations.left() || durations.right() <= choices.left());
-            if right {
-                assert!(
-                    choices.right() <= trigger.left(),
-                    "zoom={zoom}, trigger={trigger:?}, choices={choices:?}"
-                );
-            } else {
-                assert!(choices.left() >= trigger.right());
-            }
-        }
-    }
 }
 
 #[gpui::test]

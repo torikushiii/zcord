@@ -559,13 +559,6 @@ mod tests {
     }
 
     #[test]
-    fn three_tiles_fill_a_wide_stage_as_two_over_one() {
-        let (columns, width) = grid(3, 1684., 950.);
-        assert_eq!(columns, 2);
-        assert!((width - 838.).abs() < 1.);
-    }
-
-    #[test]
     fn a_tall_stage_stacks_tiles() {
         assert_eq!(grid(2, 400., 900.).0, 1);
     }

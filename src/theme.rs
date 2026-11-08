@@ -2,8 +2,6 @@ mod avatar;
 mod elements;
 mod tooltip;
 
-#[cfg(test)]
-pub use avatar::avatar;
 use avatar::{DECORATION_SCALE, mobile_status};
 pub use avatar::{
     activity_icon, default_avatar, member_avatar, placeholder_avatar, preview_avatar, spec_avatar,

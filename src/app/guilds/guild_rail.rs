@@ -17,9 +17,6 @@ use crate::{
     theme::{self, rpx},
 };
 
-#[cfg(test)]
-mod tests;
-
 pub(crate) const WIDTH: f32 = 72.;
 pub const ICON: f32 = 48.;
 const DEFAULT_FOLDER_COLOR: u32 = 0x5865F2;

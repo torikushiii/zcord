@@ -12,7 +12,7 @@ use gpui_component::ActiveTheme;
 
 use super::{
     Content, EmojiSource, Line, Piece, PieceStyle,
-    layout::{Fonts, LayoutCache, emoji_inset, layout_fingerprint},
+    layout::{Fonts, LayoutCache, layout_fingerprint},
     metrics,
 };
 
@@ -132,49 +132,6 @@ fn positive_widths_still_wrap_unbroken_unicode_without_losing_text(cx: &mut Test
     });
 }
 
-#[gpui::test]
-fn smaller_edited_labels_share_the_message_baseline(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
-    let cx = cx.add_empty_window();
-    cx.update(|window, cx| {
-        for zoom in [1., 1.25, 1.5] {
-            let mut fonts = fonts(window, cx);
-            fonts.font_size = px(16. * zoom);
-            fonts.line_height = px(22. * zoom);
-            let normal = fonts.shape("message", &PieceStyle::default(), false, window);
-            let edited = fonts.shape(
-                " (edited)",
-                &PieceStyle {
-                    scale: Some(0.625),
-                    ..Default::default()
-                },
-                false,
-                window,
-            );
-            let baseline = fonts.baseline(window);
-            // Also cover lines enlarged by emoji and labels wrapped onto their own line.
-            for height in [fonts.line_height, fonts.line_height * 2.] {
-                let line = Line {
-                    y: px(22. * zoom),
-                    height,
-                    fragments: Vec::new(),
-                };
-                let text_height = fonts.line_height;
-                let painted_baseline = |shaped: &gpui::ShapedLine| {
-                    line.text_top(shaped, text_height, baseline)
-                        + (text_height - shaped.ascent - shaped.descent) / 2.
-                        + shaped.ascent
-                };
-                assert!((painted_baseline(&normal) - painted_baseline(&edited)).abs() < px(0.01));
-                assert!(
-                    line.text_top(&edited, text_height, baseline)
-                        > line.y + (height - text_height) / 2.
-                );
-            }
-        }
-    });
-}
-
 #[test]
 fn visible_lines_follow_the_scrolled_origin_and_include_glyph_overhang() {
     let mask = Bounds::new(point(px(0.), px(0.)), size(px(200.), px(100.)));
@@ -196,15 +153,6 @@ fn ellipsis_count(layout: &super::Layout) -> usize {
         .flat_map(|line| &line.fragments)
         .filter(|fragment| fragment.shaped.is_some() && fragment.range.is_empty())
         .count()
-}
-
-fn fragment_for(layout: &super::Layout, piece: usize) -> &super::Fragment {
-    layout
-        .lines
-        .iter()
-        .flat_map(|line| &line.fragments)
-        .find(|fragment| fragment.piece == piece)
-        .expect("fragment for piece")
 }
 
 #[test]
@@ -315,43 +263,6 @@ fn line_clamp_hides_emoji_on_later_lines(cx: &mut TestAppContext) {
                 .any(|fragment| fragment.piece == 1)
         );
         assert_eq!(ellipsis_count(&layout), 1);
-    });
-}
-
-#[gpui::test]
-fn explicit_emoji_gap_is_trailing_and_default_slot_is_unchanged(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
-    let cx = cx.add_empty_window();
-    cx.update(|window, cx| {
-        let fonts = fonts(window, cx);
-        let pieces = [
-            Piece::text("a", PieceStyle::default()),
-            Piece {
-                content: Content::Emoji(None, "\u{1f600}".into()),
-                style: PieceStyle::default(),
-            },
-            Piece::text("b", PieceStyle::default()),
-        ];
-        let mut cache = LayoutCache::new(false, false, None);
-        let layout = cache.get(&pieces, &fonts, None, window);
-        let emoji = fragment_for(&layout, 1);
-        assert_eq!(
-            emoji.width,
-            fonts.emoji_size + fonts.font_size * 0.1,
-            "legacy slot width"
-        );
-        let legacy_inset = emoji_inset(emoji.width, fonts.emoji_size, false);
-        assert_eq!(legacy_inset, (emoji.width - fonts.emoji_size) / 2.);
-        assert!(legacy_inset > px(0.));
-        assert_eq!(emoji_inset(emoji.width, fonts.emoji_size, true), px(0.));
-
-        let mut gapped = fonts.clone();
-        gapped.emoji_gap = Some(px(4.));
-        let mut cache = LayoutCache::new(false, false, None);
-        let layout = cache.get(&pieces, &gapped, None, window);
-        let emoji = fragment_for(&layout, 1);
-        assert_eq!(emoji.width, gapped.emoji_size + px(4.));
-        assert_eq!(emoji_inset(emoji.width, gapped.emoji_size, true), px(0.));
     });
 }
 

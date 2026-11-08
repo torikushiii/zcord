@@ -8,13 +8,10 @@ pub(in crate::app::profile) use application::{tag_icon, tag_label};
 pub(in crate::app::profile) use games::prefetch_images;
 use games::{covers_widget, games_widget};
 use personal::personal_widget;
+#[cfg(test)]
+pub(super) use personal::stat_name;
 pub(super) use personal::{stat_value, widget_image_art};
 pub(in crate::app::profile) use popout_widgets::popout_widget;
-#[cfg(test)]
-pub(super) use {
-    games::{game_cover, game_cover_grid},
-    personal::stat_name,
-};
 
 use super::art::{
     activity_art, app_asset, current_art, media, personal_art, presence_art, widget_art,

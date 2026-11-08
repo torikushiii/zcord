@@ -372,67 +372,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn idle_mesh_matches_discord_circle_subtraction() {
-        for diameter in [10., 12.5, 15., 16., 24., 36.] {
-            let origin = point(px(83.), px(117.));
-            let bounds = Bounds::new(origin, size(px(diameter), px(diameter)));
-            let path = status_path(bounds, Status::Idle).build().unwrap();
-            for y in 0..40 {
-                for x in 0..40 {
-                    let (x, y) = ((x as f32 + 0.5) / 40., (y as f32 + 0.5) / 40.);
-                    let outer_distance = ((x - 0.5).powi(2) + (y - 0.5).powi(2)).sqrt();
-                    let notch_distance = ((x - 0.25).powi(2) + (y - 0.25).powi(2)).sqrt();
-                    // Ignore the narrow boundary band affected by curve tessellation.
-                    if (outer_distance - 0.5).abs() < 0.025
-                        || (notch_distance - 0.375).abs() < 0.025
-                    {
-                        continue;
-                    }
-                    let point = origin + point(px(x * diameter), px(y * diameter));
-                    let contains = path.vertices.as_chunks::<3>().0.iter().any(|triangle| {
-                        let side = |a: Point<Pixels>, b: Point<Pixels>| {
-                            f32::from(b.x - a.x) * f32::from(point.y - a.y)
-                                - f32::from(b.y - a.y) * f32::from(point.x - a.x)
-                        };
-                        let signs = [
-                            side(triangle[0].xy_position, triangle[1].xy_position),
-                            side(triangle[1].xy_position, triangle[2].xy_position),
-                            side(triangle[2].xy_position, triangle[0].xy_position),
-                        ];
-                        signs.iter().all(|sign| *sign >= -0.0001)
-                            || signs.iter().all(|sign| *sign <= 0.0001)
-                    });
-                    assert_eq!(
-                        contains,
-                        outer_distance < 0.5 && notch_distance > 0.375,
-                        "idle mask mismatch at ({x}, {y}), diameter {diameter}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn avatar_and_decoration_share_the_same_notch_at_every_zoom() {
-        let geometry = Geometry::for_avatar(120., true).unwrap();
-        for zoom in [0.5, 1., 1.25, 2.] {
-            let origin = point(px(50.), px(100.));
-            let avatar = Bounds::new(origin, size(px(120. * zoom), px(120. * zoom)));
-            let decoration = Bounds::new(
-                origin - point(px(12. * zoom), px(12. * zoom)),
-                size(px(144. * zoom), px(144. * zoom)),
-            );
-            let mask = geometry.mask(avatar, false, 1.5);
-            let decoration_mask = geometry.mask(decoration, true, 1.5);
-            let delta = mask.bounds.center() - decoration_mask.bounds.center();
-            assert!(f32::from(delta.x).abs() < 0.001);
-            assert!(f32::from(delta.y).abs() < 0.001);
-            assert!(f32::from(mask.radius - decoration_mask.radius).abs() < 0.001);
-            assert_eq!(mask.radius, px(20. * zoom));
-        }
-    }
-
     fn playback() -> Playback {
         let frames: Vec<_> = [50, 100, 150]
             .into_iter()

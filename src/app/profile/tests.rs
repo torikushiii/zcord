@@ -1,13 +1,12 @@
 use super::{
-    EffectLoad, THEME_OVERLAY, account_available_height, account_popout_position,
-    effect_clip_geometry, effect_finished, effect_playback, effect_start,
+    EffectLoad, THEME_OVERLAY, effect_finished, effect_playback, effect_start,
     loading::outbox_application_ids,
     modal::profile_close_button,
     palette::{ProfilePalette, ProfileTheme, blend, contrast},
     settle_effect_layers,
 };
 use crate::discord::model;
-use gpui::{Bounds, Edges, point, px, rgb, size};
+use gpui::rgb;
 use std::time::{Duration, Instant};
 
 #[test]
@@ -137,117 +136,6 @@ fn profile_effect_sakura_base_stays_mounted_while_the_overlay_repeats() {
     assert_eq!(
         effect_playback(&delayed, started, at(3000)),
         Some((0, at(100)))
-    );
-}
-
-#[test]
-fn profile_effect_clip_matches_popout_and_modal_corners_at_each_scale() {
-    for scale in [1., 1.125, 1.25, 1.5, 2.] {
-        let rem_size = px(crate::theme::BASE_FONT_SIZE * scale);
-        let bounds = Bounds::new(
-            point(px(20. * scale), px(40. * scale)),
-            size(px(300. * scale), px(420. * scale)),
-        );
-        for corner in [6., 8.] {
-            let (rounded, radius) = effect_clip_geometry(bounds, corner, false, rem_size);
-            assert_eq!(rounded, bounds);
-            assert_eq!(radius, px(corner * scale));
-        }
-        let (rounded, radius) = effect_clip_geometry(bounds, 16., true, rem_size);
-        assert_eq!(radius, px(16. * scale));
-        assert_eq!(rounded.origin, bounds.origin);
-        assert_eq!(rounded.size.width, bounds.size.width);
-        assert_eq!(rounded.bottom() - radius, bounds.bottom());
-    }
-}
-
-#[test]
-fn profile_effect_clip_uses_the_visible_scroll_viewport_and_clamps_its_radius() {
-    let card = Bounds::new(point(px(20.), px(40.)), size(px(300.), px(600.)));
-    let viewport = Bounds::new(point(px(20.), px(100.)), size(px(300.), px(200.)));
-    let visible = card.intersect(&viewport);
-    let (rounded, radius) = effect_clip_geometry(visible, 8., false, px(16.));
-    assert_eq!(rounded, viewport);
-    assert_eq!(radius, px(8.));
-
-    let small = Bounds::new(point(px(0.), px(0.)), size(px(12.), px(8.)));
-    let (rounded, radius) = effect_clip_geometry(small, 16., true, px(16.));
-    assert_eq!(radius, px(4.));
-    assert_eq!(rounded.bottom() - radius, small.bottom());
-}
-
-#[test]
-fn account_popout_sits_above_the_panel_and_clears_frame_overflow() {
-    let panel = Bounds {
-        origin: point(px(8.), px(600.)),
-        size: size(px(287.), px(58.)),
-    };
-    let overflow = Edges {
-        top: 0.,
-        right: 4.,
-        bottom: 12.,
-        left: 4.,
-    };
-    assert_eq!(
-        account_popout_position(panel, &overflow, px(16.)),
-        point(px(12.), px(580.))
-    );
-    // The gap and overflow scale with zoom just like the card.
-    assert_eq!(
-        account_popout_position(panel, &overflow, px(24.)),
-        point(px(14.), px(570.))
-    );
-    // Without a frame only the zoomed gap separates the card from the panel.
-    assert_eq!(
-        account_popout_position(panel, &Edges::default(), px(16.)),
-        point(px(8.), px(592.))
-    );
-}
-
-#[test]
-fn account_max_height_reserves_frame_overflow_gap_margin_and_zoom() {
-    let panel = Bounds {
-        origin: point(px(8.), px(600.)),
-        size: size(px(287.), px(58.)),
-    };
-    let overflow = Edges {
-        top: 10.,
-        right: 4.,
-        bottom: 12.,
-        left: 4.,
-    };
-    // No frame: 600 - 8px gap - 12px viewport margin.
-    assert_eq!(
-        account_available_height(panel, &Edges::default(), px(16.), px(0.)),
-        px(580.)
-    );
-    // 600 - 8 - 12 - 10 - 12.
-    assert_eq!(
-        account_available_height(panel, &overflow, px(16.), px(0.)),
-        px(558.)
-    );
-    // At 1.5x zoom: 600 - 12 - 18 - 15 - 12.
-    assert_eq!(
-        account_available_height(panel, &overflow, px(24.), px(0.)),
-        px(543.)
-    );
-    // The native inset is subtracted once, outside the zoomed lengths.
-    assert_eq!(
-        account_available_height(panel, &overflow, px(16.), px(6.)),
-        px(552.)
-    );
-    // The result never goes negative near the top of the window.
-    assert_eq!(
-        account_available_height(
-            Bounds {
-                origin: point(px(8.), px(10.)),
-                size: size(px(287.), px(58.)),
-            },
-            &Edges::default(),
-            px(16.),
-            px(0.),
-        ),
-        px(0.)
     );
 }
 

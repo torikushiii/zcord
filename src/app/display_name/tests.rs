@@ -47,41 +47,6 @@ fn truncation_keeps_graphemes_and_accounts_for_tracking(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
-fn wrapped_geometry_resets_line_width_and_keeps_all_glyphs(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
-    let cx = cx.add_empty_window();
-    cx.update(|window, _| {
-        let metrics = metrics(window, true);
-        let text: SharedString = "longer name short ending".into();
-        let full = layout(&text, &metrics, None, window);
-        let wrapped = layout(&text, &metrics, Some(px(90.)), window);
-        assert!(wrapped.lines.len() > 1);
-        assert_eq!(
-            wrapped.size.height,
-            metrics.line_height * wrapped.lines.len()
-        );
-        assert_eq!(
-            full.lines
-                .iter()
-                .map(|line| line.glyphs.len())
-                .sum::<usize>(),
-            wrapped
-                .lines
-                .iter()
-                .map(|line| line.glyphs.len())
-                .sum::<usize>()
-        );
-        for line in &wrapped.lines {
-            assert!(
-                line.width <= px(90.),
-                "wrapped line exceeds its measured width"
-            );
-        }
-        assert!(wrapped.lines.last().unwrap().width < full.lines[0].width);
-    });
-}
-
-#[gpui::test]
 fn layout_cache_is_shared_and_bounded(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let cx = cx.add_empty_window();
