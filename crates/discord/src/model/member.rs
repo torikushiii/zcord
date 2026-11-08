@@ -44,6 +44,10 @@ pub struct Role {
     pub position: i64,
     #[serde(default)]
     pub hoist: bool,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub unicode_emoji: Option<String>,
 }
 
 #[derive(Clone, Default, Deserialize)]

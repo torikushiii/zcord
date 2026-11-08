@@ -76,6 +76,10 @@ pub enum ImageSpec {
         guild_id: u64,
         hash: String,
     },
+    RoleIcon {
+        role_id: u64,
+        hash: String,
+    },
     Media {
         url: String,
         width: u32,
@@ -362,6 +366,10 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
         }
         ImageSpec::GuildIcon { guild_id, hash }
         | ImageSpec::GuildTagBadge { guild_id, hash }
+        | ImageSpec::RoleIcon {
+            role_id: guild_id,
+            hash,
+        }
         | ImageSpec::ChannelIcon {
             channel_id: guild_id,
             hash,
@@ -376,6 +384,7 @@ fn image_url(spec: &ImageSpec, size: u32) -> Option<reqwest::Url> {
             let route = match spec {
                 ImageSpec::GuildIcon { .. } => "icons",
                 ImageSpec::GuildTagBadge { .. } => "guild-tag-badges",
+                ImageSpec::RoleIcon { .. } => "role-icons",
                 ImageSpec::ChannelIcon { .. } => "channel-icons",
                 _ => "avatars",
             };

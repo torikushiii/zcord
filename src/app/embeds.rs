@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::rc::Rc;
 
 use gpui::{prelude::*, *};
+use gpui_component::ElementExt as _;
 
 #[cfg(test)]
 mod tests;
@@ -1544,6 +1545,57 @@ pub(crate) fn emoji_element(emoji: &ReactionEmoji, size: f32, cx: &App) -> AnyEl
     }
 }
 
+fn reactor_avatars(
+    app: &DiscordApp,
+    message_id: u64,
+    reaction: &Reaction,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    const AVATAR: f32 = 21.6;
+    const OVERLAP: f32 = 5.4;
+    let users = app.known_reactors(message_id, reaction);
+    let rest = (reaction.count as usize).saturating_sub(users.len());
+    div()
+        .flex()
+        .items_center()
+        .ml(rpx(7.))
+        .mr(rpx(5.))
+        .children(users.iter().enumerate().map(|(index, user)| {
+            let spec = crate::store::avatar_spec(
+                user.id,
+                user.avatar.as_deref(),
+                user.discriminator.as_deref(),
+            );
+            div()
+                .flex_none()
+                .when(index > 0, |this| this.ml(rpx(-OVERLAP)))
+                .child(theme::spec_avatar(
+                    &spec,
+                    user.id,
+                    &user.username,
+                    AVATAR,
+                    cx,
+                ))
+        }))
+        .when(rest > 0 && !users.is_empty(), |this| {
+            this.child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .ml(rpx(-OVERLAP))
+                    .h(rpx(AVATAR))
+                    .px(rpx(7.2))
+                    .rounded_full()
+                    .bg(rgb(theme::base_lowest()))
+                    .text_size(rpx(10.8))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(theme::text()))
+                    .child(format!("+{rest}")),
+            )
+        })
+}
+
 pub fn render_reactions(
     app: &DiscordApp,
     message_id: u64,
@@ -1557,13 +1609,19 @@ pub fn render_reactions(
     let open = app.entity.clone();
     let tip_shown = app.hovered_add_reaction == Some(message_id);
     let picking = app.picking_reaction_for(message_id);
+    let who_reacted = crate::settings::who_reacted();
+    let wanted = (who_reacted
+        && reactions
+            .iter()
+            .any(|reaction| !app.reactors_settled(message_id, reaction)))
+    .then(|| (app.entity.clone(), reactions.to_vec()));
     let pill = || {
         div()
             .flex()
             .items_center()
             .gap(rpx(6.))
             .h(rpx(30.))
-            .px(rpx(8.))
+            .px(rpx(6.))
             .rounded(rpx(8.))
             .border_1()
     };
@@ -1573,6 +1631,16 @@ pub fn render_reactions(
             .flex_wrap()
             .gap(rpx(4.))
             .mt(rpx(4.))
+            .when_some(wanted, |this, (entity, reactions)| {
+                this.on_prepaint(move |_, _, cx| {
+                    let (entity, reactions) = (entity.clone(), reactions.clone());
+                    cx.defer(move |cx| {
+                        entity
+                            .update(cx, |app, cx| app.want_reactors(message_id, &reactions, cx))
+                            .ok();
+                    });
+                })
+            })
             .children(reactions.iter().map(|reaction| {
                 let (click, hover) = (entity.clone(), entity.clone());
                 let (emoji, hovered) = (reaction.emoji.clone(), reaction.clone());
@@ -1612,7 +1680,8 @@ pub fn render_reactions(
                     .child(emoji_element(&reaction.emoji, 20., cx))
                     .child(
                         div()
-                            .text_size(rpx(15.))
+                            .text_size(rpx(16.))
+                            .line_height(rpx(16.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(rgb(if reaction.me {
                                 theme::mention_text()
@@ -1621,6 +1690,9 @@ pub fn render_reactions(
                             }))
                             .child(reaction.count.to_string()),
                     )
+                    .when(who_reacted, |this| {
+                        this.child(reactor_avatars(app, message_id, reaction, cx))
+                    })
             }))
             .child(
                 pill()

@@ -7,7 +7,7 @@ use crate::{
     app::{
         DiscordApp,
         expression_info::{Expression, HoverOwner},
-        rich_text::{Action, Chip, Content, EmojiSource, Piece, PieceStyle, rich_text},
+        rich_text::{Action, Chip, Content, EmojiSource, IconShape, Piece, PieceStyle, rich_text},
     },
     media::animated,
     media::images::{self, ImageSpec},
@@ -566,15 +566,40 @@ fn span_pieces(
             if style.action.is_none() {
                 style.action = Some(Action::OpenUserProfile(*id));
             }
-            let name = store
-                .member_name(context.guild_id, *id)
-                .unwrap_or("unknown-user");
-            format!("@{name}")
+            let name = store.member_name(context.guild_id, *id);
+            let text = format!("@{}", name.unwrap_or("unknown-user"));
+            if name.is_some() && !hidden && crate::settings::mention_avatars() {
+                let spec = store
+                    .member_avatar_spec(context.guild_id, *id)
+                    .or_else(|| store.user(*id).map(|user| user.avatar_spec()));
+                let source = spec
+                    .and_then(|spec| images::resolve(&spec, theme::image_px(MENTION_ICON), cx))
+                    .map(|path| EmojiSource::Still(path.into()));
+                return mention_with_icon(source, IconShape::Round, text, style);
+            }
+            text
         }
         SpanKind::RoleMention(id) => match store.role(context.guild_id, *id) {
             Some(role) => {
                 chip(Chip::Mention { color: role.color }, &mut style);
-                format!("@{}", role.name)
+                let text = format!("@{}", role.name);
+                if !hidden && crate::settings::mention_avatars() {
+                    let source = match (&role.unicode_emoji, role.icon_spec()) {
+                        (Some(sequence), _) => {
+                            emoji::image(sequence, theme::image_px(MENTION_ICON))
+                                .map(|image| EmojiSource::Still(image.into()))
+                        }
+                        (None, Some(spec)) => {
+                            images::resolve(&spec, theme::image_px(MENTION_ICON), cx)
+                                .map(|path| EmojiSource::Still(path.into()))
+                        }
+                        (None, None) => None,
+                    };
+                    if role.unicode_emoji.is_some() || role.icon.is_some() {
+                        return mention_with_icon(source, IconShape::Square, text, style);
+                    }
+                }
+                text
             }
             None => {
                 chip(Chip::Mention { color: None }, &mut style);
@@ -654,6 +679,27 @@ fn span_pieces(
         }
     };
     vec![Piece::text(text, style)]
+}
+
+const MENTION_ICON: f32 = 24.;
+
+/// Both pieces must carry the same chip style, or the chip paints as two.
+fn mention_with_icon(
+    source: Option<EmojiSource>,
+    shape: IconShape,
+    text: String,
+    style: PieceStyle,
+) -> Vec<Piece> {
+    vec![
+        Piece {
+            content: Content::Emoji(source, SharedString::default()),
+            style: PieceStyle {
+                icon: Some(shape),
+                ..style.clone()
+            },
+        },
+        Piece::text(text, style),
+    ]
 }
 
 pub fn preview_pieces(

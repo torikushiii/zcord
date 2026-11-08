@@ -325,6 +325,8 @@ impl Store {
                     color: Some(0x3BA55C),
                     position: 10,
                     hoist: true,
+                    icon: None,
+                    unicode_emoji: None,
                 },
             );
             social.roles.insert(
@@ -335,6 +337,8 @@ impl Store {
                     color: Some(0xF0B232),
                     position: 1,
                     hoist: true,
+                    icon: None,
+                    unicode_emoji: None,
                 },
             );
             for user in store.users.values() {

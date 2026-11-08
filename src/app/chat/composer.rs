@@ -217,7 +217,7 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                     )
                 }),
         )
-        .children(typing_indicator(app))
+        .children(typing_indicator(app, cx))
 }
 
 const SEND_FILL: Duration = Duration::from_millis(250);
@@ -770,19 +770,44 @@ fn reply_banner(app: &DiscordApp, reply: &ReplyTarget, cx: &App) -> impl IntoEle
         )
 }
 
-fn typing_indicator(app: &DiscordApp) -> Option<impl IntoElement> {
-    let names: Vec<String> = app
+fn typing_indicator(app: &DiscordApp, cx: &App) -> Option<impl IntoElement> {
+    let names: Vec<(u64, String)> = app
         .typing_users()
         .iter()
-        .map(|(user_id, _)| author_name(app, *user_id))
+        .map(|(user_id, _)| (*user_id, author_name(app, *user_id)))
         .collect();
-    let bold = |name: &String| {
+    let rich = crate::settings::rich_typing();
+    let bold = |(user_id, name): &(u64, String)| {
+        let color = rich
+            .then(|| app.store.member_name_color(app.selected_guild_id, *user_id))
+            .flatten()
+            .unwrap_or_else(theme::text);
         div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(rpx(4.))
             .font_weight(FontWeight::BOLD)
-            .text_color(rgb(theme::text()))
+            .text_color(rgb(color))
+            .when(rich, |this| {
+                this.child(theme::member_avatar(
+                    &app.store,
+                    app.selected_guild_id,
+                    *user_id,
+                    16.,
+                    None,
+                    false,
+                    cx,
+                ))
+            })
             .child(name.clone())
     };
-    let text = div().flex().min_w_0().overflow_hidden().whitespace_nowrap();
+    let text = div()
+        .flex()
+        .items_center()
+        .min_w_0()
+        .overflow_hidden()
+        .whitespace_nowrap();
     let text = match names.as_slice() {
         [] => text,
         [one] => text.child(bold(one)).child("\u{a0}is typing…"),

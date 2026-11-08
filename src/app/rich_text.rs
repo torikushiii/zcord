@@ -52,6 +52,12 @@ pub enum Chip {
     Timestamp,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IconShape {
+    Round,
+    Square,
+}
+
 #[derive(Clone, Default)]
 pub struct PieceStyle {
     pub weight: Option<FontWeight>,
@@ -66,6 +72,7 @@ pub struct PieceStyle {
     pub nowrap: bool,
     pub cell: bool,
     pub action: Option<Action>,
+    pub icon: Option<IconShape>,
 }
 
 pub enum EmojiSource {
@@ -356,6 +363,7 @@ fn layout_fingerprint(
         hash_chip(style.chip, &mut hasher);
         style.nowrap.hash(&mut hasher);
         style.cell.hash(&mut hasher);
+        style.icon.hash(&mut hasher);
         matches!(style.action, Some(Action::OpenUrl(_))).hash(&mut hasher);
     }
     hasher.finish()
@@ -543,12 +551,16 @@ fn build_atoms(pieces: &[Piece], fonts: &Fonts, wrap: bool, window: &mut Window)
         let first_atom = atoms.len();
         match &piece.content {
             Content::Emoji(..) => {
-                let gap = fonts.emoji_gap.unwrap_or(fonts.font_size * 0.1);
+                let width = if style.icon.is_some() {
+                    fonts.font_size
+                } else {
+                    fonts.emoji_size + fonts.emoji_gap.unwrap_or(fonts.font_size * 0.1)
+                };
                 atoms.push(Atom {
                     piece: piece_index,
                     range: 0..0,
                     shaped: None,
-                    width: fonts.emoji_size + gap,
+                    width,
                     trailing_space: Pixels::ZERO,
                     pad_left: Pixels::ZERO,
                     pad_right: Pixels::ZERO,
@@ -1119,22 +1131,34 @@ impl Element for RichText {
                 if let Content::Emoji(Some(source), _) = &piece.content
                     && !hidden
                 {
+                    let icon = piece.style.icon;
+                    let emoji_size = if icon.is_some() {
+                        state.fonts.font_size
+                    } else {
+                        emoji_size
+                    };
+                    let round = icon == Some(IconShape::Round);
                     let mut element = match source {
                         EmojiSource::Still(path) => img(path.clone())
                             .id(("emoji", fragment.piece))
                             .size(emoji_size)
                             .flex_none()
+                            .when(round, |this| this.rounded_full())
                             .into_any_element(),
                         EmojiSource::Animated(image) => {
                             crate::media::animated::image(image.clone())
                                 .size(emoji_size)
                                 .flex_none()
+                                .when(round, |this| this.rounded_full())
                                 .id(("emoji", fragment.piece))
                                 .into_any_element()
                         }
                     };
-                    let inset =
-                        emoji_inset(fragment.width, emoji_size, state.fonts.emoji_gap.is_some());
+                    let inset = if icon.is_some() {
+                        (fragment.width - emoji_size) / 2.
+                    } else {
+                        emoji_inset(fragment.width, emoji_size, state.fonts.emoji_gap.is_some())
+                    };
                     let top = (line.height - emoji_size) / 2.;
                     element.prepaint_as_root(
                         origin + point(inset, top),

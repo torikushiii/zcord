@@ -65,7 +65,9 @@ impl DiscordApp {
         self.reactions_openings += 1;
         self.reactions_dialog = Some(ReactionsDialog {
             opening: self.reactions_openings,
-            channel_id: self.selected_channel_id,
+            channel_id: self
+                .message_channel(message_id)
+                .map_or(self.selected_channel_id, |channel| channel.id),
             guild_id: self.request_guild(),
             message_id,
             selected: selected.clone(),
@@ -94,7 +96,7 @@ impl DiscordApp {
     }
 
     pub(super) fn message_reactions(&self, message_id: u64) -> &[Reaction] {
-        self.channel()
+        self.message_channel(message_id)
             .and_then(|channel| {
                 channel
                     .messages
@@ -102,6 +104,18 @@ impl DiscordApp {
                     .find(|message| message.id == message_id)
             })
             .map_or(&[], |message| message.reactions.as_slice())
+    }
+
+    pub(super) fn message_channel(&self, message_id: u64) -> Option<&Channel> {
+        let holds = |channel: &&Channel| {
+            channel
+                .messages
+                .iter()
+                .any(|message| message.id == message_id)
+        };
+        self.channel()
+            .filter(holds)
+            .or_else(|| self.thread_pane_channel().filter(holds))
     }
 
     /// Loads the next page of `emoji`'s reactors, then keeps paging until all are in.

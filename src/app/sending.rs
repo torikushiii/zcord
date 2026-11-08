@@ -642,7 +642,7 @@ impl DiscordApp {
                 .webhook
                 .as_ref()
                 .map(|author| author.name.clone().into()),
-            mention: true,
+            mention: !crate::settings::quiet_replies(),
         });
         self.focus_composer(window, cx);
         cx.notify();

@@ -612,6 +612,17 @@ pub struct Role {
     pub color: Option<u32>,
     pub position: i64,
     pub hoist: bool,
+    pub icon: Option<String>,
+    pub unicode_emoji: Option<String>,
+}
+
+impl Role {
+    pub fn icon_spec(&self) -> Option<ImageSpec> {
+        self.icon.as_ref().map(|hash| ImageSpec::RoleIcon {
+            role_id: self.id,
+            hash: hash.clone(),
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -318,6 +318,8 @@ fn map_role(role: &model::Role) -> Role {
         color: (color != 0).then_some(color),
         position: role.position,
         hoist: role.hoist,
+        icon: role.icon.clone().filter(|icon| !icon.is_empty()),
+        unicode_emoji: role.unicode_emoji.clone().filter(|emoji| !emoji.is_empty()),
     }
 }
 

@@ -3,14 +3,17 @@
 //! `GET /channels/{id}/messages/{id}/reactions/{emoji}` when the reaction is first hovered.
 
 use super::*;
-use std::{ops::Range, time::Duration};
+use std::{collections::VecDeque, ops::Range, time::Duration};
 
 use crate::{discord::model, store::Reaction};
 
 /// Discord names at most three reactors and counts the rest.
-const NAMED_REACTORS: u32 = 3;
+const NAMED_REACTORS: usize = 3;
+pub(crate) const FETCHED_REACTORS: u32 = 4;
 /// How long the tooltip outlasts the pointer, so it can cross the gap onto the tooltip.
 const LEAVE_GRACE: Duration = Duration::from_millis(150);
+/// Queued reactor fetches run one at a time this far apart, to stay under rate limits.
+const QUEUE_SPACING: Duration = Duration::from_millis(400);
 
 type ReactionKey = (u64, String);
 
@@ -23,6 +26,7 @@ struct Reactors {
     users: Option<Vec<model::User>>,
     /// Shown until a refetch replaces them.
     stale: bool,
+    failed: bool,
 }
 
 #[derive(Default)]
@@ -33,6 +37,8 @@ pub(crate) struct ReactionTips {
     hover_changes: u64,
     requests: u64,
     users: HashMap<ReactionKey, Reactors>,
+    queue: VecDeque<ReactionKey>,
+    pumping: bool,
 }
 
 /// Normal reactors first, then burst ones, at most `limit` and each person once.
@@ -199,11 +205,14 @@ impl DiscordApp {
             .reaction_tips
             .users
             .get(&key)
-            .is_some_and(|reactors| !reactors.stale && reactors.count == count)
+            .is_some_and(|reactors| !reactors.stale && !reactors.failed && reactors.count == count)
         {
             return;
         }
         let Some(session) = self.session.clone().filter(|_| self.live) else {
+            return;
+        };
+        let Some(channel_id) = self.message_channel(message_id).map(|channel| channel.id) else {
             return;
         };
         self.reaction_tips.requests += 1;
@@ -220,12 +229,13 @@ impl DiscordApp {
                 request,
                 users: stale,
                 stale: false,
+                failed: false,
             },
         );
-        let (guild_id, channel_id) = (self.request_guild(), self.selected_channel_id);
+        let guild_id = self.request_guild();
         let fetch = Tokio::spawn(cx, async move {
             let page = |burst| model::ReactorPage {
-                limit: NAMED_REACTORS,
+                limit: FETCHED_REACTORS,
                 after: None,
                 burst,
             };
@@ -233,14 +243,14 @@ impl DiscordApp {
                 .reaction_users(guild_id, channel_id, message_id, &text, page(false))
                 .await?;
             // A reaction can be all or partly super reactions, which Discord lists apart.
-            let burst = if normal.len() < NAMED_REACTORS as usize {
+            let burst = if normal.len() < FETCHED_REACTORS as usize {
                 session
                     .reaction_users(guild_id, channel_id, message_id, &text, page(true))
                     .await?
             } else {
                 Vec::new()
             };
-            Ok::<_, discord::Error>(merge_reactors(normal, burst, NAMED_REACTORS as usize))
+            Ok::<_, discord::Error>(merge_reactors(normal, burst, FETCHED_REACTORS as usize))
         });
         cx.spawn(async move |this, cx| {
             let result = fetch.await;
@@ -262,20 +272,84 @@ impl DiscordApp {
                     Ok(Err(error)) => log::warn!("Loading reactors failed: {error}"),
                     Err(error) => log::warn!("Reactor task failed: {error}"),
                 }
-                // A failed fetch keeps what the tooltip showed, marked for another try. Without
-                // anything to show, the tooltip goes, through the dismissal gpui wouldn't report.
-                let shown = reactors.users.is_some();
-                if shown {
-                    reactors.stale = true;
-                } else {
-                    app.reaction_tips.users.remove(&key);
-                    if app.reaction_tips.hovered.as_ref() == Some(&key) {
-                        app.dismiss_reaction_tooltip();
-                    }
+                // A failed fetch keeps what the tooltip showed. Without anything to show, the
+                // tooltip goes, through the dismissal gpui wouldn't report. The entry stays,
+                // marked failed, so Who Reacted doesn't refetch it on every paint.
+                reactors.failed = true;
+                if reactors.users.is_none() && app.reaction_tips.hovered.as_ref() == Some(&key) {
+                    app.dismiss_reaction_tooltip();
                 }
                 cx.notify();
             })
             .ok();
+        })
+        .detach();
+    }
+
+    pub(crate) fn known_reactors(&self, message_id: u64, reaction: &Reaction) -> &[model::User] {
+        self.reaction_tips
+            .users
+            .get(&(message_id, reaction_emoji_text(&reaction.emoji)))
+            .and_then(|reactors| reactors.users.as_deref())
+            .unwrap_or(&[])
+    }
+
+    pub(crate) fn reactors_settled(&self, message_id: u64, reaction: &Reaction) -> bool {
+        let key = (message_id, reaction_emoji_text(&reaction.emoji));
+        self.reaction_tips.queue.contains(&key)
+            || self.reaction_tips.users.get(&key).is_some_and(|reactors| {
+                reactors.count == reaction.count && (reactors.failed || !reactors.stale)
+            })
+    }
+
+    pub(crate) fn want_reactors(
+        &mut self,
+        message_id: u64,
+        reactions: &[Reaction],
+        cx: &mut Context<Self>,
+    ) {
+        for reaction in reactions {
+            if self.reactors_settled(message_id, reaction) {
+                continue;
+            }
+            self.reaction_tips
+                .queue
+                .push_back((message_id, reaction_emoji_text(&reaction.emoji)));
+        }
+        if self.reaction_tips.pumping || self.reaction_tips.queue.is_empty() {
+            return;
+        }
+        self.reaction_tips.pumping = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                let more = this
+                    .update(cx, |app, cx| {
+                        let Some((message_id, text)) = app.reaction_tips.queue.pop_front() else {
+                            app.reaction_tips.pumping = false;
+                            return false;
+                        };
+                        let reaction = app
+                            .message_reactions(message_id)
+                            .iter()
+                            .find(|reaction| reaction_emoji_text(&reaction.emoji) == text)
+                            .cloned();
+                        if let Some(reaction) = reaction.filter(|_| crate::settings::who_reacted())
+                        {
+                            app.load_reaction_users(
+                                message_id,
+                                &reaction.emoji,
+                                reaction.count,
+                                cx,
+                            );
+                        }
+                        true
+                    })
+                    .unwrap_or(false);
+                if !more {
+                    break;
+                }
+                cx.background_executor().timer(QUEUE_SPACING).await;
+            }
         })
         .detach();
     }
@@ -291,7 +365,11 @@ impl DiscordApp {
             return None;
         }
         let users = self.reaction_tips.users.get(&key)?.users.as_ref()?;
-        let names: Vec<String> = users.iter().map(|user| self.reactor_name(user)).collect();
+        let names: Vec<String> = users
+            .iter()
+            .take(NAMED_REACTORS)
+            .map(|user| self.reactor_name(user))
+            .collect();
         let (text, others) = reacted_by(&emoji_label(&reaction.emoji), &names, reaction.count);
         let (hover, open) = (self.entity.clone(), self.entity.clone());
         let emoji = reaction.emoji.clone();
