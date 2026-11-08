@@ -5,7 +5,7 @@ use gpui::{prelude::*, *};
 use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::{
-    app::{DIALOG_EXIT, DiscordApp, message_body::label},
+    app::{DIALOG_EXIT, DiscordApp, messages::message_body::label},
     media::images,
     quick_switcher::{self, Item, ItemKind, Section, SectionKind, Target},
     theme::{self, rpx},
@@ -59,13 +59,13 @@ impl DiscordApp {
         }
         self.close_emoji_picker(cx);
         self.close_profile(cx);
-        self.quick_switcher_opens = self.quick_switcher_opens.wrapping_add(1);
+        self.menus.quick_switcher_opens = self.menus.quick_switcher_opens.wrapping_add(1);
         let search =
             cx.new(|cx| InputState::new(window, cx).placeholder("Where would you like to go?"));
         let events = cx.subscribe_in(&search, window, |app, _, event, window, cx| match event {
             InputEvent::Change => app.rebuild_quick_switcher(cx),
             InputEvent::PressEnter { .. } => {
-                let target = app.quick_switcher.as_ref().and_then(|switcher| {
+                let target = app.menus.quick_switcher.as_ref().and_then(|switcher| {
                     switcher
                         .items()
                         .nth(switcher.selected)
@@ -78,13 +78,13 @@ impl DiscordApp {
             _ => {}
         });
         search.update(cx, |input, cx| input.focus(window, cx));
-        self.quick_switcher = Some(QuickSwitcher {
+        self.menus.quick_switcher = Some(QuickSwitcher {
             search,
             sections: Vec::new(),
             selected: 0,
             scroll: ScrollHandle::new(),
             closing: None,
-            animation: self.quick_switcher_opens,
+            animation: self.menus.quick_switcher_opens,
             _search_events: events,
         });
         self.rebuild_quick_switcher(cx);
@@ -96,7 +96,7 @@ impl DiscordApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(switcher) = &mut self.quick_switcher else {
+        let Some(switcher) = &mut self.menus.quick_switcher else {
             return false;
         };
         if switcher.closing.is_some() {
@@ -104,7 +104,7 @@ impl DiscordApp {
         }
         let animation = switcher.animation;
         if cx.reduce_motion() {
-            self.quick_switcher = None;
+            self.menus.quick_switcher = None;
             self.focus_composer(window, cx);
             cx.notify();
             return true;
@@ -113,11 +113,12 @@ impl DiscordApp {
             cx.background_executor().timer(DIALOG_EXIT).await;
             this.update(cx, |app, cx| {
                 if app
+                    .menus
                     .quick_switcher
                     .as_ref()
                     .is_some_and(|switcher| switcher.animation == animation)
                 {
-                    app.quick_switcher = None;
+                    app.menus.quick_switcher = None;
                     cx.notify();
                 }
             })
@@ -129,7 +130,7 @@ impl DiscordApp {
     }
 
     fn rebuild_quick_switcher(&mut self, cx: &mut Context<Self>) {
-        let Some(switcher) = &self.quick_switcher else {
+        let Some(switcher) = &self.menus.quick_switcher else {
             return;
         };
         let query = switcher.search.read(cx).value().to_string();
@@ -141,7 +142,7 @@ impl DiscordApp {
             self.selected_channel_id,
             LIMIT,
         );
-        if let Some(switcher) = &mut self.quick_switcher {
+        if let Some(switcher) = &mut self.menus.quick_switcher {
             switcher.sections = sections;
             switcher.selected = 0;
             switcher.scroll.scroll_to_item(0);
@@ -153,6 +154,7 @@ impl DiscordApp {
     /// switcher isn't open, so the arrow keys keep their usual meaning.
     pub(crate) fn move_quick_switcher(&mut self, delta: isize, cx: &mut Context<Self>) -> bool {
         let Some(switcher) = self
+            .menus
             .quick_switcher
             .as_mut()
             .filter(|switcher| switcher.closing.is_none())
@@ -197,7 +199,7 @@ fn header(kind: SectionKind) -> Option<&'static str> {
 }
 
 pub(super) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
-    let switcher = app.quick_switcher.as_ref()?;
+    let switcher = app.menus.quick_switcher.as_ref()?;
     let closing = switcher.closing.is_some();
     let (key, duration) = if closing {
         ("quick-switcher-out", DIALOG_EXIT)
@@ -401,7 +403,7 @@ fn item_row(app: &DiscordApp, item: &Item, index: usize, selected: bool, cx: &Ap
         .on_mouse_move(move |_, _, cx| {
             hover
                 .update(cx, |app, cx| {
-                    if let Some(switcher) = &mut app.quick_switcher
+                    if let Some(switcher) = &mut app.menus.quick_switcher
                         && switcher.selected != index
                     {
                         switcher.selected = index;

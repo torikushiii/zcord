@@ -1,66 +1,38 @@
-mod activity_feed;
-mod activity_popout;
-mod activity_privacy;
+mod root;
+
+mod events;
+
+mod activity;
 mod appearance;
-pub(crate) mod attachments;
-mod call_view;
 mod calls;
-mod channel_list;
 mod chat;
-mod composer;
+mod compose;
 mod connection;
+mod direct;
 mod display_name;
-mod dm_actions;
-mod dm_menu;
-mod dm_panel;
-mod embeds;
-mod emoji_picker;
-mod expression_info;
+mod expressions;
 mod favorites_saving;
-mod forum;
-mod forum_actions;
 mod forward_dialog;
-mod friends;
-mod gif_picker;
-mod guild_actions;
-mod guild_menu;
-mod guild_rail;
+mod guilds;
 mod history;
-mod home;
 mod hover;
 mod inbox;
-mod invite_card;
-mod invites;
 mod lightbox;
 mod login;
-mod member_list;
-mod member_menu;
 mod members;
-pub(crate) mod mentions;
 mod menu;
-mod message_body;
+pub(crate) mod messages;
 mod notifications;
 mod profile;
-mod quests;
-mod reaction_tooltip;
-mod reactions_dialog;
 mod read_state;
-mod rich_text;
-mod saved;
 mod search;
 mod selection;
-mod sending;
 mod settings_page;
 mod smooth_scroll;
-mod sticker_picker;
-mod stream_view;
+mod state;
 mod switcher;
-mod text_images;
 mod titlebar;
-mod typing;
-mod video;
 mod views;
-mod voice;
 
 use crate::discord::{
     self, Event, FatalError, OutgoingMessage, OutgoingReply, Session, UploadProgress,
@@ -194,7 +166,7 @@ pub(crate) struct Editing {
 
 pub(crate) struct FailedSend {
     reply: Option<ReplyTarget>,
-    files: Vec<attachments::StagedFile>,
+    files: Vec<messages::attachments::StagedFile>,
     /// Activity reply/reaction entry to re-attach when the send is retried.
     entry: Option<Arc<serde_json::Value>>,
     pub error: String,
@@ -229,32 +201,19 @@ pub struct DiscordApp {
     pub(crate) screen: Screen,
     pub(crate) store: Store,
     account_theme: Option<crate::discord::settings_proto::AccountTheme>,
-    activity_feed: activity_feed::ActivityFeed,
+    activity_feed: activity::activity_feed::ActivityFeed,
     activity_ticker: Option<Task<()>>,
-    pub(crate) activity_popout: Option<activity_popout::ActivityPopout>,
+    pub(crate) activity_popout: Option<activity::activity_popout::ActivityPopout>,
     pub(crate) activity_card_tops: std::rc::Rc<std::cell::RefCell<HashMap<u64, Pixels>>>,
     pub(crate) selected_guild_id: u64,
     pub(crate) selected_channel_id: u64,
     pub(crate) dm_error: Option<(u64, String)>,
-    dm_menu: Option<dm_menu::DmMenu>,
-    dm_dialog: Option<dm_menu::DmDialog>,
-    guild_menu: Option<guild_menu::GuildMenu>,
-    member_menu: Option<member_menu::MemberMenu>,
+    pub(crate) menus: state::Menus,
     calls: calls::Calls,
     pub(crate) show_members: bool,
-    pub(crate) composer: Entity<TextareaState>,
-    pub(crate) reply: Option<ReplyTarget>,
-    pub(crate) editing: Option<Editing>,
-    pub(crate) confirm_delete: Option<u64>,
-    delete_closing: Option<Task<()>>,
-    pub(crate) failed_sends: HashMap<u64, FailedSend>,
-    staged: HashMap<u64, Vec<attachments::StagedFile>>,
-    upload_refusal: Option<attachments::Refusal>,
-    upload_progress: HashMap<u64, Arc<UploadProgress>>,
-    next_staged_id: u64,
-    upload_ticking: bool,
-    pub(crate) hovered_message: Option<u64>,
-    pub(crate) hovered_actions: Option<u64>,
+    pub(crate) compose: state::Compose,
+    pub(crate) uploads: state::Uploads,
+    pub(crate) hover: state::Hover,
     pub(in crate::app) message_menu: Option<chat::MessageMenu>,
     pub(in crate::app) composer_menu: Option<chat::ComposerMenu>,
     pub(crate) shift_held: bool,
@@ -263,7 +222,7 @@ pub struct DiscordApp {
     pub(in crate::app) inbox: Option<inbox::Inbox>,
     pub(in crate::app) last_inbox_tab: inbox::InboxTab,
     pub(in crate::app) schedule_edit: Option<inbox::ScheduleEdit>,
-    pub(in crate::app) custom_reminder: Option<saved::CustomReminder>,
+    pub(in crate::app) custom_reminder: Option<messages::saved::CustomReminder>,
     reminder_timer: Option<Task<()>>,
     notified_reminders: HashSet<u64>,
     pub(in crate::app) create_thread: Option<chat::CreateThread>,
@@ -271,135 +230,73 @@ pub struct DiscordApp {
     pub(in crate::app) thread_pane: Option<chat::ThreadPane>,
     pub(crate) thread_previews: HashSet<u64>,
     pub(crate) sharing_paused: Option<Point<Pixels>>,
-    pub(crate) hovered_member: Option<u64>,
-    pub(crate) hovered_account: bool,
     pub(crate) profile: Option<profile::ProfileCard>,
     pub(crate) profile_styles: Option<profile::styles::StylesEditor>,
     pub(crate) self_status: profile::StatusChange,
     pub(crate) settings_page: Option<settings_page::SettingsPage>,
     settings_animation: u64,
     pub(crate) lightbox: Option<lightbox::Lightbox>,
-    pub(crate) stream_view: Option<stream_view::StreamView>,
-    /// `(guild, channel)` to go back to when a stage's chat closes.
-    stage_chat: Option<(u64, u64)>,
+    pub(crate) stream: state::Stream,
     voice_lobby: Option<(u64, u64)>,
-    pub(crate) activity_privacy: activity_privacy::Saving,
-    pub(crate) text_images: text_images::Saving,
+    pub(crate) activity_privacy: activity::activity_privacy::Saving,
+    pub(crate) text_images: messages::text_images::Saving,
     pub(crate) favorites_saving: favorites_saving::Saving,
     pub(crate) favorites_view: bool,
     streamer_notice_dismissed: bool,
     affinity_refresh: Option<Task<()>>,
     dm_profile: Option<profile::ProfileCard>,
-    message_search: Option<search::MessageSearch>,
-    forward_dialog: Option<forward_dialog::ForwardDialog>,
-    reactions_dialog: Option<reactions_dialog::ReactionsDialog>,
-    reactions_openings: u64,
-    stream_nonce: u64,
-    pub(crate) stream_members_shown: bool,
-    pub(crate) stream_members_toggles: u64,
-    pub(crate) stream_volume: Option<(Entity<SliderState>, Subscription)>,
-    pub(crate) hovered_stage_control: Option<(&'static str, WindowId)>,
-    pub(crate) emoji_picker: Option<emoji_picker::EmojiPicker>,
-    emoji_picker_closing: Option<Task<()>>,
-    emoji_picker_animation: u64,
-    emoji_picker_closed_at: Option<Instant>,
-    pub(crate) emoji_suggest: emoji_picker::Suggest,
-    mention_suggest: mentions::Suggest,
-    suggest_scroll: ScrollHandle,
-    mention_names: HashMap<String, u64>,
-    pub(crate) gifs: gif_picker::Gifs,
-    pub(crate) stickers: sticker_picker::Stickers,
-    pub(crate) home: home::Home,
-    pub(crate) quick_switcher: Option<switcher::QuickSwitcher>,
-    quick_switcher_opens: u64,
+    pub(crate) emoji: state::EmojiPopup,
+    pub(crate) suggest: state::Suggestions,
+    pub(crate) gifs: expressions::gif_picker::Gifs,
+    pub(crate) stickers: expressions::sticker_picker::Stickers,
+    pub(crate) home: direct::home::Home,
     recent_channels: crate::quick_switcher::Recent,
     typing: HashMap<u64, Vec<(u64, Instant)>>,
     typing_timer: Option<Task<()>>,
     typing_sent: Option<(u64, Instant)>,
-    last_nonce: u64,
     pub(crate) messages: ListState,
-    pub(crate) channel_rows: channel_list::Rows,
+    pub(crate) channel_rows: guilds::channel_list::Rows,
     pub(crate) member_rows: ListState,
-    member_layout: member_list::Layout,
+    member_layout: members::member_list::Layout,
     member_subscription: Option<(u64, u64, Vec<(u32, u32)>)>,
     pub(crate) live: bool,
-    pub(crate) voice: voice::Voice,
+    pub(crate) voice: calls::voice::Voice,
     pub(crate) reconnecting: bool,
     session: Option<Session>,
-    game_enabled: watch::Sender<bool>,
-    game_generation: u64,
-    pub(crate) current_game_application: Option<u64>,
-    pub(crate) current_game: Option<String>,
+    pub(crate) game: state::Game,
     pending_token: Option<String>,
-    loading: HashSet<u64>,
-    loading_older: HashSet<u64>,
-    older_retry_at: HashMap<u64, Instant>,
-    loading_newer: HashSet<u64>,
-    reaction_requests: HashSet<(u64, u64, String)>,
-    /// Channels waiting for a latest-page fetch before jumping to the present.
-    pending_present: HashSet<u64>,
-    pending_jump: Option<u64>,
-    history_failed: HashSet<u64>,
-    jump_return: Option<(u64, u64)>,
-    pending_sends: sending::PendingSends,
-    history_complete: HashSet<u64>,
+    pub(in crate::app) history: state::History,
     forum_pages: HashMap<u64, ForumPage>,
     /// Gallery columns that fit the forum's last laid-out width.
     forum_columns: Rc<Cell<usize>>,
-    forum_header: Option<forum_actions::ForumHeader>,
+    forum_header: Option<guilds::forum_actions::ForumHeader>,
     pub(crate) invites: HashMap<String, InviteState>,
     member_top: usize,
     open_folders: HashSet<u64>,
-    drafts: HashMap<u64, ComposerDraft>,
     pub(crate) revealed_spoilers: HashSet<(u64, u16)>,
     revealed_blocked_run_starts: HashSet<u64>,
     revealed_profiles: HashSet<u64>,
-    pub(crate) hovered_rail: Option<u64>,
     /// The window's height in `rpx` units, as of the last frame, for popups that must fit it.
     pub(crate) window_height: f32,
     /// `rpx` per pixel as of the last frame, to measure laid-out elements in `rpx`.
     pub(crate) rpx_per_pixel: f32,
-    pub(crate) hovered_add_reaction: Option<u64>,
-    reaction_tips: reaction_tooltip::ReactionTips,
-    pub(crate) hovered_upload_button: Option<attachments::UploadButton>,
-    pub(crate) expression_info: expression_info::State,
-    pub(crate) player: Option<Player>,
-    pub(crate) video_fullscreen: Option<Fullscreen>,
-    jump: Option<JumpScroll>,
-    pub(crate) send_fill: Cell<chat::SendFill>,
-    pub(crate) pane_send_fill: Cell<chat::SendFill>,
-    /// Message flashed after a reply jump lands, with a per-jump id to replay the fade.
-    pub(crate) jump_highlight: Option<(u64, u64)>,
-    pub(crate) jump_missing: bool,
-    jump_missing_nonce: u64,
-    pub(crate) hovered_video: Option<u64>,
-    video_drag: Option<(u64, VideoDrag)>,
-    video_dragged_at: Option<Instant>,
-    pub(crate) video_seek_bounds: Rc<RefCell<Option<(u64, Bounds<Pixels>)>>>,
-    pub(crate) video_volume_bounds: Rc<RefCell<Option<(u64, Bounds<Pixels>)>>>,
-    /// Hover over the active player's mute button and its volume popup.
-    video_volume_hover: [bool; 2],
-    pub(crate) rail_morphs: guild_rail::Morphs,
-    pub(crate) folder_folds: guild_rail::FolderFolds,
+    reaction_tips: expressions::reaction_tooltip::ReactionTips,
+    pub(crate) expression_info: expressions::expression_info::State,
+    pub(crate) video: state::Video,
+    pub(crate) jumps: state::Jumps,
+    pub(crate) rail_morphs: guilds::guild_rail::Morphs,
+    pub(crate) folder_folds: guilds::guild_rail::FolderFolds,
     pub(crate) entity: WeakEntity<Self>,
     pub(crate) views: views::PanelViews,
     focus_handle: FocusHandle,
     delete_focus: FocusHandle,
     window_active: bool,
-    pub(crate) unread_since: Option<u64>,
-    /// Whether the top "new messages" bar is still shown; `unread_since` keeps the divider.
-    pub(crate) unread_bar: bool,
-    pub(crate) manual_unread: Option<u64>,
-    ack_timer: Option<Task<()>>,
-    /// Acks waiting out `ACK_SEND_DELAY`, one per channel; leaving the channel doesn't stop them.
-    outgoing_acks: HashMap<u64, Task<()>>,
+    pub(crate) unread: state::Unread,
     status_expiry: Option<SystemTime>,
     status_expiry_timer: Option<Task<()>>,
     members_timer: Option<Task<()>>,
     parsed: RefCell<ParseCache>,
     _events: Option<Task<()>>,
-    _composer_subscription: Subscription,
-    _composer_cursor_subscription: Subscription,
 }
 
 fn is_background_change(change: &Change, selected_channel_id: u64) -> bool {
@@ -414,7 +311,7 @@ fn is_background_change(change: &Change, selected_channel_id: u64) -> bool {
 
 impl DiscordApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        attachments::clear_pasted(cx);
+        messages::attachments::clear_pasted(cx);
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(1, 15)
@@ -455,32 +352,58 @@ impl DiscordApp {
             screen: Screen::Connecting,
             store: Store::seed(),
             account_theme: None,
-            activity_feed: activity_feed::ActivityFeed::default(),
+            activity_feed: activity::activity_feed::ActivityFeed::default(),
             activity_ticker: None,
             activity_popout: None,
             activity_card_tops: Default::default(),
             selected_guild_id: 0,
             selected_channel_id: 0,
             dm_error: None,
-            dm_menu: None,
-            dm_dialog: None,
-            guild_menu: None,
-            member_menu: None,
+            menus: state::Menus {
+                dm: None,
+                dm_dialog: None,
+                guild: None,
+                member: None,
+                quick_switcher: None,
+                quick_switcher_opens: 0,
+                message_search: None,
+                forward: None,
+                reactions: None,
+                reactions_openings: 0,
+            },
             calls: calls::Calls::default(),
             show_members: true,
-            composer,
-            reply: None,
-            editing: None,
-            confirm_delete: None,
-            delete_closing: None,
-            failed_sends: HashMap::new(),
-            staged: HashMap::new(),
-            upload_refusal: None,
-            upload_progress: HashMap::new(),
-            next_staged_id: 1,
-            upload_ticking: false,
-            hovered_message: None,
-            hovered_actions: None,
+            compose: state::Compose {
+                input: composer,
+                reply: None,
+                editing: None,
+                confirm_delete: None,
+                delete_closing: None,
+                failed_sends: HashMap::new(),
+                last_nonce: 0,
+                pending_sends: compose::sending::PendingSends::default(),
+                drafts: HashMap::new(),
+                send_fill: Cell::default(),
+                pane_send_fill: Cell::default(),
+                _subscription: subscription,
+                _cursor_subscription: cursor_subscription,
+            },
+            uploads: state::Uploads {
+                staged: HashMap::new(),
+                refusal: None,
+                progress: HashMap::new(),
+                next_id: 1,
+                ticking: false,
+                hovered_button: None,
+            },
+            hover: state::Hover {
+                message: None,
+                actions: None,
+                member: None,
+                account: false,
+                rail: None,
+                add_reaction: None,
+            },
             message_menu: None,
             composer_menu: None,
             shift_held: false,
@@ -497,77 +420,82 @@ impl DiscordApp {
             thread_pane: None,
             thread_previews: HashSet::new(),
             sharing_paused: None,
-            hovered_member: None,
-            hovered_account: false,
             profile: None,
             profile_styles: None,
             settings_page: None,
             settings_animation: 0,
             lightbox: None,
-            emoji_picker: None,
-            emoji_picker_closing: None,
-            emoji_picker_animation: 0,
-            emoji_picker_closed_at: None,
-            emoji_suggest: Default::default(),
-            mention_suggest: Default::default(),
-            suggest_scroll: ScrollHandle::new(),
-            mention_names: HashMap::new(),
+            emoji: state::EmojiPopup {
+                picker: None,
+                closing: None,
+                animation: 0,
+                closed_at: None,
+            },
+            suggest: state::Suggestions {
+                emoji: Default::default(),
+                mention: Default::default(),
+                scroll: ScrollHandle::new(),
+                mention_names: HashMap::new(),
+            },
             gifs: Default::default(),
             stickers: Default::default(),
             home: Default::default(),
-            quick_switcher: None,
-            quick_switcher_opens: 0,
             recent_channels: Default::default(),
             typing: HashMap::new(),
             typing_timer: None,
             typing_sent: None,
-            last_nonce: 0,
             messages,
-            channel_rows: channel_list::Rows::with_collapsed(
+            channel_rows: guilds::channel_list::Rows::with_collapsed(
                 crate::settings::get(cx).collapsed_categories,
             ),
             member_rows: ListState::new(0, ListAlignment::Top, px(400.)),
-            member_layout: member_list::Layout::default(),
+            member_layout: members::member_list::Layout::default(),
             member_subscription: None,
             live: false,
-            voice: voice::Voice::from_settings(cx),
+            voice: calls::voice::Voice::from_settings(cx),
             reconnecting: false,
             session: None,
-            game_enabled,
-            game_generation: 0,
-            current_game_application: None,
-            current_game: None,
+            game: state::Game {
+                enabled: game_enabled,
+                generation: 0,
+                application: None,
+                current: None,
+            },
             self_status: profile::StatusChange::default(),
             pending_token: None,
-            loading: HashSet::new(),
-            loading_older: HashSet::new(),
-            older_retry_at: HashMap::new(),
-            loading_newer: HashSet::new(),
-            reaction_requests: HashSet::new(),
-            pending_present: HashSet::new(),
-            pending_jump: None,
-            history_failed: HashSet::new(),
-            jump_return: None,
-            pending_sends: sending::PendingSends::default(),
-            history_complete: HashSet::new(),
+            history: state::History {
+                loading: HashSet::new(),
+                older: HashSet::new(),
+                older_retry_at: HashMap::new(),
+                newer: HashSet::new(),
+                reaction_requests: HashSet::new(),
+                pending_present: HashSet::new(),
+                pending_jump: None,
+                failed: HashSet::new(),
+                jump_return: None,
+                complete: HashSet::new(),
+            },
             forum_pages: HashMap::new(),
             forum_columns: Rc::new(Cell::new(3)),
             forum_header: None,
             invites: HashMap::new(),
             member_top: 0,
             open_folders: HashSet::new(),
-            drafts: HashMap::new(),
             revealed_spoilers: HashSet::new(),
             revealed_blocked_run_starts: HashSet::new(),
             revealed_profiles: HashSet::new(),
-            hovered_rail: None,
             window_height: f32::MAX,
             rpx_per_pixel: 1.,
-            hovered_add_reaction: None,
             reaction_tips: Default::default(),
-            hovered_upload_button: None,
-            stream_view: None,
-            stage_chat: None,
+            stream: state::Stream {
+                view: None,
+                stage_chat: None,
+                nonce: 0,
+                members_shown: true,
+                members_toggles: 0,
+                volume: None,
+                hovered_control: None,
+            },
             voice_lobby: None,
             activity_privacy: Default::default(),
             text_images: Default::default(),
@@ -576,49 +504,42 @@ impl DiscordApp {
             streamer_notice_dismissed: false,
             affinity_refresh: None,
             dm_profile: None,
-            message_search: None,
-            forward_dialog: None,
-            reactions_dialog: None,
-            reactions_openings: 0,
-            stream_nonce: 0,
-            stream_members_shown: true,
-            stream_members_toggles: 0,
-            stream_volume: None,
-            hovered_stage_control: None,
-            expression_info: expression_info::State::default(),
-            player: None,
-            video_fullscreen: None,
-            jump: None,
-            send_fill: Cell::default(),
-            pane_send_fill: Cell::default(),
-            jump_highlight: None,
-            jump_missing: false,
-            jump_missing_nonce: 0,
-            hovered_video: None,
-            video_drag: None,
-            video_dragged_at: None,
-            video_seek_bounds: Rc::new(RefCell::new(None)),
-            video_volume_bounds: Rc::new(RefCell::new(None)),
-            video_volume_hover: [false; 2],
-            rail_morphs: guild_rail::Morphs::default(),
-            folder_folds: guild_rail::FolderFolds::default(),
+            expression_info: expressions::expression_info::State::default(),
+            video: state::Video {
+                player: None,
+                fullscreen: None,
+                hovered: None,
+                drag: None,
+                dragged_at: None,
+                seek_bounds: Rc::new(RefCell::new(None)),
+                volume_bounds: Rc::new(RefCell::new(None)),
+                volume_hover: [false; 2],
+            },
+            jumps: state::Jumps {
+                scroll: None,
+                highlight: None,
+                missing: false,
+                missing_nonce: 0,
+            },
+            rail_morphs: guilds::guild_rail::Morphs::default(),
+            folder_folds: guilds::guild_rail::FolderFolds::default(),
             entity: app_entity.downgrade(),
             views,
             focus_handle: cx.focus_handle(),
             delete_focus: cx.focus_handle(),
             window_active: window.is_window_active(),
-            unread_since: None,
-            unread_bar: false,
-            manual_unread: None,
-            ack_timer: None,
-            outgoing_acks: HashMap::new(),
+            unread: state::Unread {
+                since: None,
+                bar: false,
+                manual: None,
+                ack_timer: None,
+                outgoing_acks: HashMap::new(),
+            },
             status_expiry: None,
             status_expiry_timer: None,
             members_timer: None,
             parsed: RefCell::new(ParseCache::default()),
             _events: None,
-            _composer_subscription: subscription,
-            _composer_cursor_subscription: cursor_subscription,
         };
         let mut activations = crate::notify::activations();
         cx.spawn_in(window, async move |this, cx| {
@@ -641,7 +562,7 @@ impl DiscordApp {
             while output.changed().await.is_ok() {
                 let value = output.borrow().clone();
                 let (generation, session) =
-                    match this.update(cx, |app, _| (app.game_generation, app.session.clone())) {
+                    match this.update(cx, |app, _| (app.game.generation, app.session.clone())) {
                         Ok(state) => state,
                         Err(_) => break,
                     };
@@ -657,10 +578,10 @@ impl DiscordApp {
                     (value, _) => value,
                 };
                 let applied = this.update(cx, |app, cx| {
-                    if app.game_generation != generation {
+                    if app.game.generation != generation {
                         return;
                     }
-                    if resolved.is_some() && !*app.game_enabled.borrow() {
+                    if resolved.is_some() && !*app.game.enabled.borrow() {
                         return;
                     }
                     app.apply_game_activity(resolved, cx);
@@ -688,7 +609,7 @@ impl DiscordApp {
         // The dialog unmounting (cancel, confirm or external deletion) drops its focus;
         // hand it back to the composer once the dialog is really gone.
         cx.on_blur(&app.delete_focus, window, |app, window, cx| {
-            if app.confirm_delete.is_none() {
+            if app.compose.confirm_delete.is_none() {
                 app.focus_composer(window, cx);
             }
         })
@@ -725,7 +646,7 @@ impl DiscordApp {
         app.messages.set_scroll_handler(move |event, _, cx| {
             weak.update(cx, |app, cx| {
                 // Only user scrolling reaches this handler; it takes over from a reply jump.
-                app.jump = None;
+                app.jumps.scroll = None;
                 if event.visible_range.start < OLDER_MESSAGES_THRESHOLD {
                     app.fetch_older(cx);
                 }
@@ -734,7 +655,7 @@ impl DiscordApp {
                 if event.visible_range.end + NEWER_MESSAGES_THRESHOLD >= event.count {
                     app.fetch_newer(cx);
                 }
-                if app.live && (!event.is_following_tail || app.unread_bar) {
+                if app.live && (!event.is_following_tail || app.unread.bar) {
                     let entity = app.entity.clone();
                     let channel_id = app.selected_channel_id;
                     cx.defer(move |cx| {
@@ -752,8 +673,8 @@ impl DiscordApp {
                                 if !app.messages.is_following_tail() {
                                     app.messages.set_follow_mode(FollowMode::Tail);
                                 }
-                                if app.unread_bar {
-                                    app.unread_bar = false;
+                                if app.unread.bar {
+                                    app.unread.bar = false;
                                     app.views.messages.update(cx, |_, cx| cx.notify());
                                 }
                                 app.schedule_ack(cx);
@@ -762,7 +683,7 @@ impl DiscordApp {
                     });
                 }
                 app.schedule_ack(cx);
-                if app.unread_since.is_some() || app.jump_return.is_some() {
+                if app.unread.since.is_some() || app.history.jump_return.is_some() {
                     app.views.messages.update(cx, |_, cx| cx.notify());
                 }
             })
@@ -811,12 +732,12 @@ impl DiscordApp {
     ) {
         let (activity, running) =
             game.map_or((None, None), |game| (Some(game.activity), game.running));
-        self.current_game_application = running.as_ref().and_then(|game| game.application_id);
-        self.current_game = running.map(|game| game.name);
+        self.game.application = running.as_ref().and_then(|game| game.application_id);
+        self.game.current = running.map(|game| game.name);
         if let Some(session) = &self.session {
             session.set_local_activity(activity);
         }
-        if let Some(application_id) = self.current_game_application {
+        if let Some(application_id) = self.game.application {
             self.load_game_apps(vec![application_id], cx);
         }
         self.clear_stale_sharing_card();
@@ -831,8 +752,8 @@ impl DiscordApp {
                 .session
                 .as_ref()
                 .is_some_and(|session| session.shows_current_game());
-        let was_enabled = *self.game_enabled.borrow();
-        let _ = self.game_enabled.send_if_modified(|current| {
+        let was_enabled = *self.game.enabled.borrow();
+        let _ = self.game.enabled.send_if_modified(|current| {
             if *current == enabled {
                 false
             } else {
@@ -841,9 +762,9 @@ impl DiscordApp {
             }
         });
         if was_enabled && !enabled {
-            self.game_generation = self.game_generation.wrapping_add(1);
-            self.current_game_application = None;
-            self.current_game = None;
+            self.game.generation = self.game.generation.wrapping_add(1);
+            self.game.application = None;
+            self.game.current = None;
             if let Some(session) = &self.session {
                 session.set_local_activity(None);
             }
@@ -852,7 +773,7 @@ impl DiscordApp {
     }
 
     fn clear_stale_sharing_card(&mut self) {
-        if self.current_game.is_none() || !channel_list::self_invisible(self) {
+        if self.game.current.is_none() || !guilds::channel_list::self_invisible(self) {
             self.sharing_paused = None;
         }
     }
@@ -934,293 +855,8 @@ impl DiscordApp {
         }
     }
 
-    fn handle_event(&mut self, event: Event, window: &mut Window, cx: &mut Context<Self>) {
-        match event {
-            Event::Fatal(error) => {
-                let message: SharedString = match error {
-                    FatalError::InvalidToken => {
-                        if let Err(error) = credentials::clear() {
-                            log::warn!("{error}");
-                        }
-                        "Invalid token".into()
-                    }
-                    FatalError::Other(message) => message.into(),
-                };
-                self.disconnect();
-                self.live = false;
-                let mut form = LoginForm::new(window, cx);
-                form.error = Some(message);
-                self.screen = Screen::Login(form);
-                cx.notify();
-            }
-            Event::Voice(event) => self.handle_voice_event(event, cx),
-            Event::Reconnecting => {
-                self.self_status.disconnect();
-                self.reconnecting = true;
-                cx.notify();
-            }
-            Event::Resumed => {
-                self.reconnecting = false;
-                if let Some(status) = self.selected_self_status() {
-                    self.store.set_self_status(status);
-                }
-                self.arm_status_expiry_timer(cx);
-                self.refresh_voice_start_times();
-                self.member_subscription = None;
-                self.typing.clear();
-                cx.notify();
-            }
-            Event::Ready(_) => {
-                if let Some(token) = self.pending_token.take()
-                    && let Err(error) = credentials::save(&token)
-                {
-                    log::warn!("{error}");
-                }
-                self.live = true;
-                self.reconnecting = false;
-                self.typing.clear();
-                self.thread_previews.clear();
-                let reconnect = matches!(self.screen, Screen::Chat);
-                self.member_subscription = None;
-                self.store.apply(event);
-                if let Some(status) = self.selected_self_status() {
-                    self.store.set_self_status(status);
-                }
-                self.update_game_activity();
-                self.refresh_voice_start_times();
-                self.arm_status_expiry_timer(cx);
-                self.load_user_affinities(cx);
-                self.refresh_activity_feed(true, cx);
-                self.load_saved_messages(cx);
-                self.sync_channel_rows();
-                self.screen = Screen::Chat;
-                if reconnect && self.channel().is_some() {
-                    let channel = self.selected_channel_id;
-                    let thread_pane = self.thread_pane.take();
-                    self.select_channel(channel, window, cx);
-                    self.restore_thread_pane(thread_pane, window, cx);
-                } else {
-                    self.select_initial(window, cx);
-                }
-            }
-            event => {
-                match &event {
-                    Event::TypingStart(typing) => {
-                        self.typing_started(typing.channel_id, typing.user_id, cx)
-                    }
-                    Event::MessageCreate(message) => {
-                        self.notify_message(message, cx);
-                        self.typing_stopped(message.channel_id, message.author.id, cx)
-                    }
-                    Event::MessageDelete { id, .. } => self.forget_message(*id, cx),
-                    Event::CallDelete { channel_id }
-                        if self.voice.joined_call() == Some((0, *channel_id)) =>
-                    {
-                        self.leave_voice(cx);
-                    }
-                    _ => {}
-                }
-                let supplemental = matches!(event, Event::ReadySupplemental(_));
-                let status_update = match &event {
-                    Event::SettingsUpdate(update) => update.settings.kind == 1,
-                    Event::SessionsReplace(_) | Event::ReadySupplemental(_) => true,
-                    Event::PresenceUpdate(presence) => {
-                        presence
-                            .user_id
-                            .or_else(|| presence.user.as_ref().map(|user| user.id))
-                            == Some(self.store.current_user_id)
-                    }
-                    _ => false,
-                };
-                let reacted = match &event {
-                    Event::MessageReactionAdd(event) | Event::MessageReactionRemove(event) => {
-                        Some(event.message_id)
-                    }
-                    Event::MessageReactionRemoveAll(event) => Some(event.message_id),
-                    Event::MessageReactionRemoveEmoji(event) => Some(event.message_id),
-                    Event::MessageReactionAddMany(event) => Some(event.message_id),
-                    _ => None,
-                };
-                let announced_call = match &event {
-                    Event::CallCreate(call) | Event::CallUpdate(call) => Some(call.channel_id),
-                    _ => None,
-                };
-                let relationship = matches!(
-                    event,
-                    Event::RelationshipAdd(_)
-                        | Event::RelationshipUpdate(_)
-                        | Event::RelationshipRemove { .. }
-                );
-                let change = self.store.apply(event);
-                if relationship {
-                    self.remeasure_message_lists();
-                }
-                if let Some(channel_id) = announced_call {
-                    self.ring_pending_dm_call(channel_id, cx);
-                }
-                if let Some(message_id) = reacted {
-                    self.message_reactions_changed(message_id, cx);
-                }
-                if status_update && let Some(status) = self.selected_self_status() {
-                    self.store.set_self_status(status);
-                }
-                if status_update {
-                    self.update_game_activity();
-                }
-                self.apply_change(change, window, cx);
-                if supplemental {
-                    self.restore_voice(cx);
-                }
-            }
-        }
-    }
-
-    fn apply_change(&mut self, change: Change, window: &mut Window, cx: &mut Context<Self>) {
-        self.reconcile_dm_call(cx);
-        self.arm_status_expiry_timer(cx);
-        self.follow_account_theme(cx);
-        crate::settings::set_display(cx, self.text_images());
-        self.load_activity_reply_assets(cx);
-        self.sync_thread_pane(&change, cx);
-        // Background channels only change badges, which nobody can see until a
-        // repaint; coalesce a burst into one refresh with the member sync timer.
-        if is_background_change(&change, self.selected_channel_id) {
-            self.arm_members_timer(cx);
-            return;
-        }
-        let len = self.channel().map_or(0, |channel| channel.messages.len());
-        let placeholders = self.channel().is_some_and(|channel| {
-            channel
-                .messages
-                .iter()
-                .any(|message| message.delivery != crate::store::Delivery::Sent)
-        });
-        match change {
-            Change::None => return,
-            Change::VoiceTimers => {
-                self.views.channel_list.update(cx, |_, cx| cx.notify());
-                return;
-            }
-            Change::MessageInserted { channel_id, index }
-                if channel_id == self.selected_channel_id =>
-            {
-                self.messages.splice(index..index, 1);
-                self.messages.remeasure_items(if placeholders {
-                    0..len
-                } else {
-                    index.saturating_sub(1)..(index + 2).min(len)
-                });
-                let own = self
-                    .channel()
-                    .and_then(|channel| channel.messages.get(index))
-                    .is_some_and(|message| message.author_id == self.store.current_user_id);
-                if self.unread_since.is_none() && !own && !self.viewing() {
-                    self.unread_since =
-                        self.channel()
-                            .and_then(|channel| {
-                                channel.messages[..index].iter().rev().find(|message| {
-                                    message.delivery == crate::store::Delivery::Sent
-                                })
-                            })
-                            .map(|message| message.id);
-                    self.unread_bar = self.unread_since.is_some();
-                }
-                self.schedule_ack(cx);
-            }
-            Change::MessageReplaced {
-                channel_id,
-                removed,
-                inserted,
-            } if channel_id == self.selected_channel_id => {
-                self.messages.splice(removed..removed + 1, 0);
-                self.messages.splice(inserted..inserted, 1);
-                // Confirming a successor can also move earlier optimistic placeholders.
-                self.messages.remeasure_items(if placeholders {
-                    0..len
-                } else {
-                    removed.min(inserted).saturating_sub(1)..(removed.max(inserted) + 2).min(len)
-                });
-            }
-            Change::MessageChanged { channel_id, index }
-                if channel_id == self.selected_channel_id =>
-            {
-                // Author changes can also change whether the next row has a header.
-                self.messages.remeasure_items(index..(index + 2).min(len));
-            }
-            Change::MessageRemoved { channel_id, index }
-                if channel_id == self.selected_channel_id =>
-            {
-                self.stop_player(Some(window), cx);
-                self.messages.splice(index..index + 1, 0);
-                self.messages.remeasure_items(if placeholders {
-                    0..len
-                } else {
-                    index.saturating_sub(1)..(index + 1).min(len)
-                });
-            }
-            Change::Saved => self.saved_changed(cx),
-            Change::Members { guild_id } => {
-                if guild_id.is_none_or(|id| id == self.selected_guild_id) {
-                    self.arm_members_timer(cx);
-                    if self.mention_suggestions(cx).is_some() {
-                        cx.notify();
-                    }
-                }
-                return;
-            }
-            Change::Structure => {
-                self.sync_channel_rows();
-                self.sync_member_rows();
-                if self.channel().is_none() && !self.showing_home_page() {
-                    if self.is_home() {
-                        self.open_friends(window, cx);
-                    } else if self.store.guild_by_id(self.selected_guild_id).is_none() {
-                        self.open_home(window, cx);
-                    } else {
-                        self.select_first_guild(window, cx);
-                    }
-                    return;
-                }
-                if self.messages.item_count() != len {
-                    self.messages.reset(len);
-                }
-            }
-            _ => {}
-        }
-        cx.notify();
-    }
-
-    fn sync_channel_rows(&mut self) {
-        self.request_activity_members();
-        let guild = self
-            .store
-            .guilds
-            .iter()
-            .find(|guild| guild.id == self.selected_guild_id);
-        let banner = guild.and_then(|guild| self.store.guild_banner(guild.id));
-        let selected = self.thread_parent().unwrap_or(self.selected_channel_id);
-        let opened = self.selected_channel_id;
-        let guild_id = self.selected_guild_id;
-        let store = &self.store;
-        let joined = self
-            .voice
-            .call
-            .as_ref()
-            .filter(|call| call.guild_id == guild_id)
-            .map(|call| call.channel_id);
-        self.channel_rows.sync_with_banner(
-            guild,
-            banner,
-            selected,
-            |channel_id| store.voice_members(guild_id, channel_id).len(),
-            |channel_id| store.sidebar_threads(channel_id, opened).len(),
-            joined,
-        );
-        self.request_voice_members();
-    }
-
     pub(crate) fn is_loading(&self, channel_id: u64) -> bool {
-        self.loading.contains(&channel_id)
+        self.history.loading.contains(&channel_id)
     }
 
     fn message_index(&self, message_id: u64) -> Option<usize> {
@@ -1335,311 +971,6 @@ fn collect_mentions(blocks: &[markdown::Block], ids: &mut Vec<u64>) {
             Block::CodeBlock { .. } => {}
         }
     }
-}
-
-impl Render for DiscordApp {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        views::count_render(views::ViewKind::Root);
-        rich_text::keep_registered(window, cx);
-        theme::set_image_scale(window, cx);
-        let streamer = crate::settings::streamer();
-        self.store.set_conceal_usernames(streamer.hides_personal());
-        if !streamer.enabled {
-            self.streamer_notice_dismissed = false;
-        }
-        self.rpx_per_pixel = theme::BASE_FONT_SIZE / f32::from(window.rem_size());
-        self.window_height = f32::from(window.viewport_size().height) * self.rpx_per_pixel;
-        if matches!(self.screen, Screen::Chat) {
-            self.update_member_subscription();
-            self.load_active_now_apps(cx);
-        }
-        let body = match &self.screen {
-            Screen::Login(form) => login::render(form, window, cx).into_any_element(),
-            Screen::Connecting => connecting().into_any_element(),
-            Screen::Chat => div()
-                .relative()
-                .flex()
-                .flex_1()
-                .min_h_0()
-                .child(
-                    self.views
-                        .guild_rail
-                        .clone()
-                        .cached(views::guild_rail_style()),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .rounded_tl(rpx(8.))
-                        .border_t_1()
-                        .border_l_1()
-                        .border_color(rgba(theme::border()))
-                        .bg(theme::surface(
-                            theme::Layer::High,
-                            Some(theme::Layer::Higher),
-                            theme::base_lower(),
-                        ))
-                        .child(
-                            self.views
-                                .channel_list
-                                .clone()
-                                .cached(views::channel_list_style()),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .flex_1()
-                                .min_w_0()
-                                .h_full()
-                                .bg(theme::surface(
-                                    theme::Layer::Chat,
-                                    Some(theme::Layer::High),
-                                    theme::bg(),
-                                ))
-                                .when(self.stream_chat_open(), |this| {
-                                    this.flex_none().ml_auto().w(rpx(stream_view::CHAT_WIDTH))
-                                })
-                                .child(
-                                    self.views
-                                        .chat_header
-                                        .clone()
-                                        .cached(views::chat_header_style()),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_1()
-                                        .min_h_0()
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .flex_col()
-                                                .flex_1()
-                                                .min_w_0()
-                                                .h_full()
-                                                .child(
-                                                    self.views
-                                                        .messages
-                                                        .clone()
-                                                        .cached(views::messages_style()),
-                                                )
-                                                .child(self.views.composer.clone().cached(
-                                                    views::composer_style(
-                                                        self.views.composer_height.get(),
-                                                        self.selected_forum().is_some()
-                                                            || self.showing_home_page(),
-                                                    ),
-                                                )),
-                                        )
-                                        .when(
-                                            self.search_results_open()
-                                                || (self.show_members
-                                                    && (!self.is_home()
-                                                        || self.dm_panel_width().is_some())
-                                                    && !self.stream_chat_open()
-                                                    && !self.thread_pane_open()),
-                                            |this| {
-                                                this.child(self.views.members.clone().cached(
-                                                    views::member_list_style(
-                                                        if self.search_results_open() {
-                                                            search::RESULTS_WIDTH
-                                                        } else {
-                                                            self.dm_panel_width()
-                                                                .unwrap_or(member_list::WIDTH)
-                                                        },
-                                                    ),
-                                                ))
-                                            },
-                                        )
-                                        .when(
-                                            self.thread_pane_open() && !self.search_results_open(),
-                                            |this| {
-                                                this.child(self.views.thread_pane.clone().cached(
-                                                    views::thread_pane_style(
-                                                        self.selected_forum().is_some(),
-                                                        self.thread_pane_is_dm(),
-                                                    ),
-                                                ))
-                                            },
-                                        ),
-                                ),
-                        ),
-                )
-                .when(crate::settings::user_panel_extended(), |this| {
-                    this.child(views::user_panel_overlay(&self.views))
-                })
-                .into_any_element(),
-        };
-        div()
-            .track_focus(&self.focus_handle)
-            .on_modifiers_changed(cx.listener(|app, event: &ModifiersChangedEvent, _, cx| {
-                if app.shift_held != event.modifiers.shift {
-                    app.shift_held = event.modifiers.shift;
-                    if app.hovered_message.is_some() || app.hovered_actions.is_some() {
-                        cx.notify();
-                    }
-                }
-            }))
-            .on_action(cx.listener(|app, _: &JumpToPresent, window, cx| app.escape(window, cx)))
-            .on_scroll_wheel(cx.listener(|app, _, _, cx| {
-                app.close_expression_info(cx);
-            }))
-            .on_action(cx.listener(|app, _: &MarkGuildRead, _, cx| {
-                app.mark_guild_read(app.selected_guild_id, cx)
-            }))
-            .on_action(cx.listener(|app, _: &ComposerUp, window, cx| app.composer_up(window, cx)))
-            .on_action(cx.listener(|app, _: &QuickSwitch, window, cx| {
-                app.toggle_quick_switcher(window, cx);
-            }))
-            .on_action(cx.listener(|app, _: &ComposerDown, window, cx| {
-                if !(app.move_search(1, cx)
-                    || app.move_quick_switcher(1, cx)
-                    || app.suggest_input_focused(window, cx)
-                        && (app.move_mention_suggestion(1, cx) || app.move_emoji_suggestion(1, cx)))
-                {
-                    cx.propagate();
-                }
-            }))
-            .on_action(cx.listener(|app, _: &FocusSearch, window, cx| {
-                app.open_search(window, cx);
-            }))
-            .on_action(cx.listener(|app, _: &ComposerTab, window, cx| {
-                if !(app.accept_search(window, cx)
-                    || app.suggest_input_focused(window, cx)
-                        && (app.accept_mention_suggestion(None, window, cx)
-                            || app.accept_emoji_suggestion(None, window, cx)))
-                {
-                    cx.propagate();
-                }
-            }))
-            .relative()
-            .flex()
-            .flex_col()
-            .size_full()
-            .overflow_hidden()
-            .bg(rgb(theme::base_lowest()))
-            .children(theme::gradient_backdrop())
-            .child(smooth_scroll::interceptor())
-            .text_color(rgb(theme::text()))
-            .text_size(rpx(16.))
-            .child(titlebar::render(self, window, cx))
-            .when(self.reconnecting, |this| {
-                this.child(
-                    div()
-                        .flex()
-                        .justify_center()
-                        .py_1()
-                        .bg(rgb(theme::YELLOW))
-                        .text_size(rpx(13.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(gpui::black())
-                        .child("Connection lost. Reconnecting…"),
-                )
-            })
-            .when(
-                crate::settings::streamer().enabled && !self.streamer_notice_dismissed,
-                |this| this.child(streamer_bar(cx)),
-            )
-            .child(body)
-            .child(self.views.overlays.clone().cached(views::overlays_style()))
-            .when(
-                cx.has_active_drag() && self.store.can_send(self.selected_channel_id),
-                |this| {
-                    this.child(
-                        attachments::drop_overlay(self, cx)
-                            .opacity(0.)
-                            .drag_over::<ExternalPaths>(|style, _, _, _| style.opacity(1.))
-                            .on_drop(cx.listener(|app, paths: &ExternalPaths, window, cx| {
-                                app.drop_paths(paths.paths().to_vec(), window, cx);
-                            })),
-                    )
-                },
-            )
-    }
-}
-
-fn connecting() -> impl IntoElement {
-    div()
-        .flex()
-        .flex_col()
-        .flex_1()
-        .items_center()
-        .justify_center()
-        .gap_3()
-        .child(theme::logo(64.))
-        .child(theme::spinner(24., theme::muted()))
-        .child(
-            div()
-                .text_size(rpx(14.))
-                .text_color(rgb(theme::muted()))
-                .child("Connecting to Discord…"),
-        )
-}
-
-fn streamer_bar(cx: &mut Context<DiscordApp>) -> impl IntoElement {
-    let streamer = crate::settings::streamer();
-    div()
-        .relative()
-        .flex()
-        .flex_none()
-        .justify_center()
-        .items_center()
-        .h(rpx(36.))
-        .pl(rpx(4.))
-        .pr(rpx(28.))
-        .bg(rgb(theme::STREAMER))
-        .text_size(rpx(14.))
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(gpui::white())
-        .child(if streamer.hides_personal() {
-            "Streamer Mode is enabled. Usernames have been truncated."
-        } else {
-            "Streamer Mode is enabled."
-        })
-        .child(
-            div()
-                .id("streamer-mode-off")
-                .flex()
-                .items_center()
-                .h(rpx(24.))
-                .ml(rpx(10.))
-                .px(rpx(10.))
-                .rounded(rpx(3.))
-                .border_1()
-                .border_color(gpui::white())
-                .cursor_pointer()
-                .on_click(|_, _, cx| {
-                    crate::settings::set_streamer(
-                        cx,
-                        crate::settings::StreamerMode {
-                            enabled: false,
-                            ..crate::settings::streamer()
-                        },
-                    );
-                })
-                .child("Disable"),
-        )
-        .child(
-            div()
-                .id("streamer-mode-dismiss")
-                .absolute()
-                .top_0()
-                .right_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(rpx(36.))
-                .cursor_pointer()
-                .on_click(cx.listener(|app, _, _, cx| {
-                    app.streamer_notice_dismissed = true;
-                    cx.notify();
-                }))
-                .child(theme::icon("x", 18., 0xFFFFFF)),
-        )
 }
 
 #[cfg(test)]

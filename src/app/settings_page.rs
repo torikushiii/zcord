@@ -331,7 +331,7 @@ impl DiscordApp {
             _server_search_events: server_events,
             _close: None,
         });
-        super::channel_list::hide_account_tooltip(self, cx);
+        super::guilds::channel_list::hide_account_tooltip(self, cx);
         cx.notify();
     }
 

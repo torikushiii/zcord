@@ -13,7 +13,7 @@ use crate::{
     store::NameStyle,
 };
 
-use super::message_body::{label, wrapped_label};
+use super::messages::message_body::{label, wrapped_label};
 
 mod effects;
 

@@ -63,11 +63,11 @@ impl DiscordApp {
             return;
         };
         if self.selected_guild_id != id {
-            if self.hovered_rail != Some(self.selected_guild_id) {
+            if self.hover.rail != Some(self.selected_guild_id) {
                 self.rail_morphs.start(self.selected_guild_id, false);
             }
             self.member_rows.reset(0);
-            self.member_layout = member_list::Layout::default();
+            self.member_layout = members::member_list::Layout::default();
             self.member_top = 0;
             self.dismiss_stream_card();
         }
@@ -125,7 +125,7 @@ impl DiscordApp {
             "Select a post".to_owned()
         } else if self.store.can_send(id) {
             if self.is_home() {
-                home::placeholder(&self.store, id, &name)
+                direct::home::placeholder(&self.store, id, &name)
             } else if is_thread || kind == crate::store::ChannelKind::Voice {
                 format!("Message {name}")
             } else {
@@ -141,26 +141,26 @@ impl DiscordApp {
         };
 
         let previous = self.selected_channel_id;
-        let draft = self.composer.read(cx).value().to_string();
+        let draft = self.compose.input.read(cx).value().to_string();
         if draft.is_empty() {
-            self.drafts.remove(&previous);
+            self.compose.drafts.remove(&previous);
         } else {
-            self.drafts.insert(
+            self.compose.drafts.insert(
                 previous,
                 ComposerDraft {
                     content: draft,
-                    mentions: self.mention_names.clone(),
+                    mentions: self.suggest.mention_names.clone(),
                 },
             );
         }
-        let restored = self.drafts.remove(&id).unwrap_or_default();
+        let restored = self.compose.drafts.remove(&id).unwrap_or_default();
 
         if previous != id {
             self.reset_mention_draft();
             self.expression_info.clear_open();
-            self.reply = None;
-            self.editing = None;
-            self.confirm_delete = None;
+            self.compose.reply = None;
+            self.compose.editing = None;
+            self.compose.confirm_delete = None;
             self.typing_sent = None;
             self.revealed_spoilers.clear();
             self.stop_player(Some(window), cx);
@@ -168,28 +168,28 @@ impl DiscordApp {
             self.close_reactions_dialog(cx);
             self.dismiss_reaction_tooltip();
         }
-        self.mention_names = restored.mentions;
+        self.suggest.mention_names = restored.mentions;
         self.selected_channel_id = id;
         self.load_dm_profile(cx);
         self.sync_search();
-        self.pending_jump = None;
-        self.jump_return = None;
-        self.jump_missing = false;
-        self.jump_missing_nonce += 1;
-        self.manual_unread = None;
+        self.history.pending_jump = None;
+        self.history.jump_return = None;
+        self.jumps.missing = false;
+        self.jumps.missing_nonce += 1;
+        self.unread.manual = None;
         self.recent_channels.visit(id);
         self.sync_channel_rows();
         if forum {
-            self.unread_since = None;
-            self.unread_bar = false;
+            self.unread.since = None;
+            self.unread.bar = false;
         } else {
-            self.unread_since = self
+            self.unread.since = self
                 .store
                 .channel_ack(id)
                 .map(|_| self.store.last_read(id).unwrap_or(0));
-            self.unread_bar = self.unread_since.is_some();
+            self.unread.bar = self.unread.since.is_some();
         }
-        let unread_since = self.unread_since;
+        let unread_since = self.unread.since;
         if !self.live {
             self.store.mark_channel_read(self.selected_guild_id, id);
         } else {
@@ -203,7 +203,7 @@ impl DiscordApp {
             });
         }
         self.reset_messages(if forum { 0 } else { count });
-        self.composer.update(cx, |input, cx| {
+        self.compose.input.update(cx, |input, cx| {
             input.set_placeholder(placeholder, window, cx);
             set_text(input, restored.content, window, cx);
         });
@@ -256,7 +256,9 @@ impl DiscordApp {
         cx.notify();
         if collapsed {
             cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(channel_list::FOLD).await;
+                cx.background_executor()
+                    .timer(guilds::channel_list::FOLD)
+                    .await;
                 this.update(cx, |app, cx| {
                     app.sync_channel_rows();
                     cx.notify();
@@ -280,7 +282,7 @@ impl DiscordApp {
             self.folder_folds.start(id, opening);
             cx.spawn(async move |this, cx| {
                 cx.background_executor()
-                    .timer(guild_rail::FOLDER_FOLD)
+                    .timer(guilds::guild_rail::FOLDER_FOLD)
                     .await;
                 this.update(cx, |_, cx| cx.notify()).ok();
             })
@@ -292,13 +294,13 @@ impl DiscordApp {
     pub(crate) fn set_rail_hover(&mut self, key: u64, hovered: bool, cx: &mut Context<Self>) {
         let next = if hovered {
             Some(key)
-        } else if self.hovered_rail == Some(key) {
+        } else if self.hover.rail == Some(key) {
             None
         } else {
             return;
         };
-        if self.hovered_rail != next {
-            let previous = std::mem::replace(&mut self.hovered_rail, next);
+        if self.hover.rail != next {
+            let previous = std::mem::replace(&mut self.hover.rail, next);
             for key in [previous, next].into_iter().flatten() {
                 if key != self.selected_guild_id {
                     self.rail_morphs.start(key, next == Some(key));

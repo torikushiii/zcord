@@ -1,3 +1,8 @@
+pub(super) mod call_view;
+pub(super) mod stream_view;
+pub(super) mod video;
+pub(super) mod voice;
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui::*;
@@ -246,7 +251,7 @@ impl DiscordApp {
         log::warn!("Call action failed: {error}");
         self.calls.error = Some((
             channel_id,
-            crate::app::friends::failure_text(&error, "Discord refused this call action.")
+            crate::app::direct::friends::failure_text(&error, "Discord refused this call action.")
                 .to_owned(),
         ));
     }

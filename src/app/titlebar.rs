@@ -2,7 +2,7 @@ use gpui::{prelude::*, *};
 
 use crate::app::menu::PopupButton as _;
 use crate::{
-    app::{DiscordApp, guild_rail, message_body::label},
+    app::{DiscordApp, guilds::guild_rail, messages::message_body::label},
     media::images,
     store::Guild,
     theme::{self, rpx},
@@ -64,7 +64,7 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> impl IntoElement +
                 .items_center()
                 .gap_1()
                 .pr_2()
-                .children(super::saved::overdue_pill(app))
+                .children(super::messages::saved::overdue_pill(app))
                 .child(inbox_button(app))
                 .child(nav_button("help", "circle-question-mark")),
         )

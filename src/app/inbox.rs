@@ -48,7 +48,7 @@ impl DiscordApp {
             return;
         }
         let tab = tab.unwrap_or_else(|| {
-            if self.store.overdue_reminders(saved::now_ms()) > 0 {
+            if self.store.overdue_reminders(messages::saved::now_ms()) > 0 {
                 InboxTab::Reminders
             } else {
                 self.last_inbox_tab
@@ -454,7 +454,7 @@ pub(in crate::app) fn inbox_popout(
     cx: &App,
 ) -> Option<AnyElement> {
     let inbox = app.inbox.as_ref()?;
-    let now = saved::now_ms();
+    let now = messages::saved::now_ms();
     let reminders_label = match app.store.overdue_reminders(now) {
         0 => "Reminders".to_owned(),
         count => format!("Reminders ({count})"),
@@ -467,7 +467,9 @@ pub(in crate::app) fn inbox_popout(
     let content: Vec<AnyElement> = match inbox.tab {
         InboxTab::Unreads => unreads::list(app, inbox, window, cx),
         InboxTab::Mentions => mentions::list(app, inbox, cx),
-        InboxTab::Bookmarks | InboxTab::Reminders => saved::saved_list(app, inbox, now, cx),
+        InboxTab::Bookmarks | InboxTab::Reminders => {
+            messages::saved::saved_list(app, inbox, now, cx)
+        }
         InboxTab::Scheduled => scheduled::list(app, inbox, cx),
     };
     let close = app.entity.clone();

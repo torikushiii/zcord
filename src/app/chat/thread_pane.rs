@@ -5,7 +5,7 @@ use super::*;
 use crate::app::menu::PopupButton as _;
 use crate::app::{
     OLDER_MESSAGES_THRESHOLD,
-    home::{HomePage, blocked_bar, request_bar},
+    direct::home::{HomePage, blocked_bar, request_bar},
 };
 use crate::discord::model;
 use crate::store::{Change, Channel, EmojiChoice};
@@ -320,7 +320,7 @@ impl DiscordApp {
 
     /// Scrolls to the first loaded message; at the top the scroll handler fetches older pages.
     fn seek_pane_top(&mut self, channel_id: u64, cx: &mut Context<Self>) {
-        let complete = self.history_complete.contains(&channel_id);
+        let complete = self.history.complete.contains(&channel_id);
         let Some(pane) = self
             .thread_pane
             .as_mut()
@@ -438,7 +438,7 @@ impl DiscordApp {
         };
         let content = composer_tokens::to_wire(&composer.read(cx).value());
         if self.send_pane_content(
-            crate::app::sending::with_emoji_faces(content.trim()),
+            crate::app::compose::sending::with_emoji_faces(content.trim()),
             window,
             cx,
         ) {
@@ -470,7 +470,7 @@ impl DiscordApp {
         if let Some(pane) = &self.thread_pane {
             pane.list.set_follow_mode(FollowMode::Tail);
         }
-        let files = self.staged.remove(&channel_id).unwrap_or_default();
+        let files = self.uploads.staged.remove(&channel_id).unwrap_or_default();
         self.submit_send(channel_id, content, None, files, None, window, cx);
         true
     }
@@ -1129,7 +1129,7 @@ fn composer_box(app: &DiscordApp, pane: &ThreadPane, cx: &App) -> impl IntoEleme
                             send_icon(
                                 "pane-send",
                                 send_ready,
-                                &app.pane_send_fill,
+                                &app.compose.pane_send_fill,
                                 move |_, window, cx| {
                                     entity
                                         .update(cx, |app, cx| app.send_pane_message(window, cx))

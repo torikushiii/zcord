@@ -2,7 +2,7 @@ use gpui::{prelude::*, *};
 
 use super::{Page, SettingsPage, moved};
 use crate::{
-    app::{DiscordApp, voice::switch},
+    app::{DiscordApp, calls::voice::switch},
     discord::{
         gifs::GifProvider,
         settings_proto::{StickerAnimation, TextImages},
@@ -691,7 +691,7 @@ pub(super) fn detected_games(app: &DiscordApp, settings: &SettingsPage) -> Vec<A
             .is_some_and(|session| !session.shows_current_game())
         {
             "Display current activity is turned off in your Discord account".to_owned()
-        } else if let Some(game) = &app.current_game {
+        } else if let Some(game) = &app.game.current {
             format!("Sharing: {game}")
         } else {
             "No game detected".to_owned()

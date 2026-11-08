@@ -241,7 +241,7 @@ pub(crate) struct Fullscreen {
 }
 
 pub(crate) fn fullscreen(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
-    let fullscreen = app.video_fullscreen.as_ref()?;
+    let fullscreen = app.video.fullscreen.as_ref()?;
     let video = video_box(
         app,
         Video {
@@ -269,6 +269,7 @@ pub(crate) fn fullscreen(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
 
 pub(crate) fn video_box(app: &DiscordApp, video: Video<'_>, cx: &App) -> AnyElement {
     let state = app
+        .video
         .player
         .as_ref()
         .filter(|player| player.key == video.key)
@@ -290,7 +291,8 @@ pub(crate) fn video_box(app: &DiscordApp, video: Video<'_>, cx: &App) -> AnyElem
     // The full-window player owns the controls while it is open.
     let covered = !fullscreen
         && app
-            .video_fullscreen
+            .video
+            .fullscreen
             .as_ref()
             .is_some_and(|open| open.key == video.key);
     let fit = if fullscreen {
@@ -318,7 +320,7 @@ pub(crate) fn video_box(app: &DiscordApp, video: Video<'_>, cx: &App) -> AnyElem
             .into_any_element()
     };
 
-    let hovered = app.hovered_video == Some(video.key);
+    let hovered = app.video.hovered == Some(video.key);
     let click_entity = app.entity.clone();
     let hover_entity = app.entity.clone();
     let move_entity = app.entity.clone();
@@ -491,7 +493,7 @@ fn control_bar(
     let key = target.key;
     let play_entity = app.entity.clone();
     let seek_entity = app.entity.clone();
-    let seek_bounds = app.video_seek_bounds.clone();
+    let seek_bounds = app.video.seek_bounds.clone();
     let progress = if state.duration > 0. {
         (state.position / state.duration).clamp(0., 1.) as f32
     } else {
@@ -618,7 +620,7 @@ fn volume_control(app: &DiscordApp, key: u64, state: &PlayerView) -> impl IntoEl
     let button_hover = app.entity.clone();
     let popup_hover = app.entity.clone();
     let drag_entity = app.entity.clone();
-    let volume_bounds = app.video_volume_bounds.clone();
+    let volume_bounds = app.video.volume_bounds.clone();
     let level = if state.muted { 0. } else { state.volume as f32 };
     let open = app.video_volume_open();
 

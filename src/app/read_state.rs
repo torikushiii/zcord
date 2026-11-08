@@ -6,9 +6,9 @@ fn viewing_allows_channel(manual_unread: Option<u64>, selected_channel_id: u64) 
 
 impl DiscordApp {
     pub(crate) fn mark_channel_read(&mut self, cx: &mut Context<Self>) {
-        self.unread_since = None;
-        self.unread_bar = false;
-        self.manual_unread = None;
+        self.unread.since = None;
+        self.unread.bar = false;
+        self.unread.manual = None;
         self.ack_channel_now(self.selected_channel_id, true, cx);
         cx.notify();
     }
@@ -21,10 +21,10 @@ impl DiscordApp {
         let Some((cursor, mention_count)) = self.store.mark_unread(channel_id, message_id) else {
             return;
         };
-        self.manual_unread = Some(channel_id);
-        self.unread_since = Some(cursor);
-        self.unread_bar = true;
-        self.ack_timer = None;
+        self.unread.manual = Some(channel_id);
+        self.unread.since = Some(cursor);
+        self.unread.bar = true;
+        self.unread.ack_timer = None;
         // The divider adds height to a row that may already be measured.
         self.messages.remeasure_items(0..self.messages.item_count());
         self.views.messages.update(cx, |_, cx| cx.notify());
@@ -44,16 +44,16 @@ impl DiscordApp {
     }
 
     pub(super) fn schedule_ack(&mut self, cx: &mut Context<Self>) {
-        if self.ack_timer.is_some()
+        if self.unread.ack_timer.is_some()
             || !self.live
             || self.store.channel_ack(self.selected_channel_id).is_none()
         {
             return;
         }
-        self.ack_timer = Some(cx.spawn(async move |this, cx| {
+        self.unread.ack_timer = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(ACK_DELAY).await;
             this.update(cx, |app, cx| {
-                app.ack_timer = None;
+                app.unread.ack_timer = None;
                 if app.viewing() {
                     app.ack_channel(cx);
                 }
@@ -67,7 +67,7 @@ impl DiscordApp {
             && self.window_active
             && matches!(self.screen, Screen::Chat)
             && self.messages.is_following_tail()
-            && viewing_allows_channel(self.manual_unread, self.selected_channel_id)
+            && viewing_allows_channel(self.unread.manual, self.selected_channel_id)
             && self
                 .channel()
                 .is_some_and(|channel| channel.messages_loaded)
@@ -117,11 +117,11 @@ impl DiscordApp {
                 Ok(Err(error)) => log::warn!("Could not mark channel read: {error}"),
                 Err(error) => log::warn!("Mark read task failed: {error}"),
             }
-            this.update(cx, |app, _| app.outgoing_acks.remove(&channel_id))
+            this.update(cx, |app, _| app.unread.outgoing_acks.remove(&channel_id))
                 .ok();
         });
         // A newer ack for the channel replaces one still waiting, as Discord sends only the latest.
-        self.outgoing_acks.insert(channel_id, task);
+        self.unread.outgoing_acks.insert(channel_id, task);
     }
 
     pub(crate) fn mark_guild_read(&mut self, guild_id: u64, cx: &mut Context<Self>) {
@@ -129,9 +129,9 @@ impl DiscordApp {
             return;
         };
         if guild_id == self.selected_guild_id {
-            self.unread_since = None;
-            self.unread_bar = false;
-            self.manual_unread = None;
+            self.unread.since = None;
+            self.unread.bar = false;
+            self.unread.manual = None;
         }
         cx.notify();
         let acks = self.store.unread_acks(guild_id, now_snowflake());

@@ -4,7 +4,7 @@ use gpui_component::scroll::ScrollableElement as _;
 use gpui_tokio::Tokio;
 
 use crate::{
-    app::{DiscordApp, message_body::label, now_snowflake, titlebar},
+    app::{DiscordApp, messages::message_body::label, now_snowflake, titlebar},
     discord::Session,
     quick_switcher::{self, Target},
     theme::{self, rpx},
@@ -85,7 +85,7 @@ impl DiscordApp {
             }
         });
         search.update(cx, |input, cx| input.focus(window, cx));
-        self.forward_dialog = Some(ForwardDialog {
+        self.menus.forward = Some(ForwardDialog {
             guild_id,
             channel_id,
             message_id,
@@ -101,7 +101,7 @@ impl DiscordApp {
     }
 
     pub(crate) fn close_forward_dialog(&mut self, cx: &mut Context<Self>) -> bool {
-        let open = self.forward_dialog.take().is_some();
+        let open = self.menus.forward.take().is_some();
         if open {
             cx.notify();
         }
@@ -109,7 +109,7 @@ impl DiscordApp {
     }
 
     fn rebuild_forward_results(&mut self, cx: &mut Context<Self>) {
-        let Some(dialog) = &self.forward_dialog else {
+        let Some(dialog) = &self.menus.forward else {
             return;
         };
         let query = dialog.search.read(cx).value().to_string();
@@ -155,14 +155,14 @@ impl DiscordApp {
         });
         let channels: Vec<_> = channels.collect();
         results.splice(0..0, channels);
-        if let Some(dialog) = &mut self.forward_dialog {
+        if let Some(dialog) = &mut self.menus.forward {
             dialog.results = results;
         }
         cx.notify();
     }
 
     fn toggle_forward_target(&mut self, destination: Destination, cx: &mut Context<Self>) {
-        let Some(dialog) = &mut self.forward_dialog else {
+        let Some(dialog) = &mut self.menus.forward else {
             return;
         };
         match dialog
@@ -184,7 +184,8 @@ impl DiscordApp {
             return;
         };
         let Some(dialog) = self
-            .forward_dialog
+            .menus
+            .forward
             .as_ref()
             .filter(|dialog| !dialog.sending && !dialog.selected.is_empty())
         else {
@@ -204,7 +205,7 @@ impl DiscordApp {
                 (guild, channel, forward_nonce, self.next_nonce())
             })
             .collect();
-        if let Some(dialog) = &mut self.forward_dialog {
+        if let Some(dialog) = &mut self.menus.forward {
             dialog.sending = true;
             dialog.error = None;
         }
@@ -219,7 +220,7 @@ impl DiscordApp {
                     if let Ok(Err(error)) = failure {
                         log::warn!("Could not forward the message: {error}");
                     }
-                    if let Some(dialog) = &mut app.forward_dialog {
+                    if let Some(dialog) = &mut app.menus.forward {
                         dialog.sending = false;
                         dialog.error = Some("Couldn't forward. It may have reached some of them.");
                     }
@@ -232,8 +233,8 @@ impl DiscordApp {
     }
 
     fn next_nonce(&mut self) -> u64 {
-        self.last_nonce = now_snowflake().max(self.last_nonce + 1);
-        self.last_nonce
+        self.compose.last_nonce = now_snowflake().max(self.compose.last_nonce + 1);
+        self.compose.last_nonce
     }
 }
 
@@ -342,7 +343,7 @@ fn footer_button(id: &'static str, text: String, primary: bool, enabled: bool) -
 }
 
 pub(super) fn render(app: &DiscordApp) -> Option<AnyElement> {
-    let dialog = app.forward_dialog.as_ref()?;
+    let dialog = app.menus.forward.as_ref()?;
     let backdrop = app.entity.clone();
     let cancel = app.entity.clone();
     let send = app.entity.clone();

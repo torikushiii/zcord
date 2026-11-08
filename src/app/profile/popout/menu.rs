@@ -1,7 +1,7 @@
 use gpui_component::ElementExt;
 
 use super::super::*;
-use crate::app::friends::FriendAction;
+use crate::app::direct::friends::FriendAction;
 
 type MenuBounds = Rc<Cell<Option<Bounds<Pixels>>>>;
 

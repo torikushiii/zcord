@@ -3,7 +3,7 @@ use super::*;
 impl DiscordApp {
     pub(crate) fn upload_tip(
         &self,
-        button: attachments::UploadButton,
+        button: messages::attachments::UploadButton,
         label: &'static str,
         element: Stateful<Div>,
     ) -> Stateful<Div> {
@@ -14,15 +14,15 @@ impl DiscordApp {
                 entity
                     .update(cx, |app, cx| {
                         if *hovered {
-                            app.hovered_upload_button = Some(button);
-                        } else if app.hovered_upload_button == Some(button) {
-                            app.hovered_upload_button = None;
+                            app.uploads.hovered_button = Some(button);
+                        } else if app.uploads.hovered_button == Some(button) {
+                            app.uploads.hovered_button = None;
                         }
                         cx.notify();
                     })
                     .ok();
             })
-            .when(self.hovered_upload_button == Some(button), |this| {
+            .when(self.uploads.hovered_button == Some(button), |this| {
                 this.child(theme::tooltip_above(label))
             })
     }
@@ -35,13 +35,13 @@ impl DiscordApp {
     ) {
         let next = if hovered {
             Some(message_id)
-        } else if self.hovered_add_reaction == Some(message_id) {
+        } else if self.hover.add_reaction == Some(message_id) {
             None
         } else {
             return;
         };
-        if self.hovered_add_reaction != next {
-            self.hovered_add_reaction = next;
+        if self.hover.add_reaction != next {
+            self.hover.add_reaction = next;
             cx.notify();
         }
     }
@@ -54,9 +54,9 @@ impl DiscordApp {
         cx: &mut Context<Self>,
     ) {
         let slot = if actions {
-            &mut self.hovered_actions
+            &mut self.hover.actions
         } else {
-            &mut self.hovered_message
+            &mut self.hover.message
         };
         let next = if hovered {
             Some(message_id)

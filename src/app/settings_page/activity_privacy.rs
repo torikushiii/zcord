@@ -4,7 +4,7 @@ use gpui_component::input::Input;
 
 use super::{SettingsPage, sections};
 use crate::{
-    app::{DiscordApp, menu, voice::switch},
+    app::{DiscordApp, calls::voice::switch, menu},
     discord::settings_proto::{ActivityPrivacy, NewServerSharing},
     media::images,
     store::{Guild, RailEntry},

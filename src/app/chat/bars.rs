@@ -9,16 +9,16 @@ pub(super) fn new_messages_bar(
     app: &DiscordApp,
     entity: WeakEntity<DiscordApp>,
 ) -> Option<AnyElement> {
-    if !app.unread_bar || is_detached(app) {
+    if !app.unread.bar || is_detached(app) {
         return None;
     }
-    let since = app.unread_since?;
+    let since = app.unread.since?;
     let channel = app.channel()?;
     let index = channel.first_unread_index(since, app.store.current_user_id)?;
     if app.messages.item_is_above_viewport(index) != Some(true) {
         return None;
     }
-    let truncated = index == 0 && !app.history_complete.contains(&channel.id);
+    let truncated = index == 0 && !app.history.complete.contains(&channel.id);
     let count = channel.unread_message_count(since, app.store.current_user_id);
     let timestamp = channel.messages[index].timestamp;
     let today = chrono::Local::now().date_naive();
@@ -86,7 +86,7 @@ pub(super) fn new_messages_bar(
 }
 
 pub(super) fn jump_missing_notice(app: &DiscordApp) -> Option<AnyElement> {
-    app.jump_missing.then(|| {
+    app.jumps.missing.then(|| {
         div()
             .absolute()
             .top(rpx(8.))
@@ -136,8 +136,8 @@ pub(super) fn history_bar(app: &DiscordApp, entity: WeakEntity<DiscordApp>) -> O
     if !app.live || !app.channel().is_some_and(|channel| channel.messages_loaded) {
         return None;
     }
-    let loading = app.loading.contains(&channel_id);
-    let (id, text, end, action): (_, _, _, BarAction) = if app.history_failed.contains(&channel_id)
+    let loading = app.history.loading.contains(&channel_id);
+    let (id, text, end, action): (_, _, _, BarAction) = if app.history.failed.contains(&channel_id)
     {
         (
             "messages-failed",
@@ -150,9 +150,10 @@ pub(super) fn history_bar(app: &DiscordApp, entity: WeakEntity<DiscordApp>) -> O
             |app, window, cx| app.retry_history(window, cx),
         )
     } else if let Some((_, reply_id)) = app
+        .history
         .jump_return
         .filter(|(channel, _)| *channel == channel_id)
-        && !(loading && app.pending_present.contains(&channel_id))
+        && !(loading && app.history.pending_present.contains(&channel_id))
         && !reply_visible(app, reply_id)
     {
         (
@@ -163,7 +164,7 @@ pub(super) fn history_bar(app: &DiscordApp, entity: WeakEntity<DiscordApp>) -> O
         )
     } else if !is_detached(app) {
         return None;
-    } else if loading && app.pending_present.contains(&channel_id) {
+    } else if loading && app.history.pending_present.contains(&channel_id) {
         (
             "jump-to-present",
             "You're Viewing Older Messages",

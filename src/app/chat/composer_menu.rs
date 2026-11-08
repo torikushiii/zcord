@@ -79,7 +79,7 @@ impl DiscordApp {
 
     fn composer_for(&self, target: ComposerTarget) -> Option<Entity<TextareaState>> {
         match target {
-            ComposerTarget::Main => Some(self.composer.clone()),
+            ComposerTarget::Main => Some(self.compose.input.clone()),
             ComposerTarget::Pane => self.pane_composer(),
         }
     }

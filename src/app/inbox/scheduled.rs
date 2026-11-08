@@ -240,11 +240,12 @@ impl DiscordApp {
         };
         let (send_at, content) = match &edit.kind {
             EditKind::Time { date, time } => {
-                let due = saved::parse_custom(&date.read(cx).value(), &time.read(cx).value());
+                let due =
+                    messages::saved::parse_custom(&date.read(cx).value(), &time.read(cx).value());
                 let now = Local::now();
                 match due {
                     Some(due) if due > now && due <= now + LATEST => {
-                        (Some(saved::wire_time(due)), None)
+                        (Some(messages::saved::wire_time(due)), None)
                     }
                     Some(due) if due > now => {
                         edit.error = Some("Pick a time within the next 8 days.".into());

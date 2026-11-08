@@ -5,8 +5,8 @@ use super::rows::is_system;
 use super::*;
 use crate::app::display_name::{self, Surface};
 use crate::app::menu::PopupButton as _;
-use crate::app::message_body::render_body_scaled;
-use crate::app::rich_text::{Action, Piece};
+use crate::app::messages::message_body::render_body_scaled;
+use crate::app::messages::rich_text::{Action, Piece};
 
 pub(in crate::app) fn body_context<'a>(app: &'a DiscordApp, message_id: u64) -> BodyContext<'a> {
     BodyContext {
@@ -668,11 +668,13 @@ fn render_message_with(
         && !trailing_edited
         && !embeds::hides_content(&message.content, &message.embeds);
     let editing = app
+        .compose
         .editing
         .as_ref()
         .filter(|editing| !preview && editing.message_id == message.id);
     let replying = !preview
         && app
+            .compose
             .reply
             .as_ref()
             .is_some_and(|reply| reply.message_id == message.id);
@@ -703,7 +705,7 @@ fn render_message_with(
                 message.author_id,
                 message.webhook.as_ref(),
                 size,
-                !preview && app.hovered_message == Some(message.id),
+                !preview && app.hover.message == Some(message.id),
                 cx,
             ))
     };
@@ -782,7 +784,8 @@ fn render_message_with(
             }
         })
         .children(
-            app.jump_highlight
+            app.jumps
+                .highlight
                 .filter(|(id, _)| *id == message.id && !preview)
                 .map(|(_, nonce)| {
                     div()
@@ -1024,8 +1027,8 @@ fn message_editor(app: &DiscordApp, editing: &Editing, cx: &App) -> impl IntoEle
                         .text_color(rgb(theme::text())),
                 )
                 .child(emoji_token_overlay(&editing.input))
-                .children(crate::app::mentions::suggestions(app, cx))
-                .children(crate::app::emoji_picker::suggestions(app, cx)),
+                .children(crate::app::messages::mentions::suggestions(app, cx))
+                .children(crate::app::expressions::emoji_picker::suggestions(app, cx)),
         )
         .child(
             div()
@@ -1052,6 +1055,7 @@ fn send_failure(app: &DiscordApp, message_id: u64) -> impl IntoElement {
     let retry = app.entity.clone();
     let dismiss = app.entity.clone();
     let error = app
+        .compose
         .failed_sends
         .get(&message_id)
         .map_or("Message failed to send.", |failed| failed.error.as_str())

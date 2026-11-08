@@ -1,3 +1,6 @@
+pub(super) mod member_list;
+pub(super) mod member_menu;
+
 use super::*;
 
 impl DiscordApp {

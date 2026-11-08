@@ -33,7 +33,7 @@ fn dialog_button(id: &'static str, text: &'static str, bg: u32, hover: u32) -> S
 }
 
 pub(in crate::app) fn delete_dialog(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
-    let message_id = app.confirm_delete?;
+    let message_id = app.compose.confirm_delete?;
     let message = app
         .channel()?
         .messages

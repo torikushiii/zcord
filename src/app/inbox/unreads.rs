@@ -209,7 +209,7 @@ impl DiscordApp {
 }
 
 fn now() -> u64 {
-    saved::now_ms().max(0) as u64
+    messages::saved::now_ms().max(0) as u64
 }
 
 pub(super) fn mark_all_button(app: &DiscordApp) -> AnyElement {

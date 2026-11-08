@@ -6,7 +6,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 
 use super::{Page, SettingsPage, sections};
 use crate::{
-    app::{DiscordApp, voice::switch},
+    app::{DiscordApp, calls::voice::switch},
     games::{
         programs::{self, Program},
         registry::{self, GameKey, RegisteredGame},
@@ -217,14 +217,14 @@ impl DiscordApp {
 
 pub(super) fn page(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> Vec<AnyElement> {
     let games = registry::games();
-    let playing = |game: &RegisteredGame| match (game.application_id, &app.current_game) {
+    let playing = |game: &RegisteredGame| match (game.application_id, &app.game.current) {
         (_, None) => false,
-        (Some(id), Some(_)) => app.current_game_application == Some(id),
-        (None, Some(name)) => app.current_game_application.is_none() && *name == game.name,
+        (Some(id), Some(_)) => app.game.application == Some(id),
+        (None, Some(name)) => app.game.application.is_none() && *name == game.name,
     };
     let current = games.iter().find(|game| playing(game));
     let mut current_rows = sections::detected_games(app, settings);
-    current_rows.push(current_card(app, current, app.current_game.as_deref()));
+    current_rows.push(current_card(app, current, app.game.current.as_deref()));
     current_rows.push(add_line(app, &settings.games, current.is_some(), cx));
     let added = if games.is_empty() {
         vec![sections::note("No games added")]
@@ -280,7 +280,7 @@ fn current_card(
 ) -> AnyElement {
     let (name, verified) = match (game, playing) {
         (Some(game), _) => (game.name.clone(), game.verified()),
-        (None, Some(name)) => (name.to_owned(), app.current_game_application.is_some()),
+        (None, Some(name)) => (name.to_owned(), app.game.application.is_some()),
         (None, None) => ("No game detected".to_owned(), false),
     };
     let toggle = game.map(|game| {

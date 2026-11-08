@@ -2,7 +2,7 @@ use gpui::{Context, IntoElement, Render, TestAppContext, Window, div, prelude::*
 
 use super::message::{attachment_reply_preview, passive_reply_pieces};
 use crate::{
-    app::rich_text::{Action, Chip, Content, Piece, PieceStyle},
+    app::messages::rich_text::{Action, Chip, Content, Piece, PieceStyle},
     theme::{self, rpx},
 };
 

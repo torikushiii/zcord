@@ -11,7 +11,7 @@ use gpui_component::ActiveTheme;
 
 use super::{ArtSlot, ProfileCard, ProfilePalette, Stack, StackHover, Tab};
 use crate::{
-    app::{DISCORD_EPOCH_MS, DiscordApp, message_body::label},
+    app::{DISCORD_EPOCH_MS, DiscordApp, messages::message_body::label},
     discord::model::{
         Game, IdentityProfile, ListenedTrack, OutboxEntry, OutboxKind, OutboxTrait, PersonalImage,
         PersonalSection, PublicApplication, SkuPrice, StatValue, WidgetAsset, WidgetData,

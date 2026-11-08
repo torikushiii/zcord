@@ -10,12 +10,14 @@ use gpui_component::{
 use crate::{
     app::{
         DIALOG_EXIT, DISCORD_EPOCH_MS, DiscordApp, Editing, JUMP_HIGHLIGHT, MESSAGE_LIMIT,
-        ReplyTarget, embeds,
-        emoji_picker::{self, PickerTarget},
-        forum, home,
-        message_body::{BodyContext, label, preview_pieces, render_body, wrapped_label},
+        ReplyTarget,
+        direct::home,
+        expressions::emoji_picker::{self, PickerTarget},
+        guilds::forum,
+        messages::embeds,
+        messages::message_body::{BodyContext, label, preview_pieces, render_body, wrapped_label},
+        messages::rich_text::rich_text,
         profile,
-        rich_text::rich_text,
         search::search_box,
     },
     media::animated,
@@ -38,7 +40,7 @@ mod rows;
 mod skeleton;
 mod thread_pane;
 mod thread_ui;
-use crate::app::invite_card;
+use crate::app::guilds::invite_card;
 pub(super) use actions::{MessageMenu, message_menu};
 use bars::{history_bar, is_detached, jump_missing_notice, new_messages_bar};
 pub(crate) use composer::{SendFill, TEXTAREA_BUILTIN_INSET_X, TEXTAREA_BUILTIN_INSET_Y, composer};
@@ -202,7 +204,7 @@ pub fn messages(app: &DiscordApp, cx: &App) -> AnyElement {
                     )
                 }
             } else if channel.is_some_and(|channel| channel.messages.is_empty())
-                && app.history_complete.contains(&app.selected_channel_id)
+                && app.history.complete.contains(&app.selected_channel_id)
             {
                 this.child(
                     div()

@@ -14,7 +14,7 @@ use super::{
 use crate::{
     app::{
         DiscordApp,
-        voice::{
+        calls::voice::{
             device_menu::{DeviceKind, choices, current, device_line},
             switch,
         },

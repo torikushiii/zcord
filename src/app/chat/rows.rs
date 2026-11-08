@@ -83,7 +83,7 @@ pub(super) fn render_pane_row(
     {
         return hidden_row(index + 1 == messages.len());
     }
-    let start = index == 0 && app.history_complete.contains(&channel_id);
+    let start = index == 0 && app.history.complete.contains(&channel_id);
     let post = app.store.forum_post(channel_id);
     let intro = start.then(|| match post {
         Some(post) => Some(post_intro(app, post, &channel.name, cx).into_any_element()),
@@ -140,8 +140,8 @@ pub(super) fn render_row(app: &DiscordApp, index: usize, cx: &App) -> AnyElement
     {
         return hidden_row(index + 1 == messages.len());
     }
-    let start = index == 0 && app.history_complete.contains(&app.selected_channel_id);
-    let first_unread = app.unread_since.is_some_and(|since| {
+    let start = index == 0 && app.history.complete.contains(&app.selected_channel_id);
+    let first_unread = app.unread.since.is_some_and(|since| {
         is_first_unread(messages, index, since, start, app.store.current_user_id)
     });
     div()

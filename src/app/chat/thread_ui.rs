@@ -5,7 +5,7 @@ use std::{future::Future, pin::Pin};
 use super::actions::{menu_divider, menu_entry};
 use super::*;
 use crate::{
-    app::{forum::relative_time, titlebar},
+    app::{guilds::forum::relative_time, titlebar},
     discord::Error,
 };
 

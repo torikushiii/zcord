@@ -1,6 +1,6 @@
 use super::*;
-use crate::app::attachments::UploadButton;
-use crate::app::expression_info::{Expression, HoverOwner};
+use crate::app::expressions::expression_info::{Expression, HoverOwner};
+use crate::app::messages::attachments::UploadButton;
 use crate::discord::settings_proto::StickerAnimation;
 use crate::store::AttachmentExt as _;
 

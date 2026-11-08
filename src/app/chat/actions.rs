@@ -1,6 +1,6 @@
 use super::rows::is_system;
 use super::*;
-use crate::app::emoji_picker::{PickerTarget, choice_name, emoji_image};
+use crate::app::expressions::emoji_picker::{PickerTarget, choice_name, emoji_image};
 use crate::app::menu::PopupButton as _;
 use crate::store::EmojiChoice;
 
@@ -260,7 +260,7 @@ pub(super) fn has_actions(message: &Message) -> bool {
 pub(super) fn message_actions(app: &DiscordApp, message: &Message, cx: &App) -> Option<AnyElement> {
     let id = message.id;
     let menu_open = app.message_menu.is_some_and(|menu| menu.message_id == id);
-    if !(app.hovered_message == Some(id) || app.hovered_actions == Some(id) || menu_open)
+    if !(app.hover.message == Some(id) || app.hover.actions == Some(id) || menu_open)
         || !has_actions(message)
     {
         return None;
@@ -663,8 +663,12 @@ pub(in crate::app) fn message_menu(app: &DiscordApp, cx: &App) -> Option<AnyElem
             let channel_id = app.selected_channel_id;
             let bookmarked = app.store.is_bookmarked(id);
             let hover = app.entity.clone();
-            let presets =
-                crate::app::saved::preset_rows(app, "menu-reminder-preset", channel_id, id);
+            let presets = crate::app::messages::saved::preset_rows(
+                app,
+                "menu-reminder-preset",
+                channel_id,
+                id,
+            );
             this.child(menu_entry(
                 app,
                 "menu-bookmark",
@@ -707,7 +711,7 @@ pub(in crate::app) fn message_menu(app: &DiscordApp, cx: &App) -> Option<AnyElem
                                 anchored().snap_to_window_with_margin(px(8.)).child(
                                     div()
                                         .pl(rpx(16.))
-                                        .child(crate::app::saved::preset_panel(presets)),
+                                        .child(crate::app::messages::saved::preset_panel(presets)),
                                 ),
                             )
                             .with_priority(3),

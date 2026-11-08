@@ -57,14 +57,14 @@ impl DiscordApp {
         self._events = None;
         self.pending_token = None;
         self.reconnecting = false;
-        self.loading.clear();
-        self.loading_older.clear();
-        self.loading_newer.clear();
-        self.pending_present.clear();
-        self.history_failed.clear();
-        self.jump_return = None;
-        self.pending_sends.clear();
-        self.history_complete.clear();
+        self.history.loading.clear();
+        self.history.older.clear();
+        self.history.newer.clear();
+        self.history.pending_present.clear();
+        self.history.failed.clear();
+        self.history.jump_return = None;
+        self.compose.pending_sends.clear();
+        self.history.complete.clear();
         self.forum_pages.clear();
         self.invites.clear();
         self.member_subscription = None;
@@ -76,10 +76,10 @@ impl DiscordApp {
         self.voice_lobby = None;
         self.affinity_refresh = None;
         self.voice.speaking.clear();
-        self.current_game_application = None;
-        self.current_game = None;
+        self.game.application = None;
+        self.game.current = None;
         self.thread_previews.clear();
-        self.reactions_dialog = None;
+        self.menus.reactions = None;
         self.dismiss_reaction_tooltip();
         self.update_game_activity();
     }

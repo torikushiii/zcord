@@ -1,7 +1,9 @@
 use super::message::{author_name, message_author_name};
 use super::*;
-use crate::app::attachments::{MAX_FILES, Refusal, STAGED_PREVIEW, StagedFile, UploadButton};
-use crate::app::mentions;
+use crate::app::messages::attachments::{
+    MAX_FILES, Refusal, STAGED_PREVIEW, StagedFile, UploadButton,
+};
+use crate::app::messages::mentions;
 use gpui_component::{ActiveTheme, input::Paste};
 
 const PREVIEW_MAX_BYTES: u64 = 20 * 1024 * 1024;
@@ -11,7 +13,7 @@ pub(super) const TYPING_HEIGHT: f32 = 24.;
 pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
     let can_send = app.store.can_send(app.selected_channel_id);
     // Discord counts the sent form, so tokens count as their `<:name:id>` markup.
-    let text = app.composer.read(cx).text();
+    let text = app.compose.input.read(cx).text();
     let length = if text.chars().any(composer_tokens::is_token_char) {
         composer_tokens::to_wire(&text.to_string()).chars().count()
     } else {
@@ -21,9 +23,9 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
     let picker_anchor = Rc::new(Cell::new(None));
     let staged = app.staged_files();
     let send_ready = can_send && (!staged.is_empty() || !text.to_string().trim().is_empty());
-    let joined_top = app.reply.is_some() || !staged.is_empty();
+    let joined_top = app.compose.reply.is_some() || !staged.is_empty();
     let paste = app.entity.clone();
-    let composer_input = app.composer.clone();
+    let composer_input = app.compose.input.clone();
     let send_button = crate::settings::get(cx).composer_send_button;
     div()
         .relative()
@@ -53,10 +55,16 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
             }
         })
         .children(
-            app.upload_refusal
+            app.uploads
+                .refusal
                 .map(|refusal| refusal_banner(app, refusal)),
         )
-        .children(app.reply.as_ref().map(|reply| reply_banner(app, reply, cx)))
+        .children(
+            app.compose
+                .reply
+                .as_ref()
+                .map(|reply| reply_banner(app, reply, cx)),
+        )
         .children((!staged.is_empty()).then(|| staged_row(app, staged, cx)))
         .child(
             div()
@@ -89,7 +97,7 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                             .ok();
                     }
                 })
-                .when(app.editing.is_none(), |this| {
+                .when(app.compose.editing.is_none(), |this| {
                     this.children(mentions::suggestions(app, cx))
                         .children(emoji_picker::suggestions(app, cx))
                 })
@@ -116,14 +124,14 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                         .min_w_0()
                         .ml_4()
                         .child(
-                            flush_textarea(Textarea::new(&app.composer))
+                            flush_textarea(Textarea::new(&app.compose.input))
                                 .disabled(!can_send)
                                 .py(rpx(17.))
                                 .text_size(rpx(16.))
                                 .line_height(rpx(22.))
                                 .text_color(rgb(theme::text())),
                         )
-                        .child(emoji_token_overlay(&app.composer)),
+                        .child(emoji_token_overlay(&app.compose.input)),
                 )
                 .child(
                     div()
@@ -194,11 +202,16 @@ pub(crate) fn composer(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                         })
                         .children(send_button.then(|| {
                             let entity = app.entity.clone();
-                            send_icon("send", send_ready, &app.send_fill, move |_, window, cx| {
-                                entity
-                                    .update(cx, |app, cx| app.send_message(window, cx))
-                                    .ok();
-                            })
+                            send_icon(
+                                "send",
+                                send_ready,
+                                &app.compose.send_fill,
+                                move |_, window, cx| {
+                                    entity
+                                        .update(cx, |app, cx| app.send_message(window, cx))
+                                        .ok();
+                                },
+                            )
                         })),
                 )
                 .when(remaining < 200, |this| {
@@ -481,7 +494,7 @@ pub(super) fn staged_row(
         // The action bar hangs 24 past the last tile, and a scroller clips it otherwise.
         .pr(rpx(34.))
         .overflow_x_scroll()
-        .when(app.reply.is_none(), |this| this.rounded_t(rpx(8.)))
+        .when(app.compose.reply.is_none(), |this| this.rounded_t(rpx(8.)))
         .bg(rgb(theme::elevated()))
         .border_1()
         .border_b_0()

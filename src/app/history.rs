@@ -12,20 +12,20 @@ impl DiscordApp {
             return;
         }
         smooth_scroll::cancel(cx);
-        self.unread_since = None;
-        self.unread_bar = false;
-        self.manual_unread = None;
-        self.jump_return = None;
+        self.unread.since = None;
+        self.unread.bar = false;
+        self.unread.manual = None;
+        self.history.jump_return = None;
         let channel_id = self.selected_channel_id;
         let needs_present = self.live
-            && (self.pending_sends.has_channel(channel_id)
+            && (self.compose.pending_sends.has_channel(channel_id)
                 || self.channel().is_some_and(|channel| {
                     !channel.messages_loaded || !self.store.at_present(channel.id)
                 }));
         if needs_present {
-            self.jump = None;
+            self.jumps.scroll = None;
             self.messages.set_follow_mode(FollowMode::Tail);
-            self.pending_present.insert(channel_id);
+            self.history.pending_present.insert(channel_id);
             self.fetch_history(channel_id, None, window, cx);
         } else {
             self.glide_to_present(window, cx);
@@ -35,7 +35,7 @@ impl DiscordApp {
 
     fn glide_to_present(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if cx.reduce_motion() || self.messages.is_following_tail() {
-            self.jump = None;
+            self.jumps.scroll = None;
             self.messages.set_follow_mode(FollowMode::Tail);
             return;
         }
@@ -43,19 +43,19 @@ impl DiscordApp {
     }
 
     fn start_jump(&mut self, target: JumpTarget, window: &mut Window, cx: &mut Context<Self>) {
-        let nonce = self.jump.as_ref().map_or(0, |jump| jump.nonce) + 1;
-        self.jump = Some(JumpScroll { target, nonce });
+        let nonce = self.jumps.scroll.as_ref().map_or(0, |jump| jump.nonce) + 1;
+        self.jumps.scroll = Some(JumpScroll { target, nonce });
         self.step_jump(nonce, window, cx);
     }
 
     pub(crate) fn retry_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let channel_id = self.selected_channel_id;
-        if self.loading.contains(&channel_id) {
+        if self.history.loading.contains(&channel_id) {
             return;
         }
         self.jump_to_present(window, cx);
-        if !self.loading.contains(&channel_id) {
-            self.history_failed.remove(&channel_id);
+        if !self.history.loading.contains(&channel_id) {
+            self.history.failed.remove(&channel_id);
         }
         cx.notify();
     }
@@ -68,11 +68,11 @@ impl DiscordApp {
         cx: &mut Context<Self>,
     ) {
         self.jump_to_message(quoted_id, window, cx);
-        self.jump_return = Some((self.selected_channel_id, reply_id));
+        self.history.jump_return = Some((self.selected_channel_id, reply_id));
     }
 
     pub(crate) fn jump_back_to_reply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some((channel_id, reply_id)) = self.jump_return.take()
+        if let Some((channel_id, reply_id)) = self.history.jump_return.take()
             && channel_id == self.selected_channel_id
         {
             self.jump_to_message(reply_id, window, cx);
@@ -93,7 +93,7 @@ impl DiscordApp {
     }
 
     pub(crate) fn jump_to_unread(&mut self, cx: &mut Context<Self>) {
-        let Some(since) = self.unread_since else {
+        let Some(since) = self.unread.since else {
             return;
         };
         smooth_scroll::cancel(cx);
@@ -107,7 +107,7 @@ impl DiscordApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.jump_return = None;
+        self.history.jump_return = None;
         self.go_to_message(message_id, window, cx);
     }
 
@@ -174,7 +174,7 @@ impl DiscordApp {
         if let Some(index) = self.message_index(message_id) {
             self.messages.set_follow_mode(FollowMode::Normal);
             if cx.reduce_motion() {
-                self.jump = None;
+                self.jumps.scroll = None;
                 self.messages.scroll_to_reveal_item(index);
                 self.highlight_jump(message_id, cx);
                 cx.notify();
@@ -182,7 +182,7 @@ impl DiscordApp {
             }
             self.start_jump(JumpTarget::Message(message_id), window, cx);
         } else if self.live {
-            self.pending_jump = Some(message_id);
+            self.history.pending_jump = Some(message_id);
             self.fetch_history(self.selected_channel_id, Some(message_id), window, cx);
         }
     }
@@ -196,7 +196,12 @@ impl DiscordApp {
     /// target is recomputed every frame because rows measured on the way change its offset;
     /// a far target is first approached by a jump to within a viewport.
     fn step_jump(&mut self, nonce: u64, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(jump) = self.jump.as_ref().filter(|jump| jump.nonce == nonce) else {
+        let Some(jump) = self
+            .jumps
+            .scroll
+            .as_ref()
+            .filter(|jump| jump.nonce == nonce)
+        else {
             return;
         };
         let jump_target = jump.target;
@@ -209,7 +214,7 @@ impl DiscordApp {
         let target = match jump_target {
             JumpTarget::Message(message_id) => {
                 let Some(index) = self.message_index(message_id) else {
-                    self.jump = None;
+                    self.jumps.scroll = None;
                     return;
                 };
                 let top = self.messages.offset_for_item(index);
@@ -231,7 +236,7 @@ impl DiscordApp {
         self.messages.scroll_by(current + step - logical);
         self.views.messages.update(cx, |_, cx| cx.notify());
         if distance.abs() < px(1.) {
-            self.jump = None;
+            self.jumps.scroll = None;
             match jump_target {
                 JumpTarget::Message(message_id) => self.highlight_jump(message_id, cx),
                 JumpTarget::Present => self.messages.set_follow_mode(FollowMode::Tail),
@@ -248,17 +253,18 @@ impl DiscordApp {
     }
 
     fn highlight_jump(&mut self, message_id: u64, cx: &mut Context<Self>) {
-        let nonce = self.jump_highlight.map_or(0, |(_, nonce)| nonce) + 1;
-        self.jump_highlight = Some((message_id, nonce));
+        let nonce = self.jumps.highlight.map_or(0, |(_, nonce)| nonce) + 1;
+        self.jumps.highlight = Some((message_id, nonce));
         // Clear it once faded, so scrolling the row back into view doesn't replay the flash.
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(JUMP_HIGHLIGHT).await;
             this.update(cx, |app, _| {
                 if app
-                    .jump_highlight
+                    .jumps
+                    .highlight
                     .is_some_and(|(_, current)| current == nonce)
                 {
-                    app.jump_highlight = None;
+                    app.jumps.highlight = None;
                 }
             })
             .ok();
@@ -267,15 +273,15 @@ impl DiscordApp {
     }
 
     fn flash_jump_missing(&mut self, cx: &mut Context<Self>) {
-        self.jump_missing = true;
+        self.jumps.missing = true;
         self.views.messages.update(cx, |_, cx| cx.notify());
-        self.jump_missing_nonce += 1;
-        let nonce = self.jump_missing_nonce;
+        self.jumps.missing_nonce += 1;
+        let nonce = self.jumps.missing_nonce;
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(JUMP_MISSING).await;
             this.update(cx, |app, cx| {
-                if app.jump_missing && app.jump_missing_nonce == nonce {
-                    app.jump_missing = false;
+                if app.jumps.missing && app.jumps.missing_nonce == nonce {
+                    app.jumps.missing = false;
                     app.views.messages.update(cx, |_, cx| cx.notify());
                     cx.notify();
                 }
@@ -295,7 +301,7 @@ impl DiscordApp {
         let Some(session) = self.session.clone() else {
             return;
         };
-        if !self.loading.insert(channel_id) {
+        if !self.history.loading.insert(channel_id) {
             return;
         }
         let guild_id = self
@@ -326,22 +332,22 @@ impl DiscordApp {
         cx.spawn_in(window, async move |this, cx| {
             let result = request.await;
             this.update_in(cx, |app, window, cx| {
-                app.loading.remove(&channel_id);
+                app.history.loading.remove(&channel_id);
                 match result {
                     Ok(Ok(messages)) => {
-                        app.history_failed.remove(&channel_id);
-                        app.history_complete.remove(&channel_id);
+                        app.history.failed.remove(&channel_id);
+                        app.history.complete.remove(&channel_id);
                         match around {
                             Some(_) => app.store.set_around_messages(channel_id, messages),
                             None => {
                                 if messages.len() < MESSAGE_PAGE {
-                                    app.history_complete.insert(channel_id);
+                                    app.history.complete.insert(channel_id);
                                 }
                                 app.store.set_messages(channel_id, messages);
                             }
                         }
                         if around == Some(0) {
-                            app.history_complete.insert(channel_id);
+                            app.history.complete.insert(channel_id);
                         }
                         app.request_missing_members(channel_id);
                         app.reset_thread_pane(channel_id, cx);
@@ -350,7 +356,7 @@ impl DiscordApp {
                             app.reset_messages(count);
                             if let Some(since) = around {
                                 app.messages.set_follow_mode(FollowMode::Normal);
-                                if app.pending_jump.take() == Some(since) {
+                                if app.history.pending_jump.take() == Some(since) {
                                     if let Some(index) = app.message_index(since) {
                                         app.messages.scroll_to(ListOffset {
                                             item_ix: index,
@@ -365,7 +371,7 @@ impl DiscordApp {
                                                 .ok();
                                         });
                                     } else {
-                                        app.jump_return = None;
+                                        app.history.jump_return = None;
                                         app.scroll_to_unread(since);
                                         app.flash_jump_missing(cx);
                                     }
@@ -387,31 +393,33 @@ impl DiscordApp {
                         }
                     }
                     Ok(Err(error)) => {
-                        app.pending_jump = None;
-                        app.history_failed.insert(channel_id);
+                        app.history.pending_jump = None;
+                        app.history.failed.insert(channel_id);
                         if around.is_some()
                             && app
+                                .history
                                 .jump_return
                                 .is_some_and(|(channel, _)| channel == channel_id)
                         {
-                            app.jump_return = None;
+                            app.history.jump_return = None;
                         }
                         log::warn!("Could not load messages: {error}");
                     }
                     Err(error) => {
-                        app.pending_jump = None;
-                        app.history_failed.insert(channel_id);
+                        app.history.pending_jump = None;
+                        app.history.failed.insert(channel_id);
                         if around.is_some()
                             && app
+                                .history
                                 .jump_return
                                 .is_some_and(|(channel, _)| channel == channel_id)
                         {
-                            app.jump_return = None;
+                            app.history.jump_return = None;
                         }
                         log::warn!("History task failed: {error}");
                     }
                 }
-                if app.pending_present.remove(&channel_id) && around.is_some() {
+                if app.history.pending_present.remove(&channel_id) && around.is_some() {
                     app.fetch_history(channel_id, None, window, cx);
                 }
                 cx.notify();
@@ -437,7 +445,7 @@ impl DiscordApp {
         else {
             return;
         };
-        if self.store.at_present(channel_id) || !self.loading_newer.insert(channel_id) {
+        if self.store.at_present(channel_id) || !self.history.newer.insert(channel_id) {
             return;
         }
         let guild_id = self.request_guild();
@@ -449,10 +457,10 @@ impl DiscordApp {
         cx.spawn(async move |this, cx| {
             let result = request.await;
             this.update(cx, |app, cx| {
-                app.loading_newer.remove(&channel_id);
+                app.history.newer.remove(&channel_id);
                 match result {
                     Ok(Ok(messages)) => {
-                        app.history_failed.remove(&channel_id);
+                        app.history.failed.remove(&channel_id);
                         let current_newest = app
                             .history_channel(channel_id)
                             .and_then(|channel| channel.newest_history_message())
@@ -490,11 +498,11 @@ impl DiscordApp {
                         }
                     }
                     Ok(Err(error)) => {
-                        app.history_failed.insert(channel_id);
+                        app.history.failed.insert(channel_id);
                         log::warn!("Could not load newer messages: {error}");
                     }
                     Err(error) => {
-                        app.history_failed.insert(channel_id);
+                        app.history.failed.insert(channel_id);
                         log::warn!("History task failed: {error}");
                     }
                 }
@@ -522,13 +530,14 @@ impl DiscordApp {
             return;
         };
         if self
+            .history
             .older_retry_at
             .get(&channel_id)
             .is_some_and(|at| Instant::now() < *at)
         {
             return;
         }
-        if self.history_complete.contains(&channel_id) || !self.loading_older.insert(channel_id) {
+        if self.history.complete.contains(&channel_id) || !self.history.older.insert(channel_id) {
             return;
         }
         let guild_id = self.request_guild();
@@ -540,10 +549,10 @@ impl DiscordApp {
         cx.spawn(async move |this, cx| {
             let result = request.await;
             this.update(cx, |app, cx| {
-                app.loading_older.remove(&channel_id);
+                app.history.older.remove(&channel_id);
                 match result {
                     Ok(Ok(messages)) => {
-                        app.older_retry_at.remove(&channel_id);
+                        app.history.older_retry_at.remove(&channel_id);
                         let current_oldest = app
                             .history_channel(channel_id)
                             .and_then(|channel| channel.oldest_history_message())
@@ -554,7 +563,7 @@ impl DiscordApp {
                         }
                         let complete = messages.len() < OLDER_PAGE;
                         if complete {
-                            app.history_complete.insert(channel_id);
+                            app.history.complete.insert(channel_id);
                         }
                         let optimistic = app.history_channel(channel_id).is_some_and(|channel| {
                             channel
@@ -587,12 +596,14 @@ impl DiscordApp {
                         }
                     }
                     Ok(Err(error)) => {
-                        app.older_retry_at
+                        app.history
+                            .older_retry_at
                             .insert(channel_id, Instant::now() + OLDER_RETRY_DELAY);
                         log::warn!("Could not load older messages: {error}");
                     }
                     Err(error) => {
-                        app.older_retry_at
+                        app.history
+                            .older_retry_at
                             .insert(channel_id, Instant::now() + OLDER_RETRY_DELAY);
                         log::warn!("History task failed: {error}");
                     }
