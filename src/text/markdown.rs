@@ -41,6 +41,10 @@ pub enum SpanKind {
     Code(String),
     UserMention(u64),
     ChannelMention(u64),
+    MessageLink {
+        channel_id: u64,
+        message_id: u64,
+    },
     RoleMention(u64),
     Everyone,
     Here,
@@ -120,6 +124,12 @@ pub fn plain_text_with(blocks: &[Block], resolve: impl Fn(&SpanKind) -> Option<S
                             Some(name) => text.push_str(&format!("#{name}")),
                             None => text.push_str(&format!("#{id}")),
                         },
+                        SpanKind::MessageLink { channel_id, .. } => {
+                            match resolve(&SpanKind::ChannelMention(*channel_id)) {
+                                Some(name) => text.push_str(&format!("#{name} › message")),
+                                None => text.push_str(&format!("#{channel_id} › message")),
+                            }
+                        }
                         SpanKind::RoleMention(id) => match resolve(&span.kind) {
                             Some(name) => text.push_str(&format!("@{name}")),
                             None => text.push_str(&format!("@&{id}")),
@@ -393,10 +403,14 @@ impl Parser {
                             push_span(&mut output, SpanKind::Text(literal), style, link)
                         }
                         Atom::Url(url) => {
-                            let kind = channel_url(&url).map_or_else(
-                                || SpanKind::Text(url.clone()),
-                                SpanKind::ChannelMention,
-                            );
+                            let kind = match channel_url(&url) {
+                                Some((channel_id, Some(message_id))) => SpanKind::MessageLink {
+                                    channel_id,
+                                    message_id,
+                                },
+                                Some((channel_id, None)) => SpanKind::ChannelMention(channel_id),
+                                None => SpanKind::Text(url.clone()),
+                            };
                             push_span(&mut output, kind, style, Some(&url))
                         }
                         Atom::Label { label, url } => {
@@ -647,7 +661,7 @@ fn word_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-fn channel_url(value: &str) -> Option<u64> {
+fn channel_url(value: &str) -> Option<(u64, Option<u64>)> {
     let url = reqwest::Url::parse(value).ok()?;
     if url.scheme() != "https"
         || !matches!(
@@ -676,7 +690,11 @@ fn channel_url(value: &str) -> Option<u64> {
         return None;
     }
     let channel = segments.next()?.parse().ok()?;
-    segments.next().is_none().then_some(channel)
+    let message = match segments.next() {
+        None => None,
+        Some(message) => Some(message.parse().ok()?),
+    };
+    segments.next().is_none().then_some((channel, message))
 }
 
 fn syntax_pairs(text: &str) -> (Vec<Option<usize>>, Vec<Option<usize>>) {
@@ -1656,7 +1674,16 @@ mod tests {
             assert_eq!(actual[0].kind, SpanKind::Text(url.clone()));
             assert_eq!(actual[0].link.as_deref(), Some("https://example.com"));
             let message = format!("{url}/789");
-            assert_eq!(spans(&message)[0].kind, SpanKind::Text(message));
+            assert_eq!(
+                spans(&message)[0].kind,
+                SpanKind::MessageLink {
+                    channel_id: 456,
+                    message_id: 789
+                }
+            );
+            assert_eq!(spans(&message)[0].link.as_deref(), Some(message.as_str()));
+            let deeper = format!("{url}/789/1");
+            assert_eq!(spans(&deeper)[0].kind, SpanKind::Text(deeper));
         }
         for url in [
             "https://discord.com.evil.test/channels/123/456",

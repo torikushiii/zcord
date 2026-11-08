@@ -42,6 +42,10 @@ pub enum Action {
     },
     /// A standard emoji, by its character sequence.
     InspectDefaultEmoji(SharedString),
+    OpenChannel {
+        channel_id: u64,
+        message_id: Option<u64>,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -78,6 +82,7 @@ pub struct PieceStyle {
 pub enum EmojiSource {
     Still(ImageSource),
     Animated(Arc<RenderImage>),
+    Icon(SharedString),
 }
 
 pub enum Content {
@@ -228,13 +233,7 @@ impl Fonts {
             font.family = self.mono.clone();
         }
         let link = matches!(style.action, Some(Action::OpenUrl(_)));
-        let color = match style.chip {
-            Some(Chip::Mention { color: Some(color) }) if !hovered => rgb(color).into(),
-            Some(Chip::Mention { .. }) if hovered => white(),
-            Some(Chip::Mention { .. }) => rgb(theme::mention_text()).into(),
-            _ if link => style.color.unwrap_or_else(|| rgb(theme::link()).into()),
-            _ => style.color.unwrap_or(self.color),
-        };
+        let color = self.color(style, hovered);
         let underline = style.underline || (link && hovered);
         TextRun {
             len,
@@ -291,6 +290,17 @@ impl Fonts {
             None,
             || SharedString::from(text.to_owned()),
         )
+    }
+
+    fn color(&self, style: &PieceStyle, hovered: bool) -> Hsla {
+        let link = matches!(style.action, Some(Action::OpenUrl(_)));
+        match style.chip {
+            Some(Chip::Mention { color: Some(color) }) if !hovered => rgb(color).into(),
+            Some(Chip::Mention { .. }) if hovered => white(),
+            Some(Chip::Mention { .. }) => rgb(theme::mention_text()).into(),
+            _ if link => style.color.unwrap_or_else(|| rgb(theme::link()).into()),
+            _ => style.color.unwrap_or(self.color),
+        }
     }
 
     fn padding(style: &PieceStyle, font_size: Pixels) -> Pixels {
@@ -1153,6 +1163,12 @@ impl Element for RichText {
                                 .id(("emoji", fragment.piece))
                                 .into_any_element()
                         }
+                        EmojiSource::Icon(path) => svg()
+                            .path(path.clone())
+                            .size(emoji_size)
+                            .flex_none()
+                            .text_color(state.fonts.color(&piece.style, false))
+                            .into_any_element(),
                     };
                     let inset = if icon.is_some() {
                         (fragment.width - emoji_size) / 2.

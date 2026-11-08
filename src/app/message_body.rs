@@ -56,6 +56,17 @@ impl BodyContext<'_> {
         let message_id = self.message_id;
         move |action, window, cx| match action {
             Action::OpenUrl(url) => cx.open_url(url),
+            Action::OpenChannel {
+                channel_id,
+                message_id,
+            } => {
+                let (channel_id, message_id) = (*channel_id, *message_id);
+                entity
+                    .update(cx, |app, cx| {
+                        app.open_channel_link(channel_id, message_id, window, cx)
+                    })
+                    .ok();
+            }
             Action::OpenUserProfile(user_id) => {
                 let position = window.mouse_position() + point(px(16.), px(-40.));
                 entity
@@ -608,7 +619,44 @@ fn span_pieces(
         },
         SpanKind::ChannelMention(id) => {
             chip(Chip::Mention { color: None }, &mut style);
-            format!("#{}", store.channel_name(*id).unwrap_or("unknown"))
+            let name = store.channel_name(*id);
+            if name.is_some() && !hidden {
+                style.action = Some(Action::OpenChannel {
+                    channel_id: *id,
+                    message_id: None,
+                });
+            }
+            format!("#{}", name.unwrap_or("unknown"))
+        }
+        SpanKind::MessageLink {
+            channel_id,
+            message_id,
+        } => {
+            let Some(name) = store.channel_name(*channel_id) else {
+                return vec![Piece::text(span.link.clone().unwrap_or_default(), style)];
+            };
+            chip(Chip::Mention { color: None }, &mut style);
+            if !hidden {
+                style.action = Some(Action::OpenChannel {
+                    channel_id: *channel_id,
+                    message_id: Some(*message_id),
+                });
+            }
+            let icon = |name: &str| Piece {
+                content: Content::Emoji(
+                    Some(EmojiSource::Icon(format!("app/{name}.svg").into())),
+                    SharedString::default(),
+                ),
+                style: PieceStyle {
+                    icon: Some(IconShape::Square),
+                    ..style.clone()
+                },
+            };
+            return vec![
+                Piece::text(format!("#{name}"), style.clone()),
+                icon("chevron-right"),
+                icon("message-bubble"),
+            ];
         }
         SpanKind::Everyone => {
             chip(Chip::Mention { color: None }, &mut style);
@@ -899,7 +947,10 @@ mod tests {
                     link: None,
                 };
                 let pieces = span_pieces(&span, false, &context, 1, cx);
-                assert!(pieces[0].style.action.is_none());
+                assert!(!matches!(
+                    pieces[0].style.action,
+                    Some(Action::OpenUserProfile(_))
+                ));
                 assert!(matches!(pieces[0].style.chip, Some(Chip::Mention { .. })));
             }
         });

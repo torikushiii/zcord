@@ -116,6 +116,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "mail",
     "mail-filled",
     "megaphone",
+    "message-bubble",
     "message-circle",
     "message-square",
     "maximize-2",
