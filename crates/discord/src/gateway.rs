@@ -61,7 +61,7 @@ impl CommandReceiver {
     fn disconnected(&mut self) {
         let _ = self
             .generation
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |value| {
                 Some(if value % 2 == 1 {
                     value.wrapping_add(1)
                 } else {

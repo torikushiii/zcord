@@ -64,7 +64,7 @@ struct Slot(Arc<AtomicUsize>);
 impl Slot {
     fn reserve(count: &Arc<AtomicUsize>) -> Option<Self> {
         count
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |held| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |held| {
                 (held < PLAYBACK_FRAMES).then_some(held + 1)
             })
             .ok()
