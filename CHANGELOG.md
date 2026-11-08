@@ -2,6 +2,21 @@
 
 ## Unversioned
 
+## 0.8.0
+
+- Major: Rebuilt the Appearance settings: Light, Ash, Dark and Onyx themes, Same as Device Theme, Nitro color themes with a custom theme editor, and options to sync your theme across devices and apply it to other people's profiles.
+- Major: Added the Messages, Chat Box, Search and Streamer Mode sections to Appearance, synced with your Discord account: inline media, embeds, reactions, spoilers, split-view threads, emoticon conversion, sticker and game suggestions, searching across all DMs, and Streamer Mode with automatic detection of OBS and XSplit.
+- Major: Added the Favorites server to the server rail.
+- Major: Rebuilt the Accessibility settings to match Discord's: text size, underlined links, display name styles, message display, space between message groups, zoom, role colors, on/off indicators, reduced motion synced with Windows, minimum notification duration, GIF, emoji and sticker animation, and image descriptions, with a live preview and Discord-style sliders.
+- Major: Links to Discord messages now show as a channel chip, and clicking channel or message links opens them in zcord instead of the browser.
+- Minor: Added Tweaks for quiet replies, avatars and role icons in mentions, avatars of who reacted on each reaction, and avatars with role colors in the typing indicator.
+- Minor: Animated stickers can now play always, only on hover, or never, and GIFs pause while zcord isn't focused.
+- Minor: Images with a description now get an ALT badge that shows it on hover, when image descriptions are turned on.
+- Minor: The thread side pane now follows Compact mode and the group spacing setting.
+- Minor: Who reacted tooltips and the reactions list now work for messages in the side pane.
+- Bugfix: Fixed notifications for embed-only messages having no text.
+- Bugfix: Fixed notification titles naming the server when the channel has no category.
+
 ## 0.7.0
 
 - Major: Added the Inbox with Unreads, Mentions, Bookmarks, Reminders and Scheduled tabs. Messages can be bookmarked or given a reminder, and due reminders notify you.
