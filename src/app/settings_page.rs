@@ -1,5 +1,8 @@
 use gpui_component::scroll::ScrollableElement as _;
-use std::time::Duration;
+use std::{
+    cell::Cell,
+    time::{Duration, Instant},
+};
 
 use gpui::{prelude::*, *};
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -10,6 +13,9 @@ use crate::{
 };
 
 mod activity_privacy;
+mod appearance;
+mod marker_slider;
+mod preview;
 mod registered_games;
 mod sections;
 mod voice_audio;
@@ -17,6 +23,11 @@ mod voice_audio;
 pub(crate) use voice_audio::apply_preferences;
 
 const ENTER: Duration = Duration::from_millis(180);
+const SECTION_SCROLL: Duration = Duration::from_millis(300);
+const SUBNAV_FOLD: Duration = Duration::from_millis(230);
+const THUMB_SLIDE: Duration = Duration::from_millis(150);
+const SUBNAV_ITEM: f32 = 36.;
+const CONTENT_TOP: f32 = 48.;
 const EXIT: Duration = Duration::from_millis(120);
 const MARGIN: f32 = 32.;
 const MAX_WIDTH: f32 = 1400.;
@@ -84,16 +95,61 @@ const PAGES: &[PageInfo] = &[
         group: "Experience",
         label: "Appearance",
         icon: "palette",
-        sections: &[],
-        keywords: &["zoom", "scale", "size", "font", "theme", "light", "dark"],
+        sections: &["Theme", "Messages", "Chat Box", "Search", "Streamer Mode"],
+        keywords: &[
+            "theme",
+            "light",
+            "dark",
+            "ash",
+            "onyx",
+            "gradient",
+            "color",
+            "spoiler",
+            "reactions",
+            "embeds",
+            "emoticons",
+            "favorites",
+            "threads",
+            "streamer",
+            "send button",
+        ],
     },
     PageInfo {
         page: Page::Accessibility,
         group: "Experience",
         label: "Accessibility",
         icon: "accessibility",
-        sections: &[],
-        keywords: &["reduce motion", "animation"],
+        sections: &[
+            "Text Readability",
+            "Visual Density",
+            "Color & Contrast",
+            "Reduced Motion",
+            "Audio & Screen Reader",
+        ],
+        keywords: &[
+            "reduce motion",
+            "animation",
+            "compact",
+            "cozy",
+            "message display",
+            "spacing",
+            "zoom",
+            "scale",
+            "font",
+            "size",
+            "underline",
+            "links",
+            "display name",
+            "role colors",
+            "indicators",
+            "notification duration",
+            "autoplay",
+            "gif",
+            "emoji",
+            "sticker",
+            "image descriptions",
+            "alt text",
+        ],
     },
     PageInfo {
         page: Page::Chat,
@@ -101,16 +157,7 @@ const PAGES: &[PageInfo] = &[
         label: "Chat",
         icon: "message-square",
         sections: &[],
-        keywords: &[
-            "gif",
-            "klipy",
-            "tenor",
-            "giphy",
-            "autoplay",
-            "emoji",
-            "link preview",
-            "embed",
-        ],
+        keywords: &["gif", "klipy", "tenor", "giphy"],
     },
     PageInfo {
         page: Page::Notifications,
@@ -185,6 +232,13 @@ const PAGES: &[PageInfo] = &[
             "animate",
             "animation",
             "avatar",
+            "reply",
+            "ping",
+            "mention",
+            "role icon",
+            "reactions",
+            "who reacted",
+            "typing",
         ],
     },
 ];
@@ -210,6 +264,13 @@ pub(crate) struct SettingsPage {
     server_sort_open: bool,
     servers_expanded: bool,
     games: registered_games::GamesPage,
+    custom_theme: Option<appearance::CustomEditor>,
+    spoiler_menu_open: bool,
+    role_colors_menu_open: bool,
+    subnav_previous: Option<Page>,
+    subnav_key: u64,
+    thumb: Cell<(usize, usize, u64)>,
+    _section_scroll: Option<Task<()>>,
     _games_watch: Task<()>,
     _search_events: Subscription,
     _server_search_events: Subscription,
@@ -258,6 +319,13 @@ impl DiscordApp {
             server_sort_open: false,
             servers_expanded: false,
             games: Default::default(),
+            custom_theme: None,
+            spoiler_menu_open: false,
+            role_colors_menu_open: false,
+            subnav_previous: None,
+            subnav_key: 0,
+            thumb: Cell::new((0, 0, 0)),
+            _section_scroll: None,
             _games_watch: Self::watch_registered_games(cx),
             _search_events: events,
             _server_search_events: server_events,
@@ -301,11 +369,18 @@ impl DiscordApp {
             return;
         };
         if settings.page != page {
+            settings.subnav_previous = Some(settings.page);
+            settings.subnav_key = settings.subnav_key.wrapping_add(1);
+            settings.thumb.set((0, 0, settings.subnav_key));
             settings.page = page;
+            settings.spoiler_menu_open = false;
+            settings.role_colors_menu_open = false;
+            // A section scroll still running belongs to the old page.
+            settings._section_scroll = None;
             settings.scroll.set_offset(point(px(0.), px(0.)));
         }
         if let Some(section) = section {
-            settings.scroll.scroll_to_item(section);
+            self.scroll_to_section(section, cx);
         }
         if page == Page::VoiceVideo {
             self.ensure_voice_audio(cx);
@@ -352,6 +427,41 @@ impl DiscordApp {
             }));
         }
         cx.notify();
+    }
+
+    fn scroll_to_section(&mut self, section: usize, cx: &mut Context<Self>) {
+        let content_top = px(CONTENT_TOP / self.rpx_per_pixel);
+        let Some(settings) = &mut self.settings_page else {
+            return;
+        };
+        let scroll = settings.scroll.clone();
+        let (Some(item), viewport) = (scroll.bounds_for_item(section), scroll.bounds()) else {
+            return;
+        };
+        let from = scroll.offset().y;
+        let target = (viewport.top() - item.top() + content_top)
+            .min(px(0.))
+            .max(-scroll.max_offset().y);
+        if cx.reduce_motion() {
+            scroll.set_offset(point(px(0.), target));
+            cx.notify();
+            return;
+        }
+        settings._section_scroll = Some(cx.spawn(async move |this, cx| {
+            let started = Instant::now();
+            loop {
+                let progress =
+                    (started.elapsed().as_secs_f32() / SECTION_SCROLL.as_secs_f32()).min(1.);
+                let eased = 1. - (1. - progress).powi(3);
+                scroll.set_offset(point(px(0.), from + (target - from) * eased));
+                if this.update(cx, |_, cx| cx.notify()).is_err() || progress >= 1. {
+                    break;
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(8))
+                    .await;
+            }
+        }));
     }
 
     fn mark_switch_moved(&mut self, id: &'static str) {
@@ -573,11 +683,11 @@ fn sidebar(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> impl IntoElem
                         .child(group[0].group),
                 )
                 .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(rpx(4.))
-                        .children(group.iter().map(|info| sidebar_item(app, settings, info))),
+                    div().flex().flex_col().gap(rpx(4.)).children(
+                        group
+                            .iter()
+                            .map(|info| sidebar_item(app, settings, info, cx)),
+                    ),
                 )
                 .into_any_element()
         })
@@ -674,7 +784,12 @@ fn sidebar(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> impl IntoElem
         )
 }
 
-fn sidebar_item(app: &DiscordApp, settings: &SettingsPage, info: &'static PageInfo) -> Div {
+fn sidebar_item(
+    app: &DiscordApp,
+    settings: &SettingsPage,
+    info: &'static PageInfo,
+    cx: &App,
+) -> Div {
     let selected = settings.page == info.page;
     let foreground = if selected {
         theme::strong()
@@ -709,42 +824,151 @@ fn sidebar_item(app: &DiscordApp, settings: &SettingsPage, info: &'static PageIn
         })
         .child(theme::icon(info.icon, 20., foreground))
         .child(info.label);
-    let subsections = selected.then(|| {
-        div()
-            .flex()
-            .flex_col()
-            .ml(rpx(18.))
-            .my(rpx(4.))
-            .border_l_1()
-            .border_color(rgba(theme::border()))
-            .children(info.sections.iter().enumerate().map(|(index, name)| {
-                let entity = app.entity.clone();
-                div()
-                    .id((info.label, index as u64))
-                    .flex()
-                    .items_center()
-                    .h(rpx(36.))
-                    .pl(rpx(13.))
-                    .cursor_pointer()
-                    .text_size(rpx(16.))
-                    .text_color(rgb(theme::muted()))
-                    .hover(|style| style.text_color(rgb(theme::text())))
-                    .on_click(move |_, _, cx| {
-                        entity
-                            .update(cx, |app, cx| {
-                                app.select_settings_page(page, Some(index), cx)
-                            })
-                            .ok();
-                    })
-                    .child(*name)
-            }))
-    });
+    let folding = settings.subnav_previous == Some(page) && !selected;
+    let subnav = (selected || folding)
+        .then(|| subnav(app, settings, info, selected, cx.reduce_motion()))
+        .filter(|_| !info.sections.is_empty());
     div()
         .flex()
         .flex_col()
         .flex_none()
         .child(row)
-        .children(subsections.filter(|_| !info.sections.is_empty()))
+        .children(subnav)
+}
+
+fn active_section(settings: &SettingsPage, count: usize, rpx_per_pixel: f32) -> usize {
+    let scroll = &settings.scroll;
+    let offset = scroll.offset().y;
+    if count == 0 {
+        return 0;
+    }
+    if scroll.max_offset().y > px(0.) && -offset >= scroll.max_offset().y - px(1.) {
+        return count - 1;
+    }
+    let view_top = scroll.bounds().top() - offset + px((CONTENT_TOP + 16.) / rpx_per_pixel);
+    (0..count)
+        .take_while(|&index| {
+            scroll
+                .bounds_for_item(index)
+                .is_some_and(|bounds| bounds.top() <= view_top)
+        })
+        .last()
+        .unwrap_or(0)
+}
+
+fn subnav(
+    app: &DiscordApp,
+    settings: &SettingsPage,
+    info: &'static PageInfo,
+    open: bool,
+    reduce_motion: bool,
+) -> AnyElement {
+    let page = info.page;
+    let count = info.sections.len();
+    let height = count as f32 * SUBNAV_ITEM;
+    let active = if open {
+        active_section(settings, count, app.rpx_per_pixel)
+    } else {
+        settings.thumb.get().1
+    };
+    let (from, to, key) = settings.thumb.get();
+    let (from, key) = if open && to != active {
+        let key = key.wrapping_add(1);
+        settings.thumb.set((to, active, key));
+        (to, key)
+    } else {
+        (from, key)
+    };
+    let thumb_top = |index: usize| 8. + index as f32 * SUBNAV_ITEM;
+    let thumb = div()
+        .absolute()
+        .left_0()
+        .w(rpx(2.))
+        .h(rpx(20.))
+        .rounded(rpx(1.))
+        .bg(rgb(theme::strong()))
+        .top(rpx(thumb_top(active)));
+    let thumb = if from == active || reduce_motion {
+        thumb.into_any_element()
+    } else {
+        let (start, end) = (thumb_top(from), thumb_top(active));
+        thumb
+            .with_animation(
+                ("settings-subnav-thumb", key),
+                Animation::new(THUMB_SLIDE).with_easing(ease_out_quint()),
+                move |this, delta| this.top(rpx(start + (end - start) * delta)),
+            )
+            .into_any_element()
+    };
+    let items = info.sections.iter().enumerate().map(|(index, name)| {
+        let entity = app.entity.clone();
+        div()
+            .id((info.label, index as u64))
+            .flex()
+            .items_center()
+            .h(rpx(20.))
+            .mt(rpx(if index == 0 { 0. } else { 16. }))
+            .pl(rpx(19.))
+            .cursor_pointer()
+            .text_size(rpx(16.))
+            .line_height(rpx(20.))
+            .text_color(rgb(if open && index == active {
+                theme::strong()
+            } else {
+                theme::muted()
+            }))
+            .hover(|style| style.text_color(rgb(theme::text())))
+            .on_click(move |_, _, cx| {
+                entity
+                    .update(cx, |app, cx| {
+                        app.select_settings_page(page, Some(index), cx)
+                    })
+                    .ok();
+            })
+            .child(*name)
+    });
+    let body = div()
+        .relative()
+        .flex()
+        .flex_col()
+        .py(rpx(8.))
+        .ml(rpx(17.))
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .top(rpx(8.))
+                .bottom(rpx(8.))
+                .w(rpx(2.))
+                .bg(rgba(theme::control()))
+                .when(open, |this| this.child(thumb)),
+        )
+        .children(items);
+    let container = div().flex_none().overflow_hidden().child(body);
+    if reduce_motion {
+        return if open {
+            container.into_any_element()
+        } else {
+            div().into_any_element()
+        };
+    }
+    let fold = SUBNAV_FOLD.as_secs_f32();
+    container
+        .with_animation(
+            ("settings-subnav", settings.subnav_key * 2 + u64::from(open)),
+            Animation::new(SUBNAV_FOLD),
+            move |this, delta| {
+                let elapsed = delta * fold;
+                let grow = 1. - (1. - (elapsed / 0.2).min(1.)).powi(2);
+                let (height_share, fade) = if open {
+                    (grow, ((elapsed - 0.08) / 0.15).clamp(0., 1.))
+                } else {
+                    (1. - grow, 1. - (elapsed / 0.15).min(1.))
+                };
+                this.h(rpx(height * height_share)).opacity(fade)
+            },
+        )
+        .into_any_element()
 }
 
 fn footer() -> impl IntoElement {
@@ -822,6 +1046,22 @@ fn content(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> impl IntoElem
                 .flex_col()
                 .flex_1()
                 .min_h_0()
+                .when(settings.page == Page::Accessibility, |this| {
+                    this.child(
+                        div()
+                            .flex_none()
+                            .px(rpx(40.))
+                            .pt(rpx(24.))
+                            .pb(rpx(16.))
+                            .child(
+                                div()
+                                    .mx_auto()
+                                    .w_full()
+                                    .max_w(rpx(content_width))
+                                    .child(preview::preview(app, cx)),
+                            ),
+                    )
+                })
                 .child(
                     div()
                         .id("settings-content")
@@ -829,10 +1069,20 @@ fn content(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> impl IntoElem
                         .min_h_0()
                         .overflow_y_scroll()
                         .track_scroll(&settings.scroll)
+                        .on_scroll_wheel({
+                            let entity = app.entity.clone();
+                            move |_, _, cx| {
+                                entity.update(cx, |_, cx| cx.notify()).ok();
+                            }
+                        })
                         .flex()
                         .flex_col()
                         .px(rpx(if voice_page { 0. } else { 40. }))
-                        .pt(rpx(if voice_page { 64. } else { 48. }))
+                        .pt(rpx(match settings.page {
+                            Page::VoiceVideo => 64.,
+                            Page::Accessibility => 16.,
+                            _ => 48.,
+                        }))
                         // Voice & Video is the tallest page. At 80 its content overflows the pane by
                         // the bottom padding alone, leaving a few pixels of empty scroll range.
                         .pb(rpx(if voice_page { 24. } else { 80. }))

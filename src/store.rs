@@ -32,6 +32,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 pub use calls::DmCall;
 pub use expressions::{PickerSticker, StickerSection, sticker_matches};
 use home::PrivateLocation;
+pub use mapping::conceal;
 use mapping::{
     channel_unread, forum_new_posts, local_timestamp, map_components, map_decoration, map_guild,
     map_message, map_name_style, map_nameplate, map_reactions, map_snapshot, map_stickers,
@@ -76,6 +77,9 @@ pub struct Store {
     guild_indices: HashMap<u64, usize>,
     folder_layout: Option<Vec<settings_proto::GuildFolder>>,
     account_theme: Option<settings_proto::AccountTheme>,
+    client_theme: Option<settings_proto::ClientTheme>,
+    text_images: settings_proto::TextImages,
+    favorites: settings_proto::Favorites,
     frecency: Option<Vec<u8>>,
     favorite_gifs: Vec<settings_proto::FavoriteGif>,
     content_inbox: Option<model::ContentInbox>,
@@ -220,6 +224,8 @@ pub enum Change {
     Notifications,
     VoiceTimers,
     Theme,
+    TextImages,
+    Favorites,
     Saved,
 }
 
@@ -232,6 +238,9 @@ impl Store {
             .unwrap_or_default();
         let folder_layout = settings.folders;
         let account_theme = settings.theme;
+        let client_theme = settings.client_theme;
+        let text_images = settings.text_images.unwrap_or_default();
+        let favorites = settings.favorites.unwrap_or_default();
         if folder_layout.is_none() {
             log::warn!("Server folder settings unavailable; using READY order");
         }
@@ -326,6 +335,9 @@ impl Store {
             guild_indices: HashMap::new(),
             folder_layout,
             account_theme,
+            client_theme,
+            text_images,
+            favorites,
             frecency: None,
             favorite_gifs: Vec::new(),
             content_inbox: None,

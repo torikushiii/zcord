@@ -39,6 +39,12 @@ impl DiscordApp {
     }
 
     pub(crate) fn emoji_insert_text(&self, choice: &EmojiChoice) -> Option<String> {
+        if !crate::settings::display().use_rich_chat_input {
+            return Some(match choice {
+                EmojiChoice::Unicode { shortcode, .. } => format!(":{shortcode}:"),
+                EmojiChoice::Custom(custom) => format!(":{}:", custom.name),
+            });
+        }
         match choice {
             EmojiChoice::Unicode { emoji, .. } => Some(emoji.clone()),
             EmojiChoice::Custom(custom) => {
@@ -106,7 +112,18 @@ impl DiscordApp {
         let Some(text) = self.emoji_insert_text(choice) else {
             return;
         };
-        let text = format!("{text} ");
+        self.replace_suggest_query(query_len, format!("{text} "), window, cx);
+        self.record_emoji_use(choice, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn replace_suggest_query(
+        &mut self,
+        query_len: usize,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let range = {
             let input = self.suggest_input().read(cx);
             let value = input.text().to_string();
@@ -127,8 +144,6 @@ impl DiscordApp {
             input.replace(text, window, cx);
             input.focus(window, cx);
         });
-        self.record_emoji_use(choice, cx);
-        cx.notify();
     }
 
     pub(crate) fn suggest_input(&self) -> &Entity<TextareaState> {

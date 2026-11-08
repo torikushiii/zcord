@@ -3,7 +3,7 @@ use crate::{ForumQuery, ForumSort, SearchOutcome, SearchQuery, SearchScope};
 use futures::Stream;
 use reqwest::{
     Body,
-    header::{CONTENT_LENGTH, CONTENT_TYPE},
+    header::{CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER},
 };
 use serde::Deserialize;
 use std::sync::{Arc, atomic::Ordering};
@@ -434,17 +434,25 @@ impl Rest {
                 format!("https://discord.com/api/v9/channels/{channel_id}/messages/search"),
                 "https://discord.com/channels/@me".to_owned(),
             ),
+            SearchScope::Dms => (
+                "https://discord.com/api/v9/users/@me/messages/search/tabs".to_owned(),
+                "https://discord.com/channels/@me".to_owned(),
+            ),
         };
         let params = crate::search::search_params(scope, query);
+        let body = crate::search::dm_search_body(query);
         let response = self
             .send(|| {
-                self.client
-                    .get(&url)
-                    .query(&params)
-                    .header(REFERER, &referer)
+                let request = match scope {
+                    SearchScope::Dms => self.client.post(&url).json(&body),
+                    SearchScope::Guild(_) | SearchScope::Channel(_) => {
+                        self.client.get(&url).query(&params)
+                    }
+                };
+                request.header(REFERER, &referer)
             })
             .await;
-        parse_search_response(response).await
+        parse_search_response(response, scope).await
     }
 
     pub(crate) async fn fetch_messages_anchor(
@@ -770,7 +778,10 @@ impl Rest {
     }
 }
 
-async fn parse_search_response(response: Result<Response, Error>) -> Result<SearchOutcome, Error> {
+async fn parse_search_response(
+    response: Result<Response, Error>,
+    scope: SearchScope,
+) -> Result<SearchOutcome, Error> {
     let response = match response {
         Ok(response) => response,
         Err(Error::Rejected { code, .. }) if is_search_indexing_code(code) => {
@@ -781,15 +792,30 @@ async fn parse_search_response(response: Result<Response, Error>) -> Result<Sear
         Err(error) => return Err(error),
     };
     let status = response.status().as_u16();
+    let retry_after = response
+        .headers()
+        .get(RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|seconds| seconds.is_finite());
     let value = match response.json::<Value>().await {
         Ok(value) => value,
         Err(_) if status == 202 => Value::Null,
         Err(_) => return Err(Error::Decode),
     };
-    parse_search_reply(status, value)
+    match (parse_search_reply(status, value, scope)?, retry_after) {
+        (SearchOutcome::Indexing { .. }, Some(seconds)) => Ok(SearchOutcome::Indexing {
+            retry_after: Duration::from_secs_f64(seconds.clamp(1.0, 30.0)),
+        }),
+        (outcome, _) => Ok(outcome),
+    }
 }
 
-fn parse_search_reply(status: u16, value: Value) -> Result<SearchOutcome, Error> {
+fn parse_search_reply(
+    status: u16,
+    mut value: Value,
+    scope: SearchScope,
+) -> Result<SearchOutcome, Error> {
     if status == 202
         || value
             .get("code")
@@ -806,6 +832,14 @@ fn parse_search_reply(status: u16, value: Value) -> Result<SearchOutcome, Error>
             retry_after: Duration::from_secs_f64(retry_after),
         });
     }
+    if scope == SearchScope::Dms {
+        value = value
+            .get_mut("tabs")
+            .and_then(|tabs| tabs.get_mut("messages"))
+            .filter(|messages| messages.is_object())
+            .ok_or(Error::Decode)?
+            .take();
+    }
     serde_json::from_value(value)
         .map(SearchOutcome::Page)
         .map_err(|_| Error::Decode)
@@ -818,7 +852,7 @@ fn is_search_indexing_code(code: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{AckManual, forward_body, message_body, parse_search_reply, parse_search_response};
-    use crate::{Error, OutgoingMessage, SearchOutcome};
+    use crate::{Error, OutgoingMessage, SearchOutcome, SearchScope};
     use std::time::Duration;
 
     #[test]
@@ -898,10 +932,108 @@ mod tests {
     }
 
     #[test]
+    fn search_dms_reply_maps_only_messages_tab_and_preserves_channels() {
+        let message = |id: &str, channel_id: &str| {
+            serde_json::json!({
+                "id": id,
+                "channel_id": channel_id,
+                "author": {"id": "11"},
+                "timestamp": "2024-01-01T00:00:00.000Z"
+            })
+        };
+        let value = serde_json::json!({
+            "analytics_id": "search-id",
+            "tabs": {
+                "messages": {
+                    "total_results": 42,
+                    "messages": [
+                        [message("1", "10"), message("9", "10")],
+                        [],
+                        [null, message("8", "20")],
+                        [message("2", "20")]
+                    ],
+                    "channels": [
+                        {"id": "10", "type": 1, "recipients": [{"id": "11"}]},
+                        null,
+                        {"id": "20", "type": 3, "name": "Group DM"}
+                    ],
+                    "cursor": {"type": "timestamp", "timestamp": "2"}
+                },
+                "media": {"total_results": 1, "messages": [[message("3", "30")]]}
+            }
+        });
+        let outcome = parse_search_reply(200, value, SearchScope::Dms).unwrap();
+        let SearchOutcome::Page(page) = outcome else {
+            panic!("successful DM search must return a page");
+        };
+        assert_eq!(page.total, 42);
+        assert_eq!(
+            page.messages
+                .iter()
+                .map(|message| (message.id, message.channel_id))
+                .collect::<Vec<_>>(),
+            [(1, 10), (2, 20)]
+        );
+        assert_eq!(
+            page.channels
+                .iter()
+                .map(|channel| channel.id)
+                .collect::<Vec<_>>(),
+            [10, 20]
+        );
+        assert_eq!(page.channels[0].recipients[0].id, 11);
+    }
+
+    #[test]
+    fn search_dms_reply_requires_messages_tab_but_accepts_empty_results() {
+        for value in [
+            serde_json::json!({}),
+            serde_json::json!({"messages": [], "total_results": 0}),
+            serde_json::json!({"tabs": {}}),
+            serde_json::json!({"tabs": {"messages": null}}),
+            serde_json::json!({"tabs": {"messages": []}}),
+        ] {
+            assert!(matches!(
+                parse_search_reply(200, value, SearchScope::Dms),
+                Err(Error::Decode)
+            ));
+        }
+        let value = serde_json::json!({
+            "tabs": {"messages": {
+                "total_results": 0, "messages": [], "channels": [], "cursor": {}
+            }}
+        });
+        let outcome = parse_search_reply(200, value, SearchScope::Dms).unwrap();
+        let SearchOutcome::Page(page) = outcome else {
+            panic!("empty DM search must return a page");
+        };
+        assert_eq!(page.total, 0);
+        assert!(page.messages.is_empty());
+        assert!(page.channels.is_empty());
+    }
+
+    #[test]
+    fn search_dms_indexing_reply_is_parsed_before_the_tabs_envelope() {
+        for (status, value) in [
+            (202, serde_json::Value::Null),
+            (202, serde_json::json!({"retry_after": 2})),
+            (200, serde_json::json!({"code": 110000, "retry_after": 2})),
+        ] {
+            assert!(matches!(
+                parse_search_reply(status, value, SearchScope::Dms),
+                Ok(SearchOutcome::Indexing { retry_after }) if retry_after == Duration::from_secs(2)
+            ));
+        }
+    }
+
+    #[test]
     fn search_202_reply_returns_clamped_indexing_delay() {
-        let outcome =
-            parse_search_reply(202, serde_json::json!({"code": 110000, "retry_after": 1.5}))
-                .unwrap();
+        let outcome = parse_search_reply(
+            202,
+            serde_json::json!({"code": 110000, "retry_after": 1.5}),
+            SearchScope::Channel(10),
+        )
+        .unwrap();
         assert!(matches!(
             outcome,
             SearchOutcome::Indexing { retry_after } if retry_after == Duration::from_millis(1500)
@@ -915,8 +1047,12 @@ mod tests {
             (31.0, 30),
             (1e100, 30),
         ] {
-            let outcome =
-                parse_search_reply(202, serde_json::json!({"retry_after": requested})).unwrap();
+            let outcome = parse_search_reply(
+                202,
+                serde_json::json!({"retry_after": requested}),
+                SearchScope::Channel(10),
+            )
+            .unwrap();
             let SearchOutcome::Indexing { retry_after } = outcome else {
                 panic!("202 response must be treated as indexing");
             };
@@ -927,14 +1063,22 @@ mod tests {
     #[test]
     fn search_indexing_code_and_missing_retry_delay_are_tolerated() {
         for code in [110000, 115000, 119999] {
-            let outcome = parse_search_reply(200, serde_json::json!({"code": code})).unwrap();
+            let outcome = parse_search_reply(
+                200,
+                serde_json::json!({"code": code}),
+                SearchScope::Channel(10),
+            )
+            .unwrap();
             assert!(matches!(
                 outcome,
                 SearchOutcome::Indexing { retry_after } if retry_after == Duration::from_secs(2)
             ));
-            let outcome =
-                parse_search_reply(200, serde_json::json!({"code": code, "retry_after": 4.5}))
-                    .unwrap();
+            let outcome = parse_search_reply(
+                200,
+                serde_json::json!({"code": code, "retry_after": 4.5}),
+                SearchScope::Channel(10),
+            )
+            .unwrap();
             assert!(matches!(
                 outcome,
                 SearchOutcome::Indexing { retry_after } if retry_after == Duration::from_millis(4500)
@@ -946,7 +1090,7 @@ mod tests {
             serde_json::json!({"code": 50035, "retry_after": null}),
             serde_json::json!({"retry_after": "invalid"}),
         ] {
-            let outcome = parse_search_reply(202, value).unwrap();
+            let outcome = parse_search_reply(202, value, SearchScope::Channel(10)).unwrap();
             assert!(matches!(
                 outcome,
                 SearchOutcome::Indexing { retry_after } if retry_after == Duration::from_secs(2)
@@ -954,7 +1098,11 @@ mod tests {
         }
         for code in [109999, 120000] {
             assert!(matches!(
-                parse_search_reply(200, serde_json::json!({"code": code})),
+                parse_search_reply(
+                    200,
+                    serde_json::json!({"code": code}),
+                    SearchScope::Channel(10),
+                ),
                 Ok(SearchOutcome::Page(_))
             ));
         }
@@ -963,11 +1111,14 @@ mod tests {
     #[tokio::test]
     async fn search_rejected_indexing_codes_use_the_default_delay() {
         for code in [110000, 115000, 119999] {
-            let outcome = parse_search_response(Err(Error::Rejected {
-                status: 400,
-                code,
-                message: "Indexing".to_owned(),
-            }))
+            let outcome = parse_search_response(
+                Err(Error::Rejected {
+                    status: 400,
+                    code,
+                    message: "Indexing".to_owned(),
+                }),
+                SearchScope::Channel(10),
+            )
             .await
             .unwrap();
             assert!(matches!(
@@ -976,11 +1127,14 @@ mod tests {
             ));
         }
         for code in [109999, 120000] {
-            let outcome = parse_search_response(Err(Error::Rejected {
-                status: 403,
-                code,
-                message: "Rejected".to_owned(),
-            }))
+            let outcome = parse_search_response(
+                Err(Error::Rejected {
+                    status: 403,
+                    code,
+                    message: "Rejected".to_owned(),
+                }),
+                SearchScope::Channel(10),
+            )
             .await;
             assert!(matches!(
                 outcome,
@@ -989,17 +1143,20 @@ mod tests {
             ));
         }
         assert!(matches!(
-            parse_search_response(Err(Error::Http(401))).await,
+            parse_search_response(Err(Error::Http(401)), SearchScope::Channel(10)).await,
             Err(Error::Http(401))
         ));
         assert!(matches!(
-            parse_search_response(Err(Error::Network)).await,
+            parse_search_response(Err(Error::Network), SearchScope::Channel(10)).await,
             Err(Error::Network)
         ));
         assert!(matches!(
-            parse_search_response(Err(Error::RateLimited {
-                retry_after: Duration::from_secs(7),
-            }))
+            parse_search_response(
+                Err(Error::RateLimited {
+                    retry_after: Duration::from_secs(7),
+                }),
+                SearchScope::Channel(10),
+            )
             .await,
             Err(Error::RateLimited { retry_after }) if retry_after == Duration::from_secs(7)
         ));
@@ -1022,7 +1179,7 @@ mod tests {
             .timeout(Duration::from_secs(2))
             .build()
             .unwrap();
-        for (status, body, expected) in [
+        let cases = [
             (
                 202,
                 r#"{"code":110000,"retry_after":1.5}"#,
@@ -1041,7 +1198,52 @@ mod tests {
                 Expected::Page,
             ),
             (200, "not json", Expected::Decode),
-        ] {
+        ]
+        .map(|(status, body, expected)| (SearchScope::Channel(10), status, "", body, expected));
+        for (scope, status, headers, body, expected) in cases.into_iter().chain([
+            (
+                SearchScope::Dms,
+                202,
+                "Retry-After: 4.5\r\n",
+                "",
+                Expected::Indexing(Duration::from_millis(4500)),
+            ),
+            (
+                SearchScope::Dms,
+                202,
+                "Retry-After: invalid\r\n",
+                r#"{"retry_after":1.5}"#,
+                Expected::Indexing(Duration::from_millis(1500)),
+            ),
+            (
+                SearchScope::Dms,
+                202,
+                "Retry-After: 0\r\n",
+                "not json",
+                Expected::Indexing(Duration::from_secs(1)),
+            ),
+            (
+                SearchScope::Dms,
+                202,
+                "Retry-After: 100\r\n",
+                "",
+                Expected::Indexing(Duration::from_secs(30)),
+            ),
+            (
+                SearchScope::Dms,
+                200,
+                "",
+                r#"{"tabs":{"messages":{"total_results":42,"messages":[[]],"cursor":{}}}}"#,
+                Expected::Page,
+            ),
+            (
+                SearchScope::Dms,
+                200,
+                "",
+                r#"{"total_results":42,"messages":[[]]}"#,
+                Expected::Decode,
+            ),
+        ]) {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let url = format!("http://{}/search", listener.local_addr().unwrap());
             let server = async {
@@ -1054,7 +1256,7 @@ mod tests {
                     request.extend_from_slice(&bytes[..count]);
                 }
                 stream.write_all(format!(
-                    "HTTP/1.1 {status} OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status} OK\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len(),
                 ).as_bytes()).await.unwrap();
                 stream.shutdown().await.unwrap();
@@ -1064,7 +1266,7 @@ mod tests {
             })
             .await
             .unwrap();
-            let outcome = parse_search_response(Ok(response.unwrap())).await;
+            let outcome = parse_search_response(Ok(response.unwrap()), scope).await;
             match expected {
                 Expected::Indexing(delay) => assert!(matches!(
                     outcome,

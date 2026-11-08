@@ -302,6 +302,19 @@ impl Rows {
 }
 
 pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
+    if app.favorites_view {
+        return div()
+            .flex()
+            .flex_col()
+            .w(rpx(WIDTH))
+            .h_full()
+            .flex_none()
+            .border_r_1()
+            .border_color(rgba(theme::border()))
+            .child(favorites_sidebar(app))
+            .child(user_panel_slot(app, cx))
+            .into_any_element();
+    }
     if app.is_home() {
         return div()
             .flex()
@@ -567,7 +580,12 @@ fn guild_header(
         .h(rpx(HEADER_HEIGHT))
         .flex_none()
         .px_2()
-        .bg(rgb(theme::base_lower()).opacity(solidity))
+        .bg(theme::surface(
+            theme::Layer::Lower,
+            Some(theme::Layer::High),
+            theme::base_lower(),
+        )
+        .opacity(solidity))
         .border_b_1()
         .border_color(rgba(theme::border()).opacity(solidity))
         .when(app.channel_rows.banner.is_some(), |this| {
@@ -1103,7 +1121,8 @@ fn row_actions(app: &DiscordApp, channel: &Channel) -> Option<Div> {
             ))
             .on_click(|_, _, cx| cx.stop_propagation())
     });
-    if open_chat.is_none() && invite.is_none() && settings.is_none() {
+    let favorite = app.favorites_visible().then(|| favorite_action(app, id));
+    if open_chat.is_none() && invite.is_none() && settings.is_none() && favorite.is_none() {
         return None;
     }
     Some(
@@ -1112,10 +1131,125 @@ fn row_actions(app: &DiscordApp, channel: &Channel) -> Option<Div> {
             .flex_none()
             .items_center()
             .gap(rpx(4.))
+            .children(favorite)
             .children(open_chat)
             .children(invite)
             .children(settings),
     )
+}
+
+fn favorite_action(app: &DiscordApp, id: u64) -> Stateful<Div> {
+    let favorite = app.is_favorite_channel(id);
+    let entity = app.entity.clone();
+    row_action(
+        ("channel-favorite", id),
+        if favorite { "star-filled" } else { "star" },
+    )
+    .child(theme::hover_tooltip(
+        ("channel-favorite-tip", id),
+        if favorite {
+            "Remove from Favorites"
+        } else {
+            "Add to Favorites"
+        },
+    ))
+    .on_click(move |_, _, cx| {
+        cx.stop_propagation();
+        entity
+            .update(cx, |app, cx| app.toggle_favorite_channel(id, cx))
+            .ok();
+    })
+}
+
+fn favorites_sidebar(app: &DiscordApp) -> impl IntoElement {
+    let selected = app.selected_channel_id;
+    let rows: Vec<AnyElement> = app
+        .favorite_channels()
+        .into_iter()
+        .filter_map(|id| {
+            let guild = app.store.guild_by_id(app.store.channel_guild_id(id)?)?;
+            let channel = guild.channel(id)?;
+            let entity = app.entity.clone();
+            let actions = Some(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .child(favorite_action(app, id)),
+            );
+            Some(
+                div()
+                    .id(("favorite-channel", id))
+                    .flex()
+                    .flex_col()
+                    .on_click(move |_, window, cx| {
+                        entity
+                            .update(cx, |app, cx| app.open_favorite_channel(id, window, cx))
+                            .ok();
+                    })
+                    .child(channel_row(channel, selected == id, None, actions))
+                    .child(
+                        div()
+                            .pl(rpx(36.))
+                            .mt(rpx(-6.))
+                            .mb(rpx(2.))
+                            .truncate()
+                            .text_size(rpx(12.))
+                            .line_height(rpx(14.))
+                            .text_color(rgb(theme::faint()))
+                            .child(guild.name.clone()),
+                    )
+                    .into_any_element(),
+            )
+        })
+        .collect();
+    let empty = rows.is_empty();
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap_2()
+                .h(rpx(HEADER_HEIGHT))
+                .px(rpx(16.))
+                .border_b_1()
+                .border_color(rgba(theme::border()))
+                .text_size(rpx(16.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(theme::strong()))
+                .child(theme::icon("star-filled", 16., theme::strong()))
+                .child("Favorites"),
+        )
+        .child(
+            div()
+                .id("favorites-list")
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .px_2()
+                .py_2()
+                .children(rows)
+                .when(empty, |this| {
+                    this.child(
+                        div()
+                            .p(rpx(8.))
+                            .text_size(rpx(14.))
+                            .line_height(rpx(18.))
+                            .text_color(rgb(theme::muted()))
+                            .child(
+                                "No favorites yet. Hover a channel in a server and click its star \
+                                 to add it here.",
+                            ),
+                    )
+                }),
+        )
 }
 
 fn row_action(id: impl Into<ElementId>, icon: &str) -> Stateful<Div> {
@@ -1206,7 +1340,13 @@ fn account_subtitle(
         .flex()
         .flex_col()
         .child(status_line)
-        .child(line().child(div().truncate().child(user.username.clone())));
+        .child(
+            line().child(
+                div()
+                    .truncate()
+                    .child(crate::settings::shown_username(&user.username)),
+            ),
+        );
     let lines = if animate {
         let animation = Animation::new(Duration::from_millis(200)).with_easing(ease_out_quint());
         lines

@@ -409,6 +409,16 @@ impl Store {
             .color
     }
 
+    pub fn member_name_color(&self, guild_id: u64, user_id: u64) -> Option<u32> {
+        self.member_color(guild_id, user_id)
+            .filter(|_| crate::settings::role_colors() == crate::settings::RoleColors::InNames)
+    }
+
+    pub fn member_role_dot(&self, guild_id: u64, user_id: u64) -> Option<u32> {
+        self.member_color(guild_id, user_id)
+            .filter(|_| crate::settings::role_colors() == crate::settings::RoleColors::NextToNames)
+    }
+
     pub fn role(&self, guild_id: u64, role_id: u64) -> Option<&Role> {
         self.social.guilds.get(&guild_id)?.roles.get(&role_id)
     }
@@ -485,8 +495,8 @@ impl Store {
         let user = self.user(user_id)?;
         let nick = guild_id
             .and_then(|guild_id| self.member_name(guild_id, user_id))
-            .unwrap_or(&user.name);
-        Some([&user.username, &user.name, &nick.to_owned()].map(|name| name.to_lowercase()))
+            .unwrap_or(&user.real_name);
+        Some([&user.username, &user.real_name, &nick.to_owned()].map(|name| name.to_lowercase()))
     }
 
     /// Who a search filter could name, best match first: names starting with `query`, then

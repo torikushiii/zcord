@@ -46,7 +46,7 @@ impl Store {
         if user.username.is_empty() {
             if let Some(existing) = self.users.get_mut(&user.id) {
                 if let Some(name) = &user.global_name {
-                    existing.name.clone_from(name);
+                    existing.real_name.clone_from(name);
                 }
                 if let Some(avatar) = &user.avatar {
                     existing.avatar = Some(avatar.clone());
@@ -54,6 +54,7 @@ impl Store {
                 if let Some(discriminator) = &user.discriminator {
                     existing.discriminator = Some(discriminator.clone());
                 }
+                mapping::refresh_name(existing);
                 existing.bot |= user.bot;
                 existing.verified_bot |= model::verified_bot(user.bot, user.public_flags);
                 apply_cosmetics(existing, user);

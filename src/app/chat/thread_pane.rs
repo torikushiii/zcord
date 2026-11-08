@@ -38,7 +38,7 @@ pub(in crate::app) struct ThreadPane {
 }
 
 impl ThreadPane {
-    pub(super) fn remeasure(&self) {
+    pub(in crate::app) fn remeasure(&self) {
         self.list.remeasure();
     }
 }
@@ -89,6 +89,12 @@ impl DiscordApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !crate::settings::display().use_thread_sidebar
+            && self.store.private_channel(thread_id).is_none()
+        {
+            self.select_channel(thread_id, window, cx);
+            return;
+        }
         if self
             .thread_pane
             .as_ref()
@@ -431,7 +437,11 @@ impl DiscordApp {
             return;
         };
         let content = composer_tokens::to_wire(&composer.read(cx).value());
-        if self.send_pane_content(content.trim().to_owned(), window, cx) {
+        if self.send_pane_content(
+            crate::app::sending::with_emoji_faces(content.trim()),
+            window,
+            cx,
+        ) {
             composer.update(cx, |input, cx| input.set_value("", window, cx));
         }
     }

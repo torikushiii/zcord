@@ -2,14 +2,17 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::PathBuf,
-    sync::atomic::{AtomicBool, AtomicU32, Ordering},
+    sync::{
+        LazyLock, RwLock,
+        atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering},
+    },
     time::Duration,
 };
 
 use gpui::{App, Bounds, Global, Pixels, Task, Window, WindowBounds, point, px, size};
 use serde::{Deserialize, Serialize};
 
-use crate::discord::{IdentityCache, gifs::GifProvider};
+use crate::discord::{IdentityCache, gifs::GifProvider, settings_proto::TextImages};
 
 const SAVE_DELAY: Duration = Duration::from_millis(500);
 
@@ -28,6 +31,32 @@ static TYPING_HIDDEN: AtomicBool = AtomicBool::new(false);
 static ALWAYS_ANIMATE: AtomicBool = AtomicBool::new(false);
 static ACTIVITY_TOGGLE: AtomicBool = AtomicBool::new(false);
 static CHAT_FONT_SIZE: AtomicU32 = AtomicU32::new(16.0f32.to_bits());
+static PROFILE_THEME_SYNC: AtomicBool = AtomicBool::new(false);
+static UNDERLINE_LINKS: AtomicBool = AtomicBool::new(false);
+static QUIET_REPLIES: AtomicBool = AtomicBool::new(false);
+static MENTION_AVATARS: AtomicBool = AtomicBool::new(false);
+static WHO_REACTED: AtomicBool = AtomicBool::new(false);
+static RICH_TYPING: AtomicBool = AtomicBool::new(false);
+static WINDOW_FOCUSED: AtomicBool = AtomicBool::new(true);
+static DISPLAY_NAME_STYLES: AtomicBool = AtomicBool::new(true);
+static SWITCH_INDICATORS: AtomicBool = AtomicBool::new(false);
+/// `u32::MAX` while unset, which follows the message display's default.
+static GROUP_SPACING: AtomicU32 = AtomicU32::new(u32::MAX);
+static ROLE_COLORS: AtomicU8 = AtomicU8::new(0);
+static NOTIFICATION_DURATION: AtomicU32 = AtomicU32::new(DEFAULT_NOTIFICATION_SECONDS);
+
+pub const GROUP_SPACINGS: [u32; 5] = [0, 4, 8, 16, 24];
+pub const NOTIFICATION_SECONDS: std::ops::RangeInclusive<u32> = 3..=20;
+pub const DEFAULT_NOTIFICATION_SECONDS: u32 = 3;
+static STREAMER: RwLock<StreamerMode> = RwLock::new(StreamerMode {
+    enabled: false,
+    auto: true,
+    hide_personal: true,
+    hide_invites: true,
+    mute_sounds: true,
+    mute_notifications: true,
+});
+static DISPLAY: LazyLock<RwLock<TextImages>> = LazyLock::new(Default::default);
 
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
@@ -95,9 +124,42 @@ pub struct Settings {
     #[serde(default)]
     pub light_theme: bool,
     #[serde(default)]
+    pub base_theme: Option<crate::theme::BaseTheme>,
+    #[serde(default)]
+    pub client_theme: Option<SavedClientTheme>,
+    #[serde(default)]
+    pub theme_follows_device: bool,
+    #[serde(default)]
     pub theme_sync_off: bool,
     #[serde(default)]
+    pub profile_theme_sync: bool,
+    #[serde(default)]
+    pub streamer: StreamerMode,
+    #[serde(default)]
     pub reduce_motion: Option<bool>,
+    /// `None` until picked: on unless Reduced Motion was set by hand before the option existed.
+    #[serde(default)]
+    pub reduce_motion_sync: Option<bool>,
+    #[serde(default)]
+    pub underline_links: bool,
+    #[serde(default)]
+    pub quiet_replies: bool,
+    #[serde(default)]
+    pub mention_avatars: bool,
+    #[serde(default)]
+    pub who_reacted: bool,
+    #[serde(default)]
+    pub rich_typing: bool,
+    #[serde(default)]
+    pub display_name_styles_off: bool,
+    #[serde(default)]
+    pub switch_indicators: bool,
+    #[serde(default)]
+    pub message_group_spacing: Option<u32>,
+    #[serde(default)]
+    pub role_colors: RoleColors,
+    #[serde(default)]
+    pub notification_seconds: Option<u32>,
     #[serde(default)]
     pub share_game_activity: bool,
     #[serde(default)]
@@ -122,6 +184,26 @@ pub struct Settings {
     /// Voice Isolation while noise suppression is on.
     #[serde(default)]
     pub voice_input_profile: Option<InputProfile>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RoleColors {
+    #[default]
+    InNames,
+    NextToNames,
+    Hidden,
+}
+
+impl RoleColors {
+    pub const ALL: [Self; 3] = [Self::InNames, Self::NextToNames, Self::Hidden];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::InNames => "In names",
+            Self::NextToNames => "Next to names",
+            Self::Hidden => "Don't show role colors",
+        }
+    }
 }
 
 /// Discord's Input Profile presets for the microphone's processing.
@@ -157,6 +239,54 @@ impl Default for CustomStream {
             resolution: 720,
             fps: 30,
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum SavedClientTheme {
+    Preset(u32),
+    Custom {
+        colors: Vec<u32>,
+        angle: i32,
+        base_mix: i32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StreamerMode {
+    pub enabled: bool,
+    pub auto: bool,
+    pub hide_personal: bool,
+    pub hide_invites: bool,
+    pub mute_sounds: bool,
+    pub mute_notifications: bool,
+}
+
+impl Default for StreamerMode {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            auto: true,
+            hide_personal: true,
+            hide_invites: true,
+            mute_sounds: true,
+            mute_notifications: true,
+        }
+    }
+}
+
+impl StreamerMode {
+    pub fn hides_personal(&self) -> bool {
+        self.enabled && self.hide_personal
+    }
+
+    pub fn mutes_sounds(&self) -> bool {
+        self.enabled && self.mute_sounds
+    }
+
+    pub fn mutes_notifications(&self) -> bool {
+        self.enabled && self.mute_notifications
     }
 }
 
@@ -249,10 +379,187 @@ pub fn set_clock_24h(cx: &mut App, on: bool) {
 }
 
 pub fn set_reduce_motion(cx: &mut App, value: Option<bool>) {
-    // gpui does not expose the OS reduce-motion preference, only the current value.
-    cx.set_reduce_motion(value.unwrap_or(false));
     update(cx, |settings| settings.reduce_motion = value);
+    apply_reduce_motion(cx);
     cx.refresh_windows();
+}
+
+pub fn reduce_motion_sync(cx: &App) -> bool {
+    let settings = get(cx);
+    settings
+        .reduce_motion_sync
+        .unwrap_or(settings.reduce_motion.is_none())
+}
+
+pub fn set_reduce_motion_sync(cx: &mut App, on: bool) {
+    update(cx, |settings| settings.reduce_motion_sync = Some(on));
+    apply_reduce_motion(cx);
+    cx.refresh_windows();
+}
+
+pub fn apply_reduce_motion(cx: &mut App) {
+    let on = if reduce_motion_sync(cx) {
+        system_reduce_motion()
+    } else {
+        get(cx).reduce_motion == Some(true)
+    };
+    if cx.reduce_motion() != on {
+        cx.set_reduce_motion(on);
+        cx.refresh_windows();
+    }
+}
+
+/// gpui never reads the system preference itself; only Windows' Animation effects is read.
+fn system_reduce_motion() -> bool {
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
+        };
+        use windows_core::BOOL;
+        let mut animate = BOOL(1);
+        let read = unsafe {
+            SystemParametersInfoW(
+                SPI_GETCLIENTAREAANIMATION,
+                0,
+                Some((&raw mut animate).cast()),
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+            )
+        };
+        read.is_ok() && !animate.as_bool()
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+pub fn set_window_focused(cx: &mut App, focused: bool) {
+    if WINDOW_FOCUSED.swap(focused, Ordering::Relaxed) != focused {
+        cx.refresh_windows();
+    }
+}
+
+pub fn window_focused() -> bool {
+    WINDOW_FOCUSED.load(Ordering::Relaxed)
+}
+
+pub fn set_quiet_replies(cx: &mut App, on: bool) {
+    QUIET_REPLIES.store(on, Ordering::Relaxed);
+    update(cx, |settings| settings.quiet_replies = on);
+    cx.refresh_windows();
+}
+
+pub fn quiet_replies() -> bool {
+    QUIET_REPLIES.load(Ordering::Relaxed)
+}
+
+pub fn set_mention_avatars(cx: &mut App, on: bool) {
+    MENTION_AVATARS.store(on, Ordering::Relaxed);
+    update(cx, |settings| settings.mention_avatars = on);
+    cx.refresh_windows();
+}
+
+pub fn mention_avatars() -> bool {
+    MENTION_AVATARS.load(Ordering::Relaxed)
+}
+
+pub fn set_who_reacted(cx: &mut App, on: bool) {
+    WHO_REACTED.store(on, Ordering::Relaxed);
+    update(cx, |settings| settings.who_reacted = on);
+    cx.refresh_windows();
+}
+
+pub fn who_reacted() -> bool {
+    WHO_REACTED.load(Ordering::Relaxed)
+}
+
+pub fn set_rich_typing(cx: &mut App, on: bool) {
+    RICH_TYPING.store(on, Ordering::Relaxed);
+    update(cx, |settings| settings.rich_typing = on);
+    cx.refresh_windows();
+}
+
+pub fn rich_typing() -> bool {
+    RICH_TYPING.load(Ordering::Relaxed)
+}
+
+pub fn set_underline_links(cx: &mut App, on: bool) {
+    UNDERLINE_LINKS.store(on, Ordering::Relaxed);
+    update(cx, |settings| settings.underline_links = on);
+    cx.refresh_windows();
+}
+
+pub fn underline_links() -> bool {
+    UNDERLINE_LINKS.load(Ordering::Relaxed)
+}
+
+pub fn set_display_name_styles(cx: &mut App, on: bool) {
+    DISPLAY_NAME_STYLES.store(on, Ordering::Relaxed);
+    update(cx, |settings| settings.display_name_styles_off = !on);
+    cx.refresh_windows();
+}
+
+pub fn display_name_styles() -> bool {
+    DISPLAY_NAME_STYLES.load(Ordering::Relaxed)
+}
+
+pub fn set_switch_indicators(cx: &mut App, on: bool) {
+    SWITCH_INDICATORS.store(on, Ordering::Relaxed);
+    update(cx, |settings| settings.switch_indicators = on);
+    cx.refresh_windows();
+}
+
+pub fn switch_indicators() -> bool {
+    SWITCH_INDICATORS.load(Ordering::Relaxed)
+}
+
+fn nearest(steps: &[u32], value: u32) -> u32 {
+    steps
+        .iter()
+        .copied()
+        .min_by_key(|step| step.abs_diff(value))
+        .unwrap_or(value)
+}
+
+pub fn set_message_group_spacing(cx: &mut App, spacing: Option<u32>) {
+    let spacing = spacing.map(|spacing| nearest(&GROUP_SPACINGS, spacing));
+    GROUP_SPACING.store(spacing.unwrap_or(u32::MAX), Ordering::Relaxed);
+    update(cx, |settings| settings.message_group_spacing = spacing);
+    cx.refresh_windows();
+}
+
+pub fn message_group_spacing(compact: bool) -> u32 {
+    match GROUP_SPACING.load(Ordering::Relaxed) {
+        u32::MAX if compact => 0,
+        u32::MAX => 16,
+        spacing => spacing,
+    }
+}
+
+pub fn set_role_colors(cx: &mut App, mode: RoleColors) {
+    ROLE_COLORS.store(mode as u8, Ordering::Relaxed);
+    update(cx, |settings| settings.role_colors = mode);
+    cx.refresh_windows();
+}
+
+pub fn role_colors() -> RoleColors {
+    match ROLE_COLORS.load(Ordering::Relaxed) {
+        1 => RoleColors::NextToNames,
+        2 => RoleColors::Hidden,
+        _ => RoleColors::InNames,
+    }
+}
+
+pub fn set_notification_seconds(cx: &mut App, seconds: u32) {
+    let seconds = seconds.clamp(*NOTIFICATION_SECONDS.start(), *NOTIFICATION_SECONDS.end());
+    NOTIFICATION_DURATION.store(seconds, Ordering::Relaxed);
+    update(cx, |settings| {
+        settings.notification_seconds = (seconds != DEFAULT_NOTIFICATION_SECONDS).then_some(seconds)
+    });
+    cx.refresh_windows();
+}
+
+pub fn notification_seconds() -> u32 {
+    NOTIFICATION_DURATION.load(Ordering::Relaxed)
 }
 
 pub fn set_gif_autoplay(cx: &mut App, on: bool) {
@@ -397,6 +704,127 @@ pub fn set_chat_font_size(cx: &mut App, size: f32) {
 
 pub fn chat_font_size() -> f32 {
     f32::from_bits(CHAT_FONT_SIZE.load(Ordering::Relaxed))
+}
+
+pub fn set_profile_theme_sync(cx: &mut App, on: bool) {
+    PROFILE_THEME_SYNC.store(on, Ordering::Relaxed);
+    update(cx, |settings| settings.profile_theme_sync = on);
+    cx.refresh_windows();
+}
+
+pub fn profile_theme_sync() -> bool {
+    PROFILE_THEME_SYNC.load(Ordering::Relaxed)
+}
+
+pub fn set_streamer(cx: &mut App, streamer: StreamerMode) {
+    if let Ok(mut current) = STREAMER.write() {
+        *current = streamer;
+    }
+    update(cx, |settings| settings.streamer = streamer);
+    cx.refresh_windows();
+}
+
+const BROADCASTERS: &[&str] = &[
+    "obs",
+    "obs32",
+    "obs64",
+    "xsplit.gamecaster",
+    "xsplit.core",
+    "gamecaster",
+    "bebo",
+    "streamlabs obs",
+    "streamlabs desktop",
+    "twitchstudio",
+    "twitch studio",
+];
+const BROADCASTER_POLL: Duration = Duration::from_secs(5);
+
+fn broadcaster_running() -> bool {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessesToUpdate::All, ProcessRefreshKind::new());
+    system.processes().values().any(|process| {
+        let name = process.name().to_string_lossy().to_lowercase();
+        let name = name.strip_suffix(".exe").unwrap_or(&name);
+        BROADCASTERS.contains(&name)
+    })
+}
+
+/// Only a change in whether a broadcaster runs flips Streamer Mode, so a manual toggle sticks
+/// until the next start or exit. While auto is off nothing is polled, and the first poll after
+/// it comes back on only records the baseline.
+pub fn watch_broadcasters(cx: &mut App) {
+    cx.spawn(async move |cx| {
+        let mut last = Some(false);
+        loop {
+            if cx.update(|_| streamer().auto) {
+                let running = cx
+                    .background_executor()
+                    .spawn(async { broadcaster_running() })
+                    .await;
+                let changed = last.is_some_and(|last| last != running);
+                last = Some(running);
+                if changed {
+                    cx.update(|cx| {
+                        let current = streamer();
+                        if current.auto && current.enabled != running {
+                            set_streamer(
+                                cx,
+                                StreamerMode {
+                                    enabled: running,
+                                    ..current
+                                },
+                            );
+                        }
+                    });
+                }
+            } else {
+                last = None;
+            }
+            cx.background_executor().timer(BROADCASTER_POLL).await;
+        }
+    })
+    .detach();
+}
+
+pub fn shown_username(username: &str) -> String {
+    if streamer().hides_personal() {
+        crate::store::conceal(username)
+    } else {
+        username.to_owned()
+    }
+}
+
+pub fn streamer() -> StreamerMode {
+    STREAMER
+        .read()
+        .map(|streamer| *streamer)
+        .unwrap_or_default()
+}
+
+pub fn set_display(cx: &mut App, display: TextImages) {
+    if DISPLAY.read().is_ok_and(|current| *current == display) {
+        return;
+    }
+    GIF_AUTOPLAY.store(display.gif_auto_play, Ordering::Relaxed);
+    EMOJI_ANIMATION.store(display.animate_emoji, Ordering::Relaxed);
+    LINK_PREVIEWS.store(display.render_embeds, Ordering::Relaxed);
+    update(cx, |settings| {
+        settings.gif_autoplay_off = !display.gif_auto_play;
+        settings.emoji_animation_off = !display.animate_emoji;
+        settings.link_previews_off = !display.render_embeds;
+    });
+    if let Ok(mut current) = DISPLAY.write() {
+        *current = display;
+    }
+    cx.refresh_windows();
+}
+
+pub fn display() -> TextImages {
+    DISPLAY
+        .read()
+        .map(|display| display.clone())
+        .unwrap_or_default()
 }
 
 pub fn update(cx: &mut App, change: impl FnOnce(&mut Settings)) {

@@ -55,7 +55,22 @@ fn main() {
             tray::init(cx);
             let saved = settings::get(cx);
             settings::set_clock_24h(cx, saved.clock_24h);
-            settings::set_reduce_motion(cx, saved.reduce_motion);
+            settings::apply_reduce_motion(cx);
+            settings::set_underline_links(cx, saved.underline_links);
+            settings::set_quiet_replies(cx, saved.quiet_replies);
+            settings::set_mention_avatars(cx, saved.mention_avatars);
+            settings::set_who_reacted(cx, saved.who_reacted);
+            settings::set_rich_typing(cx, saved.rich_typing);
+            settings::set_display_name_styles(cx, !saved.display_name_styles_off);
+            settings::set_switch_indicators(cx, saved.switch_indicators);
+            settings::set_message_group_spacing(cx, saved.message_group_spacing);
+            settings::set_role_colors(cx, saved.role_colors);
+            settings::set_notification_seconds(
+                cx,
+                saved
+                    .notification_seconds
+                    .unwrap_or(settings::DEFAULT_NOTIFICATION_SECONDS),
+            );
             settings::set_gif_autoplay(cx, !saved.gif_autoplay_off);
             settings::set_smooth_scroll(cx, !saved.smooth_scroll_off);
             settings::set_emoji_animation(cx, !saved.emoji_animation_off);
@@ -70,7 +85,10 @@ fn main() {
             settings::set_always_animate(cx, saved.always_animate);
             settings::set_activity_toggle(cx, saved.activity_toggle);
             settings::set_chat_font_size(cx, saved.chat_font_size.unwrap_or(16.0));
-            theme::set_light(saved.light_theme, cx);
+            settings::set_profile_theme_sync(cx, saved.profile_theme_sync);
+            settings::set_streamer(cx, saved.streamer);
+            settings::watch_broadcasters(cx);
+            app::apply_saved_theme(cx);
             theme::set_zoom(saved.zoom.unwrap_or(theme::DEFAULT_ZOOM), cx);
             cx.bind_keys([
                 KeyBinding::new("secondary-=", ZoomIn, None),

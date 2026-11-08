@@ -298,4 +298,6 @@ pub struct Attachment {
     pub size: u64,
     #[serde(default)]
     pub flags: u64,
+    #[serde(default)]
+    pub description: Option<String>,
 }

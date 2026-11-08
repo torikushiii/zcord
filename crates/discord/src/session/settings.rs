@@ -1,5 +1,10 @@
 use super::super::*;
 
+enum ClientThemeEdit {
+    Keep,
+    Set(Option<settings_proto::ClientTheme>),
+}
+
 impl Session {
     pub fn status_connected(&self) -> bool {
         self.status_generation().is_ok()
@@ -221,37 +226,163 @@ impl Session {
         Ok(())
     }
 
-    /// Not retried after a reconnect; the next READY reflects whatever was saved.
-    pub async fn set_theme(&self, theme: settings_proto::AccountTheme) -> Result<(), Error> {
-        let generation = self.status_generation()?;
-        let proto = self
-            .rest(async |rest| rest.fetch_preloaded_settings().await)
-            .await?;
-        let version = settings_proto::data_version(&proto)
-            .map_err(|_| Error::Decode)?
-            .ok_or(Error::Decode)?;
-        let patch = settings_proto::theme_patch(&proto, theme).map_err(|_| Error::Decode)?;
-        if self.status_generation()? != generation {
-            return Err(Error::Closed);
-        }
-        let proto = self
-            .rest(async |rest| rest.update_preloaded_settings(&patch, version).await)
-            .await?;
-        if self.status_generation()? != generation {
-            return Err(Error::Closed);
-        }
-        let installed_theme = settings_proto::decode(&proto)
-            .map_err(|_| Error::Decode)?
-            .theme;
+    pub fn text_images(&self) -> settings_proto::TextImages {
         self.inner
             .presence
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .install(proto)?;
-        if installed_theme != Some(theme) {
+            .proto()
+            .and_then(|proto| settings_proto::text_images(proto).ok())
+            .unwrap_or_default()
+    }
+
+    pub async fn set_text_images(
+        &self,
+        base: settings_proto::TextImages,
+        edited: settings_proto::TextImages,
+    ) -> Result<(), Error> {
+        let generation = self.status_generation()?;
+        let proto = self
+            .rest(async |rest| rest.fetch_preloaded_settings().await)
+            .await?;
+        let latest = settings_proto::text_images(&proto).map_err(|_| Error::Decode)?;
+        let desired = edited.rebase(&base, &latest);
+        let patch =
+            settings_proto::text_images_patch(&proto, &desired).map_err(|_| Error::Decode)?;
+        let saved = self.save_preloaded_patch(generation, proto, patch).await?;
+        if settings_proto::text_images(&saved).map_err(|_| Error::Decode)? != desired {
             return Err(Error::SettingsOutdated);
         }
         Ok(())
+    }
+
+    pub fn client_theme(&self) -> Option<settings_proto::ClientTheme> {
+        self.inner
+            .presence
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .proto()
+            .and_then(|proto| settings_proto::client_theme(proto).ok().flatten())
+    }
+
+    pub async fn set_theme(&self, theme: settings_proto::AccountTheme) -> Result<(), Error> {
+        self.set_appearance_edit(theme, ClientThemeEdit::Keep).await
+    }
+
+    pub async fn set_appearance(
+        &self,
+        theme: settings_proto::AccountTheme,
+        client_theme: Option<settings_proto::ClientTheme>,
+    ) -> Result<(), Error> {
+        self.set_appearance_edit(theme, ClientThemeEdit::Set(client_theme))
+            .await
+    }
+
+    async fn set_appearance_edit(
+        &self,
+        theme: settings_proto::AccountTheme,
+        edit: ClientThemeEdit,
+    ) -> Result<(), Error> {
+        let generation = self.status_generation()?;
+        let proto = self
+            .rest(async |rest| rest.fetch_preloaded_settings().await)
+            .await?;
+        let (client_theme, patch) = match edit {
+            ClientThemeEdit::Keep => (
+                settings_proto::client_theme(&proto).map_err(|_| Error::Decode)?,
+                settings_proto::theme_patch(&proto, theme).map_err(|_| Error::Decode)?,
+            ),
+            ClientThemeEdit::Set(client_theme) => {
+                let patch = settings_proto::appearance_patch(&proto, theme, client_theme.as_ref())
+                    .map_err(|_| Error::Decode)?;
+                (client_theme, patch)
+            }
+        };
+        let saved = self
+            .save_preloaded_patch(generation, proto, Some(patch))
+            .await?;
+        let saved = settings_proto::decode(&saved).map_err(|_| Error::Decode)?;
+        if saved.theme != Some(theme) || saved.client_theme != client_theme {
+            return Err(Error::SettingsOutdated);
+        }
+        Ok(())
+    }
+
+    pub fn favorites(&self) -> settings_proto::Favorites {
+        self.inner
+            .presence
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .proto()
+            .and_then(|proto| settings_proto::favorites(proto).ok())
+            .unwrap_or_default()
+    }
+
+    pub async fn set_favorites_visible(&self, visible: bool) -> Result<(), Error> {
+        let generation = self.status_generation()?;
+        let proto = self
+            .rest(async |rest| rest.fetch_preloaded_settings().await)
+            .await?;
+        let patch =
+            settings_proto::favorites_visible_patch(&proto, visible).map_err(|_| Error::Decode)?;
+        let saved = self.save_preloaded_patch(generation, proto, patch).await?;
+        if settings_proto::favorites(&saved)
+            .map_err(|_| Error::Decode)?
+            .guild_visible
+            != visible
+        {
+            return Err(Error::SettingsOutdated);
+        }
+        Ok(())
+    }
+
+    pub async fn set_favorite_channel(
+        &self,
+        channel_id: u64,
+        channel: Option<settings_proto::FavoriteChannel>,
+    ) -> Result<(), Error> {
+        let generation = self.status_generation()?;
+        let proto = self
+            .rest(async |rest| rest.fetch_preloaded_settings().await)
+            .await?;
+        let patch = settings_proto::favorite_channel_patch(&proto, channel_id, channel.clone())
+            .map_err(|_| Error::Decode)?;
+        let saved = self.save_preloaded_patch(generation, proto, patch).await?;
+        let saved = settings_proto::favorites(&saved).map_err(|_| Error::Decode)?;
+        if saved.channels.iter().find(|c| c.id == channel_id) != channel.as_ref() {
+            return Err(Error::SettingsOutdated);
+        }
+        Ok(())
+    }
+
+    async fn save_preloaded_patch(
+        &self,
+        generation: u64,
+        proto: Vec<u8>,
+        patch: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, Error> {
+        let version = settings_proto::data_version(&proto)
+            .map_err(|_| Error::Decode)?
+            .ok_or(Error::Decode)?;
+        if self.status_generation()? != generation {
+            return Err(Error::Closed);
+        }
+        let proto = match patch {
+            Some(patch) => {
+                self.rest(async |rest| rest.update_preloaded_settings(&patch, version).await)
+                    .await?
+            }
+            None => proto,
+        };
+        if self.status_generation()? != generation {
+            return Err(Error::Closed);
+        }
+        self.inner
+            .presence
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .install(proto.clone())?;
+        Ok(proto)
     }
 
     pub async fn gif_search(&self, provider: GifProvider, query: &str) -> Result<Vec<Gif>, Error> {
@@ -452,6 +583,81 @@ mod tests {
         assert_eq!(receiver.try_recv().unwrap().0, 3);
         // REST is deliberately unavailable in this fixture; all refreshes above are local.
         assert!(session.inner.rest.is_err());
+    }
+
+    #[tokio::test]
+    async fn account_settings_use_cached_values_and_guard_saves_by_generation() {
+        use crate::settings_fixtures::{field, uint};
+        use settings_proto::{AccountTheme, ClientTheme, FavoriteChannel, TextImages};
+
+        let (session, mut receiver) = offline_session(0);
+        assert_eq!(session.text_images(), TextImages::default());
+        assert_eq!(session.client_theme(), None);
+        assert_eq!(session.favorites(), settings_proto::Favorites::default());
+        let proto = [
+            field(1, &uint(3, 42)),
+            field(6, &field(11, &[])),
+            settings_proto::appearance_patch(
+                &[],
+                AccountTheme::Dark,
+                Some(&ClientTheme::Preset(42)),
+            )
+            .unwrap(),
+            field(15, &field(3, &uint(1, 1))),
+        ]
+        .concat();
+        session
+            .inner
+            .presence
+            .lock()
+            .unwrap()
+            .install(proto.clone())
+            .unwrap();
+        assert!(!session.text_images().gif_auto_play);
+        assert_eq!(session.client_theme(), Some(ClientTheme::Preset(42)));
+        assert!(session.favorites().guild_visible);
+        for generation in [0, 1, 2] {
+            session
+                .inner
+                .generation
+                .store(generation, Ordering::Release);
+            let results = [
+                session
+                    .set_text_images(TextImages::default(), TextImages::default())
+                    .await,
+                session.set_appearance(AccountTheme::Light, None).await,
+                session.set_favorites_visible(false).await,
+                session
+                    .set_favorite_channel(
+                        123,
+                        Some(FavoriteChannel {
+                            id: 123,
+                            ..Default::default()
+                        }),
+                    )
+                    .await,
+            ];
+            for result in results {
+                if generation == 1 {
+                    assert!(matches!(result, Err(Error::Network)));
+                } else {
+                    assert!(matches!(result, Err(Error::Closed)));
+                }
+            }
+        }
+        session.inner.generation.store(3, Ordering::Release);
+        assert!(matches!(
+            session.save_preloaded_patch(1, proto.clone(), None).await,
+            Err(Error::Closed)
+        ));
+        let saved = session.save_preloaded_patch(3, proto, None).await.unwrap();
+        assert_eq!(settings_proto::data_version(&saved).unwrap(), Some(42));
+        assert!(receiver.try_recv().is_err());
+        session.shutdown();
+        assert!(matches!(
+            session.set_favorites_visible(false).await,
+            Err(Error::Closed)
+        ));
     }
 
     #[tokio::test]

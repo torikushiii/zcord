@@ -370,6 +370,27 @@ impl Store {
             .min(u32::MAX as usize) as u32
     }
 
+    /// Returns whether anything changed, so the caller knows to repaint.
+    pub fn set_conceal_usernames(&mut self, on: bool) -> bool {
+        if !mapping::set_conceal_usernames(on) {
+            return false;
+        }
+        for user in self.users.values_mut() {
+            mapping::refresh_name(user);
+        }
+        let names: Vec<String> = self
+            .private
+            .iter()
+            .map(|private| self.private_channel_name(private.channel.id))
+            .collect();
+        for (private, name) in self.private.iter_mut().zip(names) {
+            if !name.is_empty() {
+                private.channel.name = name;
+            }
+        }
+        true
+    }
+
     pub fn private_channel_name(&self, id: u64) -> String {
         let Some(source) = &self.source else {
             return String::new();

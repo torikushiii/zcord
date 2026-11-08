@@ -252,6 +252,7 @@ fn user(
         id: 1,
         username: "listener".into(),
         name: "Listener".into(),
+        real_name: "Listener".into(),
         initials: "L".into(),
         status: Status::Online,
         bot: false,

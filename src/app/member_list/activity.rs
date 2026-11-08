@@ -86,7 +86,7 @@ fn card_view(app: &DiscordApp, card: &ActivityCard, now_ms: i64, cx: &App) -> An
         .unwrap_or_default();
     let name_color = app
         .store
-        .member_color(guild_id, user_id)
+        .member_name_color(guild_id, user_id)
         .unwrap_or_else(theme::strong);
     let entity = app.entity.clone();
     let entry_id = card.entry_id;

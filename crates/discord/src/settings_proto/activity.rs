@@ -155,7 +155,7 @@ pub fn activity_privacy(preloaded: &[u8]) -> Result<ActivityPrivacy> {
     Ok(privacy)
 }
 
-fn bool_field(out: &mut Vec<u8>, number: u32, value: bool) {
+pub(super) fn bool_field(out: &mut Vec<u8>, number: u32, value: bool) {
     let mut wrapper = Vec::new();
     if value {
         push_uint(&mut wrapper, 1, 1);
@@ -164,7 +164,12 @@ fn bool_field(out: &mut Vec<u8>, number: u32, value: bool) {
 }
 
 /// PATCH replaces whole top-level messages, so every field not `replaced` is copied over.
-fn rebuild(preloaded: &[u8], top: u32, replaced: &[u32], encoded: &[u8]) -> Result<Vec<u8>> {
+pub(super) fn rebuild(
+    preloaded: &[u8],
+    top: u32,
+    replaced: &[u32],
+    encoded: &[u8],
+) -> Result<Vec<u8>> {
     let mut content = Vec::new();
     for field in fields(preloaded)? {
         if field.number != top {

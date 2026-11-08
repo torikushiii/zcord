@@ -24,11 +24,15 @@ impl DiscordApp {
         if self.window_active && on_screen {
             return;
         }
-        if crate::settings::notification_sound() && !self.voice.self_deaf {
+        let streamer = crate::settings::streamer();
+        if crate::settings::notification_sound()
+            && !self.voice.self_deaf
+            && !streamer.mutes_sounds()
+        {
             let volume = crate::settings::get(cx).voice_output_volume.unwrap_or(1.);
             crate::notify::play_message_sound(volume);
         }
-        if !self.window_active {
+        if !self.window_active && !streamer.mutes_notifications() {
             let service = images::download_service(cx);
             let spec = alert.avatar.clone();
             let avatar = Tokio::spawn(cx, async move {

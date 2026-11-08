@@ -57,6 +57,8 @@ pub(super) fn render(
     cx: &App,
 ) -> AnyElement {
     let id = id.into();
+    let style =
+        style.filter(|_| surface == Surface::Field || crate::settings::display_name_styles());
     let font = fonts::display_font(style.and_then(|style| style.font_id), cx);
     // Chat and member names inherit role/default colors, never profile colors or effects.
     let colors: Vec<Rgba> = style

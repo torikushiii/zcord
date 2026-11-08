@@ -1,5 +1,5 @@
 use super::blocked::{blocked_row, blocked_run};
-use super::message::render_message;
+use super::message::{render_message, render_pane_message};
 use super::*;
 
 /// Rendering only reads, so fetch a row's unseen invite links after this frame.
@@ -109,13 +109,16 @@ pub(super) fn render_pane_row(
                 this
             }
         })
-        .when(!grouped && run.is_none(), |this| this.pt_4())
+        .when(!grouped && run.is_none(), |this| {
+            let compact = crate::settings::display().message_display_compact;
+            this.pt(rpx(crate::settings::message_group_spacing(compact) as f32))
+        })
         .when(index + 1 == messages.len(), |this| {
             this.pb(rpx(BOTTOM_SPACER))
         })
         .child(match &run {
             Some(run) => blocked_row(app, messages, index, run, grouped, true, cx),
-            None => render_message(app, message, grouped, true, cx),
+            None => render_pane_message(app, message, grouped, cx),
         })
         .when(starter, |this| this.child(starter_actions(app, channel_id)))
         .into_any_element()

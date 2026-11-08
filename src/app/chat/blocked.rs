@@ -1,4 +1,4 @@
-use super::message::render_message;
+use super::message::{render_message, render_pane_message};
 use super::*;
 use crate::store::RelationshipKind;
 
@@ -79,7 +79,7 @@ pub(super) fn blocked_row(
     index: usize,
     run: &BlockedRun,
     grouped: bool,
-    preview: bool,
+    pane: bool,
     cx: &App,
 ) -> AnyElement {
     let first_id = messages[run.start].id;
@@ -93,13 +93,21 @@ pub(super) fn blocked_row(
             this.child(bar(app, first_id, run))
         })
         .when(run.is_last(index), |this| this.pb_2())
-        .child(render_message(
-            app,
-            &messages[index],
-            grouped && index != run.start,
-            preview,
-            cx,
-        ))
+        .child({
+            let grouped = grouped && index != run.start;
+            if pane {
+                // Pane rows add their own group spacing, which the passive renderer leaves out.
+                let compact = crate::settings::display().message_display_compact;
+                div()
+                    .when(!grouped, |this| {
+                        this.pt(rpx(crate::settings::message_group_spacing(compact) as f32))
+                    })
+                    .child(render_pane_message(app, &messages[index], grouped, cx))
+                    .into_any_element()
+            } else {
+                render_message(app, &messages[index], grouped, false, cx)
+            }
+        })
         .into_any_element()
 }
 

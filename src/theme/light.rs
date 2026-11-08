@@ -1,6 +1,6 @@
 use super::Palette;
 
-pub(super) const LIGHT: Palette = Palette {
+pub(super) static LIGHT: Palette = Palette {
     bg: 0xFFFFFF,
     base_lower: 0xFBFBFB,
     base_lowest: 0xF3F3F4,
@@ -73,4 +73,6 @@ pub(super) const LIGHT: Palette = Palette {
     upload_fold: 0xA7AEFF,
     accent_border: 0xFFFFFF99,
     account_hover: 0x97979F1F,
+    slider_track: 0xC5C6CA,
+    text_positive: 0x01713A,
 };

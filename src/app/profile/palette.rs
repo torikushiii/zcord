@@ -2,6 +2,8 @@ use gpui::*;
 use palette::{FromColor, Hsl, Lab, Mix, Oklab, Srgb};
 
 use super::THEME_OVERLAY;
+
+const SYNCED_THEME_OVERLAY: f32 = 0.8;
 use super::loading::guild_profile;
 use crate::{discord::model, theme};
 
@@ -46,13 +48,29 @@ impl ProfileTheme {
     }
 
     pub(super) fn is_light(self) -> bool {
+        if crate::settings::profile_theme_sync() {
+            return theme::is_light();
+        }
         // Discord selects the profile mode from the primary color's perceived brightness.
         let channel = |shift: u32| ((self.primary >> shift) & 0xFF) as f64;
         0.299 * channel(16) + 0.587 * channel(8) + 0.114 * channel(0) >= 127.5
     }
 
+    fn overlay_amount() -> f32 {
+        if crate::settings::profile_theme_sync() {
+            SYNCED_THEME_OVERLAY
+        } else {
+            THEME_OVERLAY
+        }
+    }
+
     pub(super) fn overlay(self) -> Hsla {
-        hsla(0., 0., if self.is_light() { 1. } else { 0. }, THEME_OVERLAY)
+        hsla(
+            0.,
+            0.,
+            if self.is_light() { 1. } else { 0. },
+            Self::overlay_amount(),
+        )
     }
 
     /// Discord darkens and saturates the primary color for profile buttons. Fitted to one
@@ -70,7 +88,7 @@ impl ProfileTheme {
         blend(
             color,
             if self.is_light() { 0xFFFFFF } else { 0 },
-            THEME_OVERLAY,
+            Self::overlay_amount(),
         )
     }
 

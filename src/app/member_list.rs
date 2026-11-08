@@ -216,7 +216,7 @@ pub(super) fn member_row(
         .member_name(guild_id, user.id)
         .unwrap_or(&user.name)
         .to_owned();
-    let role_color = app.store.member_color(guild_id, user.id);
+    let role_color = app.store.member_name_color(guild_id, user.id);
     let hovered = app.hovered_member == Some(user.id);
     let nameplate = app
         .store
@@ -324,6 +324,7 @@ pub(super) fn member_row(
                             user,
                             &name,
                             role_color,
+                            app.store.member_role_dot(guild_id, user.id),
                             app.store.member_name_style(guild_id, user.id),
                             cx,
                         ))
@@ -344,6 +345,7 @@ fn name_line(
     user: &User,
     name: &str,
     role_color: Option<u32>,
+    role_dot: Option<u32>,
     name_style: Option<&NameStyle>,
     cx: &App,
 ) -> impl IntoElement {
@@ -368,6 +370,7 @@ fn name_line(
                     cx,
                 )),
         )
+        .children(role_dot.map(theme::role_dot))
         .when(user.bot, |this| {
             this.child(theme::app_tag(user.verified_bot))
         })

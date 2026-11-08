@@ -334,7 +334,12 @@ impl DiscordApp {
     }
 }
 
-fn sticker_image(sticker: &PickerSticker, extent: f32, animate: bool, cx: &App) -> AnyElement {
+pub(crate) fn sticker_image(
+    sticker: &PickerSticker,
+    extent: f32,
+    animate: bool,
+    cx: &App,
+) -> AnyElement {
     let sticker = Sticker::from(sticker);
     let pixels = theme::image_px(extent);
     let image = sticker.image_spec().and_then(|spec| {
@@ -349,6 +354,16 @@ fn sticker_image(sticker: &PickerSticker, extent: f32, animate: bool, cx: &App) 
                     .id("animated")
                     .into_any_element(),
             );
+        }
+        // `img` would play these files itself, so a held sticker shows the first frame.
+        if matches!(sticker.format, 2 | 4) {
+            return animated::first_frame(&spec, pixels, cx).map(|frame| {
+                frame
+                    .size_full()
+                    .object_fit(ObjectFit::Contain)
+                    .id("still")
+                    .into_any_element()
+            });
         }
         images::resolve(&spec, pixels, cx).map(|path| {
             img(path)

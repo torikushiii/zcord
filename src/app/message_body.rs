@@ -45,6 +45,7 @@ pub struct BodyContext<'a> {
     pub guild_id: u64,
     pub message_id: u64,
     pub revealed: &'a HashSet<(u64, u16)>,
+    pub reveal_all: bool,
     pub entity: WeakEntity<DiscordApp>,
     pub colors: BodyColors,
 }
@@ -409,9 +410,9 @@ pub fn spans_to_pieces(
 }
 
 fn base_style(style: &Style, link: Option<&str>, context: &BodyContext) -> PieceStyle {
-    let revealed = style
-        .spoiler
-        .is_none_or(|index| context.revealed.contains(&(context.message_id, index)));
+    let revealed = style.spoiler.is_none_or(|index| {
+        context.reveal_all || context.revealed.contains(&(context.message_id, index))
+    });
     let action = match (style.spoiler, revealed, link) {
         (Some(index), false, _) => Some(Action::RevealSpoiler(index)),
         (_, _, Some(url)) => Some(Action::OpenUrl(url.to_owned().into())),
@@ -421,7 +422,7 @@ fn base_style(style: &Style, link: Option<&str>, context: &BodyContext) -> Piece
         color: link.and_then(|_| context.colors.link.map(|color| rgb(color).into())),
         weight: style.bold.then_some(FontWeight::BOLD),
         italic: style.italic,
-        underline: style.underline,
+        underline: style.underline || (link.is_some() && crate::settings::underline_links()),
         strikethrough: style.strikethrough,
         chip: style.spoiler.map(|_| Chip::Spoiler { revealed }),
         group: style.spoiler.map_or(0, u32::from),
@@ -730,6 +731,7 @@ mod tests {
                 guild_id: 1,
                 message_id: 10,
                 revealed: &HashSet::new(),
+                reveal_all: false,
                 entity: WeakEntity::<DiscordApp>::new_invalid(),
                 colors: BodyColors::default(),
             };
@@ -770,6 +772,7 @@ mod tests {
                 guild_id: 1,
                 message_id: 10,
                 revealed: &HashSet::new(),
+                reveal_all: false,
                 entity: WeakEntity::<DiscordApp>::new_invalid(),
                 colors: BodyColors::default(),
             };
@@ -829,6 +832,7 @@ mod tests {
                 guild_id: 1,
                 message_id: 10,
                 revealed: &HashSet::new(),
+                reveal_all: false,
                 entity: WeakEntity::<DiscordApp>::new_invalid(),
                 colors: BodyColors::default(),
             };

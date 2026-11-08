@@ -118,20 +118,26 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
                                 .children(
                                     card.profile
                                         .as_deref()
+                                        .filter(|_| !crate::settings::streamer().hides_personal())
                                         .and_then(|profile| connections(profile, palette)),
                                 )
-                                .children(card.note.as_ref().map(|note| {
-                                    section(
-                                        "Note",
-                                        div()
-                                            .text_size(rpx(14.))
-                                            .line_height(rpx(18.))
-                                            .text_color(rgb(palette.text))
-                                            .child(note.clone())
-                                            .into_any_element(),
-                                        palette,
-                                    )
-                                })),
+                                .children(
+                                    card.note
+                                        .as_ref()
+                                        .filter(|_| !crate::settings::streamer().hides_personal())
+                                        .map(|note| {
+                                            section(
+                                                "Note",
+                                                div()
+                                                    .text_size(rpx(14.))
+                                                    .line_height(rpx(18.))
+                                                    .text_color(rgb(palette.text))
+                                                    .child(note.clone())
+                                                    .into_any_element(),
+                                                palette,
+                                            )
+                                        }),
+                                ),
                         ),
                 ),
         )

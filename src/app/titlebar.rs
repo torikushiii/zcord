@@ -22,7 +22,11 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> impl IntoElement +
         .items_center()
         .h(rpx(HEIGHT))
         .w_full()
-        .bg(rgb(theme::base_lowest()))
+        .bg(theme::surface(
+            theme::Layer::Higher,
+            Some(theme::Layer::Higher),
+            theme::base_lowest(),
+        ))
         .window_control_area(WindowControlArea::Drag)
         .when(!cfg!(target_os = "windows"), |this| {
             this.on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())

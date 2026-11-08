@@ -3,9 +3,19 @@ use gpui::{prelude::*, *};
 use super::{Page, SettingsPage, moved};
 use crate::{
     app::{DiscordApp, voice::switch},
-    discord::gifs::GifProvider,
+    discord::{
+        gifs::GifProvider,
+        settings_proto::{StickerAnimation, TextImages},
+    },
+    settings::RoleColors,
     theme::{self, rpx},
 };
+
+use super::{
+    appearance::{radio, related_setting, select_field},
+    marker_slider::{Mark, marker_slider},
+};
+use std::rc::Rc;
 
 /// The selected page's sections, in sidebar order.
 pub(super) fn page(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> Vec<AnyElement> {
@@ -14,18 +24,21 @@ pub(super) fn page(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> Vec<A
         Page::GameActivity => super::activity_privacy::page(app, settings, cx),
         Page::RegisteredGames => super::registered_games::page(app, settings, cx),
         Page::VoiceVideo => super::voice_audio::page(app, settings, cx),
-        Page::Appearance => vec![
-            theme_section(app, settings, cx),
-            appearance(app, cx),
-            chat_text(),
+        Page::Appearance => super::appearance::page(app, settings, cx),
+        Page::Accessibility => vec![
+            text_readability(app, settings),
+            visual_density(app, cx),
+            color_contrast(app, settings),
+            reduced_motion(app, settings, cx),
+            screen_reader(app, settings),
         ],
-        Page::Accessibility => vec![accessibility(app, settings, cx)],
-        Page::Chat => vec![chat_media(app, settings), chat(app, cx)],
+        Page::Chat => vec![chat(app, cx)],
         Page::Notifications => vec![notifications(app, settings)],
         Page::LanguageTime => vec![language_time(app, settings, cx)],
         Page::Advanced => vec![advanced(app, settings)],
         Page::Tweaks => vec![
             layout(app, settings),
+            chat_tweaks(app, settings),
             animation_tweaks(app, settings),
             privacy_tweaks(app, settings),
         ],
@@ -54,9 +67,11 @@ fn account(app: &DiscordApp, settings: &SettingsPage) -> Vec<AnyElement> {
             })
             .child(if shown { "Hide" } else { "Reveal" })
     };
+    let hidden = crate::settings::streamer().hides_personal();
     let email = account.as_ref().and_then(|account| account.email.clone());
     let phone = account.as_ref().and_then(|account| account.phone.clone());
     let email_value = match email {
+        Some(email) if hidden => value(mask_email(&email)),
         Some(email) => value_with(
             if settings.reveal_email {
                 email
@@ -70,6 +85,7 @@ fn account(app: &DiscordApp, settings: &SettingsPage) -> Vec<AnyElement> {
         None => value("Not added").into_any_element(),
     };
     let phone_value = match phone {
+        Some(phone) if hidden => value(mask_phone(&phone)),
         Some(phone) => value_with(
             if settings.reveal_phone {
                 phone
@@ -127,102 +143,56 @@ fn mask_phone(phone: &str) -> String {
     format!("**********{last}")
 }
 
-fn theme_section(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> AnyElement {
-    let light = theme::is_light();
-    let options = [("Dark", false), ("Light", true)]
+fn zoom(cx: &App) -> AnyElement {
+    let marks = theme::ZOOM_LEVELS
         .into_iter()
-        .map(|(label, choice)| {
-            let entity = app.entity.clone();
-            (
-                label,
-                light == choice,
-                move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-                    entity
-                        .update(cx, |app, cx| app.choose_theme(choice, cx))
-                        .ok();
-                },
-            )
-        })
+        .map(|level| Mark::labelled(level * 100., format!("{}", (level * 100.).round() as u32)))
         .collect();
-    let entity = app.entity.clone();
-    section(
-        "Theme",
-        vec![
-            row(
-                "Theme",
-                Some("Light or dark colors for the whole app."),
-                segmented("settings-theme", options),
-            ),
-            toggle_row(
-                app,
-                settings,
-                "settings-theme-sync",
-                "Sync Across Clients",
-                "Use the same theme as your Discord account on your other devices.",
-                !crate::settings::get(cx).theme_sync_off,
-                move |cx, on| {
-                    entity.update(cx, |app, cx| app.set_theme_sync(on, cx)).ok();
-                },
-            ),
-        ],
+    slider_row(
+        "Zoom level",
+        "Adjust the size of the interface. You can also change this with ctrl +/-.",
+        marker_slider(
+            "settings-zoom",
+            marks,
+            theme::ZOOM_LEVELS[theme::zoom_index(cx)] * 100.,
+            Some(theme::ZOOM_LEVELS[theme::DEFAULT_ZOOM] * 100.),
+            theme::set_zoom,
+        ),
     )
 }
 
-fn appearance(_app: &DiscordApp, cx: &App) -> AnyElement {
-    let index = theme::zoom_index(cx);
-    let percent = (theme::ZOOM_LEVELS[index] * 100.).round() as u32;
-    let step = |id: &'static str, icon: &'static str, target: Option<usize>| {
-        let enabled = target.is_some();
-        theme::icon_button(
-            id,
-            icon,
-            16.,
-            if enabled {
-                theme::text()
-            } else {
-                theme::faint()
-            },
-        )
-        .size(rpx(32.))
-        .rounded(rpx(8.))
-        .bg(rgba(theme::selected()))
-        .when_some(target, |this, target| {
-            this.on_click(move |_, _, cx| theme::set_zoom(target, cx))
-        })
-    };
-    let last = theme::ZOOM_LEVELS.len() - 1;
-    let control = div()
+pub(super) fn slider_row(
+    label: &'static str,
+    description: &'static str,
+    slider: AnyElement,
+) -> AnyElement {
+    div()
         .flex()
-        .items_center()
-        .gap(rpx(8.))
-        .child(step("settings-zoom-out", "minus", index.checked_sub(1)))
+        .flex_col()
+        .py(rpx(8.))
         .child(
             div()
-                .w(rpx(56.))
-                .text_center()
-                .text_size(rpx(16.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::strong()))
-                .child(format!("{percent}%")),
+                .flex()
+                .flex_col()
+                .gap(rpx(4.))
+                .child(
+                    div()
+                        .text_size(rpx(16.))
+                        .line_height(rpx(20.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(theme::strong()))
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .text_size(rpx(14.))
+                        .line_height(rpx(18.))
+                        .text_color(rgb(theme::muted()))
+                        .child(description),
+                ),
         )
-        .child(step(
-            "settings-zoom-in",
-            "plus",
-            (index < last).then_some(index + 1),
-        ))
-        .when(index != theme::DEFAULT_ZOOM, |this| {
-            this.child(button("settings-zoom-reset", "Reset", |_, _, cx| {
-                theme::set_zoom(theme::DEFAULT_ZOOM, cx)
-            }))
-        });
-    section(
-        "Zoom",
-        vec![row(
-            "Zoom Level",
-            Some("Scales the whole app. Ctrl + and Ctrl − do the same."),
-            control.into_any_element(),
-        )],
-    )
+        .child(div().mt(rpx(8.)).child(slider))
+        .into_any_element()
 }
 
 fn layout(app: &DiscordApp, settings: &SettingsPage) -> AnyElement {
@@ -247,6 +217,51 @@ fn layout(app: &DiscordApp, settings: &SettingsPage) -> AnyElement {
              your whole account.",
                 crate::settings::activity_toggle(),
                 crate::settings::set_activity_toggle,
+            ),
+        ],
+    )
+}
+
+fn chat_tweaks(app: &DiscordApp, settings: &SettingsPage) -> AnyElement {
+    section(
+        "Chat",
+        vec![
+            toggle_row(
+                app,
+                settings,
+                "settings-quiet-replies",
+                "Quiet Replies",
+                "Replies start with the author's ping turned off. Click @ in the reply bar to ping \
+                 them anyway.",
+                crate::settings::quiet_replies(),
+                crate::settings::set_quiet_replies,
+            ),
+            toggle_row(
+                app,
+                settings,
+                "settings-mention-avatars",
+                "Mention Avatars",
+                "Shows the person's avatar in user mentions and the role's icon in role mentions.",
+                crate::settings::mention_avatars(),
+                crate::settings::set_mention_avatars,
+            ),
+            toggle_row(
+                app,
+                settings,
+                "settings-who-reacted",
+                "Who Reacted",
+                "Shows the avatars of the first few people beside each reaction's count.",
+                crate::settings::who_reacted(),
+                crate::settings::set_who_reacted,
+            ),
+            toggle_row(
+                app,
+                settings,
+                "settings-rich-typing",
+                "Typing Avatars",
+                "Shows avatars and role colors for the people in the typing indicator.",
+                crate::settings::rich_typing(),
+                crate::settings::set_rich_typing,
             ),
         ],
     )
@@ -283,30 +298,218 @@ fn privacy_tweaks(app: &DiscordApp, settings: &SettingsPage) -> AnyElement {
     )
 }
 
-fn accessibility(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> AnyElement {
-    let on = crate::settings::get(cx).reduce_motion == Some(true);
+fn text_readability(app: &DiscordApp, settings: &SettingsPage) -> AnyElement {
+    let mut rows = vec![chat_text()];
+    rows.extend([
+        toggle_row(
+            app,
+            settings,
+            "settings-underline-links",
+            "Always underline links",
+            "Make links stand out more.",
+            crate::settings::underline_links(),
+            crate::settings::set_underline_links,
+        ),
+        toggle_row(
+            app,
+            settings,
+            "settings-display-name-styles",
+            "Display Name Styles",
+            "Enable display name styles — including font, effect, and color — across zcord.",
+            crate::settings::display_name_styles(),
+            crate::settings::set_display_name_styles,
+        ),
+    ]);
+    section("Text Readability", rows)
+}
+
+fn visual_density(app: &DiscordApp, cx: &App) -> AnyElement {
+    let compact = app.text_images().message_display_compact;
+    let marks = crate::settings::GROUP_SPACINGS
+        .into_iter()
+        .map(|spacing| Mark::labelled(spacing as f32, format!("{spacing}px")))
+        .collect();
+    section(
+        "Visual Density",
+        vec![
+            super::appearance::message_display(app),
+            slider_row(
+                "Space Between Message Groups",
+                "Adjust the spacing between message groups.",
+                marker_slider(
+                    "settings-group-spacing",
+                    marks,
+                    crate::settings::message_group_spacing(compact) as f32,
+                    Some(if compact { 0. } else { 16. }),
+                    |index, cx| {
+                        crate::settings::set_message_group_spacing(
+                            cx,
+                            Some(crate::settings::GROUP_SPACINGS[index]),
+                        )
+                    },
+                ),
+            ),
+            zoom(cx),
+        ],
+    )
+}
+
+fn color_contrast(app: &DiscordApp, settings: &SettingsPage) -> AnyElement {
+    let current = crate::settings::role_colors();
+    let options = RoleColors::ALL
+        .into_iter()
+        .map(|mode| {
+            let choose: Rc<dyn Fn(&mut App)> =
+                Rc::new(move |cx| crate::settings::set_role_colors(cx, mode));
+            (mode.label(), current == mode, choose)
+        })
+        .collect();
+    section(
+        "Color & Contrast",
+        vec![
+            row(
+                "Role Colors",
+                Some("Choose how you would like role colors to be displayed."),
+                select_field(
+                    app,
+                    "settings-role-colors",
+                    settings.role_colors_menu_open,
+                    |page| &mut page.role_colors_menu_open,
+                    options,
+                ),
+            ),
+            toggle_row(
+                app,
+                settings,
+                "settings-switch-indicators",
+                "Show on/off indicators",
+                "On forms, menus and settings, on/off toggles will have icons.",
+                crate::settings::switch_indicators(),
+                crate::settings::set_switch_indicators,
+            ),
+            related_setting(
+                app,
+                "settings-related-appearance",
+                Page::Appearance,
+                "palette",
+                "Appearance",
+                "Change your app theme",
+            ),
+        ],
+    )
+}
+
+fn display_toggle(
+    app: &DiscordApp,
+    settings: &SettingsPage,
+    id: &'static str,
+    label: &'static str,
+    description: Option<&'static str>,
+    on: bool,
+    set: fn(&mut TextImages, bool),
+) -> AnyElement {
     let entity = app.entity.clone();
-    let toggle = div()
+    toggle_row(app, settings, id, label, description, on, move |cx, on| {
+        entity
+            .update(cx, |app, cx| {
+                app.change_text_images(|display| set(display, on), cx)
+            })
+            .ok();
+    })
+}
+
+fn reduced_motion(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> AnyElement {
+    let synced = crate::settings::reduce_motion_sync(cx);
+    let on = cx.reduce_motion();
+    let entity = app.entity.clone();
+    let reduce = div()
         .id("settings-reduce-motion")
-        .cursor_pointer()
-        .on_click(move |_, _, cx| {
-            entity
-                .update(cx, |app, _| app.mark_switch_moved("settings-motion"))
-                .ok();
-            crate::settings::set_reduce_motion(cx, (!on).then_some(true));
+        .when(synced, |this| this.opacity(0.5))
+        .when(!synced, |this| {
+            this.cursor_pointer().on_click(move |_, _, cx| {
+                entity
+                    .update(cx, |app, _| app.mark_switch_moved("settings-motion"))
+                    .ok();
+                crate::settings::set_reduce_motion(cx, Some(!on));
+            })
         })
         .child(switch(
             "settings-motion",
             on,
             moved(settings, "settings-motion"),
         ));
+    let display = app.text_images();
+    let durations = crate::settings::NOTIFICATION_SECONDS
+        .map(|seconds| match seconds {
+            3 | 5 | 10 | 15 | 20 => Mark::labelled(seconds as f32, format!("{seconds}s")),
+            _ => Mark::stop(seconds as f32),
+        })
+        .collect();
+    let stickers = [
+        ("Always animate", None, StickerAnimation::Always),
+        (
+            "Animate on interaction",
+            Some("Stickers animate while the pointer is over them."),
+            StickerAnimation::OnInteraction,
+        ),
+        ("Never animate", None, StickerAnimation::Never),
+    ]
+    .into_iter()
+    .map(|(label, note, mode)| {
+        let entity = app.entity.clone();
+        div()
+            .id(("settings-sticker-animation", mode as u64))
+            .flex()
+            .gap(rpx(12.))
+            .cursor_pointer()
+            .on_click(move |_, _, cx| {
+                entity
+                    .update(cx, |app, cx| {
+                        app.change_text_images(|display| display.animate_stickers = mode, cx)
+                    })
+                    .ok();
+            })
+            .child(radio(display.animate_stickers == mode))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(rpx(4.))
+                    .child(
+                        div()
+                            .text_size(rpx(16.))
+                            .line_height(rpx(20.))
+                            .text_color(rgb(theme::text()))
+                            .child(label),
+                    )
+                    .children(note.map(|note| {
+                        div()
+                            .text_size(rpx(14.))
+                            .line_height(rpx(18.))
+                            .text_color(rgb(theme::muted()))
+                            .child(note)
+                    })),
+            )
+    });
     section(
-        "Motion",
+        "Reduced Motion",
         vec![
             row(
-                "Reduced Motion",
-                Some("Turns off popup, hover and avatar animations."),
-                toggle.into_any_element(),
+                "Enable Reduced Motion",
+                Some(
+                    "Reduce the amount and intensity of animations, hover effects, and other \
+                     moving effects.",
+                ),
+                reduce.into_any_element(),
+            ),
+            toggle_row(
+                app,
+                settings,
+                "settings-motion-sync",
+                "Sync with computer setting",
+                None,
+                synced,
+                crate::settings::set_reduce_motion_sync,
             ),
             toggle_row(
                 app,
@@ -317,7 +520,72 @@ fn accessibility(app: &DiscordApp, settings: &SettingsPage, cx: &App) -> AnyElem
                 crate::settings::smooth_scroll(),
                 crate::settings::set_smooth_scroll,
             ),
+            slider_row(
+                "Minimum notification duration",
+                "Keep pop-up notifications on screen for at least this long. Notifications that \
+                 already stay longer are unaffected.",
+                marker_slider(
+                    "settings-notification-duration",
+                    durations,
+                    crate::settings::notification_seconds() as f32,
+                    Some(crate::settings::DEFAULT_NOTIFICATION_SECONDS as f32),
+                    |index, cx| {
+                        crate::settings::set_notification_seconds(
+                            cx,
+                            crate::settings::NOTIFICATION_SECONDS.start() + index as u32,
+                        )
+                    },
+                ),
+            ),
+            display_toggle(
+                app,
+                settings,
+                "settings-gif-autoplay",
+                "Play GIFs when zcord is focused",
+                None,
+                display.gif_auto_play,
+                |display, on| display.gif_auto_play = on,
+            ),
+            display_toggle(
+                app,
+                settings,
+                "settings-emoji-animation",
+                "Play animated emoji",
+                None,
+                display.animate_emoji,
+                |display, on| display.animate_emoji = on,
+            ),
+            div()
+                .flex()
+                .flex_col()
+                .gap(rpx(16.))
+                .py(rpx(12.))
+                .child(
+                    div()
+                        .text_size(rpx(16.))
+                        .line_height(rpx(20.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(theme::strong()))
+                        .child("Play sticker animations"),
+                )
+                .children(stickers)
+                .into_any_element(),
         ],
+    )
+}
+
+fn screen_reader(app: &DiscordApp, settings: &SettingsPage) -> AnyElement {
+    section(
+        "Audio & Screen Reader",
+        vec![display_toggle(
+            app,
+            settings,
+            "settings-image-descriptions",
+            "Show image descriptions",
+            Some("Image descriptions are used to describe images for screen readers."),
+            app.text_images().view_image_descriptions,
+            |display, on| display.view_image_descriptions = on,
+        )],
     )
 }
 
@@ -352,7 +620,7 @@ pub(super) fn toggle_row(
     settings: &SettingsPage,
     id: &'static str,
     label: &'static str,
-    description: &'static str,
+    description: impl Into<Option<&'static str>>,
     on: bool,
     set: impl Fn(&mut App, bool) + 'static,
 ) -> AnyElement {
@@ -365,7 +633,7 @@ pub(super) fn toggle_row(
             set(cx, !on);
         })
         .child(switch(id, on, moved(settings, id)));
-    row(label, Some(description), toggle.into_any_element())
+    row(label, description.into(), toggle.into_any_element())
 }
 
 fn notifications(app: &DiscordApp, settings: &SettingsPage) -> AnyElement {
@@ -433,110 +701,23 @@ pub(super) fn detected_games(app: &DiscordApp, settings: &SettingsPage) -> Vec<A
     rows
 }
 
-fn chat_media(app: &DiscordApp, settings: &SettingsPage) -> AnyElement {
-    section(
-        "Display Images, Videos and Lolcats",
-        vec![
-            toggle_row(
-                app,
-                settings,
-                "settings-gif-autoplay",
-                "Automatically play GIFs",
-                "When off, GIFs and animated stickers show a still frame.",
-                crate::settings::gif_autoplay(),
-                crate::settings::set_gif_autoplay,
-            ),
-            toggle_row(
-                app,
-                settings,
-                "settings-emoji-animation",
-                "Play animated emoji",
-                "When off, animated custom emoji show a still frame.",
-                crate::settings::emoji_animation(),
-                crate::settings::set_emoji_animation,
-            ),
-            toggle_row(
-                app,
-                settings,
-                "settings-link-previews",
-                "Show link previews",
-                "Shows embeds for websites linked in chat. Attachments and bot embeds always show.",
-                crate::settings::link_previews(),
-                crate::settings::set_link_previews,
-            ),
-        ],
-    )
-}
+const CHAT_FONT_SIZES: [f32; 7] = [12., 14., 15., 16., 18., 20., 24.];
 
 fn chat_text() -> AnyElement {
-    let size = crate::settings::chat_font_size();
-    let step = |id: &'static str, icon: &'static str, target: Option<f32>| {
-        theme::icon_button(
-            id,
-            icon,
-            16.,
-            if target.is_some() {
-                theme::text()
-            } else {
-                theme::faint()
-            },
-        )
-        .size(rpx(32.))
-        .rounded(rpx(8.))
-        .bg(rgba(theme::selected()))
-        .when_some(target, |this, target| {
-            this.on_click(move |_, _, cx| crate::settings::set_chat_font_size(cx, target))
-        })
-    };
-    let control = div()
-        .flex()
-        .items_center()
-        .gap(rpx(8.))
-        .child(step(
-            "settings-font-smaller",
-            "minus",
-            (size > 12.).then_some(size - 1.),
-        ))
-        .child(
-            div()
-                .w(rpx(56.))
-                .text_center()
-                .text_size(rpx(16.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::strong()))
-                .child(format!("{size:.0}px")),
-        )
-        .child(step(
-            "settings-font-larger",
-            "plus",
-            (size < 24.).then_some(size + 1.),
-        ))
-        .when(size != 16., |this| {
-            this.child(button("settings-font-reset", "Reset", |_, _, cx| {
-                crate::settings::set_chat_font_size(cx, 16.)
-            }))
-        });
-    section(
-        "Chat Text",
-        vec![
-            row(
-                "Chat Font Size",
-                Some(
-                    "Only message text changes; names, timestamps and the rest of the app keep their size.",
-                ),
-                control.into_any_element(),
-            ),
-            div()
-                .mt(rpx(8.))
-                .p(rpx(16.))
-                .rounded(rpx(8.))
-                .bg(rgb(theme::bg()))
-                .text_size(rpx(size))
-                .line_height(rpx(size * 1.375))
-                .text_color(rgb(theme::text()))
-                .child("Waiting for the day when zcord ships compact mode.")
-                .into_any_element(),
-        ],
+    let marks = CHAT_FONT_SIZES
+        .into_iter()
+        .map(|size| Mark::labelled(size, format!("{size}px")))
+        .collect();
+    slider_row(
+        "Text size in chat",
+        "Adjust the size of the chat font.",
+        marker_slider(
+            "settings-chat-font",
+            marks,
+            crate::settings::chat_font_size(),
+            Some(16.),
+            |index, cx| crate::settings::set_chat_font_size(cx, CHAT_FONT_SIZES[index]),
+        ),
     )
 }
 
@@ -650,8 +831,8 @@ pub(super) fn section(title: &'static str, rows: Vec<AnyElement>) -> AnyElement 
             div()
                 .mb(rpx(16.))
                 .text_size(rpx(24.))
-                .line_height(rpx(30.))
-                .font_weight(FontWeight::SEMIBOLD)
+                .line_height(rpx(32.))
+                .font_weight(FontWeight::MEDIUM)
                 .text_color(rgb(theme::strong()))
                 .child(title),
         )
@@ -681,7 +862,8 @@ pub(super) fn row(
                     div()
                         .text_size(rpx(16.))
                         .line_height(rpx(20.))
-                        .text_color(rgb(theme::text()))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(theme::strong()))
                         .child(label),
                 )
                 .children(description.map(|description| {
@@ -753,7 +935,7 @@ fn button(
 
 type OptionClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
-fn segmented<F>(id: &'static str, options: Vec<(&'static str, bool, F)>) -> AnyElement
+pub(super) fn segmented<F>(id: &'static str, options: Vec<(&'static str, bool, F)>) -> AnyElement
 where
     F: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {

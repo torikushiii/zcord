@@ -5,6 +5,14 @@ use std::collections::{HashMap, HashSet};
 
 mod activity;
 pub use activity::{ActivityPrivacy, NewServerSharing, activity_privacy, activity_privacy_patch};
+mod appearance;
+pub use appearance::{ClientTheme, CustomTheme, appearance_patch, client_theme};
+mod favorites;
+pub use favorites::{
+    FavoriteChannel, Favorites, favorite_channel_patch, favorites, favorites_visible_patch,
+};
+mod text_images;
+pub use text_images::{SpoilerMode, StickerAnimation, TextImages, text_images, text_images_patch};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GuildFolder {
@@ -44,11 +52,15 @@ impl AccountTheme {
     }
 }
 
-#[derive(Default, Debug, PartialEq, Eq)]
+#[derive(Default, Debug, PartialEq)]
 pub struct Settings {
     pub folders: Option<Vec<GuildFolder>>,
     pub status: Option<StatusSettings>,
     pub theme: Option<AccountTheme>,
+    pub client_theme: Option<ClientTheme>,
+    pub appearance_present: bool,
+    pub text_images: Option<TextImages>,
+    pub favorites: Option<Favorites>,
 }
 
 #[derive(Default, Debug, PartialEq, Eq)]
@@ -304,19 +316,6 @@ fn status_settings(bytes: &[u8]) -> Result<StatusSettings> {
     Ok(status)
 }
 
-fn appearance_theme(bytes: &[u8]) -> Result<Option<AccountTheme>> {
-    let mut reader = Reader::new(bytes);
-    let mut theme = None;
-    while let Some((field, wire)) = reader.tag()? {
-        if field == 1 && wire == 0 {
-            theme = AccountTheme::from_wire(reader.varint()?);
-        } else {
-            reader.skip(field, wire, 0)?;
-        }
-    }
-    Ok(theme)
-}
-
 pub fn decode(bytes: &[u8]) -> Result<Settings> {
     let mut reader = Reader::new(bytes);
     let mut settings = Settings::default();
@@ -335,7 +334,19 @@ pub fn decode(bytes: &[u8]) -> Result<Settings> {
         } else if field == 11 {
             settings.status = Some(status_settings(reader.bytes(wire)?)?);
         } else if field == 13 {
-            settings.theme = appearance_theme(reader.bytes(wire)?)?;
+            (settings.theme, settings.client_theme) =
+                appearance::decode_message(reader.bytes(wire)?)?;
+            settings.appearance_present = true;
+        } else if field == 6 {
+            text_images::decode_message(
+                reader.bytes(wire)?,
+                settings.text_images.get_or_insert_with(TextImages::default),
+            )?;
+        } else if field == 15 {
+            favorites::decode_message(
+                reader.bytes(wire)?,
+                settings.favorites.get_or_insert_with(Favorites::default),
+            )?;
         } else {
             reader.skip(field, wire, 0)?;
         }

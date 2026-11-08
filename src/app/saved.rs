@@ -242,7 +242,9 @@ impl DiscordApp {
             .collect();
         for (channel_id, message_id, body) in due {
             self.notified_reminders.insert(message_id);
-            if crate::settings::notifications() {
+            if crate::settings::notifications()
+                && !crate::settings::streamer().mutes_notifications()
+            {
                 cx.background_executor()
                     .spawn(async move {
                         crate::notify::show("Reminder", &body, None, channel_id, message_id);

@@ -2,6 +2,43 @@ use super::view::*;
 use crate::discord::{self, model};
 use chrono::{Datelike, Timelike};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static CONCEAL_USERNAMES: AtomicBool = AtomicBool::new(false);
+
+pub(super) fn set_conceal_usernames(on: bool) -> bool {
+    CONCEAL_USERNAMES.swap(on, Ordering::Relaxed) != on
+}
+
+pub fn conceal(name: &str) -> String {
+    name.chars()
+        .next()
+        .map(|first| format!("{first}\u{2026}"))
+        .unwrap_or_default()
+}
+
+/// Only a name that is the unique username itself is truncated; global names, legacy
+/// `name#1234` users and nicknames stay readable.
+fn shown_name(real: &str, username: &str, discriminator: Option<&str>) -> String {
+    let unique = discriminator.is_none_or(|value| value == "0");
+    if CONCEAL_USERNAMES.load(Ordering::Relaxed)
+        && unique
+        && real.to_lowercase() == username.to_lowercase()
+    {
+        conceal(real)
+    } else {
+        real.to_owned()
+    }
+}
+
+pub(super) fn refresh_name(user: &mut User) {
+    user.name = shown_name(
+        &user.real_name,
+        &user.username,
+        user.discriminator.as_deref(),
+    );
+    user.initials = initials(&user.real_name);
+}
 
 fn initials(name: &str) -> String {
     name.split_whitespace()
@@ -514,12 +551,13 @@ pub(super) fn map_name_style(styles: &model::DisplayNameStyles) -> NameStyle {
 }
 
 pub(super) fn map_user(user: &model::User) -> User {
-    let name = user.global_name.as_ref().unwrap_or(&user.username).clone();
+    let real_name = user.global_name.as_ref().unwrap_or(&user.username).clone();
     User {
         id: user.id,
         username: user.username.clone(),
-        initials: initials(&name),
-        name,
+        initials: initials(&real_name),
+        name: shown_name(&real_name, &user.username, user.discriminator.as_deref()),
+        real_name,
         status: Status::Offline,
         bot: user.bot,
         verified_bot: model::verified_bot(user.bot, user.public_flags),
@@ -560,20 +598,20 @@ pub(super) fn apply_user_update(user: &mut User, update: &model::UserUpdate) {
         user.username.clone_from(&update.username);
     }
     match &update.global_name {
-        Some(name) => user.name = name.clone().unwrap_or_else(|| user.username.clone()),
-        None if username_changed && user.name == old_username => {
-            user.name.clone_from(&user.username);
+        Some(name) => user.real_name = name.clone().unwrap_or_else(|| user.username.clone()),
+        None if username_changed && user.real_name == old_username => {
+            user.real_name.clone_from(&user.username);
         }
         None => {}
-    }
-    if username_changed || update.global_name.is_some() {
-        user.initials = initials(&user.name);
     }
     if let Some(avatar) = &update.avatar {
         user.avatar.clone_from(avatar);
     }
     if let Some(discriminator) = &update.discriminator {
         user.discriminator.clone_from(discriminator);
+    }
+    if username_changed || update.global_name.is_some() || update.discriminator.is_some() {
+        refresh_name(user);
     }
     if let Some(bot) = update.bot {
         user.bot = bot;

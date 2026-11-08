@@ -389,7 +389,7 @@ pub(super) fn suggestions(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                             .into_any_element(),
                     },
                     name.clone(),
-                    username.clone(),
+                    crate::settings::shown_username(username),
                 ),
                 MentionChoice::Everyone => (
                     theme::icon("at-sign", 20., theme::muted()).into_any_element(),

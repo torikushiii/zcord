@@ -272,7 +272,7 @@ fn reactor_row(app: &DiscordApp, user: &model::User, cx: &App) -> impl IntoEleme
                         .text_size(rpx(12.))
                         .line_height(rpx(16.))
                         .text_color(rgb(theme::muted()))
-                        .child(user.username.clone()),
+                        .child(crate::settings::shown_username(&user.username)),
                 ),
         )
 }

@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use tauri_winrt_notification::{IconCrop, Toast};
+use tauri_winrt_notification::{Duration, IconCrop, Toast};
 use windows::{
     Win32::{
         Foundation::PROPERTYKEY,
@@ -60,6 +60,11 @@ pub fn show(title: &str, body: &str, icon: Option<&Path>, channel_id: u64, messa
         });
     if let Some(icon) = icon {
         toast = toast.icon(icon, IconCrop::Circular, "");
+    }
+    // Toasts are either short or ~25s, and short follows the system's notification timeout
+    // (5s by default).
+    if crate::settings::notification_seconds() > 5 {
+        toast = toast.duration(Duration::Long);
     }
     if let Err(error) = toast.show() {
         log::warn!("could not show notification: {error}");

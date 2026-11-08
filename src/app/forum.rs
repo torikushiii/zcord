@@ -673,7 +673,7 @@ fn author(app: &DiscordApp, post: &ForumPost, cx: &App) -> impl IntoElement {
     let guild_id = app.selected_guild_id;
     let color = app
         .store
-        .member_color(guild_id, user_id)
+        .member_name_color(guild_id, user_id)
         .unwrap_or(theme::strong());
     div()
         .flex_none()

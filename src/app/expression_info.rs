@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use gpui::{prelude::*, *};
 
 use crate::{
-    discord::model,
+    discord::{model, settings_proto::StickerAnimation},
     media::{
         animated,
         images::{self, ImageSpec},
@@ -238,12 +238,25 @@ impl DiscordApp {
         hovered: bool,
         cx: &mut Context<Self>,
     ) {
+        let sticker = matches!(owner, HoverOwner::Sticker(..));
         if self
             .expression_info
             .set_hover(owner, expression, bounds, hovered)
         {
             self.views.overlays.update(cx, |_, cx| cx.notify());
+            if sticker
+                && crate::settings::display().animate_stickers == StickerAnimation::OnInteraction
+            {
+                cx.notify();
+            }
         }
+    }
+
+    pub(crate) fn sticker_hovered(&self, message_id: u64, sticker_id: u64) -> bool {
+        self.expression_info
+            .hover
+            .as_ref()
+            .is_some_and(|hover| hover.owner == HoverOwner::Sticker(message_id, sticker_id))
     }
 
     pub(crate) fn open_expression_info(

@@ -726,3 +726,169 @@ fn account_theme_follows_ready_and_full_and_partial_settings_updates() {
     );
     assert_eq!(store.account_theme(), None);
 }
+
+#[test]
+fn text_images_and_favorites_follow_ready_and_whole_message_updates() {
+    use settings_proto::{FavoriteChannel, TextImages};
+
+    let channel = FavoriteChannel {
+        id: 123,
+        nickname: "saved".into(),
+        kind: 1,
+        ..Default::default()
+    };
+    let favorites = settings_proto::favorite_channel_patch(&[], 123, Some(channel.clone()))
+        .unwrap()
+        .unwrap();
+    let favorites = settings_proto::favorites_visible_patch(&favorites, true)
+        .unwrap()
+        .unwrap();
+    let mut payload = ready();
+    payload.user_settings_proto = Some(
+        STANDARD.encode(
+            [
+                field(6, &[field(11, &[]), field(17, &uint(1, 1))].concat()),
+                favorites,
+            ]
+            .concat(),
+        ),
+    );
+    let mut store = Store::from_ready(payload);
+    assert!(!store.text_images().gif_auto_play);
+    assert!(store.text_images().message_display_compact);
+    assert!(store.favorites().guild_visible);
+    assert_eq!(store.favorites().channels, [channel]);
+
+    let text = field(6, &field(14, &[]));
+    assert_eq!(
+        store.apply(settings_update(1, &text, true)),
+        Change::TextImages
+    );
+    assert!(store.text_images().gif_auto_play);
+    assert!(!store.text_images().animate_emoji);
+    assert!(!store.text_images().message_display_compact);
+    assert!(store.favorites().guild_visible);
+    assert_eq!(store.apply(settings_update(1, &text, true)), Change::None);
+
+    assert_eq!(
+        store.apply(settings_update(1, &field(15, &[]), true)),
+        Change::Favorites
+    );
+    assert_eq!(store.favorites(), &settings_proto::Favorites::default());
+    assert!(!store.text_images().animate_emoji);
+    assert_eq!(
+        store.apply(settings_update(1, &field(6, &[]), true)),
+        Change::TextImages
+    );
+    assert_eq!(store.text_images(), &TextImages::default());
+
+    store.apply(settings_update(1, &text, true));
+    store.apply(settings_update(1, &field(15, &field(3, &uint(1, 1))), true));
+    assert_eq!(
+        store.apply(settings_update(1, &[], false)),
+        Change::Structure
+    );
+    assert_eq!(store.text_images(), &TextImages::default());
+    assert_eq!(store.favorites(), &settings_proto::Favorites::default());
+}
+
+#[test]
+fn client_theme_changes_and_empty_appearance_notify_theme() {
+    use settings_proto::{AccountTheme, ClientTheme, CustomTheme};
+
+    let initial =
+        settings_proto::appearance_patch(&[], AccountTheme::Dark, Some(&ClientTheme::Preset(42)))
+            .unwrap();
+    let mut payload = ready();
+    payload.user_settings_proto = Some(STANDARD.encode(&initial));
+    let mut store = Store::from_ready(payload);
+    assert_eq!(store.client_theme(), Some(&ClientTheme::Preset(42)));
+    assert_eq!(
+        store.apply(settings_update(1, &initial, true)),
+        Change::None
+    );
+    let custom = ClientTheme::Custom(CustomTheme {
+        colors: vec!["#5348ca".into(), "#abcdef".into()],
+        stops: vec![0.0, 1.0],
+        angle: 45,
+        base_mix: 74,
+    });
+    let next =
+        settings_proto::appearance_patch(&initial, AccountTheme::Dark, Some(&custom)).unwrap();
+    assert_eq!(store.apply(settings_update(1, &next, true)), Change::Theme);
+    assert_eq!(store.client_theme(), Some(&custom));
+    assert_eq!(store.account_theme(), Some(AccountTheme::Dark));
+    assert_eq!(
+        store.apply(settings_update(1, &field(6, &[]), true)),
+        Change::None
+    );
+    assert_eq!(store.client_theme(), Some(&custom));
+    assert_eq!(
+        store.apply(settings_update(1, &field(13, &[]), true)),
+        Change::Theme
+    );
+    assert_eq!(store.client_theme(), None);
+    assert_eq!(store.account_theme(), None);
+    store.apply(settings_update(1, &initial, true));
+    assert_eq!(
+        store.apply(settings_update(1, &[], false)),
+        Change::Structure
+    );
+    assert_eq!(store.client_theme(), None);
+}
+
+#[test]
+fn settings_change_priority_still_installs_lower_priority_values() {
+    use settings_proto::AccountTheme;
+
+    let mut store = Store::from_ready(ready());
+    let text = field(6, &field(11, &[]));
+    let favorites = field(15, &field(3, &uint(1, 1)));
+    let theme = field(13, &uint(1, 2));
+    let status = field(11, &field(1, &field(1, b"idle")));
+    for (extra, expected) in [
+        (Vec::new(), Change::Theme),
+        (status, Change::Members { guild_id: None }),
+        (field(14, &[]), Change::Structure),
+    ] {
+        store.apply(settings_update(1, &[], false));
+        let update = [text.clone(), favorites.clone(), theme.clone(), extra].concat();
+        assert_eq!(store.apply(settings_update(1, &update, true)), expected);
+        assert!(!store.text_images().gif_auto_play);
+        assert!(store.favorites().guild_visible);
+        assert_eq!(store.account_theme(), Some(AccountTheme::Light));
+    }
+    store.apply(settings_update(1, &[], false));
+    assert_eq!(
+        store.apply(settings_update(1, &[text, favorites].concat(), true)),
+        Change::TextImages
+    );
+    assert!(store.favorites().guild_visible);
+}
+
+#[test]
+fn saved_settings_can_be_installed_before_the_gateway_echo() {
+    let mut store = Store::from_ready(ready());
+    let text = settings_proto::TextImages {
+        gif_auto_play: false,
+        ..Default::default()
+    };
+    assert_eq!(store.set_text_images(text.clone()), Change::TextImages);
+    assert_eq!(store.text_images(), &text);
+    assert_eq!(store.set_text_images(text), Change::None);
+    assert_eq!(
+        store.apply(settings_update(1, &field(6, &field(11, &[])), true)),
+        Change::None
+    );
+    let favorites = settings_proto::Favorites {
+        guild_visible: true,
+        ..Default::default()
+    };
+    assert_eq!(store.set_favorites(favorites.clone()), Change::Favorites);
+    assert_eq!(store.favorites(), &favorites);
+    assert_eq!(store.set_favorites(favorites), Change::None);
+    assert_eq!(
+        store.apply(settings_update(1, &field(15, &field(3, &uint(1, 1))), true)),
+        Change::None
+    );
+}

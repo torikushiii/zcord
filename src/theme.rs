@@ -3,8 +3,8 @@ use gpui_component::Theme;
 use std::{
     f32::consts::{PI, TAU},
     sync::{
-        OnceLock,
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        Arc, OnceLock, RwLock,
+        atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -16,20 +16,34 @@ use crate::{
     store::{Decoration, GuildTag, Status, Store, User, WebhookAuthor},
 };
 
+mod ash;
 mod components;
 mod dark;
+pub mod gradient;
 mod light;
+mod onyx;
 mod profile_avatar;
 
+use ash::ASH;
 pub use components::init;
 use dark::DARK;
+pub use gradient::{Gradient, Layer};
 use light::LIGHT;
+use onyx::ONYX;
 pub use profile_avatar::status_icon;
 
 macro_rules! palette {
     ($($name:ident),* $(,)?) => {
         pub struct Palette {
             $(pub $name: u32,)*
+        }
+
+        impl Palette {
+            fn map(&self, mut change: impl FnMut(&str, u32) -> u32) -> Palette {
+                Palette {
+                    $($name: change(stringify!($name), self.$name),)*
+                }
+            }
         }
 
         $(
@@ -113,32 +127,97 @@ palette!(
     upload_fold,
     accent_border,
     account_hover,
+    slider_track,
+    text_positive,
 );
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum BaseTheme {
+    Light,
+    Ash,
+    Dark,
+    #[default]
+    Onyx,
+}
+
+impl BaseTheme {
+    fn palette(self) -> &'static Palette {
+        match self {
+            Self::Light => &LIGHT,
+            Self::Ash => &ASH,
+            Self::Dark => &DARK,
+            Self::Onyx => &ONYX,
+        }
+    }
+}
+
 static LIGHT_ACTIVE: AtomicBool = AtomicBool::new(false);
+// Only ever points at a static palette or a leaked tinted one, so it is never dangling.
+static PALETTE: AtomicPtr<Palette> = AtomicPtr::new(&ONYX as *const Palette as *mut Palette);
+static GRADIENT: RwLock<Option<Arc<Gradient>>> = RwLock::new(None);
+
+struct Active(BaseTheme, Option<Arc<Gradient>>);
+
+impl Global for Active {}
 
 fn palette() -> &'static Palette {
-    if is_light() { &LIGHT } else { &DARK }
+    // SAFETY: PALETTE only holds pointers from `&'static Palette`s.
+    unsafe { &*PALETTE.load(Ordering::Relaxed) }
 }
 
 /// The dark palette whatever the app's theme, for surfaces that stay dark in light mode, like a
 /// profile with a dark custom theme.
 pub fn dark_palette() -> &'static Palette {
-    &DARK
+    &ONYX
 }
 
 pub fn is_light() -> bool {
     LIGHT_ACTIVE.load(Ordering::Relaxed)
 }
 
-pub fn set_light(light: bool, cx: &mut App) {
-    settings::update(cx, |settings| settings.light_theme = light);
-    if LIGHT_ACTIVE.swap(light, Ordering::Relaxed) == light {
+pub fn gradient() -> Option<Arc<Gradient>> {
+    GRADIENT.read().ok()?.clone()
+}
+
+pub fn set_theme(base: BaseTheme, gradient: Option<Gradient>, cx: &mut App) {
+    let gradient = gradient.map(Arc::new);
+    if cx
+        .try_global::<Active>()
+        .is_some_and(|active| active.0 == base && active.1 == gradient)
+    {
         return;
     }
+    let palette: &'static Palette = match &gradient {
+        Some(gradient) => Box::leak(Box::new(gradient.tint(base.palette()))),
+        None => base.palette(),
+    };
+    PALETTE.store(palette as *const Palette as *mut Palette, Ordering::Relaxed);
+    LIGHT_ACTIVE.store(base == BaseTheme::Light, Ordering::Relaxed);
+    if let Ok(mut active) = GRADIENT.write() {
+        active.clone_from(&gradient);
+    }
+    cx.set_global(Active(base, gradient));
     components::init(cx);
     Theme::global_mut(cx).font_size = px(BASE_FONT_SIZE * ZOOM_LEVELS[zoom_index(cx)]);
     cx.refresh_windows();
+}
+
+pub fn surface(layer: Layer, under: Option<Layer>, solid: u32) -> Hsla {
+    match gradient() {
+        Some(gradient) => gradient.layer_over(layer, under),
+        None => rgb(solid).into(),
+    }
+}
+
+pub fn gradient_backdrop() -> Option<impl IntoElement> {
+    gradient().map(|gradient| {
+        div().absolute().inset_0().child(gradient.backdrop()).child(
+            div()
+                .absolute()
+                .inset_0()
+                .bg(gradient.layer_over(Layer::Higher, None)),
+        )
+    })
 }
 
 pub const SCRIM: u32 = 0x000000B8;
@@ -149,6 +228,7 @@ pub const RED: u32 = 0xEB5F5E;
 pub const GREEN: u32 = 0x41A063;
 pub const YELLOW: u32 = 0xCE8100;
 pub const NOTIFICATION: u32 = 0xD22D39;
+pub const STREAMER: u32 = 0x9147FF;
 pub const STATUS_ONLINE: u32 = 0x3D9E60;
 pub const STATUS_IDLE: u32 = 0xFFCB6E;
 pub const STATUS_DND: u32 = 0xDC4247;
@@ -243,6 +323,26 @@ pub fn user_avatar(
         image,
         user.and_then(|user| user.decoration.as_ref())
             .and_then(|data| decoration(user_id, data, size, animate, notch, cx)),
+    )
+}
+
+pub fn default_avatar(
+    index: u8,
+    size: f32,
+    status: Option<(Status, u32)>,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    let notch = profile_avatar::Geometry::for_avatar(size, status.is_some());
+    let id = u64::from(index);
+    avatar(
+        "",
+        user_color(id),
+        size,
+        status,
+        false,
+        id,
+        avatar_image(&ImageSpec::DefaultAvatar { index }, size, false, notch, cx),
+        None,
     )
 }
 
@@ -748,6 +848,14 @@ fn status_cutout(status: Status, dot: f32, ring: u32) -> Option<Div> {
 }
 
 const TOOLTIP_ENTER: Duration = Duration::from_millis(120);
+
+pub fn role_dot(color: u32) -> Div {
+    div()
+        .flex_none()
+        .size(rpx(8.))
+        .rounded_full()
+        .bg(rgb(color))
+}
 
 pub fn tooltip_bubble() -> Div {
     div()

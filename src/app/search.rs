@@ -66,6 +66,7 @@ enum ChipValue {
 struct Results {
     query: SearchQuery,
     messages: Vec<(u64, Message)>,
+    channels: Vec<model::Channel>,
     total: u64,
     status: Status,
 }
@@ -163,7 +164,11 @@ impl DiscordApp {
         if self.showing_home_page() {
             None
         } else if self.is_home() {
-            Some(SearchScope::Channel(self.selected_channel_id))
+            Some(if crate::settings::display().is_cross_dm_search_enabled {
+                SearchScope::Dms
+            } else {
+                SearchScope::Channel(self.selected_channel_id)
+            })
         } else {
             Some(SearchScope::Guild(self.selected_guild_id))
         }
@@ -273,7 +278,7 @@ impl DiscordApp {
     fn search_changed(&mut self, cx: &mut Context<Self>) {
         let guild_id = match self.active_search().map(|search| search.scope) {
             Some(SearchScope::Guild(guild_id)) => Some(guild_id),
-            Some(SearchScope::Channel(_)) => None,
+            Some(SearchScope::Channel(_) | SearchScope::Dms) => None,
             None => return,
         };
         let session = self.session.clone().filter(|_| self.live);
@@ -308,7 +313,7 @@ impl DiscordApp {
         };
         let guild_id = match search.scope {
             SearchScope::Guild(guild_id) => Some(guild_id),
-            SearchScope::Channel(_) => None,
+            SearchScope::Channel(_) | SearchScope::Dms => None,
         };
         let text = search.text(cx);
         let Some((key, partial)) = search_query::active_filter(&text) else {
@@ -459,7 +464,7 @@ impl DiscordApp {
         let parsed = search_query::parse(text)?;
         let guild_id = match search.scope {
             SearchScope::Guild(guild_id) => Some(guild_id),
-            SearchScope::Channel(_) => None,
+            SearchScope::Channel(_) | SearchScope::Dms => None,
         };
         let user = |name: &String| {
             self.store
@@ -530,6 +535,7 @@ impl DiscordApp {
         search.results = Some(Results {
             query: SearchQuery { sort, ..query },
             messages: Vec::new(),
+            channels: Vec::new(),
             total: 0,
             status,
         });
@@ -550,6 +556,7 @@ impl DiscordApp {
         results.query.sort = sort;
         results.query.offset = 0;
         results.messages.clear();
+        results.channels.clear();
         results.total = 0;
         results.status = Status::Loading;
         self.fetch_search(0, cx);
@@ -565,6 +572,7 @@ impl DiscordApp {
         };
         results.query.offset = (page.saturating_sub(1) as usize * PAGE).min(MAX_OFFSET);
         results.messages.clear();
+        results.channels.clear();
         results.status = Status::Loading;
         self.fetch_search(0, cx);
         cx.notify();
@@ -663,7 +671,7 @@ impl DiscordApp {
     fn search_page(&mut self, scope: SearchScope, page: model::SearchPage) {
         let guild_id = match scope {
             SearchScope::Guild(guild_id) => guild_id,
-            SearchScope::Channel(_) => 0,
+            SearchScope::Channel(_) | SearchScope::Dms => 0,
         };
         let authors: Vec<u64> = page
             .messages
@@ -695,6 +703,7 @@ impl DiscordApp {
         };
         results.total = page.total;
         results.messages.extend(messages);
+        results.channels = page.channels;
         results.status = Status::Ready;
     }
 
@@ -705,8 +714,34 @@ impl DiscordApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let cross_dm = self
+            .active_search()
+            .is_some_and(|search| search.scope == SearchScope::Dms);
+        if cross_dm && self.store.private_channel(channel_id).is_none() {
+            let channel = self
+                .active_search()
+                .and_then(|search| search.results.as_ref())
+                .and_then(|results| {
+                    results.channels.iter().find(|channel| {
+                        channel.id == channel_id
+                            && channel.guild_id.is_none()
+                            && matches!(channel.kind, Some(1 | 3))
+                    })
+                })
+                .cloned();
+            if let Some(channel) = channel {
+                let change = self
+                    .store
+                    .apply(crate::discord::Event::ChannelUpsert(Box::new(channel)));
+                self.apply_change(change, window, cx);
+            }
+        }
         if channel_id != self.selected_channel_id {
-            self.select_channel(channel_id, window, cx);
+            if cross_dm {
+                self.select_dm(channel_id, window, cx);
+            } else {
+                self.select_channel(channel_id, window, cx);
+            }
         }
         if channel_id == self.selected_channel_id {
             self.jump_to_message(message_id, window, cx);

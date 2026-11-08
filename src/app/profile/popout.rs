@@ -586,6 +586,9 @@ pub(super) fn display_names(
         .map(|p| p.user.user.username.clone())
         .filter(|username| !username.is_empty());
     let shown_username = username.clone().map(|username| {
+        if crate::settings::streamer().hides_personal() {
+            return crate::settings::shown_username(&username);
+        }
         match profile
             .and_then(|p| p.user.user.discriminator.as_deref())
             .filter(|discriminator| !matches!(*discriminator, "" | "0"))
@@ -970,6 +973,9 @@ pub(super) fn bio(
     clamped: bool,
     cx: &App,
 ) -> Option<AnyElement> {
+    if crate::settings::streamer().hides_personal() {
+        return None;
+    }
     let profile = card.profile.as_deref()?;
     let palette = card.palette();
     let text = guild_profile(profile)
@@ -1006,6 +1012,7 @@ pub(super) fn markdown(
         guild_id: card.guild_id.unwrap_or(0),
         message_id: id,
         revealed: &app.revealed_spoilers,
+        reveal_all: false,
         entity: app.entity.clone(),
         colors: BodyColors {
             strong: palette.strong,

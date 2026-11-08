@@ -20,6 +20,7 @@ use crate::{
         gif_picker, guild_rail, home, lightbox, member_list, profile, search, settings_page,
         switcher, voice,
     },
+    discord::settings_proto::TextImages,
     theme::rpx,
 };
 
@@ -91,7 +92,11 @@ pub(crate) fn messages_style() -> StyleRefinement {
 pub(crate) fn member_list_style(width: f32) -> StyleRefinement {
     StyleRefinement::default()
         .w(rpx(width))
-        .bg(rgb(crate::theme::base_lower()))
+        .bg(crate::theme::surface(
+            crate::theme::Layer::Low,
+            Some(crate::theme::Layer::Chat),
+            crate::theme::base_lower(),
+        ))
         .h_full()
         .flex_none()
 }
@@ -294,9 +299,26 @@ impl Render for ChatHeaderView {
     }
 }
 
+type LayoutPreferences = (f32, TextImages, u32, [bool; 3]);
+
+fn layout_preferences() -> LayoutPreferences {
+    let display = crate::settings::display();
+    let spacing = crate::settings::message_group_spacing(display.message_display_compact);
+    (
+        crate::settings::chat_font_size(),
+        display,
+        spacing,
+        [
+            crate::settings::display_name_styles(),
+            crate::settings::mention_avatars(),
+            crate::settings::who_reacted(),
+        ],
+    )
+}
+
 pub(crate) struct MessagesView {
     app: WeakEntity<DiscordApp>,
-    layout_preferences: (f32, bool),
+    layout_preferences: LayoutPreferences,
     quest_cards: super::quests::QuestCards,
     active_now_clock: Option<Task<()>>,
     _observe: Subscription,
@@ -306,10 +328,7 @@ impl MessagesView {
     fn new(app: &Entity<DiscordApp>, cx: &mut Context<Self>) -> Self {
         Self {
             app: app.downgrade(),
-            layout_preferences: (
-                crate::settings::chat_font_size(),
-                crate::settings::link_previews(),
-            ),
+            layout_preferences: layout_preferences(),
             quest_cards: Default::default(),
             active_now_clock: None,
             _observe: observe_app(app, cx),
@@ -349,13 +368,13 @@ impl Render for MessagesView {
             self.quest_cards.sync(&app, cx);
         }
         let app = app.read(cx);
-        let preferences = (
-            crate::settings::chat_font_size(),
-            crate::settings::link_previews(),
-        );
+        let preferences = layout_preferences();
         if self.layout_preferences != preferences {
-            // Width is unchanged, so the list won't invalidate these cached heights itself.
+            // Width is unchanged, so the lists won't invalidate these cached heights themselves.
             app.messages.remeasure();
+            if let Some(pane) = &app.thread_pane {
+                pane.remeasure();
+            }
             self.layout_preferences = preferences;
         }
         if app.showing_home_page() {

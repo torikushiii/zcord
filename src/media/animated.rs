@@ -1,3 +1,4 @@
+use crate::discord::settings_proto::StickerAnimation;
 use crate::media::{
     frames,
     images::{self, ImageSpec},
@@ -657,10 +658,12 @@ fn schedule_wakeup(view: EntityId, cx: &mut App, remaining: Duration, window: &W
 fn animations_enabled(spec: &ImageSpec) -> bool {
     match spec {
         ImageSpec::Emoji { .. } => crate::settings::emoji_animation(),
-        ImageSpec::Media { .. }
-        | ImageSpec::Sticker { .. }
-        | ImageSpec::Attachment { .. }
-        | ImageSpec::LocalGif { .. } => crate::settings::gif_autoplay(),
+        ImageSpec::Sticker { .. } => {
+            crate::settings::display().animate_stickers != StickerAnimation::Never
+        }
+        ImageSpec::Media { .. } | ImageSpec::Attachment { .. } | ImageSpec::LocalGif { .. } => {
+            crate::settings::gif_autoplay() && crate::settings::window_focused()
+        }
         ImageSpec::Animated { still } => animations_enabled(still),
         _ => true,
     }
@@ -682,6 +685,13 @@ pub fn poster(spec: &ImageSpec, size: u32, cx: &App) -> Option<AnimatedImage> {
     }
     match state(spec, size, cx) {
         Load::Ready(frame) => Some(poster_image(frame)),
+        Load::Pending | Load::Failed => None,
+    }
+}
+
+pub fn first_frame(spec: &ImageSpec, size: u32, cx: &App) -> Option<AnimatedImage> {
+    match state(spec, size, cx) {
+        Load::Ready(frames) => Some(poster_image(frames)),
         Load::Pending | Load::Failed => None,
     }
 }

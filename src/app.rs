@@ -16,6 +16,7 @@ mod dm_panel;
 mod embeds;
 mod emoji_picker;
 mod expression_info;
+mod favorites_saving;
 mod forum;
 mod forum_actions;
 mod forward_dialog;
@@ -54,6 +55,7 @@ mod smooth_scroll;
 mod sticker_picker;
 mod stream_view;
 mod switcher;
+mod text_images;
 mod titlebar;
 mod typing;
 mod video;
@@ -63,6 +65,7 @@ mod voice;
 use crate::discord::{
     self, Event, FatalError, OutgoingMessage, OutgoingReply, Session, UploadProgress,
 };
+pub(crate) use appearance::apply_saved_theme;
 use login::LoginForm;
 
 use std::{
@@ -281,6 +284,10 @@ pub struct DiscordApp {
     stage_chat: Option<(u64, u64)>,
     voice_lobby: Option<(u64, u64)>,
     pub(crate) activity_privacy: activity_privacy::Saving,
+    pub(crate) text_images: text_images::Saving,
+    pub(crate) favorites_saving: favorites_saving::Saving,
+    pub(crate) favorites_view: bool,
+    streamer_notice_dismissed: bool,
     affinity_refresh: Option<Task<()>>,
     dm_profile: Option<profile::ProfileCard>,
     message_search: Option<search::MessageSearch>,
@@ -563,6 +570,10 @@ impl DiscordApp {
             stage_chat: None,
             voice_lobby: None,
             activity_privacy: Default::default(),
+            text_images: Default::default(),
+            favorites_saving: Default::default(),
+            favorites_view: false,
+            streamer_notice_dismissed: false,
             affinity_refresh: None,
             dm_profile: None,
             message_search: None,
@@ -686,8 +697,17 @@ impl DiscordApp {
             crate::settings::remember_window(window, cx)
         })
         .detach();
+        appearance::device_appearance_changed(window, cx);
+        cx.observe_window_appearance(window, |_, window, cx| {
+            appearance::device_appearance_changed(window, cx);
+        })
+        .detach();
         cx.observe_window_activation(window, |app, window, cx| {
             app.window_active = window.is_window_active();
+            crate::settings::set_window_focused(cx, app.window_active);
+            if app.window_active {
+                crate::settings::apply_reduce_motion(cx);
+            }
             app.schedule_ack(cx);
             app.refresh_activity_feed(false, cx);
         })
@@ -1059,6 +1079,7 @@ impl DiscordApp {
         self.reconcile_dm_call(cx);
         self.arm_status_expiry_timer(cx);
         self.follow_account_theme(cx);
+        crate::settings::set_display(cx, self.text_images());
         self.load_activity_reply_assets(cx);
         self.sync_thread_pane(&change, cx);
         // Background channels only change badges, which nobody can see until a
@@ -1321,6 +1342,11 @@ impl Render for DiscordApp {
         views::count_render(views::ViewKind::Root);
         rich_text::keep_registered(window, cx);
         theme::set_image_scale(window, cx);
+        let streamer = crate::settings::streamer();
+        self.store.set_conceal_usernames(streamer.hides_personal());
+        if !streamer.enabled {
+            self.streamer_notice_dismissed = false;
+        }
         self.rpx_per_pixel = theme::BASE_FONT_SIZE / f32::from(window.rem_size());
         self.window_height = f32::from(window.viewport_size().height) * self.rpx_per_pixel;
         if matches!(self.screen, Screen::Chat) {
@@ -1351,7 +1377,11 @@ impl Render for DiscordApp {
                         .border_t_1()
                         .border_l_1()
                         .border_color(rgba(theme::border()))
-                        .bg(rgb(theme::base_lower()))
+                        .bg(theme::surface(
+                            theme::Layer::High,
+                            Some(theme::Layer::Higher),
+                            theme::base_lower(),
+                        ))
                         .child(
                             self.views
                                 .channel_list
@@ -1365,7 +1395,11 @@ impl Render for DiscordApp {
                                 .flex_1()
                                 .min_w_0()
                                 .h_full()
-                                .bg(rgb(theme::bg()))
+                                .bg(theme::surface(
+                                    theme::Layer::Chat,
+                                    Some(theme::Layer::High),
+                                    theme::bg(),
+                                ))
                                 .when(self.stream_chat_open(), |this| {
                                     this.flex_none().ml_auto().w(rpx(stream_view::CHAT_WIDTH))
                                 })
@@ -1488,6 +1522,7 @@ impl Render for DiscordApp {
             .size_full()
             .overflow_hidden()
             .bg(rgb(theme::base_lowest()))
+            .children(theme::gradient_backdrop())
             .child(smooth_scroll::interceptor())
             .text_color(rgb(theme::text()))
             .text_size(rpx(16.))
@@ -1505,6 +1540,10 @@ impl Render for DiscordApp {
                         .child("Connection lost. Reconnecting…"),
                 )
             })
+            .when(
+                crate::settings::streamer().enabled && !self.streamer_notice_dismissed,
+                |this| this.child(streamer_bar(cx)),
+            )
             .child(body)
             .child(self.views.overlays.clone().cached(views::overlays_style()))
             .when(
@@ -1538,6 +1577,68 @@ fn connecting() -> impl IntoElement {
                 .text_size(rpx(14.))
                 .text_color(rgb(theme::muted()))
                 .child("Connecting to Discord…"),
+        )
+}
+
+fn streamer_bar(cx: &mut Context<DiscordApp>) -> impl IntoElement {
+    let streamer = crate::settings::streamer();
+    div()
+        .relative()
+        .flex()
+        .flex_none()
+        .justify_center()
+        .items_center()
+        .h(rpx(36.))
+        .pl(rpx(4.))
+        .pr(rpx(28.))
+        .bg(rgb(theme::STREAMER))
+        .text_size(rpx(14.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(gpui::white())
+        .child(if streamer.hides_personal() {
+            "Streamer Mode is enabled. Usernames have been truncated."
+        } else {
+            "Streamer Mode is enabled."
+        })
+        .child(
+            div()
+                .id("streamer-mode-off")
+                .flex()
+                .items_center()
+                .h(rpx(24.))
+                .ml(rpx(10.))
+                .px(rpx(10.))
+                .rounded(rpx(3.))
+                .border_1()
+                .border_color(gpui::white())
+                .cursor_pointer()
+                .on_click(|_, _, cx| {
+                    crate::settings::set_streamer(
+                        cx,
+                        crate::settings::StreamerMode {
+                            enabled: false,
+                            ..crate::settings::streamer()
+                        },
+                    );
+                })
+                .child("Disable"),
+        )
+        .child(
+            div()
+                .id("streamer-mode-dismiss")
+                .absolute()
+                .top_0()
+                .right_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(rpx(36.))
+                .cursor_pointer()
+                .on_click(cx.listener(|app, _, _, cx| {
+                    app.streamer_notice_dismissed = true;
+                    cx.notify();
+                }))
+                .child(theme::icon("x", 18., 0xFFFFFF)),
         )
 }
 

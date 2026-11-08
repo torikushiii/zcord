@@ -133,6 +133,7 @@ impl DiscordApp {
     }
 
     pub(crate) fn open_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.favorites_view = false;
         self.enter_home();
         let saved = crate::settings::get(cx).guild_channels.get(&0).copied();
         match saved.filter(|id| self.store.private_channel(*id).is_some()) {
@@ -1538,7 +1539,7 @@ fn friend_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement + us
         .relationship(user_id)
         .map_or(RelationshipKind::Friend, |relationship| relationship.kind);
     let name = app.store.friend_name(user_id);
-    let username = user.map(|user| user.username.clone());
+    let username = user.map(|user| crate::settings::shown_username(&user.username));
     let status = user.map_or(Status::Offline, |user| user.status);
     let icon = user
         .filter(|user| user.status.is_online())
@@ -2471,7 +2472,7 @@ pub(crate) fn dm_intro(app: &DiscordApp, channel_id: u64, cx: &App) -> Option<An
                 div()
                     .text_size(rpx(20.))
                     .text_color(rgb(theme::text()))
-                    .child(user.username.clone())
+                    .child(crate::settings::shown_username(&user.username))
             }))
             .child(
                 div()
@@ -2964,8 +2965,8 @@ fn request_row(app: &DiscordApp, dm: &PrivateChannel, now_ms: i64, cx: &App) -> 
     let user = app.store.user(user_id);
     let name = app.store.private_channel_name(id);
     let username = user
-        .map(|user| user.username.clone())
-        .filter(|username| !username.is_empty() && *username != name);
+        .filter(|user| !user.username.is_empty() && user.username != name && user.name != name)
+        .map(|user| crate::settings::shown_username(&user.username));
     // Discord dates the row by the preview message, falling back to the channel's last message.
     let sent_id = Some(app.store.latest_message_id(id))
         .filter(|id| *id != 0)

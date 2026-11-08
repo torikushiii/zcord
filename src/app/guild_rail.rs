@@ -26,6 +26,7 @@ const DEFAULT_FOLDER_COLOR: u32 = 0x5865F2;
 const HOME_KEY: u64 = 1;
 const ADD_SERVER_KEY: u64 = 2;
 const DISCOVER_KEY: u64 = 3;
+const FAVORITES_KEY: u64 = 4;
 const CIRCLE: f32 = ICON / 2.;
 const SQUARE: f32 = 16.;
 const TOOLTIP_AVATAR_SIZE: f32 = 28.;
@@ -336,6 +337,9 @@ pub fn render(app: &DiscordApp, dms: &RailDms, cx: &App) -> impl IntoElement + u
                 .flex_none()
                 .bg(rgba(theme::border())),
         )
+        .when(app.favorites_visible(), |this| {
+            this.child(favorites_item(app, morphs))
+        })
         .children(app.store.rail.iter().filter_map(|entry| {
             match entry {
                 RailEntry::Guild(id) => app
@@ -373,9 +377,55 @@ pub fn render(app: &DiscordApp, dms: &RailDms, cx: &App) -> impl IntoElement + u
         })
 }
 
+fn favorites_item(app: &DiscordApp, morphs: Option<Instant>) -> Stateful<Div> {
+    let selected = app.favorites_view;
+    let unread = app.favorite_channels().into_iter().any(|id| {
+        app.store
+            .channel_guild_id(id)
+            .and_then(|guild_id| app.store.guild_by_id(guild_id))
+            .and_then(|guild| guild.channel(id))
+            .is_some_and(|channel| channel.unread || channel.mentions > 0)
+    });
+    let entity = app.entity.clone();
+    rail_item(
+        "favorites",
+        FAVORITES_KEY,
+        Some("Favorites"),
+        selected,
+        unread,
+        app,
+    )
+    .on_click(move |_, window, cx| {
+        entity
+            .update(cx, |app, cx| app.open_favorites(window, cx))
+            .ok();
+    })
+    .child(round(
+        div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(rpx(ICON))
+            .bg(rgb(if selected {
+                theme::BLURPLE
+            } else {
+                theme::elevated()
+            }))
+            .group_hover("rail-item", |style| style.bg(rgb(theme::BLURPLE)))
+            .child(theme::icon(
+                "star-filled",
+                22.,
+                if selected { 0xFFFFFF } else { theme::text() },
+            )),
+        Corners::Morph(FAVORITES_KEY, selected),
+        app,
+        morphs,
+    ))
+}
+
 fn guild_item(app: &DiscordApp, guild: &Guild, cx: &App, morphs: Option<Instant>) -> Stateful<Div> {
     let id = guild.id;
-    let selected = app.selected_guild_id == id;
+    let selected = app.selected_guild_id == id && !app.favorites_view;
     let connected = app
         .voice
         .call
@@ -562,7 +612,8 @@ fn folder_item(app: &DiscordApp, folder: &Folder, cx: &App, morphs: Option<Insta
         },
         Into::into,
     );
-    let contains_selected = guilds.iter().any(|guild| guild.id == app.selected_guild_id);
+    let contains_selected =
+        !app.favorites_view && guilds.iter().any(|guild| guild.id == app.selected_guild_id);
     let unread = guilds.iter().any(|guild| guild.unread);
     let mentions = guilds.iter().map(|guild| guild.mentions).sum::<u32>();
     let tint = rgba((color << 8) | 0x40);

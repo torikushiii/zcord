@@ -1,4 +1,4 @@
-use super::{Message, parse_entries};
+use super::{Channel, Message, parse_entries};
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
@@ -8,6 +8,8 @@ pub struct SearchPage {
     pub total: u64,
     #[serde(default, deserialize_with = "matching_messages")]
     pub messages: Vec<Message>,
+    #[serde(default, deserialize_with = "super::serde_helpers::entries")]
+    pub channels: Vec<Channel>,
 }
 
 fn matching_messages<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<Message>, D::Error> {
@@ -55,6 +57,7 @@ mod tests {
         let page: SearchPage = serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(page.total, 0);
         assert!(page.messages.is_empty());
+        assert!(page.channels.is_empty());
     }
 
     #[test]

@@ -14,6 +14,7 @@ pub(in crate::app) fn body_context<'a>(app: &'a DiscordApp, message_id: u64) -> 
         guild_id: app.selected_guild_id,
         message_id,
         revealed: &app.revealed_spoilers,
+        reveal_all: app.spoilers_open(),
         entity: app.entity.clone(),
         colors: Default::default(),
     }
@@ -88,7 +89,7 @@ fn author_avatar(
 
 fn author_color(app: &DiscordApp, user_id: u64) -> Hsla {
     app.store
-        .member_color(app.selected_guild_id, user_id)
+        .member_name_color(app.selected_guild_id, user_id)
         .map_or(rgb(theme::strong()).into(), |color| rgb(color).into())
 }
 
@@ -623,6 +624,26 @@ pub(super) fn render_message(
     preview: bool,
     cx: &App,
 ) -> AnyElement {
+    render_message_with(app, message, grouped, preview, false, cx)
+}
+
+pub(super) fn render_pane_message(
+    app: &DiscordApp,
+    message: &Message,
+    grouped: bool,
+    cx: &App,
+) -> AnyElement {
+    render_message_with(app, message, grouped, true, true, cx)
+}
+
+fn render_message_with(
+    app: &DiscordApp,
+    message: &Message,
+    grouped: bool,
+    preview: bool,
+    pane: bool,
+    cx: &App,
+) -> AnyElement {
     if is_system(message.kind)
         && let Some(element) = render_system(app, message, cx)
     {
@@ -658,6 +679,54 @@ pub(super) fn render_message(
     let entity = app.entity.clone();
     let menu_entity = app.entity.clone();
     let id = message.id;
+    let display = crate::settings::display();
+    let compact = display.message_display_compact && (!preview || pane);
+    let compact_avatar = compact && display.display_compact_avatars;
+    let group_gap = (!grouped && !preview)
+        .then(|| crate::settings::message_group_spacing(compact))
+        .filter(|gap| *gap > 0);
+    let grouped = grouped && !compact;
+    let author = |size: f32| {
+        div()
+            .id("author-avatar")
+            .flex_none()
+            .when(!preview && message.webhook.is_none(), |this| {
+                this.cursor_pointer()
+                    .without_text_selection()
+                    .on_popup_click(
+                        profile::shown(app, message.author_id),
+                        profile::opener(app, message.author_id, Anchor::TopLeft),
+                    )
+            })
+            .child(author_avatar(
+                app,
+                message.author_id,
+                message.webhook.as_ref(),
+                size,
+                !preview && app.hovered_message == Some(message.id),
+                cx,
+            ))
+    };
+    let body = || {
+        div()
+            .w_full()
+            .text_size(rpx(font_size))
+            .line_height(rpx(line_height))
+            .when(message.delivery == Delivery::Pending, |this| {
+                this.opacity(0.5)
+            })
+            .when(message.delivery == Delivery::Failed, |this| {
+                this.text_color(rgb(theme::RED))
+            })
+            .child(render_body_for_chat(
+                &parsed.blocks,
+                message.edited,
+                parsed.jumbo,
+                text_scale,
+                &context,
+                cx,
+            ))
+    };
     div()
         .id(("message", message.id))
         .group("message")
@@ -667,7 +736,7 @@ pub(super) fn render_message(
         .w_full()
         .pr_4()
         .py(rpx(2.))
-        .when(!grouped && !preview, |this| this.mt_4())
+        .when_some(group_gap, |this, gap| this.mt(rpx(gap as f32)))
         .when(!preview, |this| {
             this.on_hover(move |hovered, _, cx| {
                 entity
@@ -744,7 +813,15 @@ pub(super) fn render_message(
                         .justify_center()
                         .w(rpx(GUTTER))
                         .map(|gutter| {
-                            if grouped {
+                            if compact {
+                                gutter.pt(rpx(3.)).child(
+                                    div()
+                                        .text_size(rpx(11.))
+                                        .line_height(rpx(line_height - 3.))
+                                        .text_color(rgb(theme::faint()))
+                                        .child(message.timestamp.time()),
+                                )
+                            } else if grouped {
                                 gutter.pt(rpx(4.)).child(
                                     div()
                                         .text_size(rpx(11.))
@@ -755,30 +832,7 @@ pub(super) fn render_message(
                                         .child(message.timestamp.time()),
                                 )
                             } else {
-                                gutter.pt(rpx(2.)).child(
-                                    div()
-                                        .id("author-avatar")
-                                        .when(!preview && message.webhook.is_none(), |this| {
-                                            this.cursor_pointer()
-                                                .without_text_selection()
-                                                .on_popup_click(
-                                                    profile::shown(app, message.author_id),
-                                                    profile::opener(
-                                                        app,
-                                                        message.author_id,
-                                                        Anchor::TopLeft,
-                                                    ),
-                                                )
-                                        })
-                                        .child(author_avatar(
-                                            app,
-                                            message.author_id,
-                                            message.webhook.as_ref(),
-                                            40.,
-                                            !preview && app.hovered_message == Some(message.id),
-                                            cx,
-                                        )),
-                                )
+                                gutter.pt(rpx(2.)).child(author(40.))
                             }
                         }),
                 )
@@ -794,8 +848,12 @@ pub(super) fn render_message(
                                     .flex()
                                     .items_center()
                                     .gap(rpx(4.))
-                                    .h(rpx(22.))
+                                    .when(!compact, |this| this.h(rpx(22.)))
                                     .line_height(rpx(22.))
+                                    .when(compact, |this| this.items_start().flex_wrap())
+                                    .when(compact_avatar, |this| {
+                                        this.child(div().pt(rpx(3.)).child(author(16.)))
+                                    })
                                     .child(
                                         div()
                                             .id("author-name")
@@ -821,6 +879,25 @@ pub(super) fn render_message(
                                             })
                                             .child(author_label(app, message, cx)),
                                     )
+                                    .children(
+                                        message
+                                            .webhook
+                                            .is_none()
+                                            .then(|| {
+                                                app.store.member_role_dot(
+                                                    app.selected_guild_id,
+                                                    message.author_id,
+                                                )
+                                            })
+                                            .flatten()
+                                            .map(|color| {
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .h(rpx(22.))
+                                                    .child(theme::role_dot(color))
+                                            }),
+                                    )
                                     .when(
                                         message.webhook.is_some()
                                             || user.is_some_and(|user| user.bot),
@@ -835,38 +912,24 @@ pub(super) fn render_message(
                                         user.and_then(|user| user.tag.as_ref())
                                             .map(|tag| theme::guild_tag(tag, cx)),
                                     )
-                                    .child(
-                                        div()
-                                            .ml(rpx(4.))
-                                            .text_size(rpx(12.))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(rgb(theme::faint()))
-                                            .child(message.timestamp.header()),
-                                    ),
+                                    .when(!compact, |this| {
+                                        this.child(
+                                            div()
+                                                .ml(rpx(4.))
+                                                .text_size(rpx(12.))
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(rgb(theme::faint()))
+                                                .child(message.timestamp.header()),
+                                        )
+                                    })
+                                    .when(compact && editing.is_none() && show_body, |this| {
+                                        this.child(div().flex_1().min_w(rpx(160.)).child(body()))
+                                    }),
                             )
                         })
                         .map(|this| match editing {
                             Some(editing) => this.child(message_editor(app, editing, cx)),
-                            None if show_body => this.child(
-                                div()
-                                    .w_full()
-                                    .text_size(rpx(font_size))
-                                    .line_height(rpx(line_height))
-                                    .when(message.delivery == Delivery::Pending, |this| {
-                                        this.opacity(0.5)
-                                    })
-                                    .when(message.delivery == Delivery::Failed, |this| {
-                                        this.text_color(rgb(theme::RED))
-                                    })
-                                    .child(render_body_for_chat(
-                                        &parsed.blocks,
-                                        message.edited,
-                                        parsed.jumbo,
-                                        text_scale,
-                                        &context,
-                                        cx,
-                                    )),
-                            ),
+                            None if show_body && !compact => this.child(body()),
                             None => this,
                         })
                         .children(

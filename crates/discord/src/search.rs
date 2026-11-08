@@ -5,6 +5,7 @@ use std::time::Duration;
 pub enum SearchScope {
     Guild(u64),
     Channel(u64),
+    Dms,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -49,6 +50,72 @@ pub struct ForumQuery {
 pub enum SearchOutcome {
     Page(model::SearchPage),
     Indexing { retry_after: Duration },
+}
+
+#[derive(serde::Serialize)]
+struct DmSearchBody<'a> {
+    include_nsfw: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    channel_ids: Vec<String>,
+    tabs: SearchTabs<'a>,
+    track_exact_total_hits: bool,
+}
+
+#[derive(serde::Serialize)]
+struct SearchTabs<'a> {
+    messages: MessageSearchTab<'a>,
+}
+
+#[derive(serde::Serialize)]
+struct MessageSearchTab<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<&'a str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    author_id: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    mentions: Vec<String>,
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    has: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pinned: Option<bool>,
+    sort_by: &'static str,
+    sort_order: &'static str,
+    limit: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    offset: Option<usize>,
+}
+
+pub(super) fn dm_search_body(query: &SearchQuery) -> impl serde::Serialize + '_ {
+    DmSearchBody {
+        include_nsfw: true,
+        channel_ids: query.channel_ids.iter().map(u64::to_string).collect(),
+        tabs: SearchTabs {
+            messages: MessageSearchTab {
+                content: (!query.content.is_empty()).then_some(query.content.as_str()),
+                author_id: query.author_ids.iter().map(u64::to_string).collect(),
+                mentions: query.mentions.iter().map(u64::to_string).collect(),
+                has: &query.has,
+                min_id: query.min_id.map(|id| id.to_string()),
+                max_id: query.max_id.map(|id| id.to_string()),
+                pinned: query.pinned,
+                sort_by: match query.sort {
+                    SearchSort::Relevant => "relevance",
+                    SearchSort::Newest | SearchSort::Oldest => "timestamp",
+                },
+                sort_order: match query.sort {
+                    SearchSort::Newest | SearchSort::Relevant => "desc",
+                    SearchSort::Oldest => "asc",
+                },
+                limit: 25,
+                offset: (query.offset != 0).then_some(query.offset),
+            },
+        },
+        track_exact_total_hits: true,
+    }
 }
 
 pub(super) fn search_params(
@@ -113,6 +180,67 @@ pub(super) fn search_params(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dm_search_body_serializes_filters_and_offset_in_messages_tab() {
+        let query = SearchQuery {
+            content: "hello & + /?".to_owned(),
+            author_ids: vec![u64::MAX, 2],
+            mentions: vec![3, 8],
+            channel_ids: vec![4, 5],
+            has: vec!["image".to_owned(), "snapshot".to_owned()],
+            min_id: Some(6),
+            max_id: Some(7),
+            pinned: Some(false),
+            sort: SearchSort::Oldest,
+            offset: 50,
+        };
+        assert_eq!(
+            serde_json::to_value(dm_search_body(&query)).unwrap(),
+            serde_json::json!({
+                "include_nsfw": true,
+                "channel_ids": ["4", "5"],
+                "track_exact_total_hits": true,
+                "tabs": {"messages": {
+                    "content": "hello & + /?",
+                    "author_id": ["18446744073709551615", "2"],
+                    "mentions": ["3", "8"],
+                    "has": ["image", "snapshot"],
+                    "min_id": "6",
+                    "max_id": "7",
+                    "pinned": false,
+                    "sort_by": "timestamp",
+                    "sort_order": "asc",
+                    "limit": 25,
+                    "offset": 50
+                }}
+            })
+        );
+    }
+
+    #[test]
+    fn dm_search_body_omits_empty_filters_and_uses_each_sort() {
+        for (sort, sort_by, sort_order) in [
+            (SearchSort::Newest, "timestamp", "desc"),
+            (SearchSort::Oldest, "timestamp", "asc"),
+            (SearchSort::Relevant, "relevance", "desc"),
+        ] {
+            let query = SearchQuery {
+                sort,
+                ..SearchQuery::default()
+            };
+            assert_eq!(
+                serde_json::to_value(dm_search_body(&query)).unwrap(),
+                serde_json::json!({
+                    "include_nsfw": true,
+                    "track_exact_total_hits": true,
+                    "tabs": {"messages": {
+                        "sort_by": sort_by, "sort_order": sort_order, "limit": 25
+                    }}
+                })
+            );
+        }
+    }
 
     #[test]
     fn search_params_sort_relevance_descending() {

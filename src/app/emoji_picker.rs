@@ -10,7 +10,7 @@ use crate::{
     app::{DiscordApp, gif_picker},
     media::animated,
     media::images,
-    store::{EmojiAccess, EmojiChoice},
+    store::{EmojiAccess, EmojiChoice, PickerSticker, sticker_matches},
     text::emoji,
     theme::{self, rpx},
 };
@@ -26,6 +26,7 @@ const VISIBLE_SUGGESTIONS: usize = 14;
 /// title, besides the composer's measured height.
 const SUGGESTION_RESERVED_HEIGHT: f32 = 150.;
 const SUGGESTION_ROW: f32 = 36.;
+const MAX_STICKER_SUGGESTIONS: usize = 6;
 const GRID_EMOJI: f32 = 40.;
 const PICKER_RISE: f32 = 8.;
 const PICKER_ENTER: Duration = Duration::from_millis(150);
@@ -327,6 +328,35 @@ impl DiscordApp {
             usize::MAX,
         );
         (!choices.is_empty()).then_some((query, choices))
+    }
+
+    pub(crate) fn sticker_suggestions(&self, query: &str) -> Vec<PickerSticker> {
+        if !crate::settings::display().include_stickers_in_autocomplete
+            || query.chars().count() < 2
+            || self.editing.is_some()
+        {
+            return Vec::new();
+        }
+        let guild_id = (self.selected_guild_id != 0).then_some(self.selected_guild_id);
+        self.store
+            .sticker_sections(guild_id, self.selected_channel_id)
+            .into_iter()
+            .flat_map(|section| section.stickers)
+            .filter(|sticker| sticker.usable && sticker_matches(sticker, query))
+            .take(MAX_STICKER_SUGGESTIONS)
+            .collect()
+    }
+
+    fn accept_sticker_suggestion(
+        &mut self,
+        query_len: usize,
+        sticker_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.replace_suggest_query(query_len, String::new(), window, cx);
+        self.emoji_suggest = Suggest::default();
+        self.send_sticker(self.selected_channel_id, sticker_id, window, cx);
     }
 
     pub(crate) fn reset_emoji_suggest(&mut self, cx: &App) {
@@ -931,11 +961,16 @@ pub(super) fn suggestions(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
     .w_full()
     .px(rpx(8.))
     .h(rpx(visible as f32 * SUGGESTION_ROW));
+    let stickers = app.sticker_suggestions(&query);
+    let query_len = query.chars().count() + 1;
     let panel = super::mentions::suggestion_panel(
         "Emoji matching\u{a0}".into(),
         Some(format!(":{query}").into()),
     )
-    .child(list);
+    .child(list)
+    .when(!stickers.is_empty(), |this| {
+        this.child(sticker_strip(app, stickers, query_len, cx))
+    });
     Some(super::mentions::place_suggestion_popup(app, panel))
 }
 
@@ -1053,4 +1088,55 @@ mod tests {
         assert_eq!(next_hovered(hovered.as_ref(), HoverUpdate::Reset), None);
         assert_eq!(next_hovered(None, HoverUpdate::Reset), None);
     }
+}
+
+fn sticker_strip(
+    app: &DiscordApp,
+    stickers: Vec<PickerSticker>,
+    query_len: usize,
+    cx: &App,
+) -> impl IntoElement {
+    let animate = crate::settings::gif_autoplay();
+    div()
+        .flex()
+        .flex_col()
+        .gap(rpx(4.))
+        .px(rpx(16.))
+        .py(rpx(8.))
+        .border_t_1()
+        .border_color(rgba(theme::border_subtle()))
+        .child(
+            div()
+                .text_size(rpx(12.))
+                .line_height(rpx(16.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(theme::muted()))
+                .child("Stickers"),
+        )
+        .child(
+            div()
+                .flex()
+                .gap(rpx(8.))
+                .children(stickers.into_iter().map(|sticker| {
+                    let entity = app.entity.clone();
+                    let id = sticker.id;
+                    div()
+                        .id(("sticker-suggestion", id))
+                        .p(rpx(4.))
+                        .rounded(rpx(8.))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(rgba(theme::selected())))
+                        .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+                        .on_click(move |_, window, cx| {
+                            entity
+                                .update(cx, |app, cx| {
+                                    app.accept_sticker_suggestion(query_len, id, window, cx)
+                                })
+                                .ok();
+                        })
+                        .child(crate::app::sticker_picker::sticker_image(
+                            &sticker, 56., animate, cx,
+                        ))
+                })),
+        )
 }

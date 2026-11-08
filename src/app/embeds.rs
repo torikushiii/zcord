@@ -57,9 +57,17 @@ pub(super) fn part_key(message_id: u64, slot: u64) -> u64 {
     message_id ^ slot.wrapping_add(1).wrapping_mul(0x9E37_79B9_7F4A_7C15)
 }
 
-pub use crate::store::hides_embed_content as hides_content;
+pub(super) fn hides_content(content: &str, embeds: &[Embed]) -> bool {
+    crate::settings::display().inline_embed_media
+        && crate::store::hides_embed_content(content, embeds)
+}
 
 pub(super) fn visible(embed: &Embed, content: &str) -> bool {
+    if matches!(embed.kind, EmbedKind::Image | EmbedKind::Gifv)
+        && !crate::settings::display().inline_embed_media
+    {
+        return false;
+    }
     crate::settings::link_previews() || !link_preview(&embed.kind, embed.url.as_deref(), content)
 }
 
@@ -115,6 +123,7 @@ fn markdown(
         guild_id: app.selected_guild_id,
         message_id: key,
         revealed: &app.revealed_spoilers,
+        reveal_all: app.spoilers_open(),
         entity: app.entity.clone(),
         colors: BodyColors {
             quote: Some(theme::muted()),
@@ -136,6 +145,7 @@ fn linked(element: Stateful<Div>, url: Option<&String>) -> Stateful<Div> {
             let url = url.clone();
             element
                 .cursor_pointer()
+                .when(crate::settings::underline_links(), |this| this.underline())
                 .hover(|style| style.underline())
                 .on_click(move |_, _, cx| cx.open_url(&url))
         }
@@ -450,7 +460,7 @@ fn lightbox_box(
 }
 
 fn spoiler_cover(app: &DiscordApp, key: u64, spoiler: bool, element: Div) -> AnyElement {
-    if !spoiler || app.revealed_spoilers.contains(&(key, 0)) {
+    if !spoiler || app.spoiler_shown(&(key, 0)) {
         return element.into_any_element();
     }
     element
@@ -469,7 +479,7 @@ fn spoiler_media(
     radius: f32,
     cx: &App,
 ) -> Stateful<Div> {
-    if spoiler && !app.revealed_spoilers.contains(&(key, 0)) {
+    if spoiler && !app.spoiler_shown(&(key, 0)) {
         blurred_box(&media.spec(), width, height, radius, cx)
             .id(("hidden-media", key))
             .child(spoiler_overlay(app, key, radius))
@@ -1540,7 +1550,7 @@ pub fn render_reactions(
     reactions: &[Reaction],
     cx: &App,
 ) -> Option<AnyElement> {
-    if reactions.is_empty() {
+    if reactions.is_empty() || !crate::settings::display().render_reactions {
         return None;
     }
     let entity = app.entity.clone();

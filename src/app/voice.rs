@@ -1297,7 +1297,9 @@ pub(crate) fn switch(id: &'static str, on: bool, slide: Option<u64>) -> AnyEleme
         .size(rpx(20.))
         .rounded_full()
         .bg(rgb(theme::control_thumb()))
-        .child(theme::icon(icon, 12., icon_color));
+        .when(crate::settings::switch_indicators(), |this| {
+            this.child(theme::icon(icon, 12., icon_color))
+        });
     let track = div()
         .relative()
         .flex_none()

@@ -44,6 +44,36 @@ impl Store {
         self.account_theme
     }
 
+    pub fn client_theme(&self) -> Option<&settings_proto::ClientTheme> {
+        self.client_theme.as_ref()
+    }
+
+    pub fn text_images(&self) -> &settings_proto::TextImages {
+        &self.text_images
+    }
+
+    pub fn favorites(&self) -> &settings_proto::Favorites {
+        &self.favorites
+    }
+
+    pub(crate) fn set_text_images(&mut self, value: settings_proto::TextImages) -> Change {
+        if self.text_images == value {
+            Change::None
+        } else {
+            self.text_images = value;
+            Change::TextImages
+        }
+    }
+
+    pub(crate) fn set_favorites(&mut self, value: settings_proto::Favorites) -> Change {
+        if self.favorites == value {
+            Change::None
+        } else {
+            self.favorites = value;
+            Change::Favorites
+        }
+    }
+
     pub fn is_favorite_gif(&self, url: &str) -> bool {
         self.favorite_gifs.iter().any(|gif| gif.url == url)
     }
@@ -90,10 +120,22 @@ impl Store {
             Ok(settings) => {
                 let structure = settings.folders.is_some() || !update.partial;
                 let status = settings.status.is_some() || !update.partial;
-                let theme = if settings.theme.is_some() || !update.partial {
-                    let changed = self.account_theme != settings.theme;
+                let theme = if settings.appearance_present || !update.partial {
+                    let changed = self.account_theme != settings.theme
+                        || self.client_theme != settings.client_theme;
                     self.account_theme = settings.theme;
+                    self.client_theme = settings.client_theme;
                     changed
+                } else {
+                    false
+                };
+                let text_images = if settings.text_images.is_some() || !update.partial {
+                    self.set_text_images(settings.text_images.unwrap_or_default()) != Change::None
+                } else {
+                    false
+                };
+                let favorites = if settings.favorites.is_some() || !update.partial {
+                    self.set_favorites(settings.favorites.unwrap_or_default()) != Change::None
                 } else {
                     false
                 };
@@ -111,6 +153,10 @@ impl Store {
                     Change::Members { guild_id: None }
                 } else if theme {
                     Change::Theme
+                } else if text_images {
+                    Change::TextImages
+                } else if favorites {
+                    Change::Favorites
                 } else {
                     Change::None
                 };

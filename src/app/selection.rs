@@ -38,6 +38,7 @@ impl DiscordApp {
     }
 
     pub(crate) fn select_guild(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.favorites_view = false;
         let saved = crate::settings::get(cx).guild_channels.get(&id).copied();
         self.select_guild_channel(id, saved, window, cx);
     }

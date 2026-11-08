@@ -224,7 +224,7 @@ impl DiscordApp {
     pub(super) fn send_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Convert first: EM SPACE (the start of a token) is whitespace to `trim`.
         let content = composer_tokens::to_wire(&self.composer.read(cx).value());
-        let content = content.trim().to_owned();
+        let content = with_emoji_faces(content.trim());
         let channel_id = self.selected_channel_id;
         let has_files = !self.staged_files().is_empty();
         if (content.is_empty() && !has_files) || !self.store.can_send(channel_id) {
@@ -743,7 +743,7 @@ impl DiscordApp {
         let raw = composer_tokens::repair(&raw).unwrap_or(raw);
         let content = mentions::encode_mentions(&raw, &editing.mentions);
         let content = composer_tokens::to_wire(&content);
-        let content = content.trim().to_owned();
+        let content = with_emoji_faces(content.trim());
         if content.chars().count() > MESSAGE_LIMIT {
             self.editing = Some(editing);
             return;
@@ -894,5 +894,13 @@ impl DiscordApp {
             self.confirm_delete = None;
             cx.notify();
         }
+    }
+}
+
+pub(crate) fn with_emoji_faces(content: &str) -> String {
+    if crate::settings::display().convert_emoticons {
+        crate::text::emoticons::convert_emoticons(content).into_owned()
+    } else {
+        content.to_owned()
     }
 }

@@ -61,7 +61,9 @@ impl GuildTag {
 pub struct User {
     pub id: u64,
     pub username: String,
+    /// What the UI shows: `real_name`, truncated while Streamer Mode hides personal info.
     pub name: String,
+    pub real_name: String,
     pub initials: String,
     pub status: Status,
     pub on_mobile: bool,

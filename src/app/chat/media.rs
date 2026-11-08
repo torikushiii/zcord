@@ -1,6 +1,7 @@
 use super::*;
 use crate::app::attachments::UploadButton;
 use crate::app::expression_info::{Expression, HoverOwner};
+use crate::discord::settings_proto::StickerAnimation;
 use crate::store::AttachmentExt as _;
 
 const MEDIA_MAX: (f32, f32) = (550., 350.);
@@ -71,7 +72,24 @@ pub(super) fn render_sticker(
                     .into_any_element()
             })
         };
+        let animate = match crate::settings::display().animate_stickers {
+            StickerAnimation::Always => true,
+            StickerAnimation::OnInteraction => app.sticker_hovered(message_id, sticker.id),
+            StickerAnimation::Never => false,
+        };
         match sticker.format {
+            // `img` plays every frame of these files itself, so a held sticker draws only the
+            // first frame of the decoded animation.
+            2 | 4 if !animate => animated::first_frame(&spec, pixels, cx).map(|frame| {
+                frame
+                    .size_full()
+                    .object_fit(ObjectFit::Contain)
+                    .id((
+                        ElementId::from(("sticker-still", message_id)),
+                        sticker.id.to_string(),
+                    ))
+                    .into_any_element()
+            }),
             2 | 4 => animated::resolve(&spec, pixels, cx)
                 .map(|image| {
                     animated::image(image)
@@ -141,6 +159,12 @@ pub(super) fn render_attachments(
     attachments: &[Attachment],
     cx: &App,
 ) -> Vec<AnyElement> {
+    if !crate::settings::display().inline_attachment_media {
+        return attachments
+            .iter()
+            .map(|attachment| file_card(attachment).into_any_element())
+            .collect();
+    }
     let (visual, files): (Vec<_>, Vec<_>) = attachments.iter().partition(|attachment| {
         if attachment.is_video() {
             attachment.video_url().is_some()
@@ -204,7 +228,7 @@ fn attachment_box(
             return file_card(attachment).into_any_element();
         };
         let poster = attachment.video_poster_spec();
-        if attachment.spoiler() && !app.revealed_spoilers.contains(&(attachment.id, 0)) {
+        if attachment.spoiler() && !app.spoiler_shown(&(attachment.id, 0)) {
             let media = poster.as_ref().map_or_else(
                 || {
                     div()
@@ -244,7 +268,7 @@ fn attachment_box(
         attachment.width.unwrap_or(1).max(1),
         attachment.height.unwrap_or(1).max(1),
     );
-    if attachment.spoiler() && !app.revealed_spoilers.contains(&(attachment.id, 0)) {
+    if attachment.spoiler() && !app.spoiler_shown(&(attachment.id, 0)) {
         return embeds::blurred_box(&spec, width, height, radius, cx)
             .child(embeds::spoiler_overlay(app, attachment.id, radius))
             .into_any_element();
@@ -290,7 +314,13 @@ fn attachment_box(
                 .into_any_element()
         })
     });
-    div()
+    let description = attachment
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty() && crate::settings::display().view_image_descriptions)
+        .map(str::to_owned);
+    let image = div()
         .id(("lightbox-open", attachment.id))
         .relative()
         .flex_none()
@@ -317,8 +347,36 @@ fn attachment_box(
         .when(child.is_none() && loading, |this| {
             this.child(theme::media_loading())
         })
-        .children(child)
-        .into_any_element()
+        .children(child);
+    match description {
+        // The badge sits outside the clipped image so its tooltip can overhang it.
+        Some(text) => div()
+            .relative()
+            .flex_none()
+            .child(image)
+            .child(alt_badge(attachment.id, text))
+            .into_any_element(),
+        None => image.into_any_element(),
+    }
+}
+
+fn alt_badge(id: u64, text: String) -> impl IntoElement {
+    div().absolute().left(rpx(6.)).bottom(rpx(6.)).child(
+        div()
+            .relative()
+            .px(rpx(4.))
+            .rounded(rpx(4.))
+            .bg(rgba(0x000000b3))
+            .text_size(rpx(12.))
+            .line_height(rpx(16.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(rgb(0xffffff))
+            .child("ALT")
+            .child(theme::hover_tooltip_body(
+                ("attachment-alt", id),
+                div().max_w(rpx(300.)).whitespace_normal().child(text),
+            )),
+    )
 }
 
 fn animated_attachment(attachment: &Attachment) -> bool {
