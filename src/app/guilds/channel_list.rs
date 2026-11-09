@@ -1,3 +1,4 @@
+mod actions;
 mod header;
 mod rows;
 mod user_panel;
@@ -40,7 +41,8 @@ use crate::{
 
 pub const WIDTH: f32 = 303.;
 const HEADER_HEIGHT: f32 = 48.;
-const BANNER_HEIGHT: f32 = 135.;
+const BANNER_HEIGHT: f32 = WIDTH * 9. / 21.;
+const BANNER_ROW_HEIGHT: f32 = 133.;
 const BANNER_HOVER_FADE: Duration = Duration::from_millis(150);
 pub(crate) const FOLD: Duration = Duration::from_millis(200);
 
@@ -50,6 +52,14 @@ mod tests;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Row {
     Banner,
+    ActionSpacer,
+    BoostGoal {
+        spaced: bool,
+    },
+    ServerGuide,
+    Events,
+    ChannelsAndRoles,
+    ActionDivider,
     Category(usize),
     Channel {
         category: usize,
@@ -210,6 +220,30 @@ impl Rows {
         if banner.is_some() {
             rows.push(Row::Banner);
         }
+        if let Some(guild) = guild {
+            let links = [
+                (guild.server_guide, Row::ServerGuide),
+                (guild.events.is_some(), Row::Events),
+                (guild.channels_and_roles, Row::ChannelsAndRoles),
+            ];
+            let other_actions = links.iter().any(|(shown, _)| *shown);
+            if guild.boost_goal.is_some() || other_actions {
+                rows.push(Row::ActionSpacer);
+            }
+            if guild.boost_goal.is_some() {
+                rows.push(Row::BoostGoal {
+                    spaced: other_actions,
+                });
+            }
+            rows.extend(
+                links
+                    .into_iter()
+                    .filter_map(|(shown, row)| shown.then_some(row)),
+            );
+            if other_actions {
+                rows.push(Row::ActionDivider);
+            }
+        }
         for (category, group) in guild
             .into_iter()
             .flat_map(|guild| &guild.categories)
@@ -359,6 +393,18 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
                         let Some(row) = app.channel_rows.rows.get(index).copied() else {
                             return div().into_any_element();
                         };
+                        match row {
+                            Row::ActionSpacer => {
+                                return actions::spacer(app.channel_rows.banner.is_some())
+                                    .into_any_element();
+                            }
+                            Row::BoostGoal { spaced } => return actions::boost_goal(app, spaced),
+                            Row::ServerGuide | Row::Events | Row::ChannelsAndRoles => {
+                                return actions::link(app, row);
+                            }
+                            Row::ActionDivider => return actions::divider().into_any_element(),
+                            _ => {}
+                        }
                         let channel = match row {
                             Row::Channel { category, channel } => app
                                 .guild()

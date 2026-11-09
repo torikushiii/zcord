@@ -226,11 +226,12 @@ pub(super) fn banner_row(spec: Option<&ImageSpec>, cx: &App) -> impl IntoElement
         }
         images::resolve(spec, pixels, cx).map(|path| fill(img(path)).into_any_element())
     });
-    div()
-        .w_full()
-        .h(rpx(BANNER_HEIGHT))
-        .mb_2()
-        .bg(rgb(theme::elevated()))
-        .rounded_tl(rpx(8.))
-        .children(image)
+    div().w_full().h(rpx(BANNER_ROW_HEIGHT)).child(
+        div()
+            .w_full()
+            .h(rpx(BANNER_HEIGHT))
+            .bg(rgb(theme::elevated()))
+            .rounded_tl(rpx(8.))
+            .children(image),
+    )
 }

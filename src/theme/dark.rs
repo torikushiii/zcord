@@ -2,6 +2,7 @@ use super::Palette;
 
 pub(super) static DARK: Palette = Palette {
     bg: 0x1A1A1E,
+    base_low: 0x202024,
     base_lower: 0x1A1A1E,
     base_lowest: 0x121214,
     surface_high: 0x242429,

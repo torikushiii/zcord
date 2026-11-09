@@ -74,6 +74,7 @@ macro_rules! palette {
 
 palette!(
     bg,
+    base_low,
     base_lower,
     base_lowest,
     surface_high,

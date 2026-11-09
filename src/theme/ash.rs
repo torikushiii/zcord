@@ -2,6 +2,7 @@ use super::Palette;
 
 pub(super) static ASH: Palette = Palette {
     bg: 0x323339,
+    base_low: 0x36373E,
     base_lower: 0x323339,
     base_lowest: 0x2C2D32,
     surface_high: 0x393A41,

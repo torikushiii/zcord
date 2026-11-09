@@ -2,6 +2,7 @@ use super::Palette;
 
 pub(super) static LIGHT: Palette = Palette {
     bg: 0xFFFFFF,
+    base_low: 0xFBFBFB,
     base_lower: 0xFBFBFB,
     base_lowest: 0xF3F3F4,
     surface_high: 0xFFFFFF,

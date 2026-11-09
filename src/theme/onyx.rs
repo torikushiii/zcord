@@ -2,6 +2,7 @@ use super::Palette;
 
 pub(super) static ONYX: Palette = Palette {
     bg: 0x000000,
+    base_low: 0x000000,
     base_lower: 0x000000,
     base_lowest: 0x000000,
     surface_high: 0x0A0A0C,

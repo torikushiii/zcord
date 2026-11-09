@@ -1,7 +1,7 @@
 use super::*;
 
-const CHANNEL_HEIGHT: f32 = 32.;
-const CHANNEL_GAP: f32 = 2.;
+pub(super) const CHANNEL_HEIGHT: f32 = 32.;
+pub(super) const CHANNEL_GAP: f32 = 2.;
 
 pub(super) fn row_content(
     guild: Option<&Guild>,
@@ -12,7 +12,15 @@ pub(super) fn row_content(
     app: Option<(&DiscordApp, bool)>,
 ) -> Div {
     let content = match row {
-        Row::Banner | Row::VoiceMember { .. } | Row::Thread { .. } => div().into_any_element(),
+        Row::Banner
+        | Row::ActionSpacer
+        | Row::BoostGoal { .. }
+        | Row::ServerGuide
+        | Row::Events
+        | Row::ChannelsAndRoles
+        | Row::ActionDivider
+        | Row::VoiceMember { .. }
+        | Row::Thread { .. } => div().into_any_element(),
         Row::Category(index) => match guild.and_then(|guild| guild.categories.get(index)) {
             Some(category) => div()
                 .pt_4()
