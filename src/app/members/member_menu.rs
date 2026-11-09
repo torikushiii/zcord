@@ -87,8 +87,16 @@ pub(crate) fn menu(app: &DiscordApp) -> Option<AnyElement> {
     let relationship = app.store.relationship(user_id);
     let blocked = relationship.is_some_and(|found| found.kind == RelationshipKind::Blocked);
     let ignored = relationship.is_some_and(|found| found.ignored);
+    let friend = relationship.is_some_and(|found| found.kind == RelationshipKind::Friend);
+    let nicknamed = relationship.is_some_and(|found| found.nickname.is_some());
     let can_mention = app.store.can_send(app.selected_channel_id) && app.selected_forum().is_none();
     let actions = other && app.live;
+    let call = app.store.dm_channel_with(user_id).filter(|channel_id| {
+        !app.voice
+            .call
+            .as_ref()
+            .is_some_and(|call| call.guild_id == 0 && call.channel_id == *channel_id)
+    });
     let text = theme::text();
     let close = app.entity.clone();
     let body = div()
@@ -134,7 +142,61 @@ pub(crate) fn menu(app: &DiscordApp) -> Option<AnyElement> {
                 text,
                 move |app, window, cx| app.open_dm(user_id, window, cx),
             ))
+            .children(call.map(|channel_id| {
+                menu_row(
+                    app,
+                    "member-menu-call",
+                    None,
+                    "Start a Call",
+                    text,
+                    move |app, window, cx| {
+                        app.select_dm(channel_id, window, cx);
+                        app.join_dm_call(channel_id, cx);
+                    },
+                )
+            }))
+            .when(friend, |this| {
+                this.child(menu_row(
+                    app,
+                    "member-menu-nickname",
+                    None,
+                    if nicknamed {
+                        "Edit Friend Nickname"
+                    } else {
+                        "Add Friend Nickname"
+                    },
+                    text,
+                    move |app, window, cx| app.open_nickname_dialog(user_id, window, cx),
+                ))
+            })
             .child(divider())
+            .children(match relationship.map(|found| found.kind) {
+                Some(RelationshipKind::Friend) => Some(menu_row(
+                    app,
+                    "member-menu-friend",
+                    None,
+                    "Remove Friend",
+                    text,
+                    move |app, _, cx| app.ask_remove_friend(user_id, cx),
+                )),
+                Some(RelationshipKind::Incoming) => Some(menu_row(
+                    app,
+                    "member-menu-friend",
+                    None,
+                    "Accept Friend Request",
+                    text,
+                    move |app, _, cx| app.add_friend(user_id, cx),
+                )),
+                Some(RelationshipKind::Outgoing) => Some(menu_row(
+                    app,
+                    "member-menu-friend",
+                    None,
+                    "Cancel Friend Request",
+                    text,
+                    move |app, _, cx| app.drop_friend_request(user_id, cx),
+                )),
+                _ => None,
+            })
             .child(if ignored {
                 menu_row(
                     app,

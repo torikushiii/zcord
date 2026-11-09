@@ -711,6 +711,20 @@ fn muted_action(
         .on_click(|_, _, cx| cx.stop_propagation())
 }
 
+fn user_menu(
+    app: &DiscordApp,
+    user_id: u64,
+) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
+    let entity = app.entity.clone();
+    move |event, _, cx| {
+        cx.stop_propagation();
+        let position = event.position;
+        entity
+            .update(cx, |app, cx| app.open_member_menu(user_id, position, cx))
+            .ok();
+    }
+}
+
 fn row_group(user_id: u64) -> SharedString {
     format!("people-row-{user_id}").into()
 }
@@ -816,6 +830,7 @@ fn friend_row(app: &DiscordApp, user_id: u64, cx: &App) -> Stateful<Div> {
     );
     people_row(app, ("friend", user_id).into(), user_id)
         .cursor_pointer()
+        .on_mouse_down(MouseButton::Right, user_menu(app, user_id))
         .on_click(move |_, window, cx| {
             entity
                 .update(cx, |app, cx| {
@@ -897,6 +912,7 @@ fn suggestion_row(app: &DiscordApp, user_id: u64, cx: &App) -> impl IntoElement 
     let entity = app.entity.clone();
     people_row(app, ("suggestion", user_id).into(), user_id)
         .cursor_pointer()
+        .on_mouse_down(MouseButton::Right, user_menu(app, user_id))
         .on_click(move |_, _, cx| {
             entity
                 .update(cx, |app, cx| app.open_full_profile_for(user_id, cx))

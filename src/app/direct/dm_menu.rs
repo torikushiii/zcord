@@ -86,7 +86,12 @@ impl DiscordApp {
         true
     }
 
-    fn open_nickname_dialog(&mut self, user_id: u64, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_nickname_dialog(
+        &mut self,
+        user_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let current = self
             .store
             .relationship(user_id)
