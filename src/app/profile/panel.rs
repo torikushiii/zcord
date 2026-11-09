@@ -128,6 +128,8 @@ pub(in crate::app) fn render(app: &DiscordApp, card: &ProfileCard, cx: &App) -> 
                 .child("View Full Profile"),
         );
     let inner = div()
+        .id("dm-panel-card")
+        .on_hover(effect_hover(app, true))
         .relative()
         .flex()
         .flex_col()

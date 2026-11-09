@@ -80,6 +80,7 @@ pub(super) fn modal(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &
         .child(
             div()
                 .id("profile-modal-card")
+                .on_hover(effect_hover(app, false))
                 .flex()
                 .flex_col()
                 .size_full()

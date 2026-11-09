@@ -74,6 +74,54 @@ const ENTER: Duration = Duration::from_millis(180);
 const POPOUT_WAIT: Duration = Duration::from_millis(1500);
 const EFFECT_HEIGHT_RATIO: f32 = 880. / 450.;
 const EFFECT_MAX_PX: u32 = 1200;
+const EFFECT_DIM: f32 = 0.35;
+const EFFECT_DIM_DURATION: Duration = Duration::from_millis(600);
+
+#[derive(Clone, Copy)]
+struct EffectDim {
+    hovered: bool,
+    from: f32,
+    changed: Option<Instant>,
+    serial: u64,
+}
+
+impl Default for EffectDim {
+    fn default() -> Self {
+        Self {
+            hovered: false,
+            from: 1.,
+            changed: None,
+            serial: 0,
+        }
+    }
+}
+
+impl EffectDim {
+    fn target(self) -> f32 {
+        if self.hovered { EFFECT_DIM } else { 1. }
+    }
+
+    fn opacity(self, now: Instant) -> f32 {
+        let Some(changed) = self.changed else {
+            return self.target();
+        };
+        let progress = (now.saturating_duration_since(changed).as_secs_f32()
+            / EFFECT_DIM_DURATION.as_secs_f32())
+        .min(1.);
+        self.from + (self.target() - self.from) * ease_in_out(progress)
+    }
+
+    fn set(&mut self, hovered: bool, now: Instant) -> bool {
+        if self.hovered == hovered {
+            return false;
+        }
+        self.from = self.opacity(now);
+        self.hovered = hovered;
+        self.changed = Some(now);
+        self.serial += 1;
+        true
+    }
+}
 const THEME_OVERLAY: f32 = 0.6;
 const MAX_VISIBLE_BADGES: usize = 6;
 const BADGE_ART: f32 = 96.;
@@ -158,6 +206,7 @@ pub(crate) struct ProfileCard {
     cosmetics_pending: HashSet<u64>,
     opened: Instant,
     effect_started: RefCell<Option<Instant>>,
+    effect_dim: EffectDim,
     tab: Tab,
     status_prompt: usize,
     activity_prompt: usize,
@@ -741,7 +790,54 @@ fn effect_layers(
     else {
         return Vec::new();
     };
-    effect_item_layers(item, &card.effect_started, width, corner, top_only, cx)
+    let layers = effect_item_layers(item, &card.effect_started, width, corner, top_only, cx);
+    let dim = card.effect_dim;
+    if layers.is_empty() || dim.serial == 0 {
+        return layers;
+    }
+    let reduce_motion = cx.reduce_motion();
+    vec![
+        div()
+            .absolute()
+            .inset_0()
+            .children(layers)
+            .with_animation(
+                ("profile-effect-dim", dim.serial),
+                Animation::new(EFFECT_DIM_DURATION),
+                move |this, _| {
+                    this.opacity(if reduce_motion {
+                        dim.target()
+                    } else {
+                        dim.opacity(Instant::now())
+                    })
+                },
+            )
+            .into_any_element(),
+    ]
+}
+
+impl DiscordApp {
+    fn hover_profile_effect(&mut self, panel: bool, hovered: bool, cx: &mut Context<Self>) {
+        let card = if panel {
+            self.dm_profile.as_mut()
+        } else {
+            self.profile.as_mut()
+        };
+        if let Some(card) = card.filter(|card| card.effect.is_some())
+            && card.effect_dim.set(hovered, Instant::now())
+        {
+            cx.notify();
+        }
+    }
+}
+
+fn effect_hover(app: &DiscordApp, panel: bool) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
+    let entity = app.entity.clone();
+    move |hovered, _, cx| {
+        entity
+            .update(cx, |app, cx| app.hover_profile_effect(panel, *hovered, cx))
+            .ok();
+    }
 }
 
 fn effect_item_layers(

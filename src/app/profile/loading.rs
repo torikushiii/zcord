@@ -352,6 +352,7 @@ impl ProfileCard {
             cosmetics_pending: HashSet::new(),
             opened: Instant::now(),
             effect_started: RefCell::new(None),
+            effect_dim: EffectDim::default(),
             tab: Tab::Activity,
             status_prompt: rand::random::<usize>() % STATUS_PROMPTS.len(),
             activity_prompt: rand::random::<usize>() % ACTIVITY_PROMPTS.len(),

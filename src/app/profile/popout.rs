@@ -132,6 +132,7 @@ pub(super) fn popout(
                     .id("profile-popout")
                     .relative()
                     .occlude()
+                    .on_hover(effect_hover(app, false))
                     .on_mouse_down_out(move |event, _, cx| {
                         if in_status_menu(event.position) || in_switch_menu(event.position) {
                             return;
