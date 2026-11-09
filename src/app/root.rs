@@ -238,8 +238,21 @@ pub(super) fn connecting() -> impl IntoElement {
         .items_center()
         .justify_center()
         .gap_3()
-        .child(theme::logo(64.))
-        .child(theme::spinner(24., theme::muted()))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(rpx(64.))
+                .child(theme::logo(64.).with_animation(
+                    "connecting-logo",
+                    Animation::new(Duration::from_millis(1600)).repeat(),
+                    |logo, delta| {
+                        let breath = 0.5 - 0.5 * (delta * std::f32::consts::TAU).cos();
+                        logo.size(rpx(64. - 4. * breath)).opacity(1. - 0.4 * breath)
+                    },
+                )),
+        )
         .child(
             div()
                 .text_size(rpx(14.))
