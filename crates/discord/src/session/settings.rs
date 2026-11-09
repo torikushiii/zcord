@@ -117,6 +117,52 @@ impl Session {
         Ok(())
     }
 
+    pub async fn set_custom_status(
+        &self,
+        custom: Option<settings_proto::CustomStatus>,
+    ) -> Result<settings_proto::StatusSettings, Error> {
+        let generation = self.status_generation()?;
+        let proto = self
+            .rest(async |rest| rest.fetch_preloaded_settings().await)
+            .await?;
+        let version = settings_proto::data_version(&proto)
+            .map_err(|_| Error::Decode)?
+            .ok_or(Error::Decode)?;
+        let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+        let patch = settings_proto::custom_status_patch(&proto, custom.as_ref(), now)
+            .map_err(|_| Error::Decode)?;
+        if self.status_generation()? != generation {
+            return Err(Error::Closed);
+        }
+        let proto = self
+            .rest(async |rest| rest.update_status_settings(&patch, version).await)
+            .await?;
+        if self.status_generation()? != generation {
+            return Err(Error::Closed);
+        }
+        let stored = settings_proto::decode(&proto)
+            .map_err(|_| Error::Decode)?
+            .status
+            .unwrap_or_default();
+        let command = {
+            let mut presence = self
+                .inner
+                .presence
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            presence.install(proto)?;
+            commands::presence(
+                presence.payload(now).ok_or(Error::Decode)?,
+                presence.revision,
+            )
+        };
+        self.inner
+            .commands
+            .send((generation, command))
+            .map_err(|_| Error::Closed)?;
+        Ok(stored)
+    }
+
     pub fn activity_privacy(&self) -> settings_proto::ActivityPrivacy {
         self.inner
             .presence

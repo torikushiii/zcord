@@ -411,6 +411,47 @@ pub fn status_patch_at(
     Ok(patch)
 }
 
+/// Status settings are replaced whole on PATCH, so every other status field is copied from
+/// `preloaded`; leaving `custom` out clears the custom status.
+/// https://docs.discord.food/resources/user-settings-proto
+pub fn custom_status_patch(
+    preloaded: &[u8],
+    custom: Option<&CustomStatus>,
+    created_at_ms: u64,
+) -> Result<Vec<u8>> {
+    let mut content = Vec::new();
+    for field in fields(preloaded)? {
+        if field.number != 11 {
+            continue;
+        }
+        for sub in fields(field.value.ok_or(DecodeError)?)? {
+            if sub.number != 2 {
+                content.extend_from_slice(sub.raw);
+            }
+        }
+    }
+    if let Some(custom) = custom {
+        let mut status = Vec::new();
+        if !custom.text.is_empty() {
+            push_bytes(&mut status, 1, custom.text.as_bytes());
+        }
+        if custom.emoji_id != 0 {
+            push_fixed64(&mut status, 2, custom.emoji_id);
+        }
+        if !custom.emoji_name.is_empty() {
+            push_bytes(&mut status, 3, custom.emoji_name.as_bytes());
+        }
+        if custom.expires_at_ms != 0 {
+            push_fixed64(&mut status, 4, custom.expires_at_ms);
+        }
+        push_fixed64(&mut status, 5, created_at_ms);
+        push_bytes(&mut content, 2, &status);
+    }
+    let mut patch = Vec::new();
+    push_bytes(&mut patch, 11, &content);
+    Ok(patch)
+}
+
 pub fn theme_patch(preloaded: &[u8], theme: AccountTheme) -> Result<Vec<u8>> {
     let mut content = Vec::new();
     for field in fields(preloaded)? {
@@ -609,6 +650,11 @@ fn push_bytes(out: &mut Vec<u8>, field: u32, value: &[u8]) {
 fn push_uint(out: &mut Vec<u8>, field: u32, value: u64) {
     push_varint(out, u64::from(field) << 3);
     push_varint(out, value);
+}
+
+fn push_fixed64(out: &mut Vec<u8>, field: u32, value: u64) {
+    push_varint(out, (u64::from(field) << 3) | 1);
+    out.extend_from_slice(&value.to_le_bytes());
 }
 
 fn favorite_entry_bytes(gif: &FavoriteGif) -> Vec<u8> {

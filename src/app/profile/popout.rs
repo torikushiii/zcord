@@ -11,6 +11,7 @@ pub(super) use sections::{
     member_since_dates, playing, role_chips, roles, section,
 };
 use status_bubble::status_bubble;
+pub(super) use status_bubble::status_emoji_source;
 
 use gpui_component::scroll::ScrollableElement as _;
 use std::time::SystemTime;
@@ -189,7 +190,16 @@ pub(super) fn style_preview(
             Some(theme) => this.bg(theme.overlay()),
             None => this,
         })
-        .child(header(app, card, &layout, surface, None, !compact, cx))
+        .child(header_with_status(
+            app,
+            card,
+            &layout,
+            surface,
+            None,
+            (!compact).then(|| shown_status(app, card)).flatten(),
+            None,
+            cx,
+        ))
         .child(
             div()
                 .flex()
@@ -234,21 +244,58 @@ pub(super) fn header(
     show_status: bool,
     cx: &App,
 ) -> AnyElement {
+    let own = card.user_id == app.store.current_user_id;
+    header_with_status(
+        app,
+        card,
+        layout,
+        surface,
+        on_avatar,
+        show_status.then(|| shown_status(app, card)).flatten(),
+        own.then(|| app.entity.clone()),
+        cx,
+    )
+}
+
+pub(super) struct ShownStatus {
+    pub(super) status: CustomStatus,
+    pub(super) prompt: bool,
+}
+
+fn shown_status(app: &DiscordApp, card: &ProfileCard) -> Option<ShownStatus> {
     let user = app.store.user(card.user_id);
-    let palette = card.palette();
-    let status = active_custom_status(
+    if let Some(status) = active_custom_status(
         user.and_then(|user| user.custom_status.as_ref()),
         SystemTime::now(),
-    )
-    .cloned();
-    let prompt = status.is_none() && card.user_id == app.store.current_user_id;
-    let status = status.or_else(|| {
-        prompt.then(|| CustomStatus {
+    ) {
+        return Some(ShownStatus {
+            status: status.clone(),
+            prompt: false,
+        });
+    }
+    (card.user_id == app.store.current_user_id).then(|| ShownStatus {
+        status: CustomStatus {
             text: Some(STATUS_PROMPTS[card.status_prompt].to_owned()),
             emoji: None,
             expires_at: None,
-        })
-    });
+        },
+        prompt: true,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn header_with_status(
+    app: &DiscordApp,
+    card: &ProfileCard,
+    layout: &Layout,
+    surface: u32,
+    on_avatar: Option<ClickHandler>,
+    status: Option<ShownStatus>,
+    edit: Option<WeakEntity<DiscordApp>>,
+    cx: &App,
+) -> AnyElement {
+    let user = app.store.user(card.user_id);
+    let palette = card.palette();
     let avatar = div()
         .id("profile-avatar")
         .absolute()
@@ -299,11 +346,64 @@ pub(super) fn header(
         .min_h(rpx(layout.header_min))
         .child(banner(app, card, layout, cx))
         .child(avatar)
-        .children(
-            status
-                .filter(|_| show_status)
-                .map(|status| status_bubble(card.user_id, &status, prompt, layout, palette, cx)),
-        )
+        .children(status.map(|ShownStatus { status, prompt }| {
+            status_bubble(card.user_id, &status, prompt, edit, layout, palette, cx)
+        }))
+        .into_any_element()
+}
+
+pub(super) fn status_preview(
+    app: &DiscordApp,
+    card: &ProfileCard,
+    status: ShownStatus,
+    cx: &App,
+) -> AnyElement {
+    let theme = card.theme();
+    let palette = card.palette();
+    let layout = Layout::popout(theme.is_some());
+    let corner = if theme.is_some() { 6. } else { 8. };
+    let surface = theme.map_or(theme::elevated(), ProfileTheme::surface);
+    let outer_width = POPOUT_WIDTH + theme.map_or(0., |_| THEME_BORDER * 2.);
+    let inner = div()
+        .relative()
+        .flex()
+        .flex_col()
+        .rounded(rpx(corner))
+        .overflow_hidden()
+        .text_color(rgb(palette.text))
+        .map(|this| match theme {
+            Some(theme) => this.bg(theme.overlay()),
+            None => this,
+        })
+        .child(header_with_status(
+            app,
+            card,
+            &layout,
+            surface,
+            None,
+            Some(status),
+            None,
+            cx,
+        ))
+        .child(
+            div()
+                .px(rpx(layout.padding))
+                .pt(rpx(4.))
+                .pb(rpx(12.))
+                .child(display_names(app, card, false, None, cx)),
+        );
+    div()
+        .relative()
+        .w(rpx(outer_width))
+        .rounded(rpx(8.))
+        .map(|this| match theme {
+            Some(theme) => this.p(rpx(THEME_BORDER)).bg(theme.outer()),
+            None => this
+                .bg(rgb(theme::elevated()))
+                .border_1()
+                .border_color(rgba(theme::border())),
+        })
+        .child(inner)
         .into_any_element()
 }
 

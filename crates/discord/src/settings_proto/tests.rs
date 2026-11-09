@@ -513,3 +513,39 @@ fn theme_patch_creates_the_appearance_message_when_missing() {
     assert!(theme_patch(&[106], AccountTheme::Dark).is_err());
     assert!(theme_patch(&field(13, &[8]), AccountTheme::Dark).is_err());
 }
+
+#[test]
+fn custom_status_patch_sets_and_clears_while_keeping_the_status() {
+    let preloaded = status_patch(&[], "idle").unwrap();
+    let custom = CustomStatus {
+        text: "back soon".into(),
+        emoji_id: 0,
+        emoji_name: "🍵".into(),
+        expires_at_ms: u64::MAX,
+    };
+    let set = custom_status_patch(&preloaded, Some(&custom), 1_000).unwrap();
+    let status = decode(&set).unwrap().status.unwrap();
+    assert_eq!(status.status.as_deref(), Some("idle"));
+    assert_eq!(status.custom_status, Some(custom));
+
+    let cleared = custom_status_patch(&set, None, 2_000).unwrap();
+    let status = decode(&cleared).unwrap().status.unwrap();
+    assert_eq!(status.status.as_deref(), Some("idle"));
+    assert!(!status.custom_status_present);
+    assert_eq!(status.custom_status, None);
+}
+
+#[test]
+fn custom_status_patch_writes_custom_emoji_ids() {
+    let custom = CustomStatus {
+        text: String::new(),
+        emoji_id: 1_173_801_923_397_304,
+        emoji_name: "ReisaStare".into(),
+        expires_at_ms: 0,
+    };
+    let patch = custom_status_patch(&[], Some(&custom), 5).unwrap();
+    assert_eq!(
+        decode(&patch).unwrap().status.unwrap().custom_status,
+        Some(custom)
+    );
+}

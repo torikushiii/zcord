@@ -41,12 +41,15 @@ const CATEGORY_ICONS: [(&str, &str); 8] = [
     ("Flags", "🏁"),
 ];
 
+const NO_SERVER: (u64, u64) = (0, 0);
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PickerTarget {
     Composer,
     Pane,
     Reaction(u64),
     Activity(u64),
+    CustomStatus,
 }
 
 type Entry = (EmojiChoice, EmojiAccess);
@@ -282,6 +285,7 @@ impl DiscordApp {
             PickerTarget::Pane => self.insert_pane_emoji(choice, window, cx),
             PickerTarget::Reaction(message_id) => self.react(message_id, choice, cx),
             PickerTarget::Activity(entry_id) => self.react_to_activity(entry_id, choice, cx),
+            PickerTarget::CustomStatus => self.set_status_emoji(choice, cx),
         }
         if !keep_open {
             self.close_emoji_picker(cx);
@@ -406,7 +410,16 @@ impl DiscordApp {
 }
 
 fn build_rows(app: &DiscordApp, query: &str, cx: &App) -> (Vec<Row>, Vec<Section>) {
-    let (guild_id, channel_id) = (app.selected_guild_id, app.selected_channel_id);
+    let status = app
+        .emoji
+        .picker
+        .as_ref()
+        .is_some_and(|picker| picker.target == PickerTarget::CustomStatus);
+    let (guild_id, channel_id) = if status {
+        NO_SERVER
+    } else {
+        (app.selected_guild_id, app.selected_channel_id)
+    };
     let mut rows = Vec::new();
     let mut sections = Vec::new();
     let push = |rows: &mut Vec<Row>, entries: Vec<Entry>| {
