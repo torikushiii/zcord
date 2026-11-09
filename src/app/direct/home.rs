@@ -16,6 +16,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement as _;
 use gpui_tokio::Tokio;
 use std::{
+    cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     sync::Arc,
     time::{Duration, SystemTime},
@@ -97,6 +98,8 @@ pub(crate) struct Home {
     suggestions_loading: bool,
     hovered_row: Option<u64>,
     left_row: Option<u64>,
+    pub(crate) row_motion: RefCell<people::RowMotion>,
+    online_stack: Cell<people::OnlineStack>,
     mutuals: HashMap<u64, Vec<u64>>,
     mutuals_requested: HashSet<u64>,
     mutuals_failures: HashMap<u64, u32>,

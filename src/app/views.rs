@@ -312,6 +312,7 @@ pub(crate) struct MessagesView {
     layout_preferences: LayoutPreferences,
     quest_cards: super::activity::quests::QuestCards,
     active_now_clock: Option<Task<()>>,
+    showed_friends: bool,
     _observe: Subscription,
 }
 
@@ -322,6 +323,7 @@ impl MessagesView {
             layout_preferences: layout_preferences(),
             quest_cards: Default::default(),
             active_now_clock: None,
+            showed_friends: false,
             _observe: observe_app(app, cx),
         }
     }
@@ -366,6 +368,11 @@ impl Render for MessagesView {
             }
             self.layout_preferences = preferences;
         }
+        let friends = app.showing_home_page() && matches!(app.home.page, home::HomePage::Friends);
+        if friends && !self.showed_friends {
+            app.home.row_motion.borrow_mut().forget();
+        }
+        self.showed_friends = friends;
         if app.showing_home_page() {
             return match app.home.page {
                 home::HomePage::Friends => home::friends_page(app, cx),
