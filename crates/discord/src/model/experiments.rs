@@ -72,7 +72,7 @@ struct Range {
 
 impl Range {
     fn contains(self, value: u64) -> bool {
-        self.min.is_none_or(|min| value >= min) && self.max.is_none_or(|max| value <= max)
+        self.min.is_none_or(|min| value > min) && self.max.is_none_or(|max| value < max)
     }
 }
 
@@ -414,20 +414,88 @@ impl Experiments {
     }
 
     pub fn guild_variant(&self, name: &str, guild: &Guild) -> Option<i64> {
-        let user = self.user.get(name)?;
-        let assignment = if user.flags & IS_OVERRIDE != 0 {
-            user
-        } else if user.flags & USE_AS_ELIGIBILITY == 0 {
-            return None;
-        } else {
+        apex_variant(
+            self.user.get(name),
             guild
                 .experiments
-                .as_ref()?
-                .get(name)
-                .filter(|assignment| assignment.variant.is_some())?
+                .as_ref()
+                .and_then(|experiments| experiments.get(name))
+                .filter(|assignment| assignment.variant.is_some()),
+        )
+    }
+}
+
+fn apex_variant(user: Option<Assignment>, guild: Option<Assignment>) -> Option<i64> {
+    let flagged = |assignment: Option<Assignment>, flag: u32| {
+        assignment.filter(|assignment| assignment.flags & flag != 0)
+    };
+    let assignment = flagged(user, IS_OVERRIDE)
+        .or_else(|| flagged(guild, IS_OVERRIDE))
+        .or_else(|| flagged(user, USE_AS_ELIGIBILITY).and(guild))?;
+    assignment
+        .variant
+        .filter(|_| assignment.flags & USE_AS_ELIGIBILITY == 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assignment(variant: i64, flags: u32) -> Option<Assignment> {
+        Some(Assignment {
+            variant: Some(variant),
+            flags,
+        })
+    }
+
+    #[test]
+    fn range_filter_bounds_are_exclusive() {
+        let range = Range {
+            min: Some(1000),
+            max: Some(2000),
         };
-        assignment
-            .variant
-            .filter(|_| assignment.flags & USE_AS_ELIGIBILITY == 0)
+        assert!(!range.contains(1000));
+        assert!(range.contains(1001));
+        assert!(range.contains(1999));
+        assert!(!range.contains(2000));
+    }
+
+    #[test]
+    fn apex_guild_override_applies_without_a_user_assignment() {
+        assert_eq!(apex_variant(None, assignment(3, IS_OVERRIDE)), Some(3));
+        assert_eq!(
+            apex_variant(assignment(1, 0), assignment(3, IS_OVERRIDE)),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn apex_user_override_beats_guild_override() {
+        assert_eq!(
+            apex_variant(assignment(2, IS_OVERRIDE), assignment(3, IS_OVERRIDE)),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn apex_guild_assignment_needs_the_user_eligibility_gate() {
+        assert_eq!(apex_variant(None, assignment(3, 0)), None);
+        assert_eq!(apex_variant(assignment(1, 0), assignment(3, 0)), None);
+        assert_eq!(
+            apex_variant(assignment(0, USE_AS_ELIGIBILITY), assignment(3, 0)),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn apex_eligibility_only_results_are_discarded() {
+        assert_eq!(
+            apex_variant(assignment(2, IS_OVERRIDE | USE_AS_ELIGIBILITY), None),
+            None
+        );
+        assert_eq!(
+            apex_variant(None, assignment(3, IS_OVERRIDE | USE_AS_ELIGIBILITY)),
+            None
+        );
     }
 }
