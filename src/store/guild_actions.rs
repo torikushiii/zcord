@@ -1,3 +1,4 @@
+use super::experiments::{game_servers, server_theme};
 use super::view::BoostGoal;
 use crate::discord::{self, model};
 use chrono::{DateTime, Duration, Utc};
@@ -14,33 +15,12 @@ const PERK_BOOSTS: [(&str, u32); 6] = [
 const SERVER_THEME_BOOSTS: u32 = 3;
 const GAME_SERVER_BOOSTS: u32 = 3;
 
-const SERVER_THEME_USER: &str = "2026-05-server-theme-user";
-const SERVER_THEME: &str = "2026-04_server_theme";
-const SERVER_THEME_APEX: &str = "2026-06-server-theme-apex-shadow";
-const GAME_SERVERS: &str = "2025-08_portkey_enabled";
-
 const COMPLETED_HOME_ACTIONS: u32 = 1 << 6;
 const IS_GUILD_RESOURCE_CHANNEL: u64 = 1 << 7;
 const NEW_MEMBER_DAYS: i64 = 7;
 
 const VOICE: u8 = 2;
 const STAGE: u8 = 13;
-
-fn server_theme(experiments: &model::Experiments, guild: &model::Guild) -> bool {
-    experiments.user_variant(SERVER_THEME_USER) == Some(1)
-        && match experiments.guild_treatment(SERVER_THEME, guild) {
-            Some(0) => false,
-            Some(1 | 2) => true,
-            _ => matches!(
-                experiments.guild_variant(SERVER_THEME_APEX, guild),
-                Some(3 | 4)
-            ),
-        }
-}
-
-fn game_servers(experiments: &model::Experiments, guild: &model::Guild) -> bool {
-    experiments.guild_treatment(GAME_SERVERS, guild) == Some(1)
-}
 
 pub(super) fn boost_goal(
     guild: &model::Guild,

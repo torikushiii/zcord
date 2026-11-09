@@ -4,6 +4,7 @@ mod authors;
 mod calls;
 mod channels;
 mod emoji;
+mod experiments;
 mod expressions;
 mod forum;
 mod guild_actions;
