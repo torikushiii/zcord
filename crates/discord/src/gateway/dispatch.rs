@@ -135,6 +135,14 @@ pub(super) fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) 
             "GUILD_STICKERS_UPDATE" => serde_json::from_value(value)
                 .ok()
                 .map(Event::GuildStickersUpdate),
+            "GUILD_SCHEDULED_EVENT_CREATE" | "GUILD_SCHEDULED_EVENT_UPDATE" => {
+                serde_json::from_value(value)
+                    .ok()
+                    .map(Event::GuildScheduledEventUpsert)
+            }
+            "GUILD_SCHEDULED_EVENT_DELETE" => serde_json::from_value(value)
+                .ok()
+                .map(Event::GuildScheduledEventDelete),
             "GUILD_DELETE" => id(&value, "id").map(|id| Event::GuildDelete { id }),
             "MESSAGE_ACK" => {
                 if value.get("ack_type").and_then(Value::as_u64).unwrap_or(0) != 0 {

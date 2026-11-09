@@ -225,6 +225,12 @@ pub enum EmojiChoice {
     Custom(CustomEmoji),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BoostGoal {
+    pub boosts: u32,
+    pub goal: u32,
+}
+
 pub struct Guild {
     pub id: u64,
     pub name: String,
@@ -233,6 +239,10 @@ pub struct Guild {
     pub unread: bool,
     pub mentions: u32,
     pub premium_tier: u8,
+    pub boost_goal: Option<BoostGoal>,
+    pub server_guide: bool,
+    pub events: Option<u32>,
+    pub channels_and_roles: bool,
     pub categories: Vec<Category>,
     pub threads: Vec<Channel>,
     pub member_ids: Vec<u64>,

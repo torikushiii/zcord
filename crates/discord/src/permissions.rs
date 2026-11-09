@@ -15,6 +15,9 @@ pub const USE_EXTERNAL_EMOJIS: u64 = 1 << 18;
 pub const CONNECT: u64 = 1 << 20;
 #[allow(dead_code)]
 pub const SPEAK: u64 = 1 << 21;
+pub const MUTE_MEMBERS: u64 = 1 << 22;
+pub const MOVE_MEMBERS: u64 = 1 << 24;
+pub const CREATE_EVENTS: u64 = 1 << 44;
 const ADMINISTRATOR: u64 = 1 << 3;
 
 fn apply_overwrites(
@@ -42,6 +45,38 @@ fn apply_overwrites(
     permissions
 }
 
+fn member_roles(guild: &Guild, user_id: u64) -> Option<&[u64]> {
+    guild
+        .members
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .find(|m| m.id() == Some(user_id))
+        .map(|Member { roles, .. }| roles.as_slice())
+}
+
+fn base_permissions(guild: &Guild, member_roles: &[u64]) -> u64 {
+    let permissions = guild
+        .roles
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter(|r| r.id == guild.id || member_roles.contains(&r.id))
+        .fold(0, |p, role| p | role.permissions);
+    if permissions & ADMINISTRATOR != 0 {
+        u64::MAX
+    } else {
+        permissions
+    }
+}
+
+pub fn guild_permissions(guild: &Guild, user_id: u64) -> u64 {
+    if guild.owner_id() == Some(user_id) {
+        return u64::MAX;
+    }
+    member_roles(guild, user_id).map_or(0, |roles| base_permissions(guild, roles))
+}
+
 /// Channel overwrite sets are authoritative, not stacked on category overwrites. Synced
 /// children carry the same set; only an omitted set falls back to its category's set.
 /// https://docs.discord.food/topics/permissions#permission-syncing
@@ -49,26 +84,12 @@ pub fn channel_permissions(guild: &Guild, channel: &Channel, user_id: u64) -> u6
     if guild.owner_id() == Some(user_id) {
         return u64::MAX;
     }
-    let member = guild
-        .members
-        .as_deref()
-        .unwrap_or_default()
-        .iter()
-        .find(|m| m.id() == Some(user_id));
-    let Some(Member {
-        roles: member_roles,
-        ..
-    }) = member
-    else {
+    let Some(member_roles) = member_roles(guild, user_id) else {
         return 0;
     };
-    let roles = guild.roles.as_deref().unwrap_or_default();
-    let permissions = roles
-        .iter()
-        .filter(|r| r.id == guild.id || member_roles.contains(&r.id))
-        .fold(0, |p, role| p | role.permissions);
-    if permissions & ADMINISTRATOR != 0 {
-        return u64::MAX;
+    let permissions = base_permissions(guild, member_roles);
+    if permissions == u64::MAX {
+        return permissions;
     }
     let parent = channel
         .parent_id

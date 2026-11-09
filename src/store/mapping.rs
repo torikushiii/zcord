@@ -1,3 +1,4 @@
+use super::guild_actions;
 use super::view::*;
 use crate::discord::{self, model};
 use chrono::{Datelike, Timelike};
@@ -782,7 +783,11 @@ pub(super) fn map_guild(
         name: guild.name().to_owned(),
         initials: initials(guild.name()),
         icon_color: color,
-        premium_tier: guild.premium_tier,
+        premium_tier: guild.premium_tier(),
+        boost_goal: guild_actions::boost_goal(guild, &source.experiments),
+        server_guide: guild_actions::server_guide(guild, source.user.id),
+        events: guild_actions::events(guild, source.user.id),
+        channels_and_roles: guild_actions::channels_and_roles(guild),
         unread: mapped
             .iter()
             .flat_map(|c| &c.channels)

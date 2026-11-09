@@ -228,6 +228,10 @@ impl Store {
                         unread,
                         mentions,
                         premium_tier: 0,
+                        boost_goal: None,
+                        server_guide: false,
+                        events: None,
+                        channels_and_roles: false,
                         tag: None,
                         categories: vec![
                             Category {

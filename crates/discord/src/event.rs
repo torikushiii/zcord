@@ -44,6 +44,8 @@ pub enum Event {
     GuildUpsert(Box<model::Guild>),
     GuildEmojisUpdate(model::GuildEmojisUpdate),
     GuildStickersUpdate(model::GuildStickersUpdate),
+    GuildScheduledEventUpsert(model::ScheduledEvent),
+    GuildScheduledEventDelete(model::ScheduledEvent),
     GuildDelete { id: u64 },
     MessageAck { channel_id: u64, message_id: u64 },
     VoiceStateUpdate(Box<model::VoiceState>),

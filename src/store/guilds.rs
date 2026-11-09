@@ -85,6 +85,45 @@ impl Store {
         Change::Structure
     }
 
+    fn source_guild_mut(&mut self, id: u64) -> Option<&mut model::Guild> {
+        self.source
+            .as_mut()?
+            .guilds
+            .iter_mut()
+            .find(|guild| guild.id == id)
+    }
+
+    pub(super) fn scheduled_event_upsert(&mut self, event: model::ScheduledEvent) -> Change {
+        let Some(guild_id) = event.guild_id else {
+            return Change::None;
+        };
+        let Some(guild) = self.source_guild_mut(guild_id) else {
+            return Change::None;
+        };
+        let events = guild.guild_scheduled_events.get_or_insert_with(Vec::new);
+        match events.iter_mut().find(|existing| existing.id == event.id) {
+            Some(existing) => *existing = event,
+            None => events.push(event),
+        }
+        self.rebuild_structure(Some(guild_id));
+        Change::Structure
+    }
+
+    pub(super) fn scheduled_event_delete(&mut self, event: &model::ScheduledEvent) -> Change {
+        let Some(guild_id) = event.guild_id else {
+            return Change::None;
+        };
+        let Some(events) = self
+            .source_guild_mut(guild_id)
+            .and_then(|guild| guild.guild_scheduled_events.as_mut())
+        else {
+            return Change::None;
+        };
+        events.retain(|existing| existing.id != event.id);
+        self.rebuild_structure(Some(guild_id));
+        Change::Structure
+    }
+
     pub(super) fn guild_delete(&mut self, id: u64) -> Change {
         self.voice_start_times.retain(|(guild, _), _| *guild != id);
         self.social.guilds.remove(&id);

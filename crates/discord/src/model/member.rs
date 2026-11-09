@@ -20,6 +20,10 @@ pub struct Member {
     pub display_name_styles: Option<Option<DisplayNameStyles>>,
     #[serde(default, deserialize_with = "nullable")]
     pub collectibles: Option<Option<Collectibles>>,
+    #[serde(default)]
+    pub joined_at: Option<String>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub flags: u32,
 }
 
 impl Member {

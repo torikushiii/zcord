@@ -48,6 +48,9 @@ impl Store {
             if let Some(own) = members.iter_mut().find(|m| m.id() == Some(id)) {
                 own.nick.clone_from(&info.nick);
                 own.roles.clone_from(&info.roles);
+                if let Some(flags) = member.flags {
+                    own.flags = flags;
+                }
                 own.avatar.clone_from(&info.avatar);
                 if member.avatar_decoration_data.is_some() {
                     own.avatar_decoration_data
@@ -67,6 +70,8 @@ impl Store {
                     avatar_decoration_data: member.avatar_decoration_data.clone(),
                     display_name_styles: member.display_name_styles.clone(),
                     collectibles: None,
+                    joined_at: member.join_timestamp.clone(),
+                    flags: member.flags.unwrap_or(0),
                 });
             }
         }

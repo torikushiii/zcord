@@ -42,6 +42,7 @@ pub struct Ready {
     pub relationships: Vec<Relationship>,
     pub friend_suggestion_count: u32,
     pub personalization_consented: bool,
+    pub experiments: Experiments,
 }
 
 impl<'de> Deserialize<'de> for Ready {
@@ -76,8 +77,17 @@ impl<'de> Deserialize<'de> for Ready {
             friend_suggestion_count: u32,
             #[serde(default)]
             consents: Value,
+            #[serde(default)]
+            guild_experiments: Value,
+            #[serde(default)]
+            apex_experiments: Value,
         }
         let wire = Wire::deserialize(d)?;
+        let experiments = Experiments::parse(
+            &wire.guild_experiments,
+            &wire.apex_experiments,
+            wire.user.id,
+        );
         let guild_order = wire
             .guilds
             .iter()
@@ -133,6 +143,7 @@ impl<'de> Deserialize<'de> for Ready {
             personalization_consented: wire.consents["personalization"]["consented"]
                 .as_bool()
                 .unwrap_or(false),
+            experiments,
         })
     }
 }

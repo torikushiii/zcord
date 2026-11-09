@@ -6,6 +6,7 @@ mod channels;
 mod emoji;
 mod expressions;
 mod forum;
+mod guild_actions;
 mod guilds;
 mod home;
 mod mapping;
@@ -447,6 +448,8 @@ impl Store {
             }
             Event::GuildEmojisUpdate(update) => self.guild_emojis_update(update),
             Event::GuildStickersUpdate(update) => self.guild_stickers_update(update),
+            Event::GuildScheduledEventUpsert(event) => self.scheduled_event_upsert(event),
+            Event::GuildScheduledEventDelete(event) => self.scheduled_event_delete(&event),
             Event::GuildDelete { id } => self.guild_delete(id),
             Event::ThreadListSync(sync) => self.thread_list_sync(*sync),
             Event::ThreadMembersUpdate(update) => self.thread_members_update(*update),

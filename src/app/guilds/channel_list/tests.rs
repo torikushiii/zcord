@@ -20,6 +20,10 @@ fn guild(id: u64, channels: usize) -> Guild {
         unread: false,
         mentions: 0,
         premium_tier: 0,
+        boost_goal: None,
+        server_guide: false,
+        events: None,
+        channels_and_roles: false,
         tag: None,
         categories: vec![Category {
             id: id + 1,

@@ -18,6 +18,32 @@ pub struct GuildProperties {
     pub default_message_notifications: Option<NotificationLevel>,
     #[serde(default, deserialize_with = "nullable")]
     pub profile: Option<Option<GuildProfile>>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub premium_tier: Option<u8>,
+    #[serde(default, deserialize_with = "default_value")]
+    pub premium_progress_bar_enabled: Option<bool>,
+    #[serde(default, deserialize_with = "nullable_string")]
+    pub vanity_url_code: Option<Option<String>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub hub_type: Option<Option<i64>>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct ScheduledEvent {
+    #[serde(deserialize_with = "snowflake")]
+    pub id: u64,
+    #[serde(default, deserialize_with = "optional_id")]
+    pub guild_id: Option<u64>,
+    #[serde(default, deserialize_with = "optional_id")]
+    pub channel_id: Option<u64>,
+    #[serde(default)]
+    pub status: u8,
+}
+
+impl ScheduledEvent {
+    pub fn upcoming(&self) -> bool {
+        !matches!(self.status, 3 | 4)
+    }
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -52,12 +78,16 @@ pub struct Guild {
     pub voice_states: Vec<VoiceState>,
     #[serde(default)]
     pub unavailable: Option<bool>,
-    #[serde(default)]
-    pub premium_tier: u8,
+    #[serde(default, deserialize_with = "default_value")]
+    pub premium_subscription_count: Option<u32>,
     #[serde(default)]
     pub member_count: Option<u32>,
     #[serde(default)]
     pub joined_at: Option<String>,
+    #[serde(default, deserialize_with = "optional_entries")]
+    pub guild_scheduled_events: Option<Vec<ScheduledEvent>>,
+    #[serde(default)]
+    pub experiments: Option<ApexAssignments>,
 }
 
 impl Guild {
@@ -92,6 +122,32 @@ impl Guild {
             .features
             .as_deref()
             .or(self.legacy.features.as_deref())
+    }
+    pub fn has_feature(&self, name: &str) -> bool {
+        self.features()
+            .is_some_and(|features| features.iter().any(|feature| feature == name))
+    }
+    pub fn premium_tier(&self) -> u8 {
+        self.properties
+            .premium_tier
+            .or(self.legacy.premium_tier)
+            .unwrap_or(0)
+    }
+    pub fn premium_progress_bar_enabled(&self) -> bool {
+        self.properties
+            .premium_progress_bar_enabled
+            .or(self.legacy.premium_progress_bar_enabled)
+            .unwrap_or(false)
+    }
+    pub fn vanity_url_code(&self) -> Option<&str> {
+        self.properties
+            .vanity_url_code
+            .as_ref()
+            .or(self.legacy.vanity_url_code.as_ref())?
+            .as_deref()
+    }
+    pub fn hub_type(&self) -> Option<i64> {
+        self.properties.hub_type.or(self.legacy.hub_type).flatten()
     }
     pub fn tag(&self) -> Option<(&str, Option<&str>)> {
         let profile = self
@@ -177,7 +233,41 @@ impl Guild {
         if update.unavailable.is_some() {
             self.unavailable = update.unavailable;
         }
-        self.premium_tier = update.premium_tier;
+        if let Some(tier) = update
+            .properties
+            .premium_tier
+            .or(update.legacy.premium_tier)
+        {
+            self.properties.premium_tier = Some(tier);
+        }
+        if let Some(enabled) = update
+            .properties
+            .premium_progress_bar_enabled
+            .or(update.legacy.premium_progress_bar_enabled)
+        {
+            self.properties.premium_progress_bar_enabled = Some(enabled);
+        }
+        if update.premium_subscription_count.is_some() {
+            self.premium_subscription_count = update.premium_subscription_count;
+        }
+        if let Some(code) = update
+            .properties
+            .vanity_url_code
+            .as_ref()
+            .or(update.legacy.vanity_url_code.as_ref())
+        {
+            self.properties.vanity_url_code = Some(code.clone());
+        }
+        if let Some(kind) = update.properties.hub_type.or(update.legacy.hub_type) {
+            self.properties.hub_type = Some(kind);
+        }
+        if update.guild_scheduled_events.is_some() {
+            self.guild_scheduled_events
+                .clone_from(&update.guild_scheduled_events);
+        }
+        if update.experiments.is_some() {
+            self.experiments.clone_from(&update.experiments);
+        }
     }
 }
 
