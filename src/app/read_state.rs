@@ -120,6 +120,37 @@ impl DiscordApp {
         self.unread.outgoing_acks.insert(channel_id, task);
     }
 
+    pub(crate) fn mark_dm_read(&mut self, channel_id: u64, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone().filter(|_| self.live) else {
+            return;
+        };
+        let Some(message_id) = self.store.channel_ack(channel_id) else {
+            return;
+        };
+        if channel_id == self.selected_channel_id {
+            self.unread.since = None;
+            self.unread.bar = false;
+            self.unread.manual = None;
+        }
+        self.store.apply(Event::MessageAck {
+            channel_id,
+            message_id,
+        });
+        cx.notify();
+        let days = days_since_discord_epoch();
+        let request = Tokio::spawn(cx, async move {
+            session
+                .ack_message(None, channel_id, message_id, days)
+                .await
+        });
+        cx.spawn(async move |_, _| match request.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => log::warn!("Could not mark DM read: {error}"),
+            Err(error) => log::warn!("Mark read task failed: {error}"),
+        })
+        .detach();
+    }
+
     pub(crate) fn mark_guild_read(&mut self, guild_id: u64, cx: &mut Context<Self>) {
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;

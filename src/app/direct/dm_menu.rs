@@ -1,4 +1,7 @@
+use std::{cell::Cell, rc::Rc};
+
 use gpui::{prelude::*, *};
+use gpui_component::ElementExt as _;
 use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::{
@@ -7,7 +10,8 @@ use crate::{
     theme::{self, WithoutTextSelection, rpx},
 };
 
-const MENU_WIDTH: f32 = 220.;
+const MENU_WIDTH: f32 = 190.;
+const MUTE_WIDTH: f32 = 200.;
 const GROUP_SIZE: usize = 10;
 pub(crate) const MUTE_CHOICES: [(&str, i64); 6] = [
     ("For 15 Minutes", 15 * 60),
@@ -65,9 +69,11 @@ impl DiscordApp {
         true
     }
 
-    fn toggle_mute_choices(&mut self, cx: &mut Context<Self>) {
-        if let Some(menu) = &mut self.menus.dm {
-            menu.mute_open = !menu.mute_open;
+    fn show_mute_choices(&mut self, open: bool, cx: &mut Context<Self>) {
+        if let Some(menu) = &mut self.menus.dm
+            && menu.mute_open != open
+        {
+            menu.mute_open = open;
             cx.notify();
         }
     }
@@ -214,30 +220,42 @@ impl DiscordApp {
     }
 }
 
-fn menu_row(
-    app: &DiscordApp,
-    key: &'static str,
-    icon: &'static str,
-    title: &'static str,
-    color: u32,
-    run: impl Fn(&mut DiscordApp, &mut Window, &mut Context<DiscordApp>) + 'static,
-) -> Stateful<Div> {
+fn item(app: &DiscordApp, key: &'static str, opens_mute: bool) -> Stateful<Div> {
     let entity = app.entity.clone();
     div()
         .id(key)
         .flex()
         .flex_none()
         .items_center()
-        .gap(rpx(10.))
-        .h(rpx(36.))
-        .px(rpx(8.))
+        .gap(rpx(8.))
+        .p(rpx(8.))
         .rounded(rpx(4.))
+        .text_size(rpx(14.))
+        .line_height(rpx(18.))
+        .font_weight(FontWeight::MEDIUM)
+        .without_text_selection()
+        .on_hover(move |hovered, _, cx| {
+            if *hovered {
+                entity
+                    .update(cx, |app, cx| app.show_mute_choices(opens_mute, cx))
+                    .ok();
+            }
+        })
+}
+
+fn menu_row(
+    app: &DiscordApp,
+    key: &'static str,
+    icon: Option<&'static str>,
+    title: impl Into<SharedString>,
+    color: u32,
+    run: impl Fn(&mut DiscordApp, &mut Window, &mut Context<DiscordApp>) + 'static,
+) -> Stateful<Div> {
+    let entity = app.entity.clone();
+    item(app, key, false)
         .cursor_pointer()
         .hover(|style| style.bg(rgba(theme::selected())))
-        .text_size(rpx(14.))
-        .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(color))
-        .without_text_selection()
         .on_click(move |_, window, cx| {
             cx.stop_propagation();
             entity
@@ -247,17 +265,104 @@ fn menu_row(
                 })
                 .ok();
         })
-        .child(theme::icon(icon, 20., color))
-        .child(div().flex_1().min_w_0().truncate().child(title))
+        .children(icon.map(|icon| theme::icon(icon, 20., color)))
+        .child(div().flex_1().min_w_0().truncate().child(title.into()))
 }
 
 fn divider() -> Div {
     div()
         .flex_none()
         .h(rpx(1.))
-        .my(rpx(4.))
-        .mx(rpx(6.))
+        .my(rpx(8.))
         .bg(rgba(theme::border()))
+}
+
+fn mute_item(
+    app: &DiscordApp,
+    channel_id: u64,
+    label: SharedString,
+    open: bool,
+    choices: Rc<Cell<Option<Bounds<Pixels>>>>,
+) -> Stateful<Div> {
+    let click = app.entity.clone();
+    item(app, "dm-menu-mute", true)
+        .relative()
+        .cursor_pointer()
+        .text_color(rgb(theme::text()))
+        .hover(|style| style.bg(rgba(theme::selected())))
+        .when(open, |this| this.bg(rgba(theme::selected())))
+        .on_click(move |_, _, cx| {
+            cx.stop_propagation();
+            click
+                .update(cx, |app, cx| app.show_mute_choices(true, cx))
+                .ok();
+        })
+        .child(div().flex_1().min_w_0().truncate().child(label))
+        .child(theme::icon("chevron-right", 16., theme::muted()))
+        .when(open, |this| {
+            let choices_menu = div()
+                .id("dm-menu-mute-choices")
+                .flex()
+                .flex_col()
+                .w(rpx(MUTE_WIDTH))
+                .p(rpx(8.))
+                .rounded(rpx(8.))
+                .bg(rgb(theme::elevated()))
+                .border_1()
+                .border_color(rgba(theme::border()))
+                .text_color(rgb(theme::text()))
+                .shadow_lg()
+                .occlude()
+                .on_prepaint(move |bounds, _, _| choices.set(Some(bounds)))
+                .children(
+                    MUTE_CHOICES
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (label, seconds))| {
+                            let entity = app.entity.clone();
+                            let seconds = *seconds;
+                            div()
+                                .id(("dm-menu-mute-choice", index))
+                                .flex()
+                                .flex_none()
+                                .items_center()
+                                .p(rpx(8.))
+                                .rounded(rpx(4.))
+                                .cursor_pointer()
+                                .hover(|style| style.bg(rgba(theme::selected())))
+                                .text_size(rpx(14.))
+                                .line_height(rpx(18.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .without_text_selection()
+                                .on_click(move |_, _, cx| {
+                                    cx.stop_propagation();
+                                    entity
+                                        .update(cx, |app, cx| {
+                                            app.close_dm_menu(cx);
+                                            app.set_dm_mute(channel_id, Some(seconds), cx);
+                                        })
+                                        .ok();
+                                })
+                                .child(*label)
+                        }),
+                );
+            this.child(
+                div()
+                    .absolute()
+                    .top(rpx(-8.))
+                    .right(rpx(-12.))
+                    .size_0()
+                    .child(
+                        deferred(
+                            anchored()
+                                .anchor(Anchor::TopLeft)
+                                .snap_to_window_with_margin(px(8.))
+                                .child(choices_menu),
+                        )
+                        .with_priority(3),
+                    ),
+            )
+        })
 }
 
 pub(crate) fn menu(app: &DiscordApp) -> Option<AnyElement> {
@@ -265,10 +370,14 @@ pub(crate) fn menu(app: &DiscordApp) -> Option<AnyElement> {
     let channel_id = menu.channel_id;
     let dm = app.store.private_channel(channel_id)?;
     let user_id = dm.recipient_ids.first().copied().filter(|_| !dm.group);
+    let user = user_id.and_then(|id| app.store.user(id));
     let relationship = user_id.and_then(|id| app.store.relationship(id));
-    let friend = relationship.is_some_and(|found| found.kind == RelationshipKind::Friend);
-    let blocked = relationship.is_some_and(|found| found.kind == RelationshipKind::Blocked);
+    let kind = relationship.map(|found| found.kind);
+    let friend = kind == Some(RelationshipKind::Friend);
+    let blocked = kind == Some(RelationshipKind::Blocked);
     let ignored = relationship.is_some_and(|found| found.ignored);
+    let nicknamed = relationship.is_some_and(|found| found.nickname.is_some());
+    let bot = user.is_some_and(|user| user.bot);
     let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
     let muted = app.store.dm_muted(channel_id, now_ms);
     let in_call = app
@@ -276,9 +385,46 @@ pub(crate) fn menu(app: &DiscordApp) -> Option<AnyElement> {
         .call
         .as_ref()
         .is_some_and(|call| call.guild_id == 0 && call.channel_id == channel_id);
+    let unread = app.live && app.store.channel_ack(channel_id).is_some();
     let settled = !dm.message_request;
+    let mute_label: SharedString = match user {
+        Some(user) => format!("Mute @{}", user.username).into(),
+        None => "Mute Conversation".into(),
+    };
+    let unmute_label: SharedString = match user {
+        Some(user) => format!("Unmute @{}", user.username).into(),
+        None => "Unmute Conversation".into(),
+    };
     let text = theme::text();
+    let choices: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
+    let outside = choices.clone();
     let close = app.entity.clone();
+    let relation = user_id.and_then(|user_id| {
+        let (title, run): (
+            &'static str,
+            fn(&mut DiscordApp, u64, &mut Context<DiscordApp>),
+        ) = match kind {
+            Some(RelationshipKind::Friend) => {
+                ("Remove Friend", |app, id, cx| app.ask_remove_friend(id, cx))
+            }
+            Some(RelationshipKind::Incoming) => ("Accept Friend Request", |app, id, cx| {
+                app.add_friend(id, cx)
+            }),
+            Some(RelationshipKind::Outgoing) => ("Cancel Friend Request", |app, id, cx| {
+                app.drop_friend_request(id, cx)
+            }),
+            None if !bot && app.live => ("Add Friend", |app, id, cx| app.add_friend(id, cx)),
+            _ => return None,
+        };
+        Some(menu_row(
+            app,
+            "dm-menu-relationship",
+            None,
+            title,
+            text,
+            move |app, _, cx| run(app, user_id, cx),
+        ))
+    });
     let body = div()
         .id("dm-menu")
         .flex()
@@ -291,14 +437,35 @@ pub(crate) fn menu(app: &DiscordApp) -> Option<AnyElement> {
         .border_color(rgba(theme::border()))
         .shadow_lg()
         .occlude()
-        .on_mouse_down_out(move |_, _, cx| {
+        .on_mouse_down_out(move |event, _, cx| {
+            if outside
+                .get()
+                .is_some_and(|bounds| bounds.contains(&event.position))
+            {
+                return;
+            }
             close.update(cx, |app, cx| app.close_dm_menu(cx)).ok();
         })
+        .child(if unread {
+            menu_row(
+                app,
+                "dm-menu-read",
+                None,
+                "Mark As Read",
+                text,
+                move |app, _, cx| app.mark_dm_read(channel_id, cx),
+            )
+        } else {
+            item(app, "dm-menu-read", false)
+                .text_color(rgb(theme::faint()))
+                .child("Mark As Read")
+        })
+        .child(divider())
         .children(user_id.map(|user_id| {
             menu_row(
                 app,
                 "dm-menu-profile",
-                "user",
+                None,
                 "Profile",
                 text,
                 move |app, _, cx| app.open_full_profile_for(user_id, cx),
@@ -309,7 +476,7 @@ pub(crate) fn menu(app: &DiscordApp) -> Option<AnyElement> {
                 menu_row(
                     app,
                     "dm-menu-call",
-                    "phone",
+                    None,
                     "Leave Call",
                     theme::RED,
                     |app, _, cx| app.leave_voice(cx),
@@ -318,110 +485,34 @@ pub(crate) fn menu(app: &DiscordApp) -> Option<AnyElement> {
                 menu_row(
                     app,
                     "dm-menu-call",
-                    "phone",
-                    "Call",
+                    None,
+                    "Start a Call",
                     text,
                     move |app, _, cx| app.join_dm_call(channel_id, cx),
                 )
             })
-        })
-        .when(settled, |this| {
-            let toggle = app.entity.clone();
-            this.child(divider())
-                .child(if muted {
-                    menu_row(
-                        app,
-                        "dm-menu-unmute",
-                        "bell",
-                        "Unmute",
-                        text,
-                        move |app, _, cx| app.set_dm_mute(channel_id, None, cx),
-                    )
-                } else {
-                    div()
-                        .id("dm-menu-mute")
-                        .flex()
-                        .flex_none()
-                        .items_center()
-                        .gap(rpx(10.))
-                        .h(rpx(36.))
-                        .px(rpx(8.))
-                        .rounded(rpx(4.))
-                        .cursor_pointer()
-                        .hover(|style| style.bg(rgba(theme::selected())))
-                        .when(menu.mute_open, |this| this.bg(rgba(theme::selected())))
-                        .text_size(rpx(14.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(text))
-                        .without_text_selection()
-                        .on_click(move |_, _, cx| {
-                            cx.stop_propagation();
-                            toggle
-                                .update(cx, |app, cx| app.toggle_mute_choices(cx))
-                                .ok();
-                        })
-                        .child(theme::icon("bell", 20., text))
-                        .child(div().flex_1().child("Mute Conversation"))
-                        .child(theme::icon(
-                            if menu.mute_open {
-                                "chevron-down"
-                            } else {
-                                "chevron-right"
-                            },
-                            16.,
-                            theme::muted(),
-                        ))
-                })
-                .when(menu.mute_open && !muted, |this| {
-                    this.children(MUTE_CHOICES.iter().enumerate().map(
-                        |(index, (label, seconds))| {
-                            let entity = app.entity.clone();
-                            let seconds = *seconds;
-                            div()
-                                .id(("dm-menu-mute-choice", index))
-                                .flex()
-                                .flex_none()
-                                .items_center()
-                                .h(rpx(32.))
-                                .pl(rpx(38.))
-                                .pr(rpx(8.))
-                                .rounded(rpx(4.))
-                                .cursor_pointer()
-                                .hover(|style| style.bg(rgba(theme::selected())))
-                                .text_size(rpx(14.))
-                                .text_color(rgb(theme::muted()))
-                                .without_text_selection()
-                                .on_click(move |_, _, cx| {
-                                    cx.stop_propagation();
-                                    entity
-                                        .update(cx, |app, cx| {
-                                            app.close_dm_menu(cx);
-                                            app.set_dm_mute(channel_id, Some(seconds), cx);
-                                        })
-                                        .ok();
-                                })
-                                .child(*label)
-                        },
-                    ))
-                })
         })
         .when(friend, |this| {
             let user_id = user_id.unwrap_or_default();
             this.child(menu_row(
                 app,
                 "dm-menu-nickname",
-                "pencil",
-                "Edit Friend Nickname",
+                None,
+                if nicknamed {
+                    "Edit Friend Nickname"
+                } else {
+                    "Add Friend Nickname"
+                },
                 text,
                 move |app, window, cx| app.open_nickname_dialog(user_id, window, cx),
             ))
         })
         .when(settled, |this| {
-            this.child(divider()).child(if dm.group {
+            this.child(if dm.group {
                 menu_row(
                     app,
                     "dm-menu-leave",
-                    "log-out",
+                    None,
                     "Leave Group",
                     theme::RED,
                     move |app, _, cx| {
@@ -438,7 +529,7 @@ pub(crate) fn menu(app: &DiscordApp) -> Option<AnyElement> {
                 menu_row(
                     app,
                     "dm-menu-close",
-                    "x",
+                    None,
                     "Close DM",
                     text,
                     move |app, window, cx| app.close_dm(channel_id, window, cx),
@@ -446,53 +537,59 @@ pub(crate) fn menu(app: &DiscordApp) -> Option<AnyElement> {
             })
         })
         .when_some(user_id, |this, user_id| {
-            this.when(friend, |this| {
-                this.child(menu_row(
-                    app,
-                    "dm-menu-remove-friend",
-                    "user-check",
-                    "Remove Friend",
-                    theme::RED,
-                    move |app, _, cx| app.ask_remove_friend(user_id, cx),
-                ))
-            })
-            .child(if ignored {
+            this.child(divider())
+                .children(relation)
+                .child(if ignored {
+                    menu_row(
+                        app,
+                        "dm-menu-ignore",
+                        None,
+                        "Unignore",
+                        text,
+                        move |app, _, cx| app.unignore_user(user_id, cx),
+                    )
+                } else {
+                    menu_row(
+                        app,
+                        "dm-menu-ignore",
+                        None,
+                        "Ignore",
+                        text,
+                        move |app, _, cx| app.ignore_user(user_id, cx),
+                    )
+                })
+                .child(if blocked {
+                    menu_row(
+                        app,
+                        "dm-menu-block",
+                        None,
+                        "Unblock",
+                        text,
+                        move |app, _, cx| app.unblock_user(user_id, cx),
+                    )
+                } else {
+                    menu_row(
+                        app,
+                        "dm-menu-block",
+                        None,
+                        "Block",
+                        theme::RED,
+                        move |app, _, cx| app.open_dm_dialog(DmDialog::Block(user_id), cx),
+                    )
+                })
+        })
+        .when(settled, |this| {
+            this.child(divider()).child(if muted {
                 menu_row(
                     app,
-                    "dm-menu-ignore",
-                    "eye",
-                    "Unignore",
+                    "dm-menu-mute",
+                    None,
+                    unmute_label,
                     text,
-                    move |app, _, cx| app.unignore_user(user_id, cx),
+                    move |app, _, cx| app.set_dm_mute(channel_id, None, cx),
                 )
             } else {
-                menu_row(
-                    app,
-                    "dm-menu-ignore",
-                    "eye-off",
-                    "Ignore",
-                    text,
-                    move |app, _, cx| app.ignore_user(user_id, cx),
-                )
-            })
-            .child(if blocked {
-                menu_row(
-                    app,
-                    "dm-menu-block",
-                    "x",
-                    "Unblock",
-                    text,
-                    move |app, _, cx| app.unblock_user(user_id, cx),
-                )
-            } else {
-                menu_row(
-                    app,
-                    "dm-menu-block",
-                    "x",
-                    "Block",
-                    theme::RED,
-                    move |app, _, cx| app.open_dm_dialog(DmDialog::Block(user_id), cx),
-                )
+                mute_item(app, channel_id, mute_label, menu.mute_open, choices)
             })
         })
         .child(divider())
@@ -500,7 +597,7 @@ pub(crate) fn menu(app: &DiscordApp) -> Option<AnyElement> {
             menu_row(
                 app,
                 "dm-menu-copy-user",
-                "id-badge",
+                Some("id-badge"),
                 "Copy User ID",
                 text,
                 move |app, _, cx| app.copy_id(user_id, cx),
@@ -509,7 +606,7 @@ pub(crate) fn menu(app: &DiscordApp) -> Option<AnyElement> {
         .child(menu_row(
             app,
             "dm-menu-copy-channel",
-            "id-badge",
+            Some("id-badge"),
             "Copy Channel ID",
             text,
             move |app, _, cx| app.copy_id(channel_id, cx),
