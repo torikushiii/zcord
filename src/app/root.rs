@@ -17,7 +17,9 @@ impl Render for DiscordApp {
             self.load_active_now_apps(cx);
         }
         let body = match &self.screen {
-            Screen::Login(form) => login::render(form, window, cx).into_any_element(),
+            Screen::Login(form) => {
+                login::render(form, &self.accounts, window, cx).into_any_element()
+            }
             Screen::Connecting => connecting().into_any_element(),
             Screen::Chat => div()
                 .relative()

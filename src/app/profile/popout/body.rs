@@ -151,13 +151,20 @@ fn account_menu(app: &DiscordApp, card: &ProfileCard, window: &Window, cx: &App)
                     AccountAction::Settings,
                 )),
         )
-        .child(div().rounded(rpx(8.)).bg(palette.panel).child(row(
-            "account-copy-user-id",
-            "copy",
-            18.,
-            "Copy User ID",
-            AccountAction::CopyUserId,
-        )))
+        .child(
+            div()
+                .rounded(rpx(8.))
+                .bg(palette.panel)
+                .child(switch_menu::trigger(app, card, window, cx))
+                .child(div().h(rpx(1.)).mx(rpx(12.)).bg(palette.border))
+                .child(row(
+                    "account-copy-user-id",
+                    "copy",
+                    18.,
+                    "Copy User ID",
+                    AccountAction::CopyUserId,
+                )),
+        )
         .into_any_element()
 }
 

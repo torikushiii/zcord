@@ -53,6 +53,10 @@ pub use event::*;
 pub use model::{PinPage, ThreadPage};
 pub use search::{ForumQuery, ForumSort, SearchOutcome, SearchQuery, SearchScope, SearchSort};
 
+pub async fn token_owner(token: String) -> Result<model::User, Error> {
+    rest::Rest::new(&token)?.current_user().await
+}
+
 pub fn valid_friend_username(username: &str) -> bool {
     (2..=32).contains(&username.len())
         && !username.contains("..")

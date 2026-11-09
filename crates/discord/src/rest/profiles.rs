@@ -18,6 +18,17 @@ pub(super) fn profile_query(
 }
 
 impl Rest {
+    pub async fn current_user(&self) -> Result<model::User, Error> {
+        let response = self
+            .send(|| {
+                self.client
+                    .get("https://discord.com/api/v9/users/@me")
+                    .header(REFERER, "https://discord.com/channels/@me")
+            })
+            .await?;
+        response.json().await.map_err(|_| Error::Decode)
+    }
+
     pub async fn fetch_profile(
         &self,
         user_id: u64,

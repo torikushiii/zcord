@@ -118,6 +118,7 @@ pub(crate) struct ProfileCard {
     pub(crate) more_menu_open: bool,
     hovered_action: Option<&'static str>,
     status_menu: popout::status::State,
+    switch_menu: popout::switch_menu::State,
     scope_snapshots: HashMap<Option<u64>, Arc<model::Profile>>,
     origin: ProfileOrigin,
     position: Point<Pixels>,

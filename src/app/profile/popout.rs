@@ -29,6 +29,7 @@ use super::*;
 
 mod menu;
 pub(super) mod status;
+pub(super) mod switch_menu;
 
 pub(super) use menu::{message_button, more_button, profile_actions};
 
@@ -113,6 +114,7 @@ pub(super) fn popout(
     let framed = framed(card, outer_width, outer, false, cx);
     let close = app.entity.clone();
     let in_status_menu = card.status_menu.hit_test();
+    let in_switch_menu = card.switch_menu.hit_test();
     let margin = |overflow: f32| rpx(overflow).to_pixels(window.rem_size()) + px(12.);
     deferred(
         anchored()
@@ -130,7 +132,7 @@ pub(super) fn popout(
                     .relative()
                     .occlude()
                     .on_mouse_down_out(move |event, _, cx| {
-                        if in_status_menu(event.position) {
+                        if in_status_menu(event.position) || in_switch_menu(event.position) {
                             return;
                         }
                         close.update(cx, |app, cx| app.close_profile(cx)).ok();

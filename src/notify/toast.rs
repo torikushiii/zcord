@@ -46,14 +46,14 @@ pub fn init() {
     }
 }
 
-pub fn show(title: &str, body: &str, icon: Option<&Path>, channel_id: u64, message_id: u64) {
+pub fn show(title: &str, body: &str, icon: Option<&Path>, activation: super::Activation) {
     let sender = crate::notify::activation_sender().clone();
     let mut toast = Toast::new(APP_ID)
         .title(title)
         .text1(body)
         .sound(None)
         .on_activated(move |_| {
-            if let Err(error) = sender.send((channel_id, message_id)) {
+            if let Err(error) = sender.send(activation) {
                 log::warn!("could not deliver notification activation: {error}");
             }
             Ok(())

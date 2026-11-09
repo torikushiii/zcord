@@ -294,7 +294,13 @@ impl DiscordApp {
         {
             return;
         }
-        if self.dismiss_status_menu(window, cx) {
+        if self.close_account_menu(cx)
+            || self.close_add_account(window, cx)
+            || self.close_manage_accounts(cx)
+        {
+            return;
+        }
+        if self.dismiss_status_menu(window, cx) || self.dismiss_switch_menu(cx) {
             return;
         }
         if self

@@ -179,6 +179,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "upload-sheet",
     "trending-up",
     "user",
+    "user-circle",
     "user-check",
     "user-plus",
     "users",

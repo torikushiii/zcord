@@ -2,6 +2,7 @@ mod root;
 
 mod events;
 
+mod accounts;
 mod activity;
 mod appearance;
 mod calls;
@@ -28,6 +29,7 @@ mod read_state;
 mod search;
 mod selection;
 mod settings_page;
+mod shell;
 mod smooth_scroll;
 mod state;
 mod switcher;
@@ -39,6 +41,8 @@ use crate::discord::{
 };
 pub(crate) use appearance::apply_saved_theme;
 use login::LoginForm;
+pub use shell::AppShell;
+use shell::{Restart, Start};
 
 use std::{
     cell::{Cell, RefCell},
@@ -193,6 +197,7 @@ pub enum Screen {
 pub struct DiscordApp {
     pub(crate) screen: Screen,
     pub(crate) store: Store,
+    pub(crate) accounts: accounts::Accounts,
     account_theme: Option<crate::discord::settings_proto::AccountTheme>,
     activity_feed: activity::activity_feed::ActivityFeed,
     activity_ticker: Option<Task<()>>,
@@ -341,6 +346,7 @@ impl DiscordApp {
         let app = Self {
             screen: Screen::Connecting,
             store: Store::seed(),
+            accounts: accounts::Accounts::default(),
             account_theme: None,
             activity_feed: activity::activity_feed::ActivityFeed::default(),
             activity_ticker: None,
@@ -531,18 +537,6 @@ impl DiscordApp {
             parsed: RefCell::new(ParseCache::default()),
             _events: None,
         };
-        let mut activations = crate::notify::activations();
-        cx.spawn_in(window, async move |this, cx| {
-            while let Some((channel_id, message_id)) = activations.recv().await {
-                let opened = this.update_in(cx, |app, window, cx| {
-                    app.open_notification(channel_id, message_id, window, cx)
-                });
-                if opened.is_err() {
-                    break;
-                }
-            }
-        })
-        .detach();
         let games = Tokio::spawn(cx, async move { crate::games::start(game_enabled_rx) });
         let runtime = Tokio::handle(cx);
         cx.spawn(async move |this, cx| {
@@ -676,39 +670,6 @@ impl DiscordApp {
             })
             .ok();
         });
-        let credential_load = cx
-            .background_executor()
-            .spawn(async { credentials::load() });
-        cx.spawn_in(window, async move |this, cx| {
-            let result = credential_load.await;
-            this.update_in(cx, |app, window, cx| {
-                if !matches!(app.screen, Screen::Connecting)
-                    || app.session.is_some()
-                    || app.pending_token.is_some()
-                {
-                    return;
-                }
-                match result {
-                    Ok(Some(token)) => {
-                        // Re-save after Ready to persist keyutils-only tokens from older builds.
-                        app.pending_token = Some(token.clone());
-                        app.connect(token, window, cx);
-                    }
-                    result => {
-                        let mut form = LoginForm::new(window, cx);
-                        if let Err(error) = result {
-                            log::warn!("{error}");
-                            form.error =
-                                Some(format!("{error}. Your token may not be saved.").into());
-                        }
-                        app.screen = Screen::Login(form);
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
         app
     }
 

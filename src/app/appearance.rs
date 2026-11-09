@@ -155,6 +155,13 @@ pub(crate) fn device_appearance_changed(window: &Window, cx: &mut App) {
     }
 }
 
+pub(super) fn forget_account_appearance(cx: &mut App) {
+    cx.set_global(SeenAccount::default());
+    let pending = cx.default_global::<PendingSave>();
+    pending.target = None;
+    pending.generation += 1;
+}
+
 pub(crate) fn apply_saved_theme(cx: &mut App) {
     let (base, gradient) = resolve(&settings::get(cx), cx);
     theme::set_theme(base, gradient, cx);

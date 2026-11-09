@@ -2,7 +2,8 @@ use super::*;
 
 impl DiscordApp {
     pub(crate) fn submit_login(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Screen::Login(form) = &mut self.screen else {
+        let adding = self.accounts.adding.is_some();
+        let Some(form) = self.login_form() else {
             return;
         };
         if form.busy {
@@ -14,7 +15,11 @@ impl DiscordApp {
             cx.notify();
             return;
         }
-        self.login_with_token(token, window, cx);
+        if adding {
+            self.check_added_token(token, window, cx);
+        } else {
+            self.login_with_token(token, window, cx);
+        }
     }
 
     pub(crate) fn login_with_token(
@@ -29,19 +34,6 @@ impl DiscordApp {
         }
         self.pending_token = Some(token.clone());
         self.connect(token, window, cx);
-        cx.notify();
-    }
-
-    pub(crate) fn log_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.disconnect();
-        crate::settings::update(cx, |settings| settings.voice_channel = None);
-        if let Err(error) = credentials::clear() {
-            log::warn!("{error}");
-        }
-        self.live = false;
-        self.store = Store::seed();
-        self.home.quests = Default::default();
-        self.screen = Screen::Login(LoginForm::new(window, cx));
         cx.notify();
     }
 

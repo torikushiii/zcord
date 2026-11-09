@@ -11,19 +11,18 @@ impl DiscordApp {
             Event::Fatal(error) => {
                 let message: SharedString = match error {
                     FatalError::InvalidToken => {
-                        if let Err(error) = credentials::clear() {
-                            log::warn!("{error}");
-                        }
+                        self.forget_current_account(cx);
                         "Invalid token".into()
                     }
                     FatalError::Other(message) => message.into(),
                 };
-                self.disconnect();
-                self.live = false;
-                let mut form = LoginForm::new(window, cx);
-                form.error = Some(message);
-                self.screen = Screen::Login(form);
-                cx.notify();
+                self.restart(
+                    Start::Login {
+                        error: Some(message),
+                    },
+                    window,
+                    cx,
+                );
             }
             Event::Voice(event) => self.handle_voice_event(event, cx),
             Event::Reconnecting => {
@@ -42,12 +41,9 @@ impl DiscordApp {
                 self.typing.clear();
                 cx.notify();
             }
-            Event::Ready(_) => {
-                if let Some(token) = self.pending_token.take()
-                    && let Err(error) = credentials::save(&token)
-                {
-                    log::warn!("{error}");
-                }
+            Event::Ready(ref ready) => {
+                let user = ready.user.clone();
+                let switched = self.account_ready(&user, cx);
                 self.live = true;
                 self.reconnecting = false;
                 self.typing.clear();
@@ -66,7 +62,9 @@ impl DiscordApp {
                 self.load_saved_messages(cx);
                 self.sync_channel_rows();
                 self.screen = Screen::Chat;
-                if reconnect && self.channel().is_some() {
+                if switched {
+                    self.open_home(window, cx);
+                } else if reconnect && self.channel().is_some() {
                     let channel = self.selected_channel_id;
                     let thread_pane = self.thread_pane.take();
                     self.select_channel(channel, window, cx);

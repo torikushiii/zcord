@@ -158,7 +158,7 @@ fn main() {
                                 true
                             }
                         });
-                        let view = cx.new(|cx| app::DiscordApp::new(window, cx));
+                        let view = cx.new(|cx| app::AppShell::new(window, cx));
                         cx.new(|cx| Root::new(view, window, cx))
                     })
                     .expect("Failed to open the Discord window");

@@ -29,8 +29,14 @@ it came from, so if you copy it from a browser and later log out of that browser
 logged out too. Prefer QR login when you can.
 
 Either way, the token is stored in the system credential store (Windows Credential Manager,
-entry `zcord`) and is only ever sent to Discord. The gear button in the user panel logs out and
-removes it.
+one `zcord` entry per account) and is only ever sent to Discord. **Log Out** in User Settings
+logs out and removes it.
+
+### More than one account
+
+Click your avatar in the user panel and hover **Switch Accounts** to switch between up to five
+accounts, or open **Manage Accounts** to add or log out of them. Only the account you're using
+stays connected.
 
 ## Avoiding the spam filter
 

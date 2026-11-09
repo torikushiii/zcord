@@ -565,6 +565,9 @@ impl Render for OverlaysView {
             .children(voice::share_picker::render(app))
             .children(switcher::render(app, cx))
             .children(crate::media::player::fullscreen(app, cx))
+            .children(super::accounts::manage_dialog(app, cx))
+            .children(super::login::add_account_dialog(app, cx))
+            .children(super::accounts::toast(app))
             .into_any_element()
     }
 }

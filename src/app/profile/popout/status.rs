@@ -421,13 +421,18 @@ fn render(
     root.into_any_element()
 }
 
-fn menu_width(css: f32, window: &Window) -> Pixels {
+pub(super) fn menu_width(css: f32, window: &Window) -> Pixels {
     rpx(css)
         .to_pixels(window.rem_size())
         .min((window.viewport_size().width - rpx(16.).to_pixels(window.rem_size())).max(px(0.)))
 }
 
-fn flyout(menu: AnyElement, position: Point<Pixels>, window: &Window, priority: usize) -> Div {
+pub(super) fn flyout(
+    menu: AnyElement,
+    position: Point<Pixels>,
+    window: &Window,
+    priority: usize,
+) -> Div {
     div().absolute().size_0().child(
         deferred(
             anchored()
@@ -440,7 +445,7 @@ fn flyout(menu: AnyElement, position: Point<Pixels>, window: &Window, priority: 
     )
 }
 
-fn flyout_position(
+pub(super) fn flyout_position(
     anchor: Bounds<Pixels>,
     menu: Size<Pixels>,
     viewport: Size<Pixels>,

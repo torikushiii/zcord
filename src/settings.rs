@@ -62,6 +62,12 @@ pub struct Settings {
     #[serde(default)]
     pub discord_identity: IdentityCache,
     #[serde(default)]
+    pub accounts: Vec<SavedAccount>,
+    #[serde(default)]
+    pub active_account: Option<u64>,
+    #[serde(default)]
+    pub stashed_accounts: HashMap<u64, AccountScoped>,
+    #[serde(default)]
     pub zoom: Option<usize>,
     #[serde(default)]
     pub window: Option<SavedWindow>,
@@ -180,6 +186,117 @@ pub struct Settings {
     pub activity_toggle: bool,
     #[serde(default)]
     pub voice_input_profile: Option<InputProfile>,
+}
+
+pub const MAX_ACCOUNTS: usize = 5;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedAccount {
+    pub id: u64,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub discriminator: Option<String>,
+    #[serde(default)]
+    pub avatar: Option<String>,
+    #[serde(default)]
+    pub invalid: bool,
+}
+
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccountScoped {
+    #[serde(default)]
+    pub last_channel: Option<SavedChannel>,
+    #[serde(default)]
+    pub guild_channels: HashMap<u64, u64>,
+    #[serde(default)]
+    pub recent_emojis: Vec<String>,
+    #[serde(default)]
+    pub collapsed_categories: HashSet<u64>,
+    #[serde(default)]
+    pub voice_channel: Option<SavedChannel>,
+}
+
+impl Settings {
+    fn take_scoped(&mut self) -> AccountScoped {
+        AccountScoped {
+            last_channel: self.last_channel.take(),
+            guild_channels: std::mem::take(&mut self.guild_channels),
+            recent_emojis: std::mem::take(&mut self.recent_emojis),
+            collapsed_categories: std::mem::take(&mut self.collapsed_categories),
+            voice_channel: self.voice_channel.take(),
+        }
+    }
+
+    fn put_scoped(&mut self, scoped: AccountScoped) {
+        self.last_channel = scoped.last_channel;
+        self.guild_channels = scoped.guild_channels;
+        self.recent_emojis = scoped.recent_emojis;
+        self.collapsed_categories = scoped.collapsed_categories;
+        self.voice_channel = scoped.voice_channel;
+    }
+
+    fn stash(&mut self, user_id: u64, scoped: AccountScoped) {
+        if scoped == AccountScoped::default() {
+            self.stashed_accounts.remove(&user_id);
+        } else {
+            self.stashed_accounts.insert(user_id, scoped);
+        }
+    }
+
+    pub fn activate_account(&mut self, user_id: u64) -> bool {
+        if self.active_account == Some(user_id) {
+            return false;
+        }
+        let current = self.take_scoped();
+        let next = match self.active_account {
+            Some(active) => {
+                self.stash(active, current);
+                self.stashed_accounts.remove(&user_id).unwrap_or_default()
+            }
+            None => self.stashed_accounts.remove(&user_id).unwrap_or(current),
+        };
+        self.put_scoped(next);
+        self.active_account = Some(user_id);
+        true
+    }
+
+    pub fn remember_account(&mut self, account: SavedAccount) -> Vec<u64> {
+        let kept = account.id;
+        match self.accounts.iter_mut().find(|saved| saved.id == kept) {
+            Some(saved) => *saved = account,
+            None => self.accounts.push(account),
+        }
+        let mut dropped = Vec::new();
+        while self.accounts.len() > MAX_ACCOUNTS
+            && let Some(index) = self.accounts.iter().rposition(|saved| saved.id != kept)
+        {
+            dropped.push(self.accounts.remove(index).id);
+        }
+        for user_id in &dropped {
+            self.stashed_accounts.remove(user_id);
+        }
+        dropped
+    }
+
+    pub fn forget_account(&mut self, user_id: u64) {
+        self.accounts.retain(|account| account.id != user_id);
+        self.stashed_accounts.remove(&user_id);
+        if self.active_account == Some(user_id) {
+            self.take_scoped();
+            self.active_account = None;
+        }
+    }
+
+    pub fn set_account_invalid(&mut self, user_id: u64, invalid: bool) {
+        if let Some(account) = self
+            .accounts
+            .iter_mut()
+            .find(|account| account.id == user_id)
+        {
+            account.invalid = invalid;
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -352,6 +469,17 @@ pub fn get(cx: &App) -> Settings {
     cx.try_global::<State>()
         .map(|state| state.settings.clone())
         .unwrap_or_default()
+}
+
+pub fn accounts(cx: &App) -> Vec<SavedAccount> {
+    cx.try_global::<State>()
+        .map(|state| state.settings.accounts.clone())
+        .unwrap_or_default()
+}
+
+pub fn active_account(cx: &App) -> Option<u64> {
+    cx.try_global::<State>()
+        .and_then(|state| state.settings.active_account)
 }
 
 pub fn clock_format(hour12: &'static str, hour24: &'static str) -> &'static str {
@@ -1023,6 +1151,129 @@ mod tests {
         assert_eq!(chat_font_setting(16.0), None);
         assert_eq!(chat_font_setting(12.0), Some(12.0));
         assert_eq!(chat_font_setting(30.0), Some(24.0));
+    }
+
+    fn account(id: u64) -> SavedAccount {
+        SavedAccount {
+            id,
+            username: format!("user{id}"),
+            ..SavedAccount::default()
+        }
+    }
+
+    fn channel(guild_id: u64, channel_id: u64) -> Option<SavedChannel> {
+        Some(SavedChannel {
+            guild_id,
+            channel_id,
+        })
+    }
+
+    #[test]
+    fn first_account_adopts_settings_saved_before_accounts() {
+        let mut settings = Settings {
+            last_channel: channel(1, 2),
+            recent_emojis: vec!["smile".into()],
+            ..Settings::default()
+        };
+        assert!(settings.activate_account(10));
+        assert_eq!(settings.active_account, Some(10));
+        assert!(settings.last_channel == channel(1, 2));
+        assert_eq!(settings.recent_emojis, ["smile"]);
+        assert!(settings.stashed_accounts.is_empty());
+        assert!(!settings.activate_account(10));
+    }
+
+    #[test]
+    fn switching_accounts_swaps_their_own_settings() {
+        let mut settings = Settings::default();
+        settings.activate_account(10);
+        settings.last_channel = channel(1, 2);
+        settings.collapsed_categories.insert(3);
+        settings.voice_channel = channel(1, 4);
+
+        assert!(settings.activate_account(20));
+        assert!(settings.last_channel.is_none());
+        assert!(settings.collapsed_categories.is_empty());
+        assert!(settings.voice_channel.is_none());
+        settings.guild_channels.insert(5, 6);
+
+        assert!(settings.activate_account(10));
+        assert!(settings.last_channel == channel(1, 2));
+        assert!(settings.collapsed_categories.contains(&3));
+        assert!(settings.voice_channel == channel(1, 4));
+        assert!(settings.guild_channels.is_empty());
+        assert_eq!(
+            settings
+                .stashed_accounts
+                .get(&20)
+                .map(|scoped| &scoped.guild_channels),
+            Some(&HashMap::from([(5, 6)]))
+        );
+        assert!(!settings.stashed_accounts.contains_key(&10));
+    }
+
+    #[test]
+    fn remembering_accounts_updates_in_place_and_caps_the_list() {
+        let mut settings = Settings::default();
+        for id in 1..=5 {
+            assert!(settings.remember_account(account(id)).is_empty());
+        }
+        settings
+            .stashed_accounts
+            .insert(5, AccountScoped::default());
+        let renamed = SavedAccount {
+            username: "renamed".into(),
+            ..account(2)
+        };
+        assert!(settings.remember_account(renamed).is_empty());
+        assert_eq!(settings.accounts[1].username, "renamed");
+
+        assert_eq!(settings.remember_account(account(6)), [5]);
+        let ids: Vec<u64> = settings.accounts.iter().map(|account| account.id).collect();
+        assert_eq!(ids, [1, 2, 3, 4, 6]);
+        assert!(!settings.stashed_accounts.contains_key(&5));
+    }
+
+    #[test]
+    fn forgetting_the_active_account_drops_its_settings() {
+        let mut settings = Settings::default();
+        settings.remember_account(account(10));
+        settings.remember_account(account(20));
+        settings.activate_account(20);
+        settings.recent_emojis = vec!["smile".into()];
+        settings.activate_account(10);
+        settings.last_channel = channel(1, 2);
+
+        settings.forget_account(20);
+        assert!(!settings.stashed_accounts.contains_key(&20));
+        assert_eq!(settings.active_account, Some(10));
+
+        settings.forget_account(10);
+        assert_eq!(settings.active_account, None);
+        assert!(settings.last_channel.is_none());
+        assert!(settings.accounts.is_empty());
+    }
+
+    #[test]
+    fn invalid_accounts_round_trip_through_json() {
+        let mut settings = Settings::default();
+        settings.remember_account(account(10));
+        settings.set_account_invalid(10, true);
+        settings.activate_account(10);
+        settings.activate_account(20);
+        settings.recent_emojis = vec!["wave".into()];
+        settings.activate_account(10);
+        let json = serde_json::to_value(&settings).unwrap();
+        let restored: Settings = serde_json::from_value(json).unwrap();
+        assert!(restored.accounts[0].invalid);
+        assert_eq!(restored.active_account, Some(10));
+        assert_eq!(
+            restored
+                .stashed_accounts
+                .get(&20)
+                .map(|scoped| scoped.recent_emojis.clone()),
+            Some(vec!["wave".to_owned()])
+        );
     }
 
     #[test]

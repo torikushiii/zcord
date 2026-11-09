@@ -41,26 +41,50 @@ impl DiscordApp {
                     .await
                     .ok()?
             });
-            cx.background_executor()
-                .spawn(async move {
-                    let icon = avatar.await.ok().flatten();
-                    let icon = icon.and_then(|path| crate::notify::toast_icon(&path));
-                    crate::notify::show(
-                        &alert.title,
-                        &alert.body,
-                        icon.as_deref(),
-                        alert.channel_id,
-                        alert.message_id,
-                    );
-                })
-                .detach();
+            let activation = crate::notify::Activation {
+                user_id: self.store.current_user_id,
+                channel_id: alert.channel_id,
+                message_id: alert.message_id,
+            };
+            let retired = self.accounts.retired();
+            cx.spawn(async move |this, cx| {
+                let icon = avatar.await.ok().flatten();
+                let icon = match icon {
+                    Some(path) => {
+                        cx.background_executor()
+                            .spawn(async move { crate::notify::toast_icon(&path) })
+                            .await
+                    }
+                    None => None,
+                };
+                // The avatar wait can outlast an account switch; the old account's toast must not appear.
+                let current = this
+                    .read_with(cx, |app, _| {
+                        app.live && app.store.current_user_id == activation.user_id
+                    })
+                    .unwrap_or(false);
+                if current {
+                    cx.background_executor()
+                        .spawn(async move {
+                            if !retired.get() {
+                                crate::notify::show(
+                                    &alert.title,
+                                    &alert.body,
+                                    icon.as_deref(),
+                                    activation,
+                                );
+                            }
+                        })
+                        .detach();
+                }
+            })
+            .detach();
         }
     }
 
     pub(super) fn open_notification(
         &mut self,
-        channel_id: u64,
-        message_id: u64,
+        activation: crate::notify::Activation,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -68,6 +92,15 @@ impl DiscordApp {
         crate::tray::show(window);
         #[cfg(not(windows))]
         window.activate_window();
-        self.open_message(None, channel_id, message_id, window, cx);
+        if activation.user_id != self.store.current_user_id {
+            return;
+        }
+        self.open_message(
+            None,
+            activation.channel_id,
+            activation.message_id,
+            window,
+            cx,
+        );
     }
 }

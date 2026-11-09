@@ -6,6 +6,7 @@ use std::{
 
 const SERVICE: &str = "zcord";
 const LEGACY_SERVICE: &str = "discord-client";
+const LEGACY_USER: &str = "token";
 const TIMEOUT: Duration = Duration::from_secs(5);
 
 type Work = Box<dyn FnOnce() + Send>;
@@ -39,18 +40,22 @@ impl From<keyring::Error> for CredentialError {
     }
 }
 
-fn entry(service: &str) -> keyring::Result<keyring::Entry> {
+fn entry(service: &str, user: &str) -> keyring::Result<keyring::Entry> {
     #[cfg(target_os = "linux")]
     {
         // The 3.6.3 default builder bypasses keyutils even with the persistent feature.
         let credential =
             keyring::keyutils_persistent::KeyutilsPersistentCredential::new_with_target(
-                None, service, "token",
+                None, service, user,
             )?;
         Ok(keyring::Entry::new_with_credential(Box::new(credential)))
     }
     #[cfg(not(target_os = "linux"))]
-    keyring::Entry::new(service, "token")
+    keyring::Entry::new(service, user)
+}
+
+fn account_entry(user_id: u64) -> keyring::Result<keyring::Entry> {
+    entry(SERVICE, &user_id.to_string())
 }
 
 // Keep reads, migration and mutations in order, including work that outlives its timeout.
@@ -80,8 +85,10 @@ fn enqueue<T: Send + 'static>(
     Ok(receiver)
 }
 
-pub fn load() -> Result<Option<String>, CredentialError> {
-    let result = enqueue(load_now).map_err(|_| CredentialError::Unavailable)?;
+fn wait<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, CredentialError> + Send + 'static,
+) -> Result<T, CredentialError> {
+    let result = enqueue(work).map_err(|_| CredentialError::Unavailable)?;
     match result.recv_timeout(TIMEOUT) {
         Ok(result) => result,
         Err(mpsc::RecvTimeoutError::Timeout) => Err(CredentialError::TimedOut),
@@ -89,40 +96,42 @@ pub fn load() -> Result<Option<String>, CredentialError> {
     }
 }
 
-fn load_now() -> Result<Option<String>, CredentialError> {
-    match entry(SERVICE).and_then(|entry| entry.get_password()) {
+fn read(entry: keyring::Result<keyring::Entry>) -> Result<Option<String>, CredentialError> {
+    match entry.and_then(|entry| entry.get_password()) {
         Ok(token) => Ok(Some(token)),
-        Err(keyring::Error::NoEntry) => migrate_legacy(),
+        Err(keyring::Error::NoEntry) => Ok(None),
         Err(error) => Err(error.into()),
     }
 }
 
-fn migrate_legacy() -> Result<Option<String>, CredentialError> {
-    let legacy = entry(LEGACY_SERVICE)?;
-    let token = match legacy.get_password() {
-        Ok(token) => token,
-        Err(keyring::Error::NoEntry) => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    if save_now(&token).is_ok() {
-        if let Err(error) = legacy.delete_credential()
-            && !matches!(error, keyring::Error::NoEntry)
-        {
-            log::warn!("OS credential store could not clear legacy credential");
-        }
-    } else {
-        log::warn!("OS credential store could not migrate legacy credential");
-    }
-    Ok(Some(token))
+pub fn load(user_id: u64) -> Result<Option<String>, CredentialError> {
+    wait(move || read(account_entry(user_id)))
 }
 
-pub fn save(token: &str) -> anyhow::Result<()> {
+pub fn load_legacy() -> Result<Option<String>, CredentialError> {
+    wait(|| match read(entry(SERVICE, LEGACY_USER))? {
+        Some(token) => Ok(Some(token)),
+        None => read(entry(LEGACY_SERVICE, LEGACY_USER)),
+    })
+}
+
+pub fn save(user_id: u64, token: &str) -> anyhow::Result<()> {
     let token = token.to_owned();
-    queue_write("save", move || save_now(&token))
+    queue_write("save", move || {
+        account_entry(user_id)?.set_password(&token)?;
+        clear_legacy_now()
+    })
 }
 
-pub fn clear() -> anyhow::Result<()> {
-    queue_write("clear", clear_now)
+pub fn clear_legacy() -> anyhow::Result<()> {
+    queue_write("clear", clear_legacy_now)
+}
+
+pub fn clear(user_id: u64) -> anyhow::Result<()> {
+    queue_write("clear", move || {
+        delete(account_entry(user_id))?;
+        clear_legacy_now()
+    })
 }
 
 fn queue_write(
@@ -137,16 +146,18 @@ fn queue_write(
     Ok(())
 }
 
-fn save_now(token: &str) -> keyring::Result<()> {
-    entry(SERVICE)?.set_password(token)
+fn delete(entry: keyring::Result<keyring::Entry>) -> keyring::Result<()> {
+    match entry.and_then(|entry| entry.delete_credential()) {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
-fn clear_now() -> keyring::Result<()> {
+fn clear_legacy_now() -> keyring::Result<()> {
     let mut result = Ok(());
     for service in [SERVICE, LEGACY_SERVICE] {
-        match entry(service).and_then(|entry| entry.delete_credential()) {
-            Ok(()) | Err(keyring::Error::NoEntry) => {}
-            Err(error) => result = Err(error),
+        if let Err(error) = delete(entry(service, LEGACY_USER)) {
+            result = Err(error);
         }
     }
     result

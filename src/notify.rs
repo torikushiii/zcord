@@ -9,19 +9,26 @@ mod sound;
 #[cfg(windows)]
 mod toast;
 
-static ACTIVATION_SENDER: OnceLock<UnboundedSender<(u64, u64)>> = OnceLock::new();
-static ACTIVATION_RECEIVER: Mutex<Option<UnboundedReceiver<(u64, u64)>>> = Mutex::new(None);
+static ACTIVATION_SENDER: OnceLock<UnboundedSender<Activation>> = OnceLock::new();
+static ACTIVATION_RECEIVER: Mutex<Option<UnboundedReceiver<Activation>>> = Mutex::new(None);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Activation {
+    pub user_id: u64,
+    pub channel_id: u64,
+    pub message_id: u64,
+}
 
 pub fn init() {
     #[cfg(windows)]
     toast::init();
 }
 
-pub fn show(title: &str, body: &str, icon: Option<&Path>, channel_id: u64, message_id: u64) {
+pub fn show(title: &str, body: &str, icon: Option<&Path>, activation: Activation) {
     #[cfg(windows)]
-    toast::show(title, body, icon, channel_id, message_id);
+    toast::show(title, body, icon, activation);
     #[cfg(not(windows))]
-    let _ = (title, body, icon, channel_id, message_id);
+    let _ = (title, body, icon, activation);
 }
 
 pub fn toast_icon(cached: &Path) -> Option<PathBuf> {
@@ -41,7 +48,7 @@ pub fn play_message_sound(volume: f32) {
     sound::play(volume);
 }
 
-pub fn activations() -> UnboundedReceiver<(u64, u64)> {
+pub fn activations() -> UnboundedReceiver<Activation> {
     activation_sender();
     let receiver = ACTIVATION_RECEIVER
         .lock()
@@ -54,7 +61,7 @@ pub fn activations() -> UnboundedReceiver<(u64, u64)> {
     })
 }
 
-pub(crate) fn activation_sender() -> &'static UnboundedSender<(u64, u64)> {
+pub(crate) fn activation_sender() -> &'static UnboundedSender<Activation> {
     ACTIVATION_SENDER.get_or_init(|| {
         let (sender, receiver) = unbounded_channel();
         *ACTIVATION_RECEIVER
@@ -84,9 +91,14 @@ mod tests {
 
     #[test]
     fn activations_are_handed_out_once() {
-        activation_sender().send((7, 9)).unwrap();
+        let activation = Activation {
+            user_id: 5,
+            channel_id: 7,
+            message_id: 9,
+        };
+        activation_sender().send(activation).unwrap();
         let mut first = activations();
-        assert_eq!(first.try_recv().unwrap(), (7, 9));
+        assert_eq!(first.try_recv().unwrap(), activation);
         let mut second = activations();
         assert!(second.try_recv().is_err());
     }

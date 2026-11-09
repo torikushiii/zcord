@@ -243,9 +243,17 @@ impl DiscordApp {
             if crate::settings::notifications()
                 && !crate::settings::streamer().mutes_notifications()
             {
+                let activation = crate::notify::Activation {
+                    user_id: self.store.current_user_id,
+                    channel_id,
+                    message_id,
+                };
+                let retired = self.accounts.retired();
                 cx.background_executor()
                     .spawn(async move {
-                        crate::notify::show("Reminder", &body, None, channel_id, message_id);
+                        if !retired.get() {
+                            crate::notify::show("Reminder", &body, None, activation);
+                        }
                     })
                     .detach();
             }

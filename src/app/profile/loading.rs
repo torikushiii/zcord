@@ -33,6 +33,7 @@ impl DiscordApp {
         panel: AccountPanelBounds,
         cx: &mut Context<Self>,
     ) {
+        self.validate_accounts(cx);
         self.open_profile_at(
             user_id,
             position,
@@ -313,6 +314,7 @@ impl ProfileCard {
             more_menu_open: false,
             hovered_action: None,
             status_menu: popout::status::State::default(),
+            switch_menu: popout::switch_menu::State::default(),
             scope_snapshots: HashMap::new(),
             origin,
             position,

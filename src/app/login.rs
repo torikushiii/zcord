@@ -6,7 +6,13 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_tokio::Tokio;
 
 use crate::{
-    app::{DiscordApp, Screen},
+    app::{
+        DiscordApp, Screen,
+        accounts::{
+            Accounts, ListPlace, account_list, add_account_link,
+            modal::{self, Dialog},
+        },
+    },
     discord::remote_auth::{self, QrMatrix, RemoteAuth, RemoteAuthEvent, RemoteUser},
     media::images,
     store,
@@ -24,8 +30,15 @@ pub struct LoginForm {
     pub token: Entity<InputState>,
     pub error: Option<SharedString>,
     pub busy: bool,
-    qr: QrLogin,
+    pub(crate) mode: LoginMode,
+    qr: Option<QrLogin>,
     _submit_on_enter: Subscription,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LoginMode {
+    Choose,
+    Token { back: bool },
 }
 
 enum QrState {
@@ -65,6 +78,34 @@ impl QrLogin {
 
 impl LoginForm {
     pub fn new(window: &mut Window, cx: &mut Context<DiscordApp>) -> Self {
+        let mode = if crate::settings::accounts(cx).is_empty() {
+            LoginMode::Token { back: false }
+        } else {
+            LoginMode::Choose
+        };
+        Self::with_mode(mode, window, cx)
+    }
+
+    pub fn with_error(
+        error: Option<SharedString>,
+        window: &mut Window,
+        cx: &mut Context<DiscordApp>,
+    ) -> Self {
+        let mut form = match error {
+            Some(_) if !crate::settings::accounts(cx).is_empty() => {
+                Self::with_mode(LoginMode::Token { back: true }, window, cx)
+            }
+            _ => Self::new(window, cx),
+        };
+        form.error = error;
+        form
+    }
+
+    pub(crate) fn with_mode(
+        mode: LoginMode,
+        window: &mut Window,
+        cx: &mut Context<DiscordApp>,
+    ) -> Self {
         let token = cx.new(|cx| {
             InputState::new(window, cx)
                 .masked(true)
@@ -75,25 +116,63 @@ impl LoginForm {
                 app.submit_login(window, cx);
             }
         });
-        token.update(cx, |input, cx| input.focus(window, cx));
-        Self {
+        let mut form = Self {
             token,
             error: None,
             busy: false,
-            qr: QrLogin::start(window, cx),
+            mode: LoginMode::Choose,
+            qr: None,
             _submit_on_enter: submit,
+        };
+        form.set_mode(mode, window, cx);
+        form
+    }
+
+    pub(crate) fn set_mode(
+        &mut self,
+        mode: LoginMode,
+        window: &mut Window,
+        cx: &mut Context<DiscordApp>,
+    ) {
+        self.mode = mode;
+        self.busy = false;
+        match mode {
+            LoginMode::Choose => {
+                self.qr = None;
+                self.error = None;
+            }
+            LoginMode::Token { .. } => {
+                if self.qr.is_none() {
+                    self.qr = Some(QrLogin::start(window, cx));
+                }
+                self.token.update(cx, |input, cx| input.focus(window, cx));
+            }
         }
     }
 }
 
 impl DiscordApp {
+    pub(crate) fn login_form(&mut self) -> Option<&mut LoginForm> {
+        if let Some(form) = self.accounts.adding.as_mut() {
+            return Some(form);
+        }
+        match &mut self.screen {
+            Screen::Login(form) => Some(form),
+            _ => None,
+        }
+    }
+
     fn handle_remote_auth(
         &mut self,
         event: RemoteAuthEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Screen::Login(form) = &mut self.screen else {
+        let adding = self.accounts.adding.is_some();
+        let Some(form) = self.login_form() else {
+            return;
+        };
+        let Some(qr) = form.qr.as_mut() else {
             return;
         };
         let state = match event {
@@ -108,22 +187,73 @@ impl DiscordApp {
             }
             RemoteAuthEvent::Failed(message) => QrState::Failed(message.into()),
             RemoteAuthEvent::Token(token) => {
-                form.qr._auth = None;
-                self.login_with_token(token.into_inner(), window, cx);
+                qr._auth = None;
+                let scanned = match &qr.state {
+                    QrState::Scanned(user) => Some(user.clone()),
+                    _ => None,
+                };
+                if adding {
+                    form.busy = true;
+                    form.error = None;
+                    let form_id = form.token.entity_id();
+                    match scanned {
+                        Some(user) => {
+                            let account = crate::settings::SavedAccount {
+                                id: user.id,
+                                username: user.username,
+                                discriminator: Some(user.discriminator),
+                                avatar: user.avatar,
+                                invalid: false,
+                            };
+                            self.add_account(form_id, account, token.into_inner(), window, cx);
+                        }
+                        None => self.check_added_token(token.into_inner(), window, cx),
+                    }
+                } else {
+                    self.login_with_token(token.into_inner(), window, cx);
+                }
                 return;
             }
         };
-        form.qr.state = state;
+        qr.state = state;
         cx.notify();
     }
 
     fn restart_qr_login(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !matches!(self.screen, Screen::Login(_)) {
+        if !self.login_form().is_some_and(|form| form.qr.is_some()) {
             return;
         }
         let qr = QrLogin::start(window, cx);
+        if let Some(form) = self.login_form() {
+            form.qr = Some(qr);
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn show_token_form(
+        &mut self,
+        back: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Screen::Login(form) = &mut self.screen {
-            form.qr = qr;
+            form.set_mode(LoginMode::Token { back }, window, cx);
+            cx.notify();
+        }
+    }
+
+    fn login_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Screen::Login(form) = &mut self.screen else {
+            return;
+        };
+        if form.mode != (LoginMode::Token { back: true }) {
+            return;
+        }
+        if crate::settings::accounts(cx).is_empty() {
+            form.set_mode(LoginMode::Token { back: false }, window, cx);
+        } else {
+            form.set_mode(LoginMode::Choose, window, cx);
+            self.validate_accounts(cx);
         }
         cx.notify();
     }
@@ -131,40 +261,121 @@ impl DiscordApp {
 
 pub fn render(
     form: &LoginForm,
+    accounts: &Accounts,
     window: &Window,
     cx: &mut Context<DiscordApp>,
 ) -> impl IntoElement + use<> {
     let viewport = window.viewport_size().width / window.rem_size() * theme::BASE_FONT_SIZE;
-    let show_qr = viewport >= CARD_WIDTH + 48.;
+    let qr = form.qr.as_ref().filter(|_| viewport >= CARD_WIDTH + 48.);
+    let card = div()
+        .flex()
+        .items_center()
+        .gap(rpx(64.))
+        .w(rpx(if qr.is_some() { CARD_WIDTH } else { FORM_WIDTH }))
+        .max_w_full()
+        .rounded(rpx(8.))
+        .bg(rgb(theme::elevated()))
+        .border_1()
+        .border_color(rgba(theme::border()));
+    let card = match form.mode {
+        LoginMode::Choose => card.child(chooser(form, accounts, cx)),
+        LoginMode::Token { back } => card.p(rpx(32.)).child(token_form(form, back, cx)).children(
+            qr.map(|qr| qr_panel(&qr.state, cx.entity().downgrade(), theme::muted(), cx)),
+        ),
+    };
     div()
         .flex()
         .flex_1()
         .min_h_0()
         .items_center()
         .justify_center()
+        .px(rpx(16.))
         .bg(rgb(theme::bg()))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(rpx(64.))
-                .w(rpx(if show_qr { CARD_WIDTH } else { FORM_WIDTH }))
-                .p(rpx(32.))
-                .rounded(rpx(8.))
-                .bg(rgb(theme::elevated()))
-                .border_1()
-                .border_color(rgba(theme::border()))
-                .child(token_form(form, cx))
-                .when(show_qr, |card| card.child(qr_panel(&form.qr.state, cx))),
-        )
+        .child(card)
 }
 
-fn token_form(form: &LoginForm, cx: &mut Context<DiscordApp>) -> Div {
+fn chooser(form: &LoginForm, accounts: &Accounts, cx: &mut Context<DiscordApp>) -> Div {
+    let saved = crate::settings::accounts(cx);
+    let full = saved.len() >= crate::settings::MAX_ACCOUNTS;
+    let list = account_list(
+        &saved,
+        accounts,
+        ListPlace::Chooser { busy: form.busy },
+        None,
+        cx.entity().downgrade(),
+        cx,
+    );
     div()
         .flex()
         .flex_col()
         .flex_1()
         .min_w_0()
+        .pt(rpx(24.))
+        .px(rpx(16.))
+        .pb(rpx(16.))
+        .child(
+            div()
+                .flex()
+                .justify_center()
+                .text_size(rpx(24.))
+                .line_height(rpx(30.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(theme::strong()))
+                .child("Choose an account"),
+        )
+        .child(
+            div()
+                .flex()
+                .justify_center()
+                .text_center()
+                .mt(rpx(8.))
+                .mb(rpx(24.))
+                .text_size(rpx(16.))
+                .line_height(rpx(20.))
+                .text_color(rgb(theme::muted()))
+                .child("Select an account to log in with or add a new one."),
+        )
+        .child(list)
+        .child(
+            div()
+                .flex()
+                .justify_center()
+                .mt(rpx(28.))
+                .mb(rpx(12.))
+                .child(add_account_link(
+                    "login-add-account",
+                    !full && !form.busy,
+                    cx.listener(|this, _, window, cx| this.show_token_form(true, window, cx)),
+                )),
+        )
+}
+
+fn token_form(form: &LoginForm, back: bool, cx: &mut Context<DiscordApp>) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w_0()
+        .when(back, |this| {
+            this.child(
+                div().flex().mb(rpx(12.)).child(
+                    div()
+                        .id("login-back")
+                        .flex()
+                        .items_center()
+                        .gap(rpx(6.))
+                        .cursor_pointer()
+                        .text_size(rpx(14.))
+                        .line_height(rpx(18.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(theme::muted()))
+                        .hover(|style| style.text_color(rgb(theme::strong())))
+                        .on_click(cx.listener(|this, _, window, cx| this.login_back(window, cx)))
+                        .child(theme::icon("arrow-left", 16., theme::muted()))
+                        .child("Back"),
+                ),
+            )
+        })
         .child(
             div()
                 .flex()
@@ -258,7 +469,18 @@ fn token_form(form: &LoginForm, cx: &mut Context<DiscordApp>) -> Div {
         )
 }
 
-fn qr_panel(state: &QrState, cx: &mut Context<DiscordApp>) -> Div {
+fn restart_qr(
+    entity: &WeakEntity<DiscordApp>,
+) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
+    let entity = entity.clone();
+    move |_, window, cx| {
+        entity
+            .update(cx, |app, cx| app.restart_qr_login(window, cx))
+            .ok();
+    }
+}
+
+fn qr_panel(state: &QrState, entity: WeakEntity<DiscordApp>, body_color: u32, cx: &App) -> Div {
     let (title, body): (SharedString, AnyElement) = match state {
         QrState::Scanned(user) => (
             "Check your phone!".into(),
@@ -282,9 +504,7 @@ fn qr_panel(state: &QrState, cx: &mut Context<DiscordApp>) -> Div {
                 .child(
                     link("qr-restart", "Not me, start over")
                         .mt(rpx(8.))
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.restart_qr_login(window, cx)),
-                        ),
+                        .on_click(restart_qr(&entity)),
                 )
                 .into_any_element(),
         ),
@@ -302,42 +522,46 @@ fn qr_panel(state: &QrState, cx: &mut Context<DiscordApp>) -> Div {
                             .mt(rpx(8.))
                             .on_click(move |_, _, cx| cx.open_url(&url)),
                     )
-                    .child(link("qr-captcha-restart", "Start over").mt(rpx(4.)).on_click(
-                        cx.listener(|this, _, window, cx| this.restart_qr_login(window, cx)),
-                    ))
+                    .child(
+                        link("qr-captcha-restart", "Start over")
+                            .mt(rpx(4.))
+                            .on_click(restart_qr(&entity)),
+                    )
                     .into_any_element(),
             )
         }
-        QrState::Failed(message) => {
-            (
-                "Log in with QR Code".into(),
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .child(message.clone())
-                    .child(link("qr-retry", "Try again").mt(rpx(8.)).on_click(
-                        cx.listener(|this, _, window, cx| this.restart_qr_login(window, cx)),
-                    ))
-                    .into_any_element(),
-            )
-        }
-        QrState::Loading | QrState::Code(_) => (
+        QrState::Failed(message) => (
             "Log in with QR Code".into(),
             div()
-                .child("Scan this with the ")
-                .child(
-                    div()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(theme::strong()))
-                        .child("Discord mobile app"),
-                )
-                .child(" to log in instantly.")
                 .flex()
-                .flex_wrap()
-                .justify_center()
+                .flex_col()
+                .items_center()
+                .child(message.clone())
+                .child(
+                    link("qr-retry", "Try again")
+                        .mt(rpx(8.))
+                        .on_click(restart_qr(&entity)),
+                )
                 .into_any_element(),
         ),
+        QrState::Loading | QrState::Code(_) => {
+            const TEXT: &str = "Scan this with the Discord mobile app to log in instantly.";
+            const BOLD: &str = "Discord mobile app";
+            let start = TEXT.find(BOLD).unwrap_or_default();
+            (
+                "Log in with QR Code".into(),
+                StyledText::new(TEXT)
+                    .with_highlights([(
+                        start..start + BOLD.len(),
+                        HighlightStyle {
+                            font_weight: Some(FontWeight::SEMIBOLD),
+                            color: Some(rgb(theme::strong()).into()),
+                            ..Default::default()
+                        },
+                    )])
+                    .into_any_element(),
+            )
+        }
     };
     div()
         .flex()
@@ -351,6 +575,7 @@ fn qr_panel(state: &QrState, cx: &mut Context<DiscordApp>) -> Div {
                 .mt(rpx(32.))
                 .mb_2()
                 .text_size(rpx(24.))
+                .line_height(rpx(32.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(theme::strong()))
                 .child(title),
@@ -361,9 +586,130 @@ fn qr_panel(state: &QrState, cx: &mut Context<DiscordApp>) -> Div {
                 .text_size(rpx(16.))
                 .line_height(rpx(20.))
                 .text_center()
-                .text_color(rgb(theme::muted()))
+                .text_color(rgb(body_color))
                 .child(body),
         )
+}
+
+pub(crate) fn add_account_dialog(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
+    let form = app.accounts.adding.as_ref()?;
+    let entity = app.entity.clone();
+    let field = div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w_0()
+        .child(
+            div()
+                .flex()
+                .gap(rpx(4.))
+                .mb(rpx(8.))
+                .text_size(rpx(16.))
+                .line_height(rpx(20.))
+                .child(
+                    div()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(theme::strong()))
+                        .child("Token"),
+                )
+                .child(div().text_color(rgb(theme::RED)).child("*")),
+        )
+        .child(
+            div()
+                .px(rpx(10.))
+                .rounded(rpx(8.))
+                .bg(rgba(theme::recessed()))
+                .border_1()
+                .border_color(if form.error.is_some() {
+                    rgb(theme::RED)
+                } else {
+                    rgba(theme::border())
+                })
+                .child(
+                    Input::new(&form.token)
+                        .appearance(false)
+                        .mask_toggle()
+                        .h(rpx(42.))
+                        .px_0()
+                        .text_size(rpx(16.))
+                        .line_height(rpx(22.)),
+                ),
+        )
+        .children(form.error.clone().map(|error| {
+            div()
+                .mt(rpx(8.))
+                .text_size(rpx(14.))
+                .line_height(rpx(18.))
+                .text_color(rgb(theme::RED))
+                .child(error)
+        }))
+        .child(
+            div()
+                .mt(rpx(8.))
+                .text_size(rpx(12.))
+                .line_height(rpx(16.))
+                .text_color(rgb(theme::faint()))
+                .child("Stored in your system's credential manager and sent only to Discord."),
+        );
+    let body = div()
+        .flex()
+        .items_center()
+        .gap(rpx(32.))
+        .child(field)
+        .children(
+            form.qr
+                .as_ref()
+                .map(|qr| qr_panel(&qr.state, entity.clone(), theme::text(), cx)),
+        )
+        .into_any_element();
+    let back = entity.clone();
+    let submit = entity.clone();
+    let close = entity;
+    let footer = div()
+        .flex()
+        .items_center()
+        .w_full()
+        .child(
+            modal::text_button("add-account-back", "Back").on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                back.update(cx, |app, cx| app.add_account_back(window, cx))
+                    .ok();
+            }),
+        )
+        .child(div().flex_1())
+        .child(
+            modal::button("add-account-continue", "Continue", true, !form.busy).when(
+                !form.busy,
+                |this| {
+                    this.on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        submit
+                            .update(cx, |app, cx| app.submit_login(window, cx))
+                            .ok();
+                    })
+                },
+            ),
+        )
+        .into_any_element();
+    Some(modal::dialog(
+        Dialog {
+            id: "add-account",
+            width: modal::LARGE,
+            title: "Add Account",
+            subtitle: Some(
+                "Logging in to another account will let you easily switch between accounts on this device.",
+            ),
+            body,
+            footer,
+        },
+        move |window, cx| {
+            close
+                .update(cx, |app, cx| {
+                    app.close_add_account(window, cx);
+                })
+                .ok();
+        },
+    ))
 }
 
 fn qr_visual(state: &QrState, cx: &App) -> AnyElement {
