@@ -53,7 +53,10 @@ pub(super) fn row_content(
                             },
                         ))
                         .child(div().flex_1())
-                        .child(theme::icon("plus", 16., theme::muted())),
+                        .children(
+                            app.filter(|(app, _)| app.store.can_manage_channel(category.id))
+                                .map(|_| create_channel_action(category.id)),
+                        ),
                 )
                 .into_any_element(),
             None => div().into_any_element(),
@@ -382,6 +385,16 @@ fn row_actions(app: &DiscordApp, channel: &Channel) -> Option<Div> {
             .children(invite)
             .children(settings),
     )
+}
+
+fn create_channel_action(category_id: u64) -> Stateful<Div> {
+    row_action(("category-create-channel", category_id), "plus")
+        .child(theme::hover_tooltip_detail(
+            ("category-create-channel-tip", category_id),
+            "Create Channel",
+            "Create channels from Discord for now",
+        ))
+        .on_click(|_, _, cx| cx.stop_propagation())
 }
 
 fn favorite_action(app: &DiscordApp, id: u64) -> Stateful<Div> {
