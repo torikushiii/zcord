@@ -2,6 +2,19 @@
 
 ## Unversioned
 
+## 0.9.0
+
+- Major: Added account switching. Switch between up to five saved accounts from Switch Accounts in your profile popout, and add or log out of accounts from the new Manage Accounts and Add Account dialogs. Each account keeps its own last channel, recent emoji, collapsed categories and saved login.
+- Major: Added custom status editing. Hover your status bubble to edit or clear your status, or open Set your status to pick an emoji, text and when it clears, with a live preview of your profile. Custom emoji stay locked there without Nitro.
+- Major: Added the boost goal, server guide, events and channels & roles rows to the top of the channel list.
+- Minor: The Online friends list now unfolds from four stacks when it fills, and friends coming online or going offline slide in and out of the list.
+- Minor: Friend rows now have a right-click menu with Profile, Message, Start a Call, friend nicknames, Remove Friend, Accept or Cancel Friend Request, Ignore, Block and Copy User ID.
+- Minor: Reworked the direct message right-click menu to match Discord's, with Mark As Read, a Mute submenu and friend actions.
+- Minor: Profile effects now fade back while you hover a profile card.
+- Minor: The connecting screen now shows a breathing logo instead of a spinner.
+- Bugfix: Fixed the create channel button showing for members who can't manage channels.
+- Bugfix: Fixed server boost goals that ignored a server's experiment overrides.
+
 ## 0.8.0
 
 - Major: Rebuilt the Appearance settings: Light, Ash, Dark and Onyx themes, Same as Device Theme, Nitro color themes with a custom theme editor, and options to sync your theme across devices and apply it to other people's profiles.
