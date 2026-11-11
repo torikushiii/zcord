@@ -64,20 +64,26 @@ fn reactor_avatars(
     const OVERLAP: f32 = 5.4;
     let users = app.known_reactors(message_id, reaction);
     let rest = (reaction.count as usize).saturating_sub(users.len());
+    let chip = rest > 0 && !users.is_empty();
     div()
         .flex()
+        .flex_none()
         .items_center()
-        .ml(rpx(7.))
-        .mr(rpx(5.))
+        .ml(rpx(6.))
+        .mr(rpx(4.))
         .children(users.iter().enumerate().map(|(index, user)| {
             let spec = crate::store::avatar_spec(
                 user.id,
                 user.avatar.as_deref(),
                 user.discriminator.as_deref(),
             );
+            let covered = chip || index + 1 < users.len();
+            // Negative margins make the pill measure short, so an overlapped avatar
+            // gets a narrower slot and spills into the next one instead.
             div()
                 .flex_none()
-                .when(index > 0, |this| this.ml(rpx(-OVERLAP)))
+                .h(rpx(AVATAR))
+                .w(rpx(if covered { AVATAR - OVERLAP } else { AVATAR }))
                 .child(theme::spec_avatar(
                     &spec,
                     user.id,
@@ -86,13 +92,12 @@ fn reactor_avatars(
                     cx,
                 ))
         }))
-        .when(rest > 0 && !users.is_empty(), |this| {
+        .when(chip, |this| {
             this.child(
                 div()
                     .flex()
                     .flex_none()
                     .items_center()
-                    .ml(rpx(-OVERLAP))
                     .h(rpx(AVATAR))
                     .px(rpx(7.2))
                     .rounded_full()
