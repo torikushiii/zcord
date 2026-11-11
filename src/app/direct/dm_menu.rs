@@ -750,6 +750,7 @@ pub(crate) fn dialog(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
             .on_click(move |_, _, cx| {
                 backdrop.update(cx, |app, cx| app.close_dm_dialog(cx)).ok();
             })
+            .child(theme::selection_guard())
             .child(
                 div()
                     .id("dm-dialog")

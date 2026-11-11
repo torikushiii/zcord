@@ -382,6 +382,7 @@ pub(crate) fn remove_dialog(app: &DiscordApp) -> Option<AnyElement> {
                     .update(cx, |app, cx| app.cancel_remove_friend(cx))
                     .ok();
             })
+            .child(theme::selection_guard())
             .child(
                 div()
                     .id("friend-remove-dialog")

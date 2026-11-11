@@ -723,6 +723,7 @@ pub(super) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
             .with_animation(("lightbox-backdrop", 0u64), animation, |this, delta| {
                 this.bg(rgba(theme::LIGHTBOX_SCRIM).opacity(delta))
             })
+            .child(theme::selection_guard())
             .child(picture)
             .when(paged, |this| {
                 this.child(gallery_button(app, false))

@@ -170,6 +170,24 @@ pub trait WithoutTextSelection: InteractiveElement + Sized {
 
 impl<E: InteractiveElement> WithoutTextSelection for E {}
 
+/// A selection begun on the press that closes a dialog lands on the text beneath it.
+pub fn selection_guard() -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        |_, _, window, _| {
+            // Registered after gpui-component's own capture listener, which clears the flag at
+            // the start of each press, so this runs later and the suppression holds.
+            window.on_mouse_event(|_: &MouseDownEvent, phase, _, cx| {
+                if phase == DispatchPhase::Capture {
+                    gpui_base::GlobalState::suppress_text_selection(cx);
+                }
+            });
+        },
+    )
+    .absolute()
+    .size_0()
+}
+
 pub fn icon_button(id: impl Into<ElementId>, name: &str, size: f32, color: u32) -> Stateful<Div> {
     icon_button_with_hover(id, name, size, color, rgba(hover()).into())
 }

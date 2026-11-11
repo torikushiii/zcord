@@ -313,6 +313,7 @@ pub(crate) fn render(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                     .update(cx, |app, cx| app.close_reactions_dialog(cx))
                     .ok();
             })
+            .child(theme::selection_guard())
             .child(
                 div()
                     .id("reactions-dialog")

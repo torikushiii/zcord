@@ -31,6 +31,7 @@ pub(crate) fn dialog(
         .bg(rgba(theme::SCRIM))
         .without_text_selection()
         .on_click(move |_, window, cx| dismiss(window, cx))
+        .child(theme::selection_guard())
         .child(
             div()
                 .id(dialog.id)

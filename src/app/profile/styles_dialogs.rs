@@ -303,6 +303,7 @@ fn shell(
         .with_animation((key, opens), animation.clone(), move |this, delta| {
             this.bg(rgba(theme::SCRIM).opacity(scrim_progress(delta)))
         })
+        .child(theme::selection_guard())
         .child(
             div()
                 .id("style-dialog")

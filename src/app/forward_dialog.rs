@@ -375,6 +375,7 @@ pub(super) fn render(app: &DiscordApp) -> Option<AnyElement> {
                     .update(cx, |app, cx| app.close_forward_dialog(cx))
                     .ok();
             })
+            .child(theme::selection_guard())
             .child(
                 div()
                     .id("forward-dialog")

@@ -519,6 +519,7 @@ pub(crate) fn schedule_edit_dialog(app: &DiscordApp) -> Option<AnyElement> {
                     .update(cx, |app, cx| app.close_schedule_edit(cx))
                     .ok();
             })
+            .child(theme::selection_guard())
             .child(
                 div()
                     .id("schedule-edit")

@@ -373,6 +373,7 @@ pub(in crate::app) fn create_thread_dialog(app: &DiscordApp) -> Option<AnyElemen
                     .update(cx, |app, cx| app.close_create_thread(cx))
                     .ok();
             })
+            .child(theme::selection_guard())
             .child(
                 div()
                     .id("create-thread")

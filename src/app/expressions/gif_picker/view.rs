@@ -155,6 +155,7 @@ pub(crate) fn render(app: &DiscordApp, window: &Window, cx: &App) -> Option<AnyE
                     .justify_center()
                     .when(!closing, |this| this.occlude())
                     .bg(rgba(theme::SCRIM).opacity(if closing { 0. } else { 1. }))
+                    .child(theme::selection_guard())
                     .child(panel),
             )
             .with_priority(2)

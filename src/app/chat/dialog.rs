@@ -67,6 +67,7 @@ pub(in crate::app) fn delete_dialog(app: &DiscordApp, cx: &App) -> Option<AnyEle
             .with_animation((key, message_id), animation.clone(), move |this, delta| {
                 this.bg(rgba(theme::SCRIM).opacity(progress(delta)))
             })
+            .child(theme::selection_guard())
             .child(
                 div()
                     .id("delete-dialog")

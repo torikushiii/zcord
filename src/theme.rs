@@ -9,7 +9,7 @@ pub use avatar::{
 };
 pub use elements::{
     WithoutTextSelection, app_tag, badge, guild_tag, icon_button, icon_button_with_hover,
-    media_loading, spinner,
+    media_loading, selection_guard, spinner,
 };
 pub use tooltip::{
     hover_tooltip, hover_tooltip_below, hover_tooltip_body, hover_tooltip_detail, tooltip_above,

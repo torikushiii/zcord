@@ -770,6 +770,7 @@ pub(in crate::app) fn custom_reminder_dialog(app: &DiscordApp) -> Option<AnyElem
                     .update(cx, |app, cx| app.close_custom_reminder(cx))
                     .ok();
             })
+            .child(theme::selection_guard())
             .child(
                 div()
                     .id("custom-reminder")
