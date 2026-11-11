@@ -46,6 +46,7 @@ const BANNER_HEIGHT: f32 = WIDTH * 9. / 21.;
 const BANNER_ROW_HEIGHT: f32 = 133.;
 const BANNER_HOVER_FADE: Duration = Duration::from_millis(150);
 pub(crate) const FOLD: Duration = Duration::from_millis(200);
+const REVEAL_TRIES: u8 = 4;
 
 #[cfg(test)]
 mod tests;
@@ -150,6 +151,7 @@ pub(crate) struct Rows {
     unsaved: Option<u64>,
     selected_row: Option<usize>,
     reveal_pending: bool,
+    reveal_tries: u8,
     subtitle_hovered_once: bool,
     hovered_account_control: Option<AccountControl>,
 }
@@ -157,8 +159,7 @@ pub(crate) struct Rows {
 impl Rows {
     pub fn new() -> Self {
         Self {
-            // Every row is measured so a row far off screen can be scrolled to exactly.
-            state: ListState::new(0, ListAlignment::Top, px(200.)).measure_all(),
+            state: ListState::new(0, ListAlignment::Top, px(200.)),
             account_bounds: Rc::new(Cell::new(None)),
             rows: Vec::new(),
             guild_id: None,
@@ -172,6 +173,7 @@ impl Rows {
             unsaved: None,
             selected_row: None,
             reveal_pending: false,
+            reveal_tries: 0,
             subtitle_hovered_once: false,
             hovered_account_control: None,
         }
@@ -340,10 +342,10 @@ impl Rows {
                     self.reveal_pending = false;
                     kept = selected;
                 }
-                None => self.reveal_pending = true,
+                None => self.request_reveal(),
             }
         } else if self.kept != selected_channel_id {
-            self.reveal_pending = true;
+            self.request_reveal();
         }
         if !switched && self.rows != rows {
             let prefix = self
@@ -414,14 +416,48 @@ impl Rows {
         self.state.set_scroll_handler(handler);
     }
 
+    fn request_reveal(&mut self) {
+        self.reveal_pending = true;
+        self.reveal_tries = 0;
+    }
+
+    /// Unmeasured rows count as zero height, so a row far below the viewport is first brought
+    /// near it and aligned on a later frame, once the rows before it have been measured.
     pub(crate) fn reveal_selected(&mut self) {
-        if !self.reveal_pending || self.state.viewport_bounds().size.height <= px(0.) {
+        let viewport = self.state.viewport_bounds();
+        if !self.reveal_pending || viewport.size.height <= px(0.) {
             return;
         }
-        self.reveal_pending = false;
-        if let Some(ix) = self.selected_row {
-            self.reveal_if_hidden(ix);
+        let Some(ix) = self
+            .selected_row
+            .filter(|_| self.reveal_tries < REVEAL_TRIES)
+        else {
+            self.reveal_pending = false;
+            return;
+        };
+        self.reveal_tries += 1;
+        let item = self.state.bounds_for_item(ix);
+        if item
+            .is_some_and(|item| item.top() >= viewport.top() && item.bottom() <= viewport.bottom())
+        {
+            self.reveal_pending = false;
+            return;
         }
+        let top = self.state.logical_scroll_top();
+        if ix <= top.item_ix || item.is_some() {
+            self.state.scroll_to_reveal_item(ix);
+            return;
+        }
+        let row_height = self
+            .state
+            .bounds_for_item(top.item_ix)
+            .map_or(px(34.), |row| row.size.height)
+            .max(px(1.));
+        let fit = (viewport.size.height / row_height) as usize;
+        self.state.scroll_to(ListOffset {
+            item_ix: ix.saturating_sub(fit.saturating_sub(1)),
+            offset_in_item: px(0.),
+        });
     }
 
     /// GPUI's `scroll_to_reveal_item` re-anchors the scroll whenever the row's bottom-aligned
