@@ -203,8 +203,7 @@ impl DiscordApp {
         });
         clear_credentials(dropped);
         if changed {
-            self.channel_rows =
-                guilds::channel_list::Rows::with_collapsed(settings::get(cx).collapsed_categories);
+            self.channel_rows = guilds::channel_list::Rows::from_settings(&settings::get(cx));
         }
         self.accounts.expected = Some(user.id);
         self.accounts.busy = None;

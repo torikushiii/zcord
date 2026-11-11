@@ -1,5 +1,7 @@
 use super::*;
 
+const CHANNEL_SCROLL_SAVE_DELAY: Duration = Duration::from_millis(500);
+
 impl DiscordApp {
     pub(super) fn select_initial(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let saved = crate::settings::get(cx).last_channel;
@@ -241,7 +243,33 @@ impl DiscordApp {
         } else if unread_since.is_none() {
             self.restore_scroll();
         }
+        self.save_channel_list_scroll(cx);
         cx.notify();
+    }
+
+    pub(super) fn channel_list_scrolled(&mut self, cx: &mut Context<Self>) {
+        self.channel_rows.note_scrolled();
+        self.channel_scroll_save = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(CHANNEL_SCROLL_SAVE_DELAY)
+                .await;
+            this.update(cx, |app, cx| app.save_channel_list_scroll(cx))
+                .ok();
+        }));
+    }
+
+    fn save_channel_list_scroll(&mut self, cx: &mut Context<Self>) {
+        let Some((guild_id, saved)) = self.channel_rows.take_unsaved() else {
+            return;
+        };
+        crate::settings::update(cx, |settings| match saved {
+            Some(saved) => {
+                settings.channel_list_scroll.insert(guild_id, saved);
+            }
+            None => {
+                settings.channel_list_scroll.remove(&guild_id);
+            }
+        });
     }
 
     pub(crate) fn toggle_category(&mut self, id: u64, cx: &mut Context<Self>) {

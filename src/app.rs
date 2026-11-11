@@ -258,6 +258,7 @@ pub struct DiscordApp {
     typing_sent: Option<(u64, Instant)>,
     pub(crate) messages: ListState,
     pub(crate) channel_rows: guilds::channel_list::Rows,
+    channel_scroll_save: Option<Task<()>>,
     pub(crate) member_rows: ListState,
     member_layout: members::member_list::Layout,
     member_subscription: Option<(u64, u64, Vec<(u32, u32)>)>,
@@ -446,9 +447,8 @@ impl DiscordApp {
             typing_timer: None,
             typing_sent: None,
             messages,
-            channel_rows: guilds::channel_list::Rows::with_collapsed(
-                crate::settings::get(cx).collapsed_categories,
-            ),
+            channel_rows: guilds::channel_list::Rows::from_settings(&crate::settings::get(cx)),
+            channel_scroll_save: None,
             member_rows: ListState::new(0, ListAlignment::Top, px(400.)),
             member_layout: members::member_list::Layout::default(),
             member_subscription: None,
@@ -609,6 +609,15 @@ impl DiscordApp {
             app.refresh_activity_feed(false, cx);
         })
         .detach();
+        let weak = app.entity.clone();
+        app.channel_rows.set_scroll_handler(move |_, _, cx| {
+            // The list state is borrowed while this runs, so record the position afterwards.
+            let weak = weak.clone();
+            cx.defer(move |cx| {
+                weak.update(cx, |app, cx| app.channel_list_scrolled(cx))
+                    .ok();
+            });
+        });
         let weak = app.entity.clone();
         app.member_rows.set_scroll_handler(move |event, _, cx| {
             let top = event.visible_range.start;

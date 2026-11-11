@@ -34,6 +34,7 @@ use crate::{
     discord::{SelfStatus, StatusDuration},
     media::animated,
     media::images::{self, ImageSpec},
+    settings::{ListAnchor, SavedListScroll},
     store::{Channel, ChannelKind, Guild, Status, StatusEmoji, ThreadRow, User},
     text::emoji,
     theme::{self, WithoutTextSelection, rpx},
@@ -144,6 +145,11 @@ pub(crate) struct Rows {
     collapsed: HashSet<u64>,
     folds: HashMap<u64, Fold>,
     kept: u64,
+    anchors: Vec<ListAnchor>,
+    scroll_memory: HashMap<u64, SavedListScroll>,
+    unsaved: Option<u64>,
+    selected_row: Option<usize>,
+    reveal_pending: bool,
     subtitle_hovered_once: bool,
     hovered_account_control: Option<AccountControl>,
 }
@@ -151,7 +157,8 @@ pub(crate) struct Rows {
 impl Rows {
     pub fn new() -> Self {
         Self {
-            state: ListState::new(0, ListAlignment::Top, px(200.)),
+            // Every row is measured so a row far off screen can be scrolled to exactly.
+            state: ListState::new(0, ListAlignment::Top, px(200.)).measure_all(),
             account_bounds: Rc::new(Cell::new(None)),
             rows: Vec::new(),
             guild_id: None,
@@ -160,14 +167,20 @@ impl Rows {
             collapsed: HashSet::new(),
             folds: HashMap::new(),
             kept: 0,
+            anchors: Vec::new(),
+            scroll_memory: HashMap::new(),
+            unsaved: None,
+            selected_row: None,
+            reveal_pending: false,
             subtitle_hovered_once: false,
             hovered_account_control: None,
         }
     }
 
-    pub fn with_collapsed(collapsed: HashSet<u64>) -> Self {
+    pub fn from_settings(settings: &crate::settings::Settings) -> Self {
         Self {
-            collapsed,
+            collapsed: settings.collapsed_categories.clone(),
+            scroll_memory: settings.channel_list_scroll.clone(),
             ..Self::new()
         }
     }
@@ -217,6 +230,7 @@ impl Rows {
     ) {
         let now = Instant::now();
         let mut rows = Vec::new();
+        let mut selected_row = None;
         if banner.is_some() {
             rows.push(Row::Banner);
         }
@@ -258,6 +272,9 @@ impl Rows {
                 if collapsed && entry.id != selected_channel_id && !joined {
                     continue;
                 }
+                if entry.id == selected_channel_id {
+                    selected_row = Some(rows.len());
+                }
                 rows.push(Row::Channel { category, channel });
                 if entry.kind == ChannelKind::Voice && (!collapsed || joined) {
                     rows.extend((0..voice_members(entry.id)).map(|index| Row::VoiceMember {
@@ -275,13 +292,60 @@ impl Rows {
                 }
             }
         }
+        let anchors: Vec<ListAnchor> = rows
+            .iter()
+            .map(|row| {
+                let categories = guild.map_or(&[][..], |guild| &guild.categories[..]);
+                match *row {
+                    Row::Category(category) => categories
+                        .get(category)
+                        .map_or(ListAnchor::Top, |group| ListAnchor::Category(group.id)),
+                    Row::Channel { category, channel }
+                    | Row::VoiceMember {
+                        category, channel, ..
+                    }
+                    | Row::Thread {
+                        category, channel, ..
+                    } => categories
+                        .get(category)
+                        .and_then(|group| group.channels.get(channel))
+                        .map_or(ListAnchor::Top, |entry| ListAnchor::Channel(entry.id)),
+                    _ => ListAnchor::Top,
+                }
+            })
+            .collect();
         let guild_id = guild.map(|guild| guild.id);
-        if self.guild_id != guild_id || banner.is_none() {
+        let switched = self.guild_id != guild_id;
+        if switched || banner.is_none() {
             self.banner_hover = BannerHover::default();
         }
-        if self.guild_id != guild_id {
+        let mut kept = selected_channel_id;
+        if switched {
+            self.remember_scroll();
             self.state.reset(rows.len());
-        } else if self.rows != rows {
+            // Switching servers syncs once before the new channel is selected, so the saved
+            // selected channel stands in until then.
+            let restored = guild_id
+                .and_then(|id| self.scroll_memory.get(&id))
+                .and_then(|saved| {
+                    let ix = anchors.iter().position(|anchor| *anchor == saved.anchor)?;
+                    Some((ix, px(saved.offset), saved.selected))
+                });
+            match restored {
+                Some((item_ix, offset_in_item, selected)) => {
+                    self.state.scroll_to(ListOffset {
+                        item_ix,
+                        offset_in_item,
+                    });
+                    self.reveal_pending = false;
+                    kept = selected;
+                }
+                None => self.reveal_pending = true,
+            }
+        } else if self.kept != selected_channel_id {
+            self.reveal_pending = true;
+        }
+        if !switched && self.rows != rows {
             let prefix = self
                 .rows
                 .iter()
@@ -301,8 +365,63 @@ impl Rows {
         }
         self.guild_id = guild_id;
         self.rows = rows;
-        self.kept = selected_channel_id;
+        self.anchors = anchors;
+        self.kept = kept;
+        self.selected_row = selected_row;
         self.banner = banner;
+    }
+
+    fn remember_scroll(&mut self) {
+        let Some(guild_id) = self.guild_id else {
+            return;
+        };
+        let top = self.state.logical_scroll_top();
+        match self.anchors.get(top.item_ix) {
+            Some(anchor) => {
+                let offset = match self.rows.get(top.item_ix) {
+                    Some(Row::VoiceMember { .. } | Row::Thread { .. }) => 0.,
+                    _ => top.offset_in_item.as_f32(),
+                };
+                self.scroll_memory.insert(
+                    guild_id,
+                    SavedListScroll {
+                        anchor: *anchor,
+                        offset,
+                        selected: self.kept,
+                    },
+                );
+            }
+            None => {
+                self.scroll_memory.remove(&guild_id);
+            }
+        }
+        self.unsaved = Some(guild_id);
+    }
+
+    pub(crate) fn take_unsaved(&mut self) -> Option<(u64, Option<SavedListScroll>)> {
+        let guild_id = self.unsaved.take()?;
+        Some((guild_id, self.scroll_memory.get(&guild_id).copied()))
+    }
+
+    pub(crate) fn note_scrolled(&mut self) {
+        self.remember_scroll();
+    }
+
+    pub(crate) fn set_scroll_handler(
+        &self,
+        handler: impl FnMut(&ListScrollEvent, &mut Window, &mut App) + 'static,
+    ) {
+        self.state.set_scroll_handler(handler);
+    }
+
+    pub(crate) fn reveal_selected(&mut self) {
+        if !self.reveal_pending || self.state.viewport_bounds().size.height <= px(0.) {
+            return;
+        }
+        self.reveal_pending = false;
+        if let Some(ix) = self.selected_row {
+            self.reveal_if_hidden(ix);
+        }
     }
 
     /// GPUI's `scroll_to_reveal_item` re-anchors the scroll whenever the row's bottom-aligned
@@ -382,6 +501,20 @@ pub fn render(app: &DiscordApp, window: &Window, cx: &App) -> AnyElement {
                 .flex_1()
                 .min_h_0()
                 .w_full()
+                .when(app.channel_rows.reveal_pending, |this| {
+                    let reveal = app.entity.clone();
+                    this.on_prepaint(move |_, _, cx| {
+                        let reveal = reveal.clone();
+                        cx.defer(move |cx| {
+                            reveal
+                                .update(cx, |app, cx| {
+                                    app.channel_rows.reveal_selected();
+                                    app.views.channel_list.update(cx, |_, cx| cx.notify());
+                                })
+                                .ok();
+                        });
+                    })
+                })
                 .child(
                     list(app.channel_rows.state.clone(), move |index, window, cx| {
                         let Some(app_entity) = entity.upgrade() else {

@@ -82,6 +82,8 @@ pub struct Settings {
     #[serde(default)]
     pub search_history: HashMap<String, Vec<SavedSearch>>,
     #[serde(default)]
+    pub channel_list_scroll: HashMap<u64, SavedListScroll>,
+    #[serde(default)]
     pub video_audio: Option<VideoAudio>,
     #[serde(default)]
     pub gif_provider: GifProvider,
@@ -219,6 +221,22 @@ pub struct AccountScoped {
     pub voice_channel: Option<SavedChannel>,
     #[serde(default)]
     pub search_history: HashMap<String, Vec<SavedSearch>>,
+    #[serde(default)]
+    pub channel_list_scroll: HashMap<u64, SavedListScroll>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedListScroll {
+    pub anchor: ListAnchor,
+    pub offset: f32,
+    pub selected: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ListAnchor {
+    Top,
+    Category(u64),
+    Channel(u64),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -254,6 +272,7 @@ impl Settings {
             collapsed_categories: std::mem::take(&mut self.collapsed_categories),
             voice_channel: self.voice_channel.take(),
             search_history: std::mem::take(&mut self.search_history),
+            channel_list_scroll: std::mem::take(&mut self.channel_list_scroll),
         }
     }
 
@@ -264,6 +283,7 @@ impl Settings {
         self.collapsed_categories = scoped.collapsed_categories;
         self.voice_channel = scoped.voice_channel;
         self.search_history = scoped.search_history;
+        self.channel_list_scroll = scoped.channel_list_scroll;
     }
 
     fn stash(&mut self, user_id: u64, scoped: AccountScoped) {
