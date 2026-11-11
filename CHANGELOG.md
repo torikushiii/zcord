@@ -2,6 +2,17 @@
 
 ## Unversioned
 
+## 0.9.1
+
+- Major: Reworked message search. Suggestions are grouped under headings and offer users and channels for plain words, History keeps your last five searches, the new Filters dialog adds From, In, Has, Mentions, date, author type and pinned filters, matching words are highlighted in results, and results page with numbered pages.
+- Minor: Ctrl+F in a server channel now starts a search limited to that channel.
+- Minor: Channels now keep a bounded window of messages and load older and newer pages as you scroll, with placeholder rows at the edges. The You're Viewing Older Messages bar takes you back to the present, and channels reopen where you left them.
+- Minor: Page Up and Page Down now scroll the chat, and Shift+Page Down jumps to the present.
+- Minor: Each server's channel list now remembers where it was scrolled, also after a restart, and scrolls to the selected channel when it's out of view.
+- Bugfix: Fixed reaction pills not fitting around their avatars.
+- Bugfix: Fixed clicking to close a dialog selecting the text underneath it.
+- Bugfix: Fixed Mark As Read doing nothing while viewing older messages.
+
 ## 0.9.0
 
 - Major: Added account switching. Switch between up to five saved accounts from Switch Accounts in your profile popout, and add or log out of accounts from the new Manage Accounts and Add Account dialogs. Each account keeps its own last channel, recent emoji, collapsed categories and saved login.
