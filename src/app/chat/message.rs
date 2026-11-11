@@ -8,8 +8,14 @@ use crate::app::menu::PopupButton as _;
 use crate::app::messages::message_body::render_body_scaled;
 use crate::app::messages::rich_text::{Action, Piece};
 
+thread_local! {
+    static SEARCH_TERMS: std::cell::RefCell<Option<Rc<[String]>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 pub(in crate::app) fn body_context<'a>(app: &'a DiscordApp, message_id: u64) -> BodyContext<'a> {
     BodyContext {
+        highlight: SEARCH_TERMS.with(|terms| terms.borrow().clone()),
         store: &app.store,
         guild_id: app.selected_guild_id,
         message_id,
@@ -609,11 +615,16 @@ pub(in crate::app) fn render_search_message(
     app: &DiscordApp,
     message: &Message,
     width: f32,
+    terms: Rc<[String]>,
     cx: &App,
 ) -> AnyElement {
-    with_media_limit(width - GUTTER - MESSAGE_RIGHT_PADDING, || {
+    let previous =
+        SEARCH_TERMS.with(|current| current.replace((!terms.is_empty()).then_some(terms)));
+    let element = with_media_limit(width - GUTTER - MESSAGE_RIGHT_PADDING, || {
         render_message(app, message, false, true, cx)
-    })
+    });
+    SEARCH_TERMS.with(|current| current.replace(previous));
+    element
 }
 
 pub(super) fn render_message(

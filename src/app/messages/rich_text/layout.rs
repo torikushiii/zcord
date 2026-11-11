@@ -119,6 +119,7 @@ fn hash_chip(chip: Option<Chip>, hasher: &mut impl Hasher) {
             revealed.hash(hasher);
         }
         Some(Chip::Timestamp) => 4u8.hash(hasher),
+        Some(Chip::SearchHit) => 5u8.hash(hasher),
     }
 }
 

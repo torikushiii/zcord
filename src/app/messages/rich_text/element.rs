@@ -376,6 +376,7 @@ impl Element for RichText {
                         rgb(theme::spoiler_revealed_bg()).opacity(0.1).into(),
                         px(3.),
                     ),
+                    Chip::SearchHit => (rgba(0xFDB8334D).into(), px(0.)),
                 };
                 window.paint_quad(quad(
                     chip_bounds,

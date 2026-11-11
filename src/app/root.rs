@@ -181,7 +181,7 @@ impl Render for DiscordApp {
                 }
             }))
             .on_action(cx.listener(|app, _: &FocusSearch, window, cx| {
-                app.open_search(window, cx);
+                app.find_in_channel(window, cx);
             }))
             .on_action(cx.listener(|app, _: &ComposerTab, window, cx| {
                 if !(app.accept_search(window, cx)

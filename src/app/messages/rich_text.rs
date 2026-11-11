@@ -58,6 +58,7 @@ pub enum Chip {
     Mention { color: Option<u32> },
     Spoiler { revealed: bool },
     Timestamp,
+    SearchHit,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

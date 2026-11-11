@@ -361,6 +361,7 @@ fn unread_body(
                     app,
                     message,
                     CARD_MESSAGE_WIDTH,
+                    std::rc::Rc::from([]),
                     cx,
                 ))
                 .child(

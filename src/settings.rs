@@ -80,6 +80,8 @@ pub struct Settings {
     #[serde(default)]
     pub collapsed_categories: HashSet<u64>,
     #[serde(default)]
+    pub search_history: HashMap<String, Vec<SavedSearch>>,
+    #[serde(default)]
     pub video_audio: Option<VideoAudio>,
     #[serde(default)]
     pub gif_provider: GifProvider,
@@ -215,6 +217,32 @@ pub struct AccountScoped {
     pub collapsed_categories: HashSet<u64>,
     #[serde(default)]
     pub voice_channel: Option<SavedChannel>,
+    #[serde(default)]
+    pub search_history: HashMap<String, Vec<SavedSearch>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedSearch {
+    pub text: String,
+    #[serde(default)]
+    pub filters: Vec<SavedFilter>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedFilter {
+    pub key: String,
+    pub label: String,
+    pub value: SavedFilterValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum SavedFilterValue {
+    User(u64),
+    Channel(u64),
+    Has(String),
+    Date(String),
+    Author(String),
+    Pinned(bool),
 }
 
 impl Settings {
@@ -225,6 +253,7 @@ impl Settings {
             recent_emojis: std::mem::take(&mut self.recent_emojis),
             collapsed_categories: std::mem::take(&mut self.collapsed_categories),
             voice_channel: self.voice_channel.take(),
+            search_history: std::mem::take(&mut self.search_history),
         }
     }
 
@@ -234,6 +263,7 @@ impl Settings {
         self.recent_emojis = scoped.recent_emojis;
         self.collapsed_categories = scoped.collapsed_categories;
         self.voice_channel = scoped.voice_channel;
+        self.search_history = scoped.search_history;
     }
 
     fn stash(&mut self, user_id: u64, scoped: AccountScoped) {

@@ -133,6 +133,25 @@ fn box_chip(chip: &Chip) -> [Div; 2] {
     ]
 }
 
+pub(super) fn history_chip(filter: &SavedFilter) -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .h(rpx(24.))
+        .max_w(rpx(160.))
+        .mr(rpx(4.))
+        .px(rpx(6.))
+        .gap(rpx(4.))
+        .rounded(rpx(4.))
+        .bg(rgba(theme::control_selected()))
+        .text_color(rgb(theme::strong()))
+        .text_size(rpx(14.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(div().flex_none().child(format!("{}:", filter.key)))
+        .child(div().min_w_0().truncate().child(filter.label.clone()))
+}
+
 pub(super) fn row_chip(app: &DiscordApp, chip: &Chip, cx: &App) -> Div {
     let user = match chip.value {
         ChipValue::User(id) => Some(id),

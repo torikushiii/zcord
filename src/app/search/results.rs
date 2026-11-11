@@ -1,9 +1,8 @@
 use super::*;
 
 const RESULT_LIMIT: u64 = 10_000;
-const PAGER_SPAN: u64 = 2;
 const SPINNER_SIZE: f32 = 16.;
-const SORT_MENU_WIDTH: f32 = 170.;
+const SORT_MENU_WIDTH: f32 = 148.;
 const CARD_WIDTH: f32 = RESULTS_WIDTH - 1. - 32. - 2.;
 const SORT_REOPEN_GUARD: Duration = Duration::from_millis(200);
 const SORTS: [(SearchSort, &str); 3] = [
@@ -152,7 +151,13 @@ fn note(text: String) -> Div {
         .child(text)
 }
 
-fn result_card(app: &DiscordApp, channel_id: u64, message: &Message, cx: &App) -> impl IntoElement {
+fn result_card(
+    app: &DiscordApp,
+    channel_id: u64,
+    message: &Message,
+    terms: &Rc<[String]>,
+    cx: &App,
+) -> impl IntoElement {
     let open = app.entity.clone();
     let id = message.id;
     let group = SharedString::from(format!("search-result-{id}"));
@@ -175,7 +180,13 @@ fn result_card(app: &DiscordApp, channel_id: u64, message: &Message, cx: &App) -
             })
             .ok();
         })
-        .child(render_search_message(app, message, CARD_WIDTH, cx))
+        .child(render_search_message(
+            app,
+            message,
+            CARD_WIDTH,
+            terms.clone(),
+            cx,
+        ))
         .child(
             div()
                 .absolute()
@@ -249,75 +260,161 @@ fn channel_heading(app: &DiscordApp, channel_id: u64, key: u64) -> AnyElement {
         .into_any_element()
 }
 
+fn pager_slots(page: u64, pages: u64) -> Vec<Option<u64>> {
+    if pages <= 5 {
+        return (1..=pages).map(Some).collect();
+    }
+    if page <= 3 {
+        vec![Some(1), Some(2), Some(3), None, Some(pages)]
+    } else if page + 2 >= pages {
+        vec![Some(1), None, Some(pages - 2), Some(pages - 1), Some(pages)]
+    } else {
+        vec![Some(1), None, Some(page), None, Some(pages)]
+    }
+}
+
 fn pager(app: &DiscordApp, page: u64, pages: u64) -> Div {
-    let button =
-        |key: &'static str, slot: u64, text: String, target: u64, on: bool, enabled: bool| {
-            let entity = app.entity.clone();
-            div()
-                .id((key, slot))
-                .flex()
-                .flex_none()
-                .items_center()
-                .justify_center()
-                .h(rpx(32.))
-                .min_w(rpx(32.))
-                .px(rpx(8.))
-                .rounded(rpx(8.))
-                .text_size(rpx(14.))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(if enabled {
-                    theme::strong()
+    let step = |key: &'static str, text: &'static str, target: u64, enabled: bool, back: bool| {
+        let entity = app.entity.clone();
+        let color = if enabled {
+            theme::strong()
+        } else {
+            theme::faint()
+        };
+        let chevron = || {
+            theme::icon(
+                if back {
+                    "chevron-left"
                 } else {
-                    theme::faint()
-                }))
-                .when(on, |this| this.bg(rgba(theme::control_selected())))
-                .when(enabled && !on, |this| {
-                    this.cursor_pointer()
+                    "chevron-right"
+                },
+                16.,
+                color,
+            )
+        };
+        div()
+            .id(key)
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(rpx(4.))
+            .h(rpx(40.))
+            .px(rpx(12.))
+            .rounded(rpx(8.))
+            .text_size(rpx(16.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(rgb(color))
+            .when(back, |this| this.child(chevron()))
+            .child(text)
+            .when(!back, |this| this.child(chevron()))
+            .when(enabled, |this| {
+                this.cursor_pointer()
+                    .hover(|style| style.bg(rgba(theme::hover())))
+                    .on_click(move |_, _, cx| {
+                        entity
+                            .update(cx, |app, cx| app.set_search_page(target, cx))
+                            .ok();
+                    })
+            })
+    };
+    let number = |slot: usize, number: u64| {
+        let entity = app.entity.clone();
+        let current = number == page;
+        div()
+            .id(("search-page", slot))
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .h(rpx(28.))
+            .min_w(rpx(28.))
+            .px(rpx(6.))
+            .rounded_full()
+            .text_size(rpx(16.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .map(|this| {
+                if current {
+                    this.bg(rgb(theme::BLURPLE)).text_color(white())
+                } else {
+                    this.text_color(rgb(theme::strong()))
+                        .cursor_pointer()
                         .hover(|style| style.bg(rgba(theme::hover())))
                         .on_click(move |_, _, cx| {
                             entity
-                                .update(cx, |app, cx| app.set_search_page(target, cx))
+                                .update(cx, |app, cx| app.set_search_page(number, cx))
                                 .ok();
                         })
-                })
-                .child(text)
-        };
-    let first = page.saturating_sub(PAGER_SPAN).max(1);
-    let last = (page + PAGER_SPAN).min(pages);
+                }
+            })
+            .child(number.to_string())
+            .into_any_element()
+    };
+    let gap = || {
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .w(rpx(36.))
+            .h(rpx(44.))
+            .text_size(rpx(16.))
+            .text_color(rgb(theme::strong()))
+            .child("\u{2026}")
+            .into_any_element()
+    };
     div()
         .flex()
         .flex_none()
         .items_center()
-        .justify_center()
-        .gap(rpx(4.))
-        .h(rpx(56.))
+        .justify_between()
+        .h(rpx(57.))
         .px(rpx(16.))
-        .child(button(
+        .child(step(
             "search-back",
-            0,
-            "Back".to_owned(),
+            "Previous",
             page.saturating_sub(1),
-            false,
             page > 1,
+            true,
         ))
-        .children((first..=last).map(|number| {
-            button(
-                "search-page",
-                number,
-                number.to_string(),
-                number,
-                number == page,
-                true,
-            )
-        }))
-        .child(button(
-            "search-next",
-            0,
-            "Next".to_owned(),
-            page + 1,
-            false,
-            page < pages,
+        .child(div().flex().items_center().gap(rpx(4.)).children(
+            pager_slots(page, pages).into_iter().enumerate().map(
+                |(slot, number_at)| match number_at {
+                    Some(value) => number(slot, value),
+                    None => gap(),
+                },
+            ),
         ))
+        .child(step("search-next", "Next", page + 1, page < pages, false))
+}
+
+fn filters_button(app: &DiscordApp, count: usize) -> impl IntoElement {
+    let open = app.entity.clone();
+    div()
+        .id("search-filters")
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(rpx(6.))
+        .h(rpx(32.))
+        .px(rpx(12.))
+        .rounded(rpx(8.))
+        .bg(rgba(theme::control_bg()))
+        .border_1()
+        .border_color(rgba(theme::border_soft()))
+        .cursor_pointer()
+        .text_size(rpx(14.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(theme::strong()))
+        .on_click(move |_, window, cx| {
+            open.update(cx, |app, cx| app.open_search_filters(window, cx))
+                .ok();
+        })
+        .child(theme::icon("sliders-horizontal", 16., theme::strong()))
+        .child(if count > 0 {
+            format!("Filters ({count})")
+        } else {
+            "Filters".to_owned()
+        })
 }
 
 pub(crate) fn render_results(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
@@ -353,7 +450,7 @@ pub(crate) fn render_results(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
             .children(
                 messages
                     .into_iter()
-                    .map(|message| result_card(app, channel_id, message, cx)),
+                    .map(|message| result_card(app, channel_id, message, &results.terms, cx)),
             )
     });
     let body = match &results.status {
@@ -395,6 +492,7 @@ pub(crate) fn render_results(app: &DiscordApp, cx: &App) -> Option<AnyElement> {
                                 this.child(theme::spinner(SPINNER_SIZE, theme::muted()))
                             }),
                     )
+                    .child(filters_button(app, filter_count(search, cx)))
                     .child(sort_control(app, search, sort))
                     .child(
                         theme::icon_button("search-close", "x", 20., theme::muted()).on_click(

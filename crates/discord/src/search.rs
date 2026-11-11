@@ -26,6 +26,7 @@ pub struct SearchQuery {
     pub min_id: Option<u64>,
     pub max_id: Option<u64>,
     pub pinned: Option<bool>,
+    pub author_types: Vec<String>,
     pub sort: SearchSort,
     pub offset: usize,
 }
@@ -80,6 +81,8 @@ struct MessageSearchTab<'a> {
     max_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pinned: Option<bool>,
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    author_type: &'a [String],
     sort_by: &'static str,
     sort_order: &'static str,
     limit: usize,
@@ -100,6 +103,7 @@ pub(super) fn dm_search_body(query: &SearchQuery) -> impl serde::Serialize + '_ 
                 min_id: query.min_id.map(|id| id.to_string()),
                 max_id: query.max_id.map(|id| id.to_string()),
                 pinned: query.pinned,
+                author_type: &query.author_types,
                 sort_by: match query.sort {
                     SearchSort::Relevant => "relevance",
                     SearchSort::Newest | SearchSort::Oldest => "timestamp",
@@ -147,6 +151,12 @@ pub(super) fn search_params(
     if let Some(pinned) = query.pinned {
         params.push(("pinned", pinned.to_string()));
     }
+    params.extend(
+        query
+            .author_types
+            .iter()
+            .map(|kind| ("author_type", kind.clone())),
+    );
     params.extend([
         (
             "sort_by",
@@ -190,6 +200,7 @@ mod tests {
             min_id: Some(6),
             max_id: Some(7),
             pinned: Some(false),
+            author_types: Vec::new(),
             sort: SearchSort::Oldest,
             offset: 50,
         };
@@ -262,6 +273,7 @@ mod tests {
             min_id: Some(6),
             max_id: Some(7),
             pinned: Some(false),
+            author_types: Vec::new(),
             sort: SearchSort::Oldest,
             offset: 50,
         };

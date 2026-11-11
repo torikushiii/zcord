@@ -13,13 +13,13 @@ pub struct ParsedSearch {
 }
 
 pub const HAS_OPTIONS: [(&str, &str); 9] = [
-    ("link", "link"),
-    ("embed", "embed"),
-    ("poll", "poll"),
-    ("file", "file"),
-    ("video", "video"),
     ("image", "image"),
+    ("video", "video"),
+    ("link", "link"),
+    ("file", "file"),
+    ("embed", "embed"),
     ("sound", "sound"),
+    ("poll", "poll"),
     ("sticker", "sticker"),
     ("forward", "snapshot"),
 ];
@@ -78,24 +78,10 @@ pub fn parse(text: &str) -> Result<ParsedSearch, String> {
                 };
                 parsed.has.push((*api_name).to_owned());
             }
-            "before" => {
-                let date = parse_date(value)?;
-                parsed.max_id = Some(snowflake(local_midnight(date)?));
-            }
-            "after" => {
-                let date = parse_date(value)?;
-                let next = date
-                    .checked_add_days(Days::new(1))
-                    .ok_or_else(invalid_date)?;
-                parsed.min_id = Some(snowflake(local_midnight(next)?));
-            }
-            "during" => {
-                let date = parse_date(value)?;
-                let next = date
-                    .checked_add_days(Days::new(1))
-                    .ok_or_else(invalid_date)?;
-                parsed.min_id = Some(snowflake(local_midnight(date)?));
-                parsed.max_id = Some(snowflake(local_midnight(next)?));
+            "before" | "after" | "during" => {
+                let (min_id, max_id) = date_bounds(&key, parse_date(value)?)?;
+                parsed.min_id = min_id.or(parsed.min_id);
+                parsed.max_id = max_id.or(parsed.max_id);
             }
             "pinned" => match value.to_ascii_lowercase().as_str() {
                 "true" => parsed.pinned = Some(true),
@@ -108,6 +94,22 @@ pub fn parse(text: &str) -> Result<ParsedSearch, String> {
 
     parsed.content = content.join(" ");
     Ok(parsed)
+}
+
+pub fn date_bounds(key: &str, date: NaiveDate) -> Result<(Option<u64>, Option<u64>), String> {
+    let next = || {
+        date.checked_add_days(Days::new(1))
+            .ok_or_else(invalid_date)
+            .and_then(local_midnight)
+    };
+    Ok(match key {
+        "before" => (None, Some(snowflake(local_midnight(date)?))),
+        "after" => (Some(snowflake(next()?)), None),
+        _ => (
+            Some(snowflake(local_midnight(date)?)),
+            Some(snowflake(next()?)),
+        ),
+    })
 }
 
 pub fn active_filter(text: &str) -> Option<(&str, &str)> {

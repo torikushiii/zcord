@@ -49,6 +49,7 @@ pub struct BodyContext<'a> {
     pub reveal_all: bool,
     pub entity: WeakEntity<DiscordApp>,
     pub colors: BodyColors,
+    pub highlight: Option<std::rc::Rc<[String]>>,
 }
 
 impl BodyContext<'_> {
@@ -365,6 +366,9 @@ fn inline(
     let block = *counter;
     let id = ("body", (context.message_id << 8) ^ u64::from(*counter));
     let mut pieces = spans_to_pieces(spans, jumbo, context, counter, cx);
+    if let Some(terms) = context.highlight.as_deref() {
+        pieces = mark_search_hits(pieces, terms);
+    }
     if edited {
         pieces.push(Piece::text(
             " (edited)",
@@ -397,6 +401,80 @@ fn inline(
                 })
                 .ok();
         })
+}
+
+fn mark_search_hits(pieces: Vec<Piece>, terms: &[String]) -> Vec<Piece> {
+    let mut marked = Vec::with_capacity(pieces.len());
+    for piece in pieces {
+        let Content::Text(text) = &piece.content else {
+            marked.push(piece);
+            continue;
+        };
+        if piece.style.chip.is_some() || piece.style.action.is_some() {
+            marked.push(piece);
+            continue;
+        }
+        let hits = search_hits(text, terms);
+        if hits.is_empty() {
+            marked.push(piece);
+            continue;
+        }
+        let mut cursor = 0;
+        for (start, end) in hits {
+            if start > cursor {
+                marked.push(Piece::text(
+                    text[cursor..start].to_owned(),
+                    piece.style.clone(),
+                ));
+            }
+            marked.push(Piece::text(
+                text[start..end].to_owned(),
+                PieceStyle {
+                    chip: Some(Chip::SearchHit),
+                    ..piece.style.clone()
+                },
+            ));
+            cursor = end;
+        }
+        if cursor < text.len() {
+            marked.push(Piece::text(text[cursor..].to_owned(), piece.style));
+        }
+    }
+    marked
+}
+
+fn search_hits(text: &str, terms: &[String]) -> Vec<(usize, usize)> {
+    let lower = text.to_lowercase();
+    // Lowercasing can change byte lengths; positions are only valid when it doesn't.
+    if lower.len() != text.len() {
+        return Vec::new();
+    }
+    let boundary = |index: usize| {
+        lower[..index]
+            .chars()
+            .next_back()
+            .is_none_or(|character| !character.is_alphanumeric())
+    };
+    let mut hits = Vec::new();
+    for term in terms {
+        let term = term.to_lowercase();
+        if term.is_empty() {
+            continue;
+        }
+        for (start, _) in lower.match_indices(&term) {
+            let end = start + term.len();
+            let after = lower[end..]
+                .chars()
+                .next()
+                .is_none_or(|character| !character.is_alphanumeric());
+            if boundary(start) && after {
+                hits.push((start, end));
+            }
+        }
+    }
+    hits.sort_unstable();
+    hits.dedup_by(|next, kept| next.0 < kept.1);
+    hits
 }
 
 pub fn spans_to_pieces(
@@ -813,6 +891,7 @@ mod tests {
         cx.update(|cx| {
             let store = Store::seed();
             let mut context = BodyContext {
+                highlight: None,
                 store: &store,
                 guild_id: 1,
                 message_id: 10,
@@ -854,6 +933,7 @@ mod tests {
         cx.update(|cx| {
             let store = Store::seed();
             let mut context = BodyContext {
+                highlight: None,
                 store: &store,
                 guild_id: 1,
                 message_id: 10,
@@ -914,6 +994,7 @@ mod tests {
         cx.update(|cx| {
             let store = Store::seed();
             let context = BodyContext {
+                highlight: None,
                 store: &store,
                 guild_id: 1,
                 message_id: 10,

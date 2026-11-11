@@ -332,6 +332,7 @@ pub(super) fn message_body(app: &DiscordApp, message: &Message, cx: &App) -> Any
             app,
             message,
             CARD_MESSAGE_WIDTH,
+            std::rc::Rc::from([]),
             cx,
         ))
         .into_any_element()

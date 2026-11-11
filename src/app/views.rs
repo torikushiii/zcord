@@ -546,6 +546,7 @@ impl Render for OverlaysView {
             .children(super::messages::saved::custom_reminder_dialog(app))
             .children(super::inbox::schedule_edit_dialog(app))
             .children(search::popover(app, cx))
+            .children(search::filters_dialog(app, cx))
             .children(chat::create_thread_dialog(app))
             .children(forward_dialog::render(app))
             .children(super::expressions::reactions_dialog::render(app, cx))

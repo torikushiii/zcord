@@ -122,6 +122,7 @@ fn markdown(
 ) -> AnyElement {
     let parsed = app.parsed(key, content);
     let context = BodyContext {
+        highlight: None,
         store: &app.store,
         guild_id: app.selected_guild_id,
         message_id: key,

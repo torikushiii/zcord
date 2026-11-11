@@ -39,6 +39,7 @@ pub(crate) fn markdown(
     let palette = card.palette();
     let parsed = app.parsed(id, text);
     let context = BodyContext {
+        highlight: None,
         store: &app.store,
         guild_id: card.guild_id.unwrap_or(0),
         message_id: id,
