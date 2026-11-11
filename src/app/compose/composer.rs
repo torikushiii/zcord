@@ -334,7 +334,7 @@ impl DiscordApp {
             self.close_thread_pane(cx);
             self.focus_composer(window, cx);
         } else {
-            self.jump_to_present(window, cx);
+            self.jump_to_present(crate::app::JUMP_PAGE, window, cx);
         }
     }
 

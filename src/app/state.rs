@@ -32,6 +32,7 @@ pub(crate) struct Suggestions {
     pub(in crate::app) mention_names: HashMap<String, u64>,
 }
 
+#[derive(Default)]
 pub(crate) struct History {
     pub(in crate::app) loading: HashSet<u64>,
     pub(in crate::app) older: HashSet<u64>,
@@ -39,10 +40,30 @@ pub(crate) struct History {
     pub(in crate::app) newer: HashSet<u64>,
     pub(in crate::app) reaction_requests: HashSet<(u64, u64, String)>,
     pub(in crate::app) pending_present: HashSet<u64>,
+    pub(in crate::app) present_limit: HashMap<u64, usize>,
     pub(in crate::app) pending_jump: Option<u64>,
     pub(in crate::app) failed: HashSet<u64>,
     pub(in crate::app) jump_return: Option<(u64, u64)>,
     pub(in crate::app) complete: HashSet<u64>,
+    pub(in crate::app) trimmed: HashMap<u64, Trimmed>,
+    pub(in crate::app) paused: HashSet<u64>,
+    pub(in crate::app) load_rows: Option<(u64, std::ops::Range<usize>)>,
+    pub(in crate::app) edge_check: bool,
+    /// Kept here because rows render while the list state is borrowed.
+    pub(crate) placeholder_height: Cell<Pixels>,
+    pub(in crate::app) scroll_memory: HashMap<u64, (u64, Pixels)>,
+}
+
+#[derive(Default)]
+pub(crate) struct Trimmed {
+    pub(in crate::app) older: TrimCache,
+    pub(in crate::app) newer: TrimCache,
+}
+
+#[derive(Default)]
+pub(crate) struct TrimCache {
+    pub(in crate::app) messages: Vec<crate::store::Message>,
+    pub(in crate::app) at_edge: bool,
 }
 
 pub(crate) struct Jumps {

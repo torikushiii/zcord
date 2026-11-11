@@ -53,6 +53,8 @@ impl DiscordApp {
         self.history.older.clear();
         self.history.newer.clear();
         self.history.pending_present.clear();
+        self.history.present_limit.clear();
+        self.forget_trimmed();
         self.history.failed.clear();
         self.history.jump_return = None;
         self.compose.pending_sends.clear();

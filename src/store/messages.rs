@@ -409,6 +409,83 @@ impl Store {
         count
     }
 
+    pub fn trim_older(&mut self, channel_id: u64, keep: usize) -> Vec<Message> {
+        let Some(channel) = self.network_channel_mut(channel_id) else {
+            return Vec::new();
+        };
+        let excess = channel.messages.len().saturating_sub(keep);
+        let count = channel
+            .messages
+            .iter()
+            .take(excess)
+            .take_while(|message| message.in_history())
+            .count();
+        channel.messages.drain(..count).collect()
+    }
+
+    pub fn trim_newer(&mut self, channel_id: u64, keep: usize) -> Vec<Message> {
+        let Some(channel) = self.network_channel_mut(channel_id) else {
+            return Vec::new();
+        };
+        if channel.messages.len() <= keep
+            || channel.messages.iter().any(|message| !message.in_history())
+        {
+            return Vec::new();
+        }
+        let trimmed = channel.messages.split_off(keep);
+        self.set_at_present(channel_id, false);
+        trimmed
+    }
+
+    pub fn restore_older(&mut self, channel_id: u64, mut messages: Vec<Message>) -> usize {
+        let Some(channel) = self.network_channel_mut(channel_id) else {
+            return 0;
+        };
+        let oldest = channel
+            .oldest_history_message()
+            .map_or(u64::MAX, |message| message.id);
+        messages.retain(|message| message.id < oldest);
+        let count = messages.len();
+        messages.append(&mut channel.messages);
+        channel.messages = messages;
+        count
+    }
+
+    pub fn restore_newer(
+        &mut self,
+        channel_id: u64,
+        mut messages: Vec<Message>,
+        present: bool,
+    ) -> usize {
+        let Some(channel) = self.network_channel_mut(channel_id) else {
+            return 0;
+        };
+        let newest = channel
+            .newest_history_message()
+            .map_or(0, |message| message.id);
+        messages.retain(|message| message.id > newest);
+        let count = messages.len();
+        channel.messages.append(&mut messages);
+        if present {
+            self.set_at_present(channel_id, true);
+        }
+        count
+    }
+
+    pub fn swap_window(
+        &mut self,
+        channel_id: u64,
+        messages: Vec<Message>,
+        present: bool,
+    ) -> Vec<Message> {
+        let Some(channel) = self.network_channel_mut(channel_id) else {
+            return Vec::new();
+        };
+        let previous = std::mem::replace(&mut channel.messages, messages);
+        self.set_at_present(channel_id, present);
+        previous
+    }
+
     pub(super) fn message_create(&mut self, message: Box<model::Message>) -> Change {
         let thread_id =
             self.source_channels

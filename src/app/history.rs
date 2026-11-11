@@ -1,13 +1,20 @@
 use super::*;
 use crate::store::Delivery;
 
+mod paging;
+
 impl DiscordApp {
     pub(super) fn reset_messages(&mut self, count: usize) {
         self.messages.reset(count);
         self.messages.set_follow_mode(FollowMode::Tail);
     }
 
-    pub(crate) fn jump_to_present(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn jump_to_present(
+        &mut self,
+        limit: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !matches!(self.screen, Screen::Chat) {
             return;
         }
@@ -17,15 +24,26 @@ impl DiscordApp {
         self.unread.manual = None;
         self.history.jump_return = None;
         let channel_id = self.selected_channel_id;
+        let sending = self.compose.pending_sends.has_channel(channel_id);
         let needs_present = self.live
-            && (self.compose.pending_sends.has_channel(channel_id)
+            && (sending
                 || self.channel().is_some_and(|channel| {
                     !channel.messages_loaded || !self.store.at_present(channel.id)
                 }));
         if needs_present {
             self.jumps.scroll = None;
+            if !sending
+                && self
+                    .channel()
+                    .is_some_and(|channel| channel.messages_loaded)
+                && self.present_from_trimmed(limit, window, cx)
+            {
+                self.mark_channel_read(cx);
+                return;
+            }
             self.messages.set_follow_mode(FollowMode::Tail);
             self.history.pending_present.insert(channel_id);
+            self.history.present_limit.insert(channel_id, limit);
             self.fetch_history(channel_id, None, window, cx);
         } else {
             self.glide_to_present(window, cx);
@@ -53,7 +71,8 @@ impl DiscordApp {
         if self.history.loading.contains(&channel_id) {
             return;
         }
-        self.jump_to_present(window, cx);
+        let limit = self.page_size(cx);
+        self.jump_to_present(limit, window, cx);
         if !self.history.loading.contains(&channel_id) {
             self.history.failed.remove(&channel_id);
         }
@@ -92,12 +111,22 @@ impl DiscordApp {
         });
     }
 
-    pub(crate) fn jump_to_unread(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn jump_to_unread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(since) = self.unread.since else {
             return;
         };
         smooth_scroll::cancel(cx);
-        self.scroll_to_unread(since);
+        let loaded = self.channel().is_some_and(|channel| {
+            channel
+                .first_unread_index(since, self.store.current_user_id)
+                .is_some_and(|index| index > 0 || !self.has_older_history(channel.id))
+        });
+        if loaded || !self.live {
+            self.messages.set_follow_mode(FollowMode::Normal);
+            self.scroll_to_unread(since);
+        } else {
+            self.fetch_history(self.selected_channel_id, Some(since), window, cx);
+        }
         cx.notify();
     }
 
@@ -186,7 +215,7 @@ impl DiscordApp {
         }
     }
 
-    fn list_offset(&self) -> Pixels {
+    pub(super) fn list_offset(&self) -> Pixels {
         let top = self.messages.logical_scroll_top();
         self.messages.offset_for_item(top.item_ix) + top.offset_in_item
     }
@@ -215,11 +244,14 @@ impl DiscordApp {
                 };
                 let top = self.messages.offset_for_item(index);
                 let height = self.messages.offset_for_item(index + 1) - top;
-                (top - ((viewport - height) / 2.).max(px(16.).min(viewport / 4.)))
-                    .max(px(0.))
-                    .min(bottom)
+                let zoom = crate::theme::ZOOM_LEVELS[crate::theme::zoom_index(cx)];
+                let clearance = if self.unread.bar { 32. } else { 16. };
+                let clearance = px(clearance * zoom).min(viewport / 4.);
+                let centered = (viewport - height) / 2. + px(8. * zoom);
+                (top - centered.max(clearance)).max(px(0.)).min(bottom)
             }
             JumpTarget::Present => bottom,
+            JumpTarget::Offset(offset) => offset.max(px(0.)).min(bottom),
         };
         let distance = target - current;
         let step = if distance.abs() > viewport * JUMP_GLIDE_VIEWPORTS {
@@ -233,10 +265,20 @@ impl DiscordApp {
         self.views.messages.update(cx, |_, cx| cx.notify());
         if distance.abs() < px(1.) {
             self.jumps.scroll = None;
+            let present = self.store.at_present(self.selected_channel_id);
             match jump_target {
                 JumpTarget::Message(message_id) => self.highlight_jump(message_id, cx),
-                JumpTarget::Present => self.messages.set_follow_mode(FollowMode::Tail),
+                JumpTarget::Present => {
+                    self.messages.set_follow_mode(FollowMode::Tail);
+                    self.schedule_ack(cx);
+                }
+                JumpTarget::Offset(_) if present && target >= bottom => {
+                    self.messages.set_follow_mode(FollowMode::Tail);
+                    self.schedule_ack(cx);
+                }
+                JumpTarget::Offset(_) => {}
             }
+            self.history.edge_check = true;
             cx.notify();
             return;
         }
@@ -299,6 +341,19 @@ impl DiscordApp {
         if !self.history.loading.insert(channel_id) {
             return;
         }
+        let limit = match around {
+            Some(message_id)
+                if message_id != 0 && self.history.pending_jump == Some(message_id) =>
+            {
+                JUMP_PAGE
+            }
+            Some(_) => MESSAGE_PAGE,
+            None => self
+                .history
+                .present_limit
+                .remove(&channel_id)
+                .unwrap_or(MESSAGE_PAGE),
+        };
         let guild_id = self
             .store
             .guilds
@@ -309,17 +364,17 @@ impl DiscordApp {
             match around {
                 Some(0) => {
                     session
-                        .fetch_messages_after(guild_id, channel_id, 0, MESSAGE_PAGE)
+                        .fetch_messages_after(guild_id, channel_id, 0, limit)
                         .await
                 }
                 Some(message_id) => {
                     session
-                        .fetch_messages_around(guild_id, channel_id, message_id, MESSAGE_PAGE)
+                        .fetch_messages_around(guild_id, channel_id, message_id, limit)
                         .await
                 }
                 None => {
                     session
-                        .fetch_messages(guild_id, channel_id, None, MESSAGE_PAGE)
+                        .fetch_messages(guild_id, channel_id, None, limit)
                         .await
                 }
             }
@@ -328,14 +383,23 @@ impl DiscordApp {
             let result = request.await;
             this.update_in(cx, |app, window, cx| {
                 app.history.loading.remove(&channel_id);
+                let presenting =
+                    around.is_none() && app.history.pending_present.contains(&channel_id);
                 match result {
                     Ok(Ok(messages)) => {
                         app.history.failed.remove(&channel_id);
                         app.history.complete.remove(&channel_id);
+                        app.history.trimmed.remove(&channel_id);
+                        app.history.paused.remove(&channel_id);
+                        let previous_first = (app.selected_channel_id == channel_id)
+                            .then(|| app.channel())
+                            .flatten()
+                            .and_then(|channel| channel.oldest_history_message())
+                            .map(|message| message.id);
                         match around {
                             Some(_) => app.store.set_around_messages(channel_id, messages),
                             None => {
-                                if messages.len() < MESSAGE_PAGE {
+                                if messages.len() < limit {
                                     app.history.complete.insert(channel_id);
                                 }
                                 app.store.set_messages(channel_id, messages);
@@ -349,12 +413,22 @@ impl DiscordApp {
                         if app.selected_channel_id == channel_id {
                             let count = app.channel().map_or(0, |channel| channel.messages.len());
                             app.reset_messages(count);
+                            if presenting {
+                                app.glide_down_from_top(window, cx);
+                            }
                             if let Some(since) = around {
                                 app.messages.set_follow_mode(FollowMode::Normal);
                                 if app.history.pending_jump.take() == Some(since) {
                                     if let Some(index) = app.message_index(since) {
+                                        let start =
+                                            match previous_first {
+                                                Some(first) if !cx.reduce_motion() => {
+                                                    if since > first { 0 } else { count }
+                                                }
+                                                _ => index,
+                                            };
                                         app.messages.scroll_to(ListOffset {
-                                            item_ix: index,
+                                            item_ix: start,
                                             offset_in_item: px(0.),
                                         });
                                         let entity = app.entity.clone();
@@ -424,7 +498,7 @@ impl DiscordApp {
         .detach();
     }
 
-    pub(super) fn fetch_newer(&mut self, cx: &mut Context<Self>) {
+    fn fetch_newer(&mut self, limit: usize, cx: &mut Context<Self>) {
         if !self.live {
             return;
         }
@@ -446,7 +520,7 @@ impl DiscordApp {
         let guild_id = self.request_guild();
         let request = Tokio::spawn(cx, async move {
             session
-                .fetch_messages_after(guild_id, channel_id, newest, MESSAGE_PAGE)
+                .fetch_messages_after(guild_id, channel_id, newest, limit)
                 .await
         });
         cx.spawn(async move |this, cx| {
@@ -470,25 +544,20 @@ impl DiscordApp {
                                 .iter()
                                 .any(|message| message.delivery != Delivery::Sent)
                         });
-                        let inserted =
-                            app.store
-                                .append_messages(channel_id, messages, MESSAGE_PAGE);
+                        let inserted = app.store.append_messages(channel_id, messages, limit);
                         if inserted > 0 {
                             app.request_missing_members(channel_id);
-                            if app.selected_channel_id == channel_id {
-                                let len = app.channel().map_or(0, |channel| channel.messages.len());
-                                let index = len - inserted;
-                                app.messages.splice(index..index, inserted);
-                                app.messages.remeasure_items(if optimistic {
-                                    0..len
-                                } else {
-                                    index.saturating_sub(1)..(index + 1).min(len)
-                                });
-                            }
                         }
-                        if optimistic && inserted == 0 && app.selected_channel_id == channel_id {
+                        if app.selected_channel_id == channel_id {
                             let len = app.channel().map_or(0, |channel| channel.messages.len());
-                            app.messages.remeasure_items(0..len);
+                            let index = len - inserted;
+                            if inserted > 0 {
+                                app.messages.splice(index..index, inserted);
+                            }
+                            if optimistic {
+                                app.messages.remeasure_items(0..len);
+                            }
+                            app.newer_loaded(index, inserted, cx);
                         }
                     }
                     Ok(Err(error)) => {
@@ -507,11 +576,11 @@ impl DiscordApp {
         .detach();
     }
 
-    pub(super) fn fetch_older(&mut self, cx: &mut Context<Self>) {
-        self.fetch_older_in(self.selected_channel_id, cx);
+    pub(crate) fn fetch_older_in(&mut self, channel_id: u64, cx: &mut Context<Self>) {
+        self.fetch_older_page(channel_id, OLDER_PAGE, cx);
     }
 
-    pub(crate) fn fetch_older_in(&mut self, channel_id: u64, cx: &mut Context<Self>) {
+    fn fetch_older_page(&mut self, channel_id: u64, limit: usize, cx: &mut Context<Self>) {
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;
         };
@@ -537,7 +606,7 @@ impl DiscordApp {
         let guild_id = self.request_guild();
         let request = Tokio::spawn(cx, async move {
             session
-                .fetch_messages(guild_id, channel_id, Some(oldest), OLDER_PAGE)
+                .fetch_messages(guild_id, channel_id, Some(oldest), limit)
                 .await
         });
         cx.spawn(async move |this, cx| {
@@ -555,8 +624,7 @@ impl DiscordApp {
                             cx.notify();
                             return;
                         }
-                        let complete = messages.len() < OLDER_PAGE;
-                        if complete {
+                        if messages.len() < limit {
                             app.history.complete.insert(channel_id);
                         }
                         let optimistic = app.history_channel(channel_id).is_some_and(|channel| {
@@ -568,25 +636,10 @@ impl DiscordApp {
                         let inserted = app.store.prepend_messages(channel_id, messages);
                         if inserted > 0 {
                             app.prepend_thread_pane(channel_id, inserted, cx);
-                        }
-                        if complete && inserted == 0 && app.selected_channel_id == channel_id {
-                            app.messages.remeasure_items(0..1);
-                        }
-                        if inserted > 0 {
                             app.request_missing_members(channel_id);
-                            if app.selected_channel_id == channel_id {
-                                app.messages.splice(0..0, inserted);
-                                let len = app.channel().map_or(0, |channel| channel.messages.len());
-                                app.messages.remeasure_items(if optimistic {
-                                    0..len
-                                } else {
-                                    inserted..inserted + 1
-                                });
-                            }
                         }
-                        if optimistic && inserted == 0 && app.selected_channel_id == channel_id {
-                            let len = app.channel().map_or(0, |channel| channel.messages.len());
-                            app.messages.remeasure_items(0..len);
+                        if app.selected_channel_id == channel_id {
+                            app.older_loaded(inserted, optimistic, cx);
                         }
                     }
                     Ok(Err(error)) => {

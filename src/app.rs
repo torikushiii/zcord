@@ -87,8 +87,8 @@ struct ParseCache {
 const PARSED_CACHE_LIMIT: usize = 4096;
 const MESSAGE_PAGE: usize = 50;
 const OLDER_PAGE: usize = 20;
+const JUMP_PAGE: usize = 30;
 const OLDER_MESSAGES_THRESHOLD: usize = 8;
-const NEWER_MESSAGES_THRESHOLD: usize = 8;
 
 pub(crate) const DISCORD_EPOCH_MS: u64 = 1_420_070_400_000;
 const ACK_DELAY: Duration = Duration::from_secs(1);
@@ -112,6 +112,7 @@ struct JumpScroll {
 enum JumpTarget {
     Message(u64),
     Present,
+    Offset(Pixels),
 }
 
 pub(crate) const DIALOG_EXIT: Duration = Duration::from_millis(150);
@@ -135,6 +136,8 @@ actions!(
     zcord,
     [
         JumpToPresent,
+        ScrollPageUp,
+        ScrollPageDown,
         MarkGuildRead,
         ComposerUp,
         ComposerDown,
@@ -461,18 +464,7 @@ impl DiscordApp {
             },
             self_status: profile::StatusChange::default(),
             pending_token: None,
-            history: state::History {
-                loading: HashSet::new(),
-                older: HashSet::new(),
-                older_retry_at: HashMap::new(),
-                newer: HashSet::new(),
-                reaction_requests: HashSet::new(),
-                pending_present: HashSet::new(),
-                pending_jump: None,
-                failed: HashSet::new(),
-                jump_return: None,
-                complete: HashSet::new(),
-            },
+            history: state::History::default(),
             forum_pages: HashMap::new(),
             forum_columns: Rc::new(Cell::new(3)),
             forum_header: None,
@@ -630,14 +622,14 @@ impl DiscordApp {
         app.messages.set_scroll_handler(move |event, _, cx| {
             weak.update(cx, |app, cx| {
                 app.jumps.scroll = None;
-                if event.visible_range.start < OLDER_MESSAGES_THRESHOLD {
-                    app.fetch_older(cx);
-                }
                 // GPUI runs this handler while the list's state is mutably borrowed, so any
                 // `app.messages` call here panics; read the event and defer list access.
-                if event.visible_range.end + NEWER_MESSAGES_THRESHOLD >= event.count {
-                    app.fetch_newer(cx);
-                }
+                let entity = app.entity.clone();
+                cx.defer(move |cx| {
+                    entity
+                        .update(cx, |app, cx| app.check_message_edges(true, cx))
+                        .ok();
+                });
                 if app.live && (!event.is_following_tail || app.unread.bar) {
                     let entity = app.entity.clone();
                     let channel_id = app.selected_channel_id;

@@ -153,6 +153,14 @@ impl Render for DiscordApp {
                 }
             }))
             .on_action(cx.listener(|app, _: &JumpToPresent, window, cx| app.escape(window, cx)))
+            .on_action(
+                cx.listener(|app, _: &ScrollPageUp, window, cx| app.scroll_page(false, window, cx)),
+            )
+            .on_action(
+                cx.listener(|app, _: &ScrollPageDown, window, cx| {
+                    app.scroll_page(true, window, cx)
+                }),
+            )
             .on_scroll_wheel(cx.listener(|app, _, _, cx| {
                 app.close_expression_info(cx);
             }))

@@ -9,18 +9,38 @@ pub(super) fn new_messages_bar(
     app: &DiscordApp,
     entity: WeakEntity<DiscordApp>,
 ) -> Option<AnyElement> {
-    if !app.unread.bar || is_detached(app) {
+    if !app.unread.bar {
         return None;
     }
     let since = app.unread.since?;
     let channel = app.channel()?;
-    let index = channel.first_unread_index(since, app.store.current_user_id)?;
-    if app.messages.item_is_above_viewport(index) != Some(true) {
-        return None;
-    }
-    let truncated = index == 0 && !app.history.complete.contains(&channel.id);
-    let count = channel.unread_message_count(since, app.store.current_user_id);
-    let timestamp = channel.messages[index].timestamp;
+    let me = app.store.current_user_id;
+    let loaded = channel.unread_message_count(since, me);
+    let trimmed = app.history.trimmed.get(&channel.id);
+    let cached = trimmed.map_or(0, |trimmed| trimmed.older_unread(since, me).count());
+    let (count, timestamp, truncated) = match trimmed.and_then(|trimmed| {
+        trimmed
+            .older_unread(since, me)
+            .next()
+            .map(|first| (trimmed, first))
+    }) {
+        Some((trimmed, first)) => (
+            cached + loaded,
+            first.timestamp,
+            trimmed.older.messages.first().map(|message| message.id) == Some(first.id)
+                && !trimmed.older_reaches_start(),
+        ),
+        None => {
+            let index = channel.first_unread_index(since, me)?;
+            if app.messages.item_is_above_viewport(index) != Some(true) {
+                return None;
+            }
+            let truncated = index == 0
+                && trimmed.is_none_or(|trimmed| trimmed.older.messages.is_empty())
+                && app.has_older_history(channel.id);
+            (loaded, channel.messages[index].timestamp, truncated)
+        }
+    };
     let today = chrono::Local::now().date_naive();
     let since_text = if (
         u32::from(timestamp.year),
@@ -63,8 +83,9 @@ pub(super) fn new_messages_bar(
                     .truncate()
                     .font_weight(FontWeight::MEDIUM)
                     .cursor_pointer()
-                    .on_click(move |_, _, cx| {
-                        jump.update(cx, |app, cx| app.jump_to_unread(cx)).ok();
+                    .on_click(move |_, window, cx| {
+                        jump.update(cx, |app, cx| app.jump_to_unread(window, cx))
+                            .ok();
                     })
                     .child(label),
             )
@@ -76,7 +97,15 @@ pub(super) fn new_messages_bar(
                     .cursor_pointer()
                     .on_click(move |_, window, cx| {
                         entity
-                            .update(cx, |app, cx| app.jump_to_present(window, cx))
+                            .update(cx, |app, cx| {
+                                if is_detached(app) {
+                                    app.mark_channel_read(cx);
+                                    app.views.messages.update(cx, |_, cx| cx.notify());
+                                } else {
+                                    let limit = app.page_size(cx);
+                                    app.jump_to_present(limit, window, cx);
+                                }
+                            })
                             .ok();
                     })
                     .child("Mark As Read"),
@@ -120,7 +149,7 @@ fn reply_visible(app: &DiscordApp, reply_id: u64) -> bool {
     })
 }
 
-const BOTTOM_BAR_OFFSET: f32 = 28.;
+const BOTTOM_BAR_OFFSET: f32 = 20.;
 const BRAND_HOVER: u32 = 0x4752C4;
 
 type BarAction = fn(&mut DiscordApp, &mut Window, &mut Context<DiscordApp>);
@@ -149,19 +178,6 @@ pub(super) fn history_bar(app: &DiscordApp, entity: WeakEntity<DiscordApp>) -> O
             },
             |app, window, cx| app.retry_history(window, cx),
         )
-    } else if let Some((_, reply_id)) = app
-        .history
-        .jump_return
-        .filter(|(channel, _)| *channel == channel_id)
-        && !(loading && app.history.pending_present.contains(&channel_id))
-        && !reply_visible(app, reply_id)
-    {
-        (
-            "jump-to-reply",
-            "You Are Viewing a Reply.",
-            BarEnd::Button("Jump To Original Message"),
-            |app, window, cx| app.jump_back_to_reply(window, cx),
-        )
     } else if !is_detached(app) {
         return None;
     } else if loading && app.history.pending_present.contains(&channel_id) {
@@ -171,12 +187,27 @@ pub(super) fn history_bar(app: &DiscordApp, entity: WeakEntity<DiscordApp>) -> O
             BarEnd::Loading,
             |_, _, _| {},
         )
+    } else if let Some((_, reply_id)) = app
+        .history
+        .jump_return
+        .filter(|(channel, _)| *channel == channel_id)
+        && !reply_visible(app, reply_id)
+    {
+        (
+            "jump-to-reply",
+            "You Are Viewing a Reply.",
+            BarEnd::Button("Jump To Original Message"),
+            |app, window, cx| app.jump_back_to_reply(window, cx),
+        )
     } else {
         (
             "jump-to-present",
             "You're Viewing Older Messages",
             BarEnd::Button("Jump To Present"),
-            |app, window, cx| app.jump_to_present(window, cx),
+            |app, window, cx| {
+                let limit = app.page_size(cx);
+                app.jump_to_present(limit, window, cx)
+            },
         )
     };
     let typing = if app.typing_users().is_empty() {
@@ -238,17 +269,38 @@ pub(super) fn history_bar(app: &DiscordApp, entity: WeakEntity<DiscordApp>) -> O
                     .py(rpx(8.))
                     .when(failed, |bar| bar.pl(rpx(16.)).pr(rpx(8.)))
                     .when(!failed, |bar| bar.px(rpx(12.)))
-                    .rounded(rpx(8.))
+                    .relative()
+                    .rounded(rpx(16.))
                     .border_1()
                     .border_color(rgba(theme::border()))
                     .bg(rgb(theme::surface_highest()))
-                    .shadow_md()
+                    .shadow(vec![BoxShadow {
+                        color: hsla(0., 0., 0., 0.16),
+                        offset: point(px(0.), px(4.)),
+                        blur_radius: px(8.),
+                        spread_radius: px(0.),
+                        inset: false,
+                    }])
                     .when(!busy, |bar| {
+                        let strip = entity.clone();
                         bar.cursor_pointer()
                             .active(|style| style.mb(rpx(-1.)))
                             .on_click(move |_, window, cx| {
                                 entity.update(cx, |app, cx| action(app, window, cx)).ok();
                             })
+                            .child(
+                                div()
+                                    .id("bar-reach")
+                                    .absolute()
+                                    .left(rpx(-16.))
+                                    .right(rpx(-16.))
+                                    .bottom(rpx(-9.))
+                                    .h(rpx(8.))
+                                    .cursor_pointer()
+                                    .on_click(move |_, window, cx| {
+                                        strip.update(cx, |app, cx| action(app, window, cx)).ok();
+                                    }),
+                            )
                     })
                     .child(
                         div()

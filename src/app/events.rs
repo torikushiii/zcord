@@ -48,6 +48,7 @@ impl DiscordApp {
                 self.reconnecting = false;
                 self.typing.clear();
                 self.thread_previews.clear();
+                self.forget_trimmed();
                 let reconnect = matches!(self.screen, Screen::Chat);
                 self.member_subscription = None;
                 self.store.apply(event);
@@ -79,10 +80,26 @@ impl DiscordApp {
                         self.typing_started(typing.channel_id, typing.user_id, cx)
                     }
                     Event::MessageCreate(message) => {
+                        self.trimmed_message_created(message.channel_id);
                         self.notify_message(message, cx);
                         self.typing_stopped(message.channel_id, message.author.id, cx)
                     }
-                    Event::MessageDelete { id, .. } => self.forget_message(*id, cx),
+                    Event::MessageUpdate(update) => {
+                        self.trimmed_message_changed(update.channel_id, update.id)
+                    }
+                    Event::MessageReactionAdd(event)
+                    | Event::MessageReactionRemove(event)
+                    | Event::MessageReactionRemoveAll(event)
+                    | Event::MessageReactionRemoveEmoji(event) => {
+                        self.trimmed_message_changed(event.channel_id, event.message_id)
+                    }
+                    Event::MessageReactionAddMany(event) => {
+                        self.trimmed_message_changed(event.channel_id, event.message_id)
+                    }
+                    Event::MessageDelete { channel_id, id } => {
+                        self.trimmed_message_deleted(*channel_id, *id);
+                        self.forget_message(*id, cx)
+                    }
                     Event::CallDelete { channel_id }
                         if self.voice.joined_call() == Some((0, *channel_id)) =>
                     {
@@ -186,6 +203,10 @@ impl DiscordApp {
                     .channel()
                     .and_then(|channel| channel.messages.get(index))
                     .is_some_and(|message| message.author_id == self.store.current_user_id);
+                let dropped = self.window_after_insert();
+                let index = index
+                    .saturating_sub(dropped)
+                    .min(self.channel().map_or(0, |channel| channel.messages.len()));
                 if self.unread.since.is_none() && !own && !self.viewing() {
                     self.unread.since =
                         self.channel()

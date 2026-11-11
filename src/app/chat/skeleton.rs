@@ -15,6 +15,31 @@ impl Shuffle {
 const SKELETON_GROUPS: usize = 14;
 
 pub(super) fn skeleton(seed: u64) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .justify_end()
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .overflow_hidden()
+        .pb(rpx(BOTTOM_SPACER))
+        .children(groups(seed))
+}
+
+pub(super) fn edge_placeholder(seed: u64, height: Pixels, above: bool) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .when(above, |this| this.justify_end())
+        .h(height)
+        .w_full()
+        .flex_none()
+        .overflow_hidden()
+        .children(groups(seed ^ u64::from(above)))
+}
+
+fn groups(seed: u64) -> Vec<Div> {
     let mut shuffle = Shuffle(seed ^ 0x9E37_79B9_7F4A_7C15);
     let bar = |width: f32, height: f32, color: Rgba| {
         div()
@@ -24,7 +49,7 @@ pub(super) fn skeleton(seed: u64) -> impl IntoElement {
             .rounded(rpx(height / 2.))
             .bg(color)
     };
-    let groups: Vec<_> = (0..SKELETON_GROUPS)
+    (0..SKELETON_GROUPS)
         .map(|_| {
             let name = shuffle.next(60..140) as f32;
             let lines: Vec<_> = (0..shuffle.next(1..4))
@@ -85,15 +110,5 @@ pub(super) fn skeleton(seed: u64) -> impl IntoElement {
                         .children(image),
                 )
         })
-        .collect();
-    div()
-        .flex()
-        .flex_col()
-        .justify_end()
-        .flex_1()
-        .min_h_0()
-        .w_full()
-        .overflow_hidden()
-        .pb(rpx(BOTTOM_SPACER))
-        .children(groups)
+        .collect()
 }

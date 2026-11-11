@@ -156,6 +156,8 @@ impl DiscordApp {
         let restored = self.compose.drafts.remove(&id).unwrap_or_default();
 
         if previous != id {
+            self.remember_scroll();
+            self.history.paused.clear();
             self.reset_mention_draft();
             self.expression_info.clear_open();
             self.compose.reply = None;
@@ -236,6 +238,8 @@ impl DiscordApp {
                 self.messages.set_follow_mode(FollowMode::Normal);
                 self.scroll_to_unread(since);
             }
+        } else if unread_since.is_none() {
+            self.restore_scroll();
         }
         cx.notify();
     }

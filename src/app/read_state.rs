@@ -85,7 +85,7 @@ impl DiscordApp {
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;
         };
-        if !self.store.at_present(channel_id) {
+        if !immediate && !self.store.at_present(channel_id) {
             return;
         }
         let Some(message_id) = self.store.channel_ack(channel_id) else {

@@ -541,7 +541,7 @@ impl Message {
         self.author_id == other.author_id && self.webhook == other.webhook
     }
 
-    pub(super) fn in_history(&self) -> bool {
+    pub(in crate::store) fn in_history(&self) -> bool {
         self.delivery == Delivery::Sent
             && self
                 .send_order

@@ -81,7 +81,7 @@ pub(super) fn render_pane_row(
         && !run.revealed
         && index != run.start
     {
-        return hidden_row(index + 1 == messages.len());
+        return hidden_row(index + 1 == messages.len()).into_any_element();
     }
     let start = index == 0 && app.history.complete.contains(&channel_id);
     let post = app.store.forum_post(channel_id);
@@ -132,19 +132,26 @@ pub(super) fn render_row(app: &DiscordApp, index: usize, cx: &App) -> AnyElement
         return div().into_any_element();
     };
     let (new_day, grouped) = row_grouping(messages, index);
+    let last = index + 1 == messages.len();
+    let channel_id = app.selected_channel_id;
+    let above = (index == 0 && app.has_older_history(channel_id))
+        .then(|| edge_placeholder(channel_id, app.edge_placeholder_height(), true));
+    let below = (last && is_detached(app))
+        .then(|| edge_placeholder(channel_id, app.edge_placeholder_height(), false));
     let run = blocked_run(app, messages, index);
     if let Some(run) = &run
         && !run.revealed
         && index != run.start
     {
-        return hidden_row(index + 1 == messages.len());
+        return hidden_row(last).children(below).into_any_element();
     }
-    let start = index == 0 && app.history.complete.contains(&app.selected_channel_id);
+    let start = index == 0 && app.history.complete.contains(&channel_id);
     let first_unread = app.unread.since.is_some_and(|since| {
         is_first_unread(messages, index, since, start, app.store.current_user_id)
     });
     div()
         .w_full()
+        .children(above)
         .when(start, |this| this.children(welcome(app, cx)))
         .map(|this| {
             if new_day || start {
@@ -155,21 +162,19 @@ pub(super) fn render_row(app: &DiscordApp, index: usize, cx: &App) -> AnyElement
                 this
             }
         })
-        .when(index + 1 == messages.len(), |this| {
-            this.pb(rpx(BOTTOM_SPACER))
-        })
+        .when(last && below.is_none(), |this| this.pb(rpx(BOTTOM_SPACER)))
         .child(match &run {
             Some(run) => blocked_row(app, messages, index, run, grouped, false, cx),
             None => render_message(app, message, grouped, false, cx),
         })
+        .children(below)
         .into_any_element()
 }
 
-fn hidden_row(last: bool) -> AnyElement {
+fn hidden_row(last: bool) -> Div {
     div()
         .w_full()
         .when(last, |this| this.pb(rpx(BOTTOM_SPACER)))
-        .into_any_element()
 }
 
 pub(super) fn is_first_unread(

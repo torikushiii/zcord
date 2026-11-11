@@ -54,7 +54,7 @@ pub(in crate::app) use popouts::{
     ChannelPopout, PopoutKind, channel_popout, pins_button, threads_button,
 };
 use rows::{render_row, request_invites, request_thread_preview, welcome};
-use skeleton::skeleton;
+use skeleton::{edge_placeholder, skeleton};
 pub(in crate::app) use thread_pane::ThreadPane;
 pub(crate) use thread_pane::{WIDTH as THREAD_PANE_WIDTH, render_thread_pane};
 pub(in crate::app) use thread_ui::{CreateThread, ThreadMenu, create_thread_dialog, thread_menu};
@@ -216,16 +216,25 @@ pub fn messages(app: &DiscordApp, cx: &App) -> AnyElement {
                         .children(welcome(app, cx)),
                 )
             } else {
-                let bar = if is_detached(app) {
-                    None
-                } else {
-                    new_messages_bar(app, app.entity.clone())
-                };
+                let height = app.messages.viewport_bounds().size.height;
+                let rows = app.messages.item_count();
+                if app.history.placeholder_height.replace(height) != height && rows > 0 {
+                    app.messages.remeasure_items(0..1);
+                    app.messages.remeasure_items(rows - 1..rows);
+                }
+                let bar = new_messages_bar(app, app.entity.clone());
                 let history = history_bar(app, app.entity.clone());
                 let missing = jump_missing_notice(app);
+                let edges = app.entity.clone();
                 this.child(
                     div()
                         .relative()
+                        .on_prepaint(move |_, _, cx| {
+                            let edges = edges.clone();
+                            cx.defer(move |cx| {
+                                edges.update(cx, |app, cx| app.run_edge_check(cx)).ok();
+                            });
+                        })
                         .flex()
                         .flex_col()
                         .flex_1()
