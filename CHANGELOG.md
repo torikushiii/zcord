@@ -2,6 +2,13 @@
 
 ## Unversioned
 
+## 0.10.0
+
+- Major: Added the Shop to Home. Browse Featured, the Orbs Shop, collections and the full catalog with search, type, color and theme filters and sorting, and preview decorations, nameplates and profile effects on your own profile. To buy, gift or redeem an item, zcord opens it on discord.com.
+- Minor: Shop bundles play their animated art when hovered.
+- Minor: WebM videos encoded with VP9 now play inline on Windows, including ones with transparency.
+- Bugfix: Fixed servers, categories and channels muted in the official client still showing unread indicators.
+
 ## 0.9.1
 
 - Major: Reworked message search. Suggestions are grouped under headings and offer users and channels for plain words, History keeps your last five searches, the new Filters dialog adds From, In, Has, Mentions, date, author type and pinned filters, matching words are highlighted in results, and results page with numbered pages.
