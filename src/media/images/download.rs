@@ -119,6 +119,43 @@ impl Service {
         Some(bytes.to_vec())
     }
 
+    pub(crate) async fn save_original(&self, url: &str, target: &Path) -> std::io::Result<()> {
+        let url = reqwest::Url::parse(url)
+            .ok()
+            .filter(allowed_url)
+            .ok_or_else(|| std::io::Error::other("attachment URL is not a Discord CDN URL"))?;
+        let mut response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(std::io::Error::other)?;
+        let temp = target.with_extension(format!(
+            "part-{}-{:016x}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let result = async {
+            let mut file = tokio::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp)
+                .await?;
+            while let Some(chunk) = response.chunk().await.map_err(std::io::Error::other)? {
+                file.write_all(&chunk).await?;
+            }
+            file.flush().await?;
+            drop(file);
+            tokio::fs::rename(&temp, target).await
+        }
+        .await;
+        if result.is_err() {
+            let _ = tokio::fs::remove_file(&temp).await;
+        }
+        result
+    }
+
     pub(crate) async fn fetch_size(&self, url: &str) -> Option<u64> {
         let url = reqwest::Url::parse(url).ok().filter(allowed_url)?;
         let response = self.client.head(url).send().await.ok()?;

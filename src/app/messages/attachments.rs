@@ -488,6 +488,40 @@ impl DiscordApp {
             .unwrap_or(&[])
     }
 
+    pub(crate) fn download_attachment(
+        &mut self,
+        url: String,
+        filename: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(service) = crate::media::images::download_service(cx) else {
+            return;
+        };
+        let directory = dirs::download_dir().unwrap_or_default();
+        let target = cx.prompt_for_new_path(&directory, Some(&filename));
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(target))) = target.await else {
+                return;
+            };
+            let saved = Tokio::spawn(
+                cx,
+                async move { service.save_original(&url, &target).await },
+            )
+            .await;
+            let error = match saved {
+                Ok(Ok(())) => return,
+                Ok(Err(error)) => error.to_string(),
+                Err(error) => error.to_string(),
+            };
+            log::warn!("Could not download {filename}: {error}");
+            this.update(cx, |app, cx| {
+                app.show_toast(format!("Could not download {filename}"), false, cx)
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     pub(crate) fn dismiss_upload_refusal(&mut self, cx: &mut Context<Self>) {
         if self.uploads.refusal.take().is_some() {
             cx.notify();

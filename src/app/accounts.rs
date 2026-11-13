@@ -581,7 +581,12 @@ impl DiscordApp {
         cx.notify();
     }
 
-    fn show_toast(&mut self, text: impl Into<SharedString>, success: bool, cx: &mut Context<Self>) {
+    pub(crate) fn show_toast(
+        &mut self,
+        text: impl Into<SharedString>,
+        success: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.accounts.toast = Some((text.into(), success));
         self.accounts.toast_serial += 1;
         self.accounts.toast_timer = Some(cx.spawn(async move |this, cx| {

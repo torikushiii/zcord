@@ -5,6 +5,7 @@ use crate::discord::settings_proto::StickerAnimation;
 use crate::store::AttachmentExt as _;
 
 const MEDIA_MAX: (f32, f32) = (550., 350.);
+const FILE_CARD_WIDTH: f32 = 432.;
 
 thread_local! {
     static MEDIA_LIMIT: std::cell::Cell<f32> = const { std::cell::Cell::new(f32::INFINITY) };
@@ -160,7 +161,7 @@ pub(super) fn render_attachments(
     if !crate::settings::display().inline_attachment_media {
         return attachments
             .iter()
-            .map(|attachment| file_card(attachment).into_any_element())
+            .map(|attachment| file_card(app, attachment).into_any_element())
             .collect();
     }
     let (visual, files): (Vec<_>, Vec<_>) = attachments.iter().partition(|attachment| {
@@ -185,7 +186,7 @@ pub(super) fn render_attachments(
         .chain(
             files
                 .into_iter()
-                .map(|attachment| file_card(attachment).into_any_element()),
+                .map(|attachment| file_card(app, attachment).into_any_element()),
         )
         .collect()
 }
@@ -197,7 +198,7 @@ fn render_attachment(app: &DiscordApp, attachment: &Attachment, cx: &App) -> Any
         attachment.image_spec().is_some()
     };
     if !visual {
-        return file_card(attachment).into_any_element();
+        return file_card(app, attachment).into_any_element();
     }
     let (width, height) = (
         attachment.width.unwrap_or(1).max(1) as f32,
@@ -223,7 +224,7 @@ fn attachment_box(
 ) -> AnyElement {
     if attachment.is_video() {
         let Some(url) = attachment.video_url() else {
-            return file_card(attachment).into_any_element();
+            return file_card(app, attachment).into_any_element();
         };
         let poster = attachment.video_poster_spec();
         if attachment.spoiler() && !app.spoiler_shown(&(attachment.id, 0)) {
@@ -260,7 +261,7 @@ fn attachment_box(
         .into_any_element();
     }
     let Some(spec) = attachment.image_spec() else {
-        return file_card(attachment).into_any_element();
+        return file_card(app, attachment).into_any_element();
     };
     let (original_width, original_height) = (
         attachment.width.unwrap_or(1).max(1),
@@ -389,14 +390,27 @@ fn animated_attachment(attachment: &Attachment) -> bool {
     gif_type || gif_extension
 }
 
-fn file_card(attachment: &Attachment) -> impl IntoElement + use<> {
-    div()
+fn file_card(app: &DiscordApp, attachment: &Attachment) -> impl IntoElement + use<> {
+    let id = attachment.id;
+    let group = SharedString::from(format!("file-card-{id}"));
+    let download = || {
+        let entity = app.entity.clone();
+        let url = attachment.url.clone();
+        let filename = attachment.filename.clone();
+        move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+            entity
+                .update(cx, |app, cx| {
+                    app.download_attachment(url.clone(), filename.clone(), cx)
+                })
+                .ok();
+            cx.stop_propagation();
+        }
+    };
+    let card = div()
         .flex()
         .items_center()
-        .gap_3()
-        .mt_1()
-        .max_w(rpx(432.))
-        .p_3()
+        .gap(rpx(8.))
+        .p(rpx(16.))
         .rounded(rpx(8.))
         .bg(rgb(theme::elevated()))
         .border_1()
@@ -408,16 +422,58 @@ fn file_card(attachment: &Attachment) -> impl IntoElement + use<> {
                 .flex_col()
                 .min_w_0()
                 .child(
-                    div()
-                        .truncate()
-                        .text_color(rgb(theme::link()))
-                        .child(attachment.filename.clone()),
+                    div().flex().min_w_0().child(
+                        div()
+                            .id(("file-card-name", id))
+                            .truncate()
+                            .line_height(rpx(20.))
+                            .text_color(rgb(theme::link()))
+                            .cursor_pointer()
+                            .hover(|style| style.underline())
+                            .on_click(download())
+                            .child(attachment.filename.clone()),
+                    ),
                 )
                 .child(
                     div()
                         .text_size(rpx(12.))
+                        .line_height(rpx(16.))
                         .text_color(rgb(theme::faint()))
                         .child(file_size(attachment.size)),
+                ),
+        );
+    // GPUI group hover tracks the group's own hitbox; the padding keeps the overhanging button
+    // inside it so the button does not hide as the pointer reaches it.
+    div()
+        .relative()
+        .group(group.clone())
+        .mt(rpx(-4.))
+        .mr(rpx(-8.))
+        .max_w(rpx(FILE_CARD_WIDTH + 8.))
+        .pt(rpx(8.))
+        .pr(rpx(8.))
+        .child(card)
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .right_0()
+                .flex()
+                .rounded(rpx(5.))
+                .bg(rgb(theme::elevated()))
+                .border_1()
+                .border_color(rgba(theme::border()))
+                .invisible()
+                .group_hover(group, |style| style.visible())
+                .child(
+                    theme::icon_button(("file-card-download", id), "download", 20., theme::muted())
+                        .size(rpx(32.))
+                        .relative()
+                        .child(theme::hover_tooltip(
+                            ("file-card-download-tip", id),
+                            "Download",
+                        ))
+                        .on_click(download()),
                 ),
         )
 }
