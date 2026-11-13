@@ -88,6 +88,29 @@ impl Store {
             })
     }
 
+    pub fn channel_muted_with_parent(&self, guild_id: u64, channel: &Channel, now_ms: u64) -> bool {
+        self.channel_muted(guild_id, channel.id, now_ms)
+            || channel
+                .parent_id
+                .is_some_and(|parent| self.channel_muted(guild_id, parent, now_ms))
+    }
+
+    pub fn channel_unread_visible(&self, guild_id: u64, channel: &Channel, now_ms: u64) -> bool {
+        channel.unread
+            && !self.guild_muted(guild_id, now_ms)
+            && !self.channel_muted_with_parent(guild_id, channel, now_ms)
+    }
+
+    pub fn guild_unread_visible(&self, guild: &Guild, now_ms: u64) -> bool {
+        guild.unread
+            && !self.guild_muted(guild.id, now_ms)
+            && guild.channels().any(|channel| {
+                channel.kind.is_unreadable()
+                    && !self.channel_muted_with_parent(guild.id, channel, now_ms)
+                    && channel.unread
+            })
+    }
+
     pub fn guild_mute_end(&self, guild_id: u64, now_ms: u64) -> Option<u64> {
         let settings = self.notification_settings.get(&Some(guild_id))?;
         settings

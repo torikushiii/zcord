@@ -375,12 +375,17 @@ pub fn render(app: &DiscordApp, dms: &RailDms, cx: &App) -> impl IntoElement + u
 
 fn favorites_item(app: &DiscordApp, morphs: Option<Instant>) -> Stateful<Div> {
     let selected = app.favorites_view;
+    let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
     let unread = app.favorite_channels().into_iter().any(|id| {
+        let Some(guild_id) = app.store.channel_guild_id(id) else {
+            return false;
+        };
         app.store
-            .channel_guild_id(id)
-            .and_then(|guild_id| app.store.guild_by_id(guild_id))
+            .guild_by_id(guild_id)
             .and_then(|guild| guild.channel(id))
-            .is_some_and(|channel| channel.unread || channel.mentions > 0)
+            .is_some_and(|channel| {
+                channel.mentions > 0 || app.store.channel_unread_visible(guild_id, channel, now_ms)
+            })
     });
     let entity = app.entity.clone();
     rail_item(
@@ -428,7 +433,9 @@ fn guild_item(app: &DiscordApp, guild: &Guild, cx: &App, morphs: Option<Instant>
         .as_ref()
         .is_some_and(|call| call.guild_id == id && call.connected);
     let entity = app.entity.clone();
-    rail_item(("guild", id), id, None, selected, guild.unread, app)
+    let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+    let unread = app.store.guild_unread_visible(guild, now_ms);
+    rail_item(("guild", id), id, None, selected, unread, app)
         .when(app.hover.rail == Some(id), |this| {
             this.child(guild_tooltip(app, guild, cx))
         })
@@ -609,7 +616,10 @@ fn folder_item(app: &DiscordApp, folder: &Folder, cx: &App, morphs: Option<Insta
     );
     let contains_selected =
         !app.favorites_view && guilds.iter().any(|guild| guild.id == app.selected_guild_id);
-    let unread = guilds.iter().any(|guild| guild.unread);
+    let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+    let unread = guilds
+        .iter()
+        .any(|guild| app.store.guild_unread_visible(guild, now_ms));
     let mentions = guilds.iter().map(|guild| guild.mentions).sum::<u32>();
     let tint = rgba((color << 8) | 0x40);
 

@@ -61,11 +61,16 @@ pub(super) fn row_content(
                 .into_any_element(),
             None => div().into_any_element(),
         },
-        Row::Channel { category, channel } => match guild
-            .and_then(|guild| guild.categories.get(category))
-            .and_then(|category| category.channels.get(channel))
-        {
-            Some(channel) if openness < 1. => div()
+        Row::Channel { category, channel } => match guild.and_then(|guild| {
+            let channel = guild.categories.get(category)?.channels.get(channel)?;
+            let muted = app.is_some_and(|(app, _)| {
+                let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+                app.store
+                    .channel_muted_with_parent(guild.id, channel, now_ms)
+            });
+            Some((channel, muted))
+        }) {
+            Some((channel, muted)) if openness < 1. => div()
                 .h(rpx((CHANNEL_HEIGHT + CHANNEL_GAP) * openness))
                 .overflow_hidden()
                 .opacity(openness)
@@ -76,14 +81,16 @@ pub(super) fn row_content(
                         .child(channel_row(
                             channel,
                             selected == channel.id,
+                            muted,
                             voice,
                             actions(app, channel, selected),
                         )),
                 )
                 .into_any_element(),
-            Some(channel) => channel_row(
+            Some((channel, muted)) => channel_row(
                 channel,
                 selected == channel.id,
+                muted,
                 voice,
                 actions(app, channel, selected),
             )
@@ -102,7 +109,15 @@ pub(super) fn thread_row(
     let id = thread.id;
     let selected = app.selected_channel_id == id;
     let mentions = app.store.thread_mentions(id);
-    let unread = (app.store.thread_unread(id) || mentions > 0) && !selected;
+    let muted = thread.muted
+        || app.guild().is_some_and(|guild| {
+            let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+            guild.channel(thread.parent_id).is_some_and(|parent| {
+                app.store
+                    .channel_muted_with_parent(guild.id, parent, now_ms)
+            })
+        });
+    let unread = (app.store.thread_unread(id) || mentions > 0) && !selected && !muted;
     let entity = app.entity.clone();
     div().w_full().pl(rpx(36.)).pr_2().child(
         div()
@@ -124,6 +139,8 @@ pub(super) fn thread_row(
             })
             .text_color(rgb(if selected || unread {
                 theme::strong()
+            } else if muted {
+                theme::interactive_muted()
             } else {
                 theme::muted()
             }))
@@ -182,14 +199,16 @@ pub(super) fn thread_row(
 fn channel_row(
     channel: &Channel,
     selected: bool,
+    muted: bool,
     voice: Option<voice::Joined>,
     actions: Option<Div>,
 ) -> impl IntoElement + use<> {
     let id = channel.id;
     let joined = voice.filter(|voice| voice.channel_id == id);
     let mentions = channel.mentions;
-    let new_posts = channel.new_posts;
-    let unread = (channel.unread || mentions > 0 || new_posts > 0) && !selected;
+    let new_posts = if muted { 0 } else { channel.new_posts };
+    let dim = muted && !selected && joined.is_none();
+    let unread = (channel.unread || mentions > 0 || new_posts > 0) && !selected && !muted;
     let (icon, lock_built_in) = match (channel.kind, channel.private) {
         (ChannelKind::Text, true) => ("hash-lock", true),
         (ChannelKind::Text, false) => ("hash", false),
@@ -255,6 +274,8 @@ fn channel_row(
         .cursor_pointer()
         .text_color(rgb(if selected || unread || joined.is_some() {
             theme::strong()
+        } else if dim {
+            theme::interactive_muted()
         } else {
             theme::muted()
         }))
@@ -286,6 +307,8 @@ fn channel_row(
                 theme::GREEN
             } else if selected || unread {
                 theme::strong()
+            } else if dim {
+                theme::interactive_muted()
             } else {
                 theme::faint()
             };
@@ -422,12 +445,16 @@ fn favorite_action(app: &DiscordApp, id: u64) -> Stateful<Div> {
 
 pub(super) fn favorites_sidebar(app: &DiscordApp) -> impl IntoElement {
     let selected = app.selected_channel_id;
+    let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
     let rows: Vec<AnyElement> = app
         .favorite_channels()
         .into_iter()
         .filter_map(|id| {
             let guild = app.store.guild_by_id(app.store.channel_guild_id(id)?)?;
             let channel = guild.channel(id)?;
+            let muted = app
+                .store
+                .channel_muted_with_parent(guild.id, channel, now_ms);
             let entity = app.entity.clone();
             let actions = Some(
                 div()
@@ -446,7 +473,7 @@ pub(super) fn favorites_sidebar(app: &DiscordApp) -> impl IntoElement {
                             .update(cx, |app, cx| app.open_favorite_channel(id, window, cx))
                             .ok();
                     })
-                    .child(channel_row(channel, selected == id, None, actions))
+                    .child(channel_row(channel, selected == id, muted, None, actions))
                     .child(
                         div()
                             .pl(rpx(36.))

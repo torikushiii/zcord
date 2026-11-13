@@ -65,6 +65,53 @@ fn guild_mute_query_checks_only_the_guild_and_expires_at_the_boundary() {
 }
 
 #[test]
+fn guild_unread_pill_hides_for_muted_guilds_channels_and_categories() {
+    let visible = |entries: Value| {
+        let store = make_store(entries);
+        let guild = store.guild_by_id(200).unwrap();
+        assert!(guild.unread);
+        assert_eq!(guild.mentions, 3);
+        store.guild_unread_visible(guild, NOW)
+    };
+    assert!(visible(json!([])));
+    assert!(!visible(json!([{"guild_id": "200", "muted": true}])));
+    assert!(!visible(json!([
+        {"guild_id": "200", "channel_overrides": [{"channel_id": "2002", "muted": true}]}
+    ])));
+    assert!(!visible(json!([
+        {"guild_id": "200", "channel_overrides": [{"channel_id": "220", "muted": true}]}
+    ])));
+    assert!(visible(json!([{
+        "guild_id": "200", "muted": true, "mute_config": {"end_time": NOW - 1},
+        "channel_overrides": [{"channel_id": "2003", "muted": true}]
+    }])));
+    assert!(visible(json!([{
+        "guild_id": "200",
+        "channel_overrides": [
+            {"channel_id": "2002", "muted": true, "mute_config": {"end_time": NOW - 1}}
+        ]
+    }])));
+}
+
+#[test]
+fn channel_unread_hides_when_its_guild_is_muted() {
+    let visible = |entries: Value| {
+        let store = make_store(entries);
+        let channel = store.guild_by_id(200).unwrap().channel(2002).unwrap();
+        assert!(channel.unread);
+        store.channel_unread_visible(200, channel, NOW)
+    };
+    assert!(visible(json!([])));
+    assert!(!visible(json!([{"guild_id": "200", "muted": true}])));
+    assert!(!visible(json!([
+        {"guild_id": "200", "channel_overrides": [{"channel_id": "220", "muted": true}]}
+    ])));
+    assert!(visible(json!([
+        {"guild_id": "200", "muted": true, "mute_config": {"end_time": NOW - 1}}
+    ])));
+}
+
+#[test]
 fn guild_notification_query_resolves_settings_then_default_then_all() {
     use model::NotificationLevel::{All, Mentions, Nothing};
 
