@@ -15,7 +15,7 @@ pub(super) fn frame_overflow(card: &ProfileCard, width: f32) -> Option<Edges<f32
     Some(item_overflow(profile_frame(card)?.1, width))
 }
 
-pub(super) fn item_overflow(item: &model::CollectibleItem, width: f32) -> Edges<f32> {
+pub(crate) fn item_overflow(item: &model::CollectibleItem, width: f32) -> Edges<f32> {
     let scale = width / item.inner_width.unwrap_or(1200).max(1) as f32;
     let horizontal = item.overflow_horizontal.unwrap_or(0) as f32 * scale;
     Edges {
@@ -36,7 +36,7 @@ pub(super) fn framed(
     framed_with(profile_frame(card), width, body, fill, cx)
 }
 
-pub(super) fn framed_with(
+pub(crate) fn framed_with(
     frame: Option<(u64, &model::CollectibleItem)>,
     width: f32,
     body: AnyElement,

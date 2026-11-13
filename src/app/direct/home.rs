@@ -78,6 +78,7 @@ pub(crate) enum HomePage {
     Friends,
     Requests,
     Quests,
+    Shop,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -93,6 +94,7 @@ pub(crate) struct Home {
     tab: FriendsTab,
     pub(crate) friends: friends::Friends,
     pub(crate) quests: quests::QuestHome,
+    pub(crate) shop: crate::app::shop::Shop,
     requests_tab: RequestsTab,
     previews_requested: HashSet<u64>,
     suggestions_loading: bool,
@@ -159,7 +161,7 @@ impl DiscordApp {
         self.show_home_page(HomePage::Requests, window, cx);
     }
 
-    fn open_quests(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_quests(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.show_home_page(HomePage::Quests, window, cx);
         self.load_quests(cx);
     }
@@ -266,7 +268,12 @@ impl DiscordApp {
         .detach();
     }
 
-    fn show_home_page(&mut self, page: HomePage, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn show_home_page(
+        &mut self,
+        page: HomePage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.enter_home();
         self.dismiss_call_view();
         self.home.page = page;

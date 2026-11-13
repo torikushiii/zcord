@@ -12,4 +12,5 @@ mod quests;
 mod relationships;
 mod saved;
 mod settings;
+mod shop;
 mod threads;

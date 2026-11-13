@@ -281,6 +281,7 @@ impl Render for ChatHeaderView {
                 home::HomePage::Friends => home::friends_header(app).into_any_element(),
                 home::HomePage::Requests => home::requests_header(app).into_any_element(),
                 home::HomePage::Quests => super::activity::quests::header(app).into_any_element(),
+                home::HomePage::Shop => super::shop::header(app, cx),
             }
         } else if app.is_home() {
             home::dm_header(app, cx).into_any_element()
@@ -380,6 +381,7 @@ impl Render for MessagesView {
                 home::HomePage::Quests => {
                     super::activity::quests::page(app, &self.quest_cards, window, cx)
                 }
+                home::HomePage::Shop => super::shop::page(app, window),
             };
         }
         chat::messages(app, cx)
@@ -576,6 +578,7 @@ impl Render for OverlaysView {
             .children(super::accounts::manage_dialog(app, cx))
             .children(super::login::add_account_dialog(app, cx))
             .children(super::profile::status_editor_dialog(app, cx))
+            .children(super::shop::overlay(app, window, cx))
             .children(super::accounts::toast(app))
             .into_any_element()
     }

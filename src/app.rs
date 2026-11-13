@@ -30,6 +30,7 @@ mod search;
 mod selection;
 mod settings_page;
 mod shell;
+mod shop;
 mod smooth_scroll;
 mod state;
 mod switcher;

@@ -50,6 +50,7 @@ pub(crate) use account_logic::StatusChange;
 pub(crate) use account_logic::{AccountAction, account_action};
 pub(crate) use board::presence_art;
 pub(crate) use custom_status::status_editor_dialog;
+pub(crate) use frame::{framed_with, item_overflow};
 use loading::{widget_application_ids, widget_game_ids};
 use modal::modal;
 use palette::{ProfilePalette, ProfileTheme};
@@ -840,7 +841,7 @@ fn effect_hover(app: &DiscordApp, panel: bool) -> impl Fn(&bool, &mut Window, &m
     }
 }
 
-fn effect_item_layers(
+pub(crate) fn effect_item_layers(
     item: &model::CollectibleItem,
     clock: &RefCell<Option<Instant>>,
     width: f32,

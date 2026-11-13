@@ -254,7 +254,8 @@ impl DiscordApp {
             cx.notify();
             return;
         }
-        if self.close_message_menu(cx)
+        if self.close_shop_layers(cx)
+            || self.close_message_menu(cx)
             || self.close_dm_menu(cx)
             || self.close_dm_dialog(cx)
             || self.close_guild_menu(cx)

@@ -2240,3 +2240,280 @@ fn ready_and_voice_state_fill_voice_channel_members() {
             .is_some_and(|member| member.id() == Some(3))
     );
 }
+
+fn shop_prices(regular: u64, nitro: u64, orbs: Option<u64>) -> Value {
+    let tier = |amount: u64| {
+        let mut prices = vec![
+            json!({"amount": amount, "currency": "idr", "exponent": 2}),
+            json!({"amount": 899, "currency": "usd", "exponent": 2}),
+        ];
+        prices.extend(
+            orbs.map(|orbs| json!({"amount": orbs, "currency": "discord_orb", "exponent": 0})),
+        );
+        json!({"country_prices": {"country_code": "ID", "prices": prices}})
+    };
+    json!({"0": tier(regular), "4": tier(nitro)})
+}
+
+#[test]
+fn shop_page_parses_blocks_and_skips_unknown_ones() {
+    let page: ShopPage = serde_json::from_value(json!({
+        "shop_blocks": [
+            {"type": 0, "category_sku_id": "100", "name": "Sample Set", "summary": " ",
+             "ranked_sku_ids": ["11", "12"], "hero_banner_url": "https://cdn.discordapp.com/media/v1/collectibles-shop/hero",
+             "hero_logo_url": "https://cdn.discordapp.com/media/v1/collectibles-shop/logo"},
+            {"type": 1, "subblocks": [
+                {"type": 0, "category_sku_id": "200", "name": "Promo", "asset_url": "https://cdn.discordapp.com/media/v1/collectibles-shop/promo"},
+                {"type": 0, "name": "missing id"}
+            ]},
+            {"type": 4, "name": "Row", "category_sku_id": "100", "ranked_sku_ids": ["12"], "show_button": false, "button_text": "Shop All"},
+            {"type": 2, "ranked_sku_ids": ["1", "2"], "sorted_sku_ids": {"recommended": [], "popular": ["3"]}},
+            {"type": 3, "title": "Orbs?", "body": "Spend them.", "wide_banner_url": "https://cdn.discordapp.com/assets/content/wide"},
+            {"type": 9, "anything": true},
+            "garbage"
+        ],
+        "categories": [{
+            "sku_id": "100", "name": "Sample Set", "summary": " ",
+            "styles": {"background_colors": [1316118, 3618615], "button_colors": [5793266]},
+            "products": [
+                {"sku_id": "12", "name": "Sample Decoration", "summary": "Give your avatar a new look.",
+                 "type": 0, "premium_type": 0, "category_sku_id": "100",
+                 "prices": shop_prices(7800000, 5200000, None),
+                 "items": [{"type": 0, "sku_id": "12", "asset": "a_00000000000000000000000000000001"}]},
+                {"sku_id": "11", "name": "Sample Bundle", "summary": "{joinedItems}", "type": 1000,
+                 "prices": shop_prices(16000000, 13000000, None),
+                 "preview_assets": {"fg_static": "https://cdn.discordapp.com/media/v1/collectibles-shop/bundle-fg-static/11",
+                                    "fg_video": "https://cdn.discordapp.com/media/v1/collectibles-shop/bundle-fg-video/11",
+                                    "bg_static": "https://cdn.discordapp.com/media/v1/collectibles-shop/bundle-bg-static/11"},
+                 "items": [{"type": 0, "sku_id": "12", "asset": "a_00000000000000000000000000000001"},
+                           {"type": 2, "sku_id": "13", "asset": "nameplates/sample/13/", "palette": "teal"}],
+                 "bundled_products": [
+                    {"sku_id": "12", "name": "Sample Decoration", "type": 0, "prices": shop_prices(7800000, 5200000, None)},
+                    {"sku_id": "13", "name": "Sample Plate", "type": 2, "prices": shop_prices(7800000, 5200000, None)}
+                 ]},
+                {"name": "no sku"}
+            ]
+        }]
+    }))
+    .unwrap();
+    let ShopBlock::Hero(hero) = &page.blocks[0] else {
+        panic!("hero first");
+    };
+    assert_eq!(
+        (
+            hero.collection_id,
+            hero.title.as_str(),
+            hero.summary.as_str()
+        ),
+        (Some(100), "Sample Set", "")
+    );
+    assert_eq!(hero.skus, [11, 12]);
+    let ShopBlock::Promos(promos) = &page.blocks[1] else {
+        panic!("promos second");
+    };
+    assert_eq!(promos.len(), 1);
+    assert_eq!(promos[0].collection_id, 200);
+    let ShopBlock::Row(row) = &page.blocks[2] else {
+        panic!("row third");
+    };
+    assert_eq!(row.button, None);
+    assert_eq!(
+        page.blocks[3],
+        ShopBlock::Grid(ShopGrid {
+            recommended: vec![1, 2],
+            popular: vec![3]
+        })
+    );
+    let ShopBlock::Info(info) = &page.blocks[4] else {
+        panic!("info fifth");
+    };
+    assert_eq!(
+        (info.title.as_str(), info.body.as_str()),
+        ("Orbs?", "Spend them.")
+    );
+    assert_eq!(page.blocks.len(), 5);
+
+    let collection = &page.collections[0];
+    assert_eq!(collection.styles.background, [0x141516, 0x373737]);
+    assert_eq!(collection.product_skus, [12, 11]);
+    let bundle = &collection.products[1];
+    assert_eq!(bundle.kind, ShopKind::Bundle);
+    assert_eq!(bundle.items.len(), 2);
+    assert_eq!(bundle.bundled[1].kind, ShopKind::Nameplate);
+    assert!(
+        bundle
+            .art
+            .foreground
+            .as_deref()
+            .is_some_and(|url| url.ends_with("/11"))
+    );
+    assert!(
+        bundle
+            .art
+            .video
+            .as_deref()
+            .is_some_and(|url| url.contains("bundle-fg-video"))
+    );
+    assert_eq!(
+        bundle.prices.local(true).map(|price| price.amount),
+        Some(13000000)
+    );
+    assert_eq!(
+        bundle
+            .prices
+            .local(false)
+            .map(|price| price.currency.as_str()),
+        Some("idr")
+    );
+    assert_eq!(bundle.prices.orbs(), None);
+}
+
+#[test]
+fn shop_prices_skip_orbs_for_money_and_fall_back_to_regular() {
+    let product: ShopProduct = serde_json::from_value(json!({
+        "sku_id": "5", "type": 0,
+        "prices": {"0": {"country_prices": {"prices": [
+            {"amount": 4100, "currency": "DISCORD_ORB", "exponent": 0},
+            {"amount": 599, "currency": "usd", "exponent": 2}
+        ]}}}
+    }))
+    .unwrap();
+    assert_eq!(product.prices.orbs(), Some(4100));
+    let nitro = product.prices.local(true).unwrap();
+    assert_eq!((nitro.amount, nitro.currency.as_str()), (599, "usd"));
+    let broken: ShopProduct =
+        serde_json::from_value(json!({"sku_id": "6", "prices": "nope"})).unwrap();
+    assert!(broken.prices.is_empty());
+}
+
+#[test]
+fn storefront_products_expand_variants_and_bundles() {
+    let products = storefront_products(json!({"products": [
+        {"id": "900", "summary": "Give your avatar a new look.",
+         "tenant_metadata": {"collectibles": {"primary_collection_id": "100",
+            "primary_collection_styles": {"background_colors": [255, 0]},
+            "primary_collection_will_unpublish_at": "2030-01-01T00:00:00+00:00"}},
+         "skus": [
+            {"id": "21", "name": "Cat Ears", "description": "",
+             "selected_options": [{"option_name": "Cat Ears", "option_value": "Original"}],
+             "prices": shop_prices(3950000, 3300000, Some(4100)),
+             "tenant_metadata": {"collectibles": {"type": 0, "premium_type": 0,
+                "option_selector_display_value": "#D093B8",
+                "item": {"type": 0, "sku_id": "21", "asset": "a_00000000000000000000000000000021"}}}},
+            {"id": "22", "name": "Cat Ears (Yellow)", "description": "Yellow ears.",
+             "selected_options": [{"option_name": "Cat Ears", "option_value": "Yellow"}],
+             "tenant_metadata": {"collectibles": {"type": 0, "option_selector_display_value": "bad",
+                "item": {"type": 0, "sku_id": "22", "asset": "a_00000000000000000000000000000022"}}}}
+         ]},
+        {"id": "901", "summary": "{joinedItems}",
+         "skus": [{"id": "30", "name": "Sample Bundle", "description": "{joinedItems}",
+             "preview_asset_paths": {"fg_static": "https://cdn.discordapp.com/media/v1/collectibles-shop/bundle-fg-static/30"},
+             "tenant_metadata": {"collectibles": {"type": 1000}},
+             "bundled_skus": [
+                {"id": "31", "name": "Sample Effect",
+                 "tenant_metadata": {"collectibles": {"type": 1, "item": {"type": 1, "sku_id": "31",
+                    "effects": [{"src": "https://cdn.discordapp.com/assets/content/effect", "loop": true, "zIndex": 2}]}}}},
+                {"id": "32", "name": "Sample Plate",
+                 "tenant_metadata": {"collectibles": {"type": 2, "item": {"type": 2, "sku_id": "32", "asset": "nameplates/sample/32/"}}}}
+             ]}]},
+        {"id": "bad"}
+    ]}));
+    assert_eq!(products.len(), 3);
+    let original = &products[0];
+    assert_eq!(
+        (original.sku_id, original.summary.as_str()),
+        (21, "Give your avatar a new look.")
+    );
+    assert_eq!(original.collection_id, Some(100));
+    assert_eq!(original.styles.background, [0xFF, 0]);
+    assert_eq!(original.variants.len(), 2);
+    assert_eq!(original.variants[0].swatch, Some(0xD093B8));
+    assert_eq!(original.variants[1].swatch, None);
+    assert_eq!(original.variants[1].label, "Yellow");
+    assert_eq!(products[1].summary, "Yellow ears.");
+    assert_eq!(products[1].items[0].sku_id, 22);
+    let bundle = &products[2];
+    assert_eq!(bundle.kind, ShopKind::Bundle);
+    assert!(bundle.variants.is_empty());
+    assert_eq!(bundle.items.len(), 2);
+    assert_eq!(bundle.items[0].effects.len(), 1);
+    assert_eq!(
+        bundle.bundled.iter().map(|b| b.kind).collect::<Vec<_>>(),
+        [ShopKind::Effect, ShopKind::Nameplate]
+    );
+    assert!(storefront_products(json!({"products": "nope"})).is_empty());
+}
+
+#[test]
+fn storefront_collections_keep_shop_order() {
+    let collections = storefront_collections(json!({
+        "collections": [{
+            "id": "100", "name": "Sample Set", "description": " ",
+            "product_ids": ["902", "900"],
+            "unpublish_settings": {"will_unpublish_at": "2030-01-01T00:00:00+00:00"},
+            "tenant_metadata": {"collectibles": {
+                "catalog_banner_url": "https://cdn.discordapp.com/media/v1/collectibles-shop/catalog",
+                "styles": {"background_colors": [1, 2]}}},
+            "products": [
+                {"id": "900", "skus": [{"id": "21", "name": "A", "tenant_metadata": {"collectibles": {"type": 0}}},
+                                       {"id": "22", "name": "B", "tenant_metadata": {"collectibles": {"type": 0}}}]},
+                {"id": "902", "skus": [{"id": "40", "name": "C", "tenant_metadata": {"collectibles": {"type": 2}}}]},
+                {"id": "903", "skus": []}
+            ]
+        }, {"name": "no id"}],
+        "total": 98
+    }));
+    assert_eq!(collections.total, 98);
+    assert_eq!(collections.collections.len(), 1);
+    let collection = &collections.collections[0];
+    assert_eq!(collection.product_skus, [40, 21]);
+    assert_eq!(collection.products.len(), 3);
+    assert_eq!(collection.summary, "");
+    assert!(collection.catalog_banner.is_some());
+    assert_eq!(
+        collection.unpublished_at.as_deref(),
+        Some("2030-01-01T00:00:00+00:00")
+    );
+}
+
+#[test]
+fn shop_query_builds_search_params() {
+    let query = ShopQuery {
+        item_types: vec![ShopKind::Decoration, ShopKind::Other, ShopKind::Bundle],
+        colors: vec!["COLLECTIBLES_COLOR_PURPLE"],
+        themes: vec!["COLLECTIBLES_THEME_ANIME"],
+        orbs_only: true,
+        collabs_only: true,
+        search: "  cat ".to_owned(),
+        sort: ShopSort::PriceLow,
+        shuffle: false,
+        offset: 20,
+        limit: 20,
+    };
+    let expected: Vec<(&str, String)> = [
+        ("item_types", "AVATAR_DECORATION"),
+        ("item_types", "BUNDLE"),
+        ("colors", "COLLECTIBLES_COLOR_PURPLE"),
+        ("themes", "COLLECTIBLES_THEME_ANIME"),
+        ("orbs_eligible", "true"),
+        ("is_first_party", "false"),
+        ("search", "cat"),
+        ("offset", "20"),
+        ("limit", "20"),
+        ("sort_type", "price"),
+        ("sort_direction", "asc"),
+        ("published_collections_only", "true"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key, value.to_owned()))
+    .collect();
+    assert_eq!(query.params(), expected);
+    let shuffled = ShopQuery {
+        shuffle: true,
+        limit: 8,
+        ..ShopQuery::default()
+    }
+    .params();
+    assert!(shuffled.contains(&("randomize", "true".to_owned())));
+    assert!(!shuffled.iter().any(|(key, _)| *key == "sort_type"));
+}

@@ -33,6 +33,7 @@ pub(crate) fn sidebar(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
     let friends_selected = app.showing_home_page() && app.home.page == HomePage::Friends;
     let requests_selected = app.showing_home_page() && app.home.page == HomePage::Requests;
     let quests_selected = app.showing_home_page() && app.home.page == HomePage::Quests;
+    let shop_selected = app.showing_home_page() && app.home.page == HomePage::Shop;
     let entity = app.entity.clone();
     let friends = nav_row(
         "home-friends",
@@ -90,6 +91,23 @@ pub(crate) fn sidebar(app: &DiscordApp, cx: &App) -> impl IntoElement + use<> {
                 .py_2()
                 .child(friends)
                 .child(nav_row("home-library", "library", "Library", false, 0).opacity(0.5))
+                .child(
+                    nav_row("home-shop", "store", "Shop", shop_selected, 0)
+                        .cursor_pointer()
+                        .when(!shop_selected, |this| {
+                            this.hover(|style| {
+                                style
+                                    .bg(rgba(theme::hover()))
+                                    .text_color(rgb(theme::text()))
+                            })
+                        })
+                        .on_click({
+                            let entity = app.entity.clone();
+                            move |_, window, cx| {
+                                entity.update(cx, |app, cx| app.open_shop(window, cx)).ok();
+                            }
+                        }),
+                )
                 .child(
                     nav_row("home-quests", "laurel-wreath", "Quests", quests_selected, 0)
                         .cursor_pointer()

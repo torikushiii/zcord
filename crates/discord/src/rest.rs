@@ -26,6 +26,7 @@ mod rate_limits;
 mod requests;
 mod saved;
 mod settings;
+mod shop;
 mod streams;
 mod threads;
 pub(crate) use messages::{put_upload, upload_client};
