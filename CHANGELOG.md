@@ -2,6 +2,10 @@
 
 ## Unversioned
 
+## 0.10.1
+
+- Minor: File attachments can now be downloaded. Hover a file to show its Download button, or click its name, then choose where to save it.
+
 ## 0.10.0
 
 - Major: Added the Shop to Home. Browse Featured, the Orbs Shop, collections and the full catalog with search, type, color and theme filters and sorting, and preview decorations, nameplates and profile effects on your own profile. To buy, gift or redeem an item, zcord opens it on discord.com.
