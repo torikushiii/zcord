@@ -47,6 +47,10 @@ jobs:
     needs: [windows]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          sparse-checkout: CHANGELOG.md
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: dist
@@ -59,9 +63,17 @@ jobs:
             test -f "dist/zcord-$ver-$artifact" \
               || { echo "missing zcord-$ver-$artifact: does Cargo.toml say $ver?"; exit 1; }
           done
+      - name: Release notes (CHANGELOG.md section)
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          awk -v heading="## $ver" '$0 == heading { found = 1; next } /^## / { found = 0 } found && NF' \
+            CHANGELOG.md > release-notes.md
+          test -s release-notes.md \
+            || { echo "CHANGELOG.md has no entries under '## $ver'"; exit 1; }
+          cat release-notes.md
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS.txt
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: dist/*
-          generate_release_notes: true
+          body_path: release-notes.md
