@@ -4,9 +4,25 @@ use gpui::{App, RenderImage};
 use std::sync::Arc;
 
 #[cfg(windows)]
+mod vp9;
+#[cfg(any(windows, test))]
+mod webm;
+
+#[cfg(windows)]
 pub(crate) use platform::Reader;
 #[cfg(windows)]
 pub(crate) use platform::init;
+#[cfg(windows)]
+pub(crate) use vp9::AlphaReader;
+
+#[cfg(windows)]
+pub(crate) fn is_webm_file(path: &std::path::Path) -> bool {
+    use std::io::Read as _;
+    let mut magic = [0; 4];
+    std::fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut magic))
+        .is_ok_and(|()| webm::is_webm(&magic))
+}
 
 pub fn resolve(spec: &ImageSpec, size: u32, cx: &App) -> Option<Arc<RenderImage>> {
     #[cfg(windows)]
@@ -52,7 +68,8 @@ pub(crate) mod animation {
         let promo = reqwest::Url::parse(url).is_ok_and(|url| {
             url.host_str() == Some("cdn.discordapp.com")
                 && (url.path().starts_with("/quests/")
-                    || url.path().starts_with("/assets/content/"))
+                    || url.path().starts_with("/assets/content/")
+                    || url.path().starts_with("/media/v1/collectibles-shop/"))
         });
         if promo { PROMO_MAX_FPS } else { MAX_FPS }
     }
@@ -647,21 +664,21 @@ mod platform {
         .detach();
     }
 
-    struct Com;
+    pub(super) struct Com;
     impl Drop for Com {
         fn drop(&mut self) {
             unsafe { CoUninitialize() };
         }
     }
 
-    struct Foundation;
+    pub(super) struct Foundation;
     impl Drop for Foundation {
         fn drop(&mut self) {
             let _ = unsafe { MFShutdown() };
         }
     }
 
-    fn decode_permit() -> Result<tokio::sync::SemaphorePermit<'static>> {
+    pub(super) fn decode_permit() -> Result<tokio::sync::SemaphorePermit<'static>> {
         static PERMITS: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
         futures::executor::block_on(
             PERMITS

@@ -95,11 +95,19 @@ impl Core {
             }
             #[cfg(windows)]
             SourceKind::Video { max_fps } => {
-                let reader = crate::media::video::Reader::open(&path, size)?;
+                use crate::media::video::{AlphaReader, Reader, animation::VideoFrames};
+                if crate::media::video::is_webm_file(&path) {
+                    let reader = AlphaReader::open(&path, size)?;
+                    let rate = reader.rate();
+                    return Ok(Self::from_source(Box::new(VideoFrames::new(
+                        reader, rate, max_fps,
+                    ))));
+                }
+                let reader = Reader::open(&path, size)?;
                 let rate = reader.rate();
-                Ok(Self::from_source(Box::new(
-                    crate::media::video::animation::VideoFrames::new(reader, rate, max_fps),
-                )))
+                Ok(Self::from_source(Box::new(VideoFrames::new(
+                    reader, rate, max_fps,
+                ))))
             }
             #[cfg(test)]
             SourceKind::Fake(open) => Ok(Self::from_source(open()?)),

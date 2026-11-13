@@ -275,7 +275,7 @@ pub(super) async fn gif_provider_bytes(
 
 pub(super) fn download_bytes(spec: &ImageSpec, bytes: &[u8]) -> bool {
     if matches!(spec, ImageSpec::Video { .. }) {
-        bytes.get(4..8) == Some(b"ftyp")
+        bytes.get(4..8) == Some(b"ftyp") || bytes.starts_with(&[0x1A, 0x45, 0xDF, 0xA3])
     } else {
         image_bytes(bytes)
     }
