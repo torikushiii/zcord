@@ -279,7 +279,7 @@ fn capture(
     } = *picture;
     let (raw_sender, raw_receiver) = sync_channel(1);
     let _capture = capture_windows::Capture::start(source, raw_sender, stop.clone(), quality.fps)?;
-    let mut encoder = None;
+    let mut encoder: Option<encode_windows::Encoder> = None;
     let mut size = (0, 0);
     let mut applied_bitrate = 0;
     let frame_interval = Duration::from_secs_f64(1. / f64::from(quality.fps.max(1)));
@@ -316,16 +316,18 @@ fn capture(
         let target = bitrate
             .load(Ordering::Acquire)
             .clamp(MIN_BITRATE, max_bitrate(size.1));
-        if encoder.is_none() {
+        if let Some(active) = &mut encoder {
+            if target != applied_bitrate {
+                active.set_bitrate(target)?;
+                applied_bitrate = target;
+            }
+        } else {
             encoder = Some(encode_windows::Encoder::new(
                 target,
                 size.0,
                 size.1,
                 quality.fps,
             )?);
-            applied_bitrate = target;
-        } else if target != applied_bitrate {
-            encoder.as_mut().expect("encoder").set_bitrate(target)?;
             applied_bitrate = target;
         }
         stats.raw_size = (raw.width, raw.height);

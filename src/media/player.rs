@@ -979,19 +979,18 @@ mod platform {
                 return Ok(());
             }
 
-            if let Ok(pts) = unsafe { engine.OnVideoStreamTick() } {
-                if last_pts != Some(pts) {
-                    last_pts = Some(pts);
-                    if unsafe { engine.TransferVideoFrame(&target, None, &rect, Some(&border)) }
-                        .is_ok()
-                    {
-                        unsafe { context.CopyResource(&staging, &target) };
-                        if let Some(frame) = copy_frame(&context, &staging, width, height) {
-                            let mut state = state.lock().unwrap();
-                            state.buffering = false;
-                            drop(state);
-                            events.send(PlayerEvent::Frame(frame)).ok();
-                        }
+            if let Ok(pts) = unsafe { engine.OnVideoStreamTick() }
+                && last_pts != Some(pts)
+            {
+                last_pts = Some(pts);
+                if unsafe { engine.TransferVideoFrame(&target, None, &rect, Some(&border)) }.is_ok()
+                {
+                    unsafe { context.CopyResource(&staging, &target) };
+                    if let Some(frame) = copy_frame(&context, &staging, width, height) {
+                        let mut state = state.lock().unwrap();
+                        state.buffering = false;
+                        drop(state);
+                        events.send(PlayerEvent::Frame(frame)).ok();
                     }
                 }
             }

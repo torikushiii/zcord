@@ -121,7 +121,7 @@ impl Encoder {
             }
         }
         let _ = unsafe { attributes.SetUINT32(&MF_LOW_LATENCY, 1) };
-        let codec: ICodecAPI = unsafe { transform.cast() }.map_err(|_| UNAVAILABLE.to_owned())?;
+        let codec: ICodecAPI = transform.cast().map_err(|_| UNAVAILABLE.to_owned())?;
         unsafe {
             let _ = codec.SetValue(&CODECAPI_AVLowLatencyMode, &VARIANT::from(true));
             let _ = codec.SetValue(
@@ -163,7 +163,8 @@ impl Encoder {
         }
         let events = if async_mft {
             Some(
-                unsafe { transform.cast::<IMFMediaEventGenerator>() }
+                transform
+                    .cast::<IMFMediaEventGenerator>()
                     .map_err(|_| UNAVAILABLE.to_owned())?,
             )
         } else {
@@ -307,48 +308,45 @@ impl Encoder {
     }
 
     fn take_output(&mut self) -> Result<Option<Vec<u8>>, String> {
-        loop {
-            unsafe {
-                let own = if self.provides_samples {
-                    None
-                } else {
-                    let info = self
-                        .transform
-                        .GetOutputStreamInfo(0)
-                        .map_err(|_| FAILED.to_owned())?;
-                    if info.cbSize == 0 || info.cbSize as usize > MAX_BUFFER_BYTES {
-                        return Err(FAILED.to_owned());
-                    }
-                    let buffer =
-                        MFCreateMemoryBuffer(info.cbSize).map_err(|_| FAILED.to_owned())?;
-                    let sample = MFCreateSample().map_err(|_| FAILED.to_owned())?;
-                    sample.AddBuffer(&buffer).map_err(|_| FAILED.to_owned())?;
-                    Some(sample)
-                };
-                let mut output = MFT_OUTPUT_DATA_BUFFER {
-                    dwStreamID: 0,
-                    pSample: ManuallyDrop::new(own.clone()),
-                    dwStatus: 0,
-                    pEvents: ManuallyDrop::new(None),
-                };
-                let mut status = 0;
-                let result =
-                    self.transform
-                        .ProcessOutput(0, std::slice::from_mut(&mut output), &mut status);
-                let sample = ManuallyDrop::into_inner(output.pSample).or(own);
-                drop(ManuallyDrop::into_inner(output.pEvents));
-                match result {
-                    Ok(()) => {}
-                    Err(error) if error.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => {
-                        return Ok(None);
-                    }
-                    Err(_) => return Err(FAILED.to_owned()),
+        unsafe {
+            let own = if self.provides_samples {
+                None
+            } else {
+                let info = self
+                    .transform
+                    .GetOutputStreamInfo(0)
+                    .map_err(|_| FAILED.to_owned())?;
+                if info.cbSize == 0 || info.cbSize as usize > MAX_BUFFER_BYTES {
+                    return Err(FAILED.to_owned());
                 }
-                let Some(sample) = sample else {
+                let buffer = MFCreateMemoryBuffer(info.cbSize).map_err(|_| FAILED.to_owned())?;
+                let sample = MFCreateSample().map_err(|_| FAILED.to_owned())?;
+                sample.AddBuffer(&buffer).map_err(|_| FAILED.to_owned())?;
+                Some(sample)
+            };
+            let mut output = MFT_OUTPUT_DATA_BUFFER {
+                dwStreamID: 0,
+                pSample: ManuallyDrop::new(own.clone()),
+                dwStatus: 0,
+                pEvents: ManuallyDrop::new(None),
+            };
+            let mut status = 0;
+            let result =
+                self.transform
+                    .ProcessOutput(0, std::slice::from_mut(&mut output), &mut status);
+            let sample = ManuallyDrop::into_inner(output.pSample).or(own);
+            drop(ManuallyDrop::into_inner(output.pEvents));
+            match result {
+                Ok(()) => {}
+                Err(error) if error.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => {
                     return Ok(None);
-                };
-                return Ok(Some(sample_bytes(&sample)?));
+                }
+                Err(_) => return Err(FAILED.to_owned()),
             }
+            let Some(sample) = sample else {
+                return Ok(None);
+            };
+            Ok(Some(sample_bytes(&sample)?))
         }
     }
 }

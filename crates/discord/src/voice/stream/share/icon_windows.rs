@@ -53,14 +53,14 @@ fn message_icon(hwnd: HWND) -> Option<HICON> {
                 Some(&raw mut result),
             )
         };
-        (answered.0 != 0 && result != 0).then(|| HICON(result as *mut _))
+        (answered.0 != 0 && result != 0).then_some(HICON(result as *mut _))
     })
 }
 
 fn class_icon(hwnd: HWND) -> Option<HICON> {
     [GCLP_HICON, GCLP_HICONSM].into_iter().find_map(|index| {
         let icon = unsafe { GetClassLongPtrW(hwnd, index) };
-        (icon != 0).then(|| HICON(icon as *mut _))
+        (icon != 0).then_some(HICON(icon as *mut _))
     })
 }
 

@@ -508,10 +508,7 @@ mod platform {
         let (job, evicted, dropped) = {
             let mut state = cache.borrow_mut();
             let mut dropped = 0;
-            loop {
-                let Some(key) = state.queue.front().cloned() else {
-                    break;
-                };
+            while let Some(key) = state.queue.front().cloned() {
                 let stale = match state.entries.get(&key) {
                     Some(Entry::Pending { requested, .. }) => requested.elapsed() > STALE_AFTER,
                     _ => true,
