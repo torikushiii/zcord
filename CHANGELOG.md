@@ -2,6 +2,23 @@
 
 ## Unversioned
 
+## 0.11.0
+
+- Major: zcord now talks to Discord the way the official desktop client does. The gateway uses compressed ETF, requests go over HTTP/2 with the client's headers, retries and rate limits follow the client's rules, and the client version, build number and installation ID stay current.
+- Minor: Voice calls and Go Live now refuse to drop end-to-end encryption, reconnecting instead of sending unencrypted media.
+- Minor: Voice calls now follow your Allow Voice Recording setting from Clips, and reconnect on their own instead of leaving the call when the voice connection drops.
+- Minor: zcord now uses the refreshed login token Discord sends after connecting, so saved logins keep working.
+- Minor: Opening a channel with nothing unread now loads only as many messages as fit the window.
+- Minor: Mark As Read on a server now also clears unread joined threads, voice channel chats and new server events.
+- Minor: Retrying a failed message or sticker now resends the same message, so it can't be posted twice.
+- Minor: Messages starting with @silent are now sent as silent messages.
+- Minor: Changing a thread's notification settings now joins the thread first.
+- Minor: GIF search now always goes through Discord. The direct Tenor and Giphy providers were removed.
+- Bugfix: Fixed threads in announcement channels being created with the wrong thread type.
+- Bugfix: Fixed editing a reply with its ping turned off pinging the author.
+- Bugfix: Fixed the About Me section showing a large empty area when a bio is padded with blank characters.
+- Bugfix: Fixed placeholder rows staying above short channels that were opened while unread.
+
 ## 0.10.1
 
 - Minor: File attachments can now be downloaded. Hover a file to show its Download button, or click its name, then choose where to save it.
