@@ -11,7 +11,7 @@
 - Minor: Opening a channel with nothing unread now loads only as many messages as fit the window.
 - Minor: Mark As Read on a server now also clears unread joined threads, voice channel chats and new server events.
 - Minor: Retrying a failed message or sticker now resends the same message, so it can't be posted twice.
-- Minor: Messages starting with @silent are now sent as silent messages.
+- Minor: Messages starting with `@silent` are now sent as silent messages.
 - Minor: Changing a thread's notification settings now joins the thread first.
 - Minor: GIF search now always goes through Discord. The direct Tenor and Giphy providers were removed.
 - Bugfix: Fixed threads in announcement channels being created with the wrong thread type.
