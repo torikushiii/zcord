@@ -91,7 +91,7 @@ impl DiscordApp {
         let top = self.list_offset().min(bottom);
         let placeholder = self.edge_placeholder_height();
         let region = css(cx, LOAD_REGION);
-        if self.has_older_history(channel_id) && content > viewport {
+        if self.has_older_history(channel_id) {
             let reach = if self.unread.since.is_some() {
                 placeholder - css(cx, UNREAD_LOAD_INSET)
             } else {
