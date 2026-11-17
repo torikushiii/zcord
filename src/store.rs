@@ -401,6 +401,14 @@ impl Store {
                 Change::Structure
             }
             Event::SettingsUpdate(update) => self.settings_update(update),
+            Event::NotificationSettingsUpdate {
+                use_new_notifications,
+            } => {
+                if let Some(source) = &mut self.source {
+                    source.use_new_notifications = use_new_notifications;
+                }
+                Change::None
+            }
             Event::UserGuildSettingsUpdate(settings) => {
                 self.notification_settings
                     .insert(settings.guild_id, *settings);

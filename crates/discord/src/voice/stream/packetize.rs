@@ -1,3 +1,5 @@
+use super::super::gateway::{RTX_PAYLOAD, VIDEO_PAYLOAD};
+
 const MTU: usize = 1200;
 const RTP_HEADER: usize = 12;
 const EXTENSION_PREAMBLE: usize = 4;
@@ -51,7 +53,7 @@ impl Packet {
         *transport_sequence = transport_sequence.wrapping_add(1);
         let mut header = self.header;
         header[0] = 0x90;
-        header[1] = 102 | (self.header[1] & 0x80);
+        header[1] = RTX_PAYLOAD | (self.header[1] & 0x80);
         header[2..4].copy_from_slice(&sequence.to_be_bytes());
         header[8..12].copy_from_slice(&ssrc.to_be_bytes());
         let mut payload = Vec::with_capacity(self.payload.len() + 2);
@@ -142,7 +144,7 @@ fn push(
     *transport_sequence = transport_sequence.wrapping_add(1);
     let mut header = [0; RTP_HEADER];
     header[0] = 0x90;
-    header[1] = 101 | u8::from(marker) << 7;
+    header[1] = VIDEO_PAYLOAD | u8::from(marker) << 7;
     header[2..4].copy_from_slice(&sequence.to_be_bytes());
     header[4..8].copy_from_slice(&timestamp.to_be_bytes());
     header[8..12].copy_from_slice(&ssrc.to_be_bytes());
@@ -259,7 +261,7 @@ mod tests {
         .unwrap();
         let mut rtx_transport = 20;
         let rtx = packets[0].rtx(12, 400, &mut rtx_transport);
-        assert_eq!(rtx.header[1], 0x80 | 102);
+        assert_eq!(rtx.header[1], 0x80 | RTX_PAYLOAD);
         assert_eq!(&rtx.header[2..4], &400u16.to_be_bytes());
         assert_eq!(&rtx.header[8..12], &12u32.to_be_bytes());
         assert_eq!(rtx.preamble, [0xbe, 0xde, 0, 4]);

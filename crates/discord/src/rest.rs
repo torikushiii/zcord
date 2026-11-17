@@ -4,13 +4,13 @@ use super::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use reqwest::{
-    Client, Request, RequestBuilder, Response,
-    header::{AUTHORIZATION, HeaderMap, HeaderValue, REFERER, USER_AGENT},
+    Client, Method, Request, RequestBuilder, Response,
+    header::{AUTHORIZATION, HeaderMap, HeaderValue, ORIGIN, REFERER, USER_AGENT},
 };
 use serde::Serialize;
 use serde_json::Value;
 use std::{collections::HashMap, time::Duration};
-use tokio::sync::OnceCell;
+use tokio::time::sleep;
 mod calls;
 mod dms;
 mod expressions;
@@ -32,22 +32,41 @@ mod threads;
 pub(crate) use messages::{put_upload, upload_client};
 use rate_limits::{Limiter, Permit, Route};
 
+fn installation_header(id: &str) -> Option<HeaderValue> {
+    let mut header = HeaderValue::from_str(id).ok().filter(|_| !id.is_empty())?;
+    header.set_sensitive(true);
+    Some(header)
+}
+
+const RETRY_STATUSES: [u16; 8] = [502, 504, 507, 522, 523, 524, 598, 599];
+const MAX_FAILED_REQUESTS: u32 = 2;
+
+enum Attempt {
+    Done(Result<Response, Error>),
+    Retry(Error),
+    Backoff(Error),
+}
+
 pub(super) struct Rest {
     client: Client,
     pub(super) upload_client: Client,
     limits: Limiter,
-    installation_id: OnceCell<HeaderValue>,
+    installation_id: std::sync::RwLock<Option<HeaderValue>>,
+    authorization: std::sync::RwLock<HeaderValue>,
+    view: std::sync::RwLock<(u64, u64)>,
+}
+
+fn authorization(token: &str) -> Result<HeaderValue, Error> {
+    let mut authorization = HeaderValue::from_str(token).map_err(|_| Error::InvalidCredential)?;
+    authorization.set_sensitive(true);
+    Ok(authorization)
 }
 
 impl Rest {
     pub fn new(token: &str) -> Result<Self, Error> {
-        let mut authorization =
-            HeaderValue::from_str(token).map_err(|_| Error::InvalidCredential)?;
-        authorization.set_sensitive(true);
-        let mut headers = client_headers()?;
-        headers.insert(AUTHORIZATION, authorization);
+        let authorization = authorization(token)?;
         let client = Client::builder()
-            .default_headers(headers)
+            .default_headers(client_headers()?)
             .cookie_store(true)
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(30))
@@ -57,74 +76,204 @@ impl Rest {
             client,
             upload_client: upload_client()?,
             limits: Limiter::default(),
-            installation_id: OnceCell::new(),
+            installation_id: std::sync::RwLock::new(
+                properties::installation_id().and_then(|id| installation_header(&id)),
+            ),
+            authorization: std::sync::RwLock::new(authorization),
+            view: std::sync::RwLock::new((0, 0)),
         })
     }
 
+    pub(super) fn set_token(&self, token: &str) -> Result<(), Error> {
+        let value = authorization(token)?;
+        *self
+            .authorization
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = value;
+        Ok(())
+    }
+
     async fn send(&self, request: impl Fn() -> RequestBuilder) -> Result<Response, Error> {
-        for attempt in 0..3 {
+        let mut retries = 0;
+        let mut failed_requests = 0;
+        loop {
             let mut request = request().build().map_err(|_| Error::Network)?;
-            if let Some(installation) = self.installation_id.get() {
+            if failed_requests > 0 {
                 request
                     .headers_mut()
-                    .insert("x-installation-id", installation.clone());
+                    .insert("x-failed-requests", HeaderValue::from(failed_requests));
             }
+            self.prepare(&mut request);
             let permit = self.limits.acquire(Route::of(&request)).await?;
             request.headers_mut().insert(
                 "x-super-properties",
                 HeaderValue::from_str(&properties::super_properties())
                     .map_err(|_| Error::Decode)?,
             );
-            match self.execute(request, permit).await {
-                Err(Error::RateLimited { .. }) if attempt < 2 => continue,
-                result => return result,
+            let error = match self.execute(request, permit).await {
+                Attempt::Done(result) => return result,
+                Attempt::Retry(error) => error,
+                Attempt::Backoff(error) => {
+                    failed_requests += 1;
+                    if retries < MAX_FAILED_REQUESTS {
+                        sleep(Duration::from_secs(1 << retries)).await;
+                    }
+                    error
+                }
+            };
+            if retries == MAX_FAILED_REQUESTS {
+                return Err(error);
             }
+            retries += 1;
         }
-        unreachable!()
     }
 
-    async fn fetch_installation(&self, url: &str, referer: &str) -> Result<&HeaderValue, Error> {
+    pub(super) fn set_view(&self, guild_id: u64, channel_id: u64) {
+        let view = (guild_id, channel_id);
+        if *self
+            .view
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            != view
+        {
+            *self
+                .view
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = view;
+        }
+    }
+
+    fn view_referer(&self) -> String {
+        match *self
+            .view
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            (0, 0) => "https://discord.com/channels/@me".to_owned(),
+            (0, channel_id) => referer(None, channel_id),
+            (guild_id, 0) => format!("https://discord.com/channels/{guild_id}"),
+            (guild_id, channel_id) => referer(Some(guild_id), channel_id),
+        }
+    }
+
+    fn prepare(&self, request: &mut Request) {
+        if !request.headers().contains_key(REFERER)
+            && let Ok(referer) = HeaderValue::from_str(&self.view_referer())
+        {
+            request.headers_mut().insert(REFERER, referer);
+        }
+        let authorization = self
+            .authorization
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        request.headers_mut().insert(AUTHORIZATION, authorization);
+        request.headers_mut().insert(
+            USER_AGENT,
+            HeaderValue::from_static(properties::user_agent()),
+        );
+        if !matches!(*request.method(), Method::GET | Method::HEAD) {
+            request
+                .headers_mut()
+                .entry(ORIGIN)
+                .or_insert(HeaderValue::from_static("https://discord.com"));
+        }
+        if let Some(installation) = self.installation_id() {
+            request
+                .headers_mut()
+                .insert("x-installation-id", installation);
+        }
+    }
+
+    async fn try_send(&self, mut request: Request) -> Result<bool, Error> {
+        self.prepare(&mut request);
+        let Some(permit) = self.limits.try_acquire(Route::of(&request))? else {
+            return Ok(false);
+        };
+        request.headers_mut().insert(
+            "x-super-properties",
+            HeaderValue::from_str(&properties::super_properties()).map_err(|_| Error::Decode)?,
+        );
+        match self.execute(request, permit).await {
+            Attempt::Done(result) => result.map(|_| true),
+            Attempt::Retry(error) | Attempt::Backoff(error) => Err(error),
+        }
+    }
+
+    fn installation_id(&self) -> Option<HeaderValue> {
         self.installation_id
-            .get_or_try_init(|| async {
-                let response = self
-                    .send(|| self.client.get(url).header(REFERER, referer))
-                    .await?;
-                let value = response.json::<Value>().await.map_err(|_| Error::Decode)?;
-                let installation = value
-                    .get("installation")
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.is_empty())
-                    .ok_or(Error::Decode)?;
-                let mut header = HeaderValue::from_str(installation).map_err(|_| Error::Decode)?;
-                header.set_sensitive(true);
-                Ok(header)
-            })
-            .await
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
-    async fn execute(&self, request: Request, permit: Permit<'_>) -> Result<Response, Error> {
-        let response = self
-            .client
-            .execute(request)
-            .await
-            .map_err(|_| Error::Network)?;
-        let status = response.status();
-        permit.observe(status.as_u16(), response.headers());
-        if status.as_u16() == 401 {
-            return Err(Error::Http(401));
+    pub(super) fn set_installation_id(&self, id: &str) -> bool {
+        let Some(header) = installation_header(id) else {
+            return false;
+        };
+        *self
+            .installation_id
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(header);
+        properties::set_installation_id(Some(id.to_owned()));
+        true
+    }
+
+    async fn fetch_installation(&self, url: &str, referer: &str) -> Result<HeaderValue, Error> {
+        if let Some(installation) = self.installation_id() {
+            return Ok(installation);
         }
-        if status.as_u16() == 429 {
+        let response = self
+            .send(|| self.client.get(url).header(REFERER, referer))
+            .await?;
+        let value = response.json::<Value>().await.map_err(|_| Error::Decode)?;
+        let installation = value
+            .get("installation")
+            .and_then(Value::as_str)
+            .ok_or(Error::Decode)?;
+        if !self.set_installation_id(installation) {
+            return Err(Error::Decode);
+        }
+        self.installation_id().ok_or(Error::Decode)
+    }
+
+    /// Only Retry-After makes a 429 or 503 safe to resend, and only reads are resent after a
+    /// server error or a dropped connection.
+    /// https://docs.discord.food/topics/rate-limits
+    async fn execute(&self, request: Request, permit: Permit<'_>) -> Attempt {
+        let idempotent = matches!(*request.method(), Method::GET | Method::HEAD);
+        let response = match self.client.execute(request).await {
+            Ok(response) => response,
+            Err(_) if idempotent => return Attempt::Backoff(Error::Network),
+            Err(_) => return Attempt::Done(Err(Error::Network)),
+        };
+        let status = response.status().as_u16();
+        permit.observe(status, response.headers());
+        if status == 401 {
+            return Attempt::Done(Err(Error::Http(401)));
+        }
+        if status == 429 || status == 503 {
             let headers = response.headers().clone();
             let body = response.json::<Value>().await.unwrap_or(Value::Null);
-            return Err(Error::RateLimited {
+            let error = Error::RateLimited {
                 retry_after: permit.retry(&headers, &body),
-            });
+            };
+            return if headers.contains_key("retry-after") {
+                Attempt::Retry(error)
+            } else {
+                Attempt::Done(Err(error))
+            };
         }
-        if !status.is_success() {
+        if !response.status().is_success() {
             let value = response.json::<Value>().await.unwrap_or(Value::Null);
-            return Err(classify(status.as_u16(), &value));
+            let error = classify(status, &value);
+            return if idempotent && RETRY_STATUSES.contains(&status) {
+                Attempt::Backoff(error)
+            } else {
+                Attempt::Done(Err(error))
+            };
         }
-        Ok(response)
+        Attempt::Done(Ok(response))
     }
 
     pub(super) async fn external_assets(
@@ -238,7 +387,12 @@ fn referer(guild_id: Option<u64>, channel_id: u64) -> String {
 fn percent_encode(value: &str) -> String {
     let mut encoded = String::with_capacity(value.len());
     for &byte in value.as_bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+        if byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'-' | b'.' | b'_' | b'~' | b'!' | b'*' | b'\'' | b'(' | b')'
+            )
+        {
             encoded.push(byte as char);
         } else {
             encoded.push_str(&format!("%{byte:02X}"));

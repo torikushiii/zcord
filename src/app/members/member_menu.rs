@@ -2,6 +2,7 @@ use gpui::{prelude::*, *};
 
 use crate::{
     app::{DiscordApp, direct::dm_menu::DmDialog},
+    discord::model::RelationshipLocation,
     store::RelationshipKind,
     theme::{self, WithoutTextSelection, rpx},
 };
@@ -177,7 +178,9 @@ pub(crate) fn menu(app: &DiscordApp) -> Option<AnyElement> {
                     None,
                     "Remove Friend",
                     text,
-                    move |app, _, cx| app.ask_remove_friend(user_id, cx),
+                    move |app, _, cx| {
+                        app.ask_remove_friend(user_id, RelationshipLocation::ContextMenu, cx)
+                    },
                 )),
                 Some(RelationshipKind::Incoming) => Some(menu_row(
                     app,
@@ -185,7 +188,9 @@ pub(crate) fn menu(app: &DiscordApp) -> Option<AnyElement> {
                     None,
                     "Accept Friend Request",
                     text,
-                    move |app, _, cx| app.add_friend(user_id, cx),
+                    move |app, _, cx| {
+                        app.add_friend(user_id, RelationshipLocation::ContextMenu, cx)
+                    },
                 )),
                 Some(RelationshipKind::Outgoing) => Some(menu_row(
                     app,
@@ -193,7 +198,9 @@ pub(crate) fn menu(app: &DiscordApp) -> Option<AnyElement> {
                     None,
                     "Cancel Friend Request",
                     text,
-                    move |app, _, cx| app.drop_friend_request(user_id, cx),
+                    move |app, _, cx| {
+                        app.drop_friend_request(user_id, RelationshipLocation::ContextMenu, cx)
+                    },
                 )),
                 _ => None,
             })
@@ -223,7 +230,9 @@ pub(crate) fn menu(app: &DiscordApp) -> Option<AnyElement> {
                     None,
                     "Unblock",
                     text,
-                    move |app, _, cx| app.unblock_user(user_id, cx),
+                    move |app, _, cx| {
+                        app.unblock_user(user_id, Some(RelationshipLocation::ContextMenu), cx)
+                    },
                 )
             } else {
                 menu_row(

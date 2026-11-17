@@ -1,16 +1,30 @@
 use super::*;
 
+const COMMAND_INDEX_ATTEMPTS: usize = 3;
+const COMMAND_INDEX_RETRY: Duration = Duration::from_secs(5);
+
 pub(super) fn profile_query(
     kind: ProfileKind,
     guild_id: Option<u64>,
 ) -> Vec<(&'static str, String)> {
-    let modal = kind == ProfileKind::Modal;
-    let mut query = vec![
-        ("type", if modal { "modal" } else { "popout" }.to_owned()),
-        ("with_mutual_guilds", modal.to_string()),
-        ("with_mutual_friends", modal.to_string()),
-        ("with_mutual_friends_count", modal.to_string()),
-    ];
+    let (surface, mutual_guilds, mutual_friends_count) = match kind {
+        ProfileKind::Popout => (Some("popout"), false, false),
+        ProfileKind::Modal => (Some("modal"), true, true),
+        ProfileKind::Sidebar { bot } => (Some("sidebar"), true, !bot),
+        ProfileKind::MessageRequest => (None, true, false),
+    };
+    let mut query: Vec<_> = surface
+        .map(|surface| ("type", surface.to_owned()))
+        .into_iter()
+        .collect();
+    query.extend([
+        ("with_mutual_guilds", mutual_guilds.to_string()),
+        ("with_mutual_friends", "false".to_owned()),
+        (
+            "with_mutual_friends_count",
+            mutual_friends_count.to_string(),
+        ),
+    ]);
     if let Some(guild_id) = guild_id {
         query.push(("guild_id", guild_id.to_string()));
     }
@@ -53,6 +67,24 @@ impl Rest {
         response.json().await.map_err(|_| Error::Decode)
     }
 
+    pub async fn fetch_mutual_friends(
+        &self,
+        user_id: u64,
+        guild_id: Option<u64>,
+        channel_id: Option<u64>,
+    ) -> Result<Vec<model::User>, Error> {
+        let referer = channel_id.map_or_else(
+            || "https://discord.com/channels/@me".to_owned(),
+            |channel_id| referer(guild_id, channel_id),
+        );
+        let url = format!("https://discord.com/api/v9/users/{user_id}/relationships");
+        let response = self
+            .send(|| self.client.get(&url).header(REFERER, &referer))
+            .await?;
+        let value = response.json::<Value>().await.map_err(|_| Error::Decode)?;
+        Ok(model::parse_entries(value))
+    }
+
     pub async fn fetch_user_badges(
         &self,
         user_id: u64,
@@ -82,12 +114,20 @@ impl Rest {
         response.json().await.map_err(|_| Error::Decode)
     }
 
-    pub async fn fetch_content_inbox(&self) -> Result<model::ContentInbox, Error> {
-        let url = "https://discord.com/api/v9/content-inventory/users/@me?for_game_profile=false&feature=inbox";
+    pub async fn fetch_content_inbox(
+        &self,
+        refresh_token: Option<&str>,
+    ) -> Result<model::ContentInbox, Error> {
+        let mut query: Vec<_> = refresh_token
+            .map(|token| ("refresh_token", token))
+            .into_iter()
+            .collect();
+        query.extend([("for_game_profile", "false"), ("feature", "inbox")]);
         let response = self
             .send(|| {
                 self.client
-                    .get(url)
+                    .get("https://discord.com/api/v9/content-inventory/users/@me")
+                    .query(&query)
                     .header(REFERER, "https://discord.com/channels/@me")
             })
             .await?;
@@ -115,23 +155,37 @@ impl Rest {
         guild_id: u64,
     ) -> Result<model::ApplicationCommandIndex, Error> {
         let url = format!("https://discord.com/api/v9/guilds/{guild_id}/application-command-index");
-        let response = self
-            .send(|| {
-                self.client
-                    .get(&url)
-                    .header(REFERER, "https://discord.com/channels/@me")
-            })
-            .await?;
-        response.json().await.map_err(|_| Error::Decode)
+        for attempt in 0..COMMAND_INDEX_ATTEMPTS {
+            let response = self
+                .send(|| {
+                    self.client
+                        .get(&url)
+                        .header(REFERER, "https://discord.com/channels/@me")
+                })
+                .await?;
+            if response.status() != reqwest::StatusCode::ACCEPTED {
+                return response.json().await.map_err(|_| Error::Decode);
+            }
+            if attempt + 1 < COMMAND_INDEX_ATTEMPTS {
+                tokio::time::sleep(COMMAND_INDEX_RETRY).await;
+            }
+        }
+        Err(Error::Http(202))
     }
 
-    pub async fn fetch_wishlist(&self, wishlist_id: u64) -> Result<model::Wishlist, Error> {
+    pub async fn fetch_wishlist(
+        &self,
+        wishlist_id: u64,
+        country: Option<&str>,
+    ) -> Result<model::Wishlist, Error> {
         let url = format!("https://discord.com/api/v9/wishlists/{wishlist_id}");
+        let mut query = vec![("source", "user_profile")];
+        query.extend(country.map(|country| ("country_code", country)));
         let response = self
             .send(|| {
                 self.client
                     .get(&url)
-                    .query(&[("source", "user_profile")])
+                    .query(&query)
                     .header(REFERER, "https://discord.com/channels/@me")
             })
             .await?;
@@ -186,7 +240,11 @@ impl Rest {
             .send(|| {
                 self.client
                     .get(&url)
-                    .query(&[("with_counts", "true"), ("with_expiration", "true")])
+                    .query(&[
+                        ("with_counts", "true"),
+                        ("with_expiration", "true"),
+                        ("with_permissions", "true"),
+                    ])
                     .header(REFERER, "https://discord.com/channels/@me")
             })
             .await
@@ -229,24 +287,20 @@ impl Rest {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let mut applications = Vec::with_capacity(ids.len());
-        for chunk in ids.chunks(LOOKUP_BATCH) {
-            let query: Vec<_> = chunk
-                .iter()
-                .map(|id| ("application_ids", id.to_string()))
-                .collect();
-            let response = self
-                .send(|| {
-                    self.client
-                        .get("https://discord.com/api/v9/applications/public")
-                        .query(&query)
-                        .header(REFERER, "https://discord.com/channels/@me")
-                })
-                .await?;
-            let value = response.json::<Value>().await.map_err(|_| Error::Decode)?;
-            applications.extend(model::parse_entries(value));
-        }
-        Ok(applications)
+        let query: Vec<_> = ids
+            .iter()
+            .map(|id| ("application_ids", id.to_string()))
+            .collect();
+        let response = self
+            .send(|| {
+                self.client
+                    .get("https://discord.com/api/v9/applications/public")
+                    .query(&query)
+                    .header(REFERER, "https://discord.com/channels/@me")
+            })
+            .await?;
+        let value = response.json::<Value>().await.map_err(|_| Error::Decode)?;
+        Ok(model::parse_entries(value))
     }
 
     pub async fn put_widgets(

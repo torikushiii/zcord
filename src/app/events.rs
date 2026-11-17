@@ -39,11 +39,19 @@ impl DiscordApp {
                 self.refresh_voice_start_times();
                 self.member_subscription = None;
                 self.typing.clear();
+                self.request_dm_call(self.selected_channel_id);
                 cx.notify();
             }
             Event::Ready(ref ready) => {
                 let user = ready.user.clone();
-                let switched = self.account_ready(&user, cx);
+                let switched = self.account_ready(&user, ready.auth_token.clone(), cx);
+                if let Some(id) = ready.installation_id.as_deref()
+                    && crate::settings::get(cx).discord_identity.installation_id() != Some(id)
+                {
+                    crate::settings::update(cx, |settings| {
+                        settings.discord_identity.set_installation_id(id)
+                    });
+                }
                 self.live = true;
                 self.reconnecting = false;
                 self.typing.clear();
@@ -73,6 +81,7 @@ impl DiscordApp {
                 } else {
                     self.select_initial(window, cx);
                 }
+                self.request_dm_call(self.selected_channel_id);
             }
             event => {
                 match &event {

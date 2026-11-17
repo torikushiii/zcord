@@ -3,7 +3,11 @@ use super::*;
 const RELATIONSHIPS_URL: &str = "https://discord.com/api/v9/users/@me/relationships";
 const FRIEND_SUGGESTIONS_URL: &str = "https://discord.com/api/v9/friend-suggestions";
 const INSTALLATION_URL: &str = "https://discord.com/api/v9/apex/experiments?surface=2";
-const PROFILE_CONTEXT: &str = "eyJsb2NhdGlvbiI6InVzZXIgcHJvZmlsZSBtb2RhbCB2MiJ9";
+const FRIENDS_REFERER: &str = "https://discord.com/channels/@me";
+const EMPTY_CONTEXT: &str = "e30=";
+const ADD_FRIEND_CONTEXT: &str = "eyJsb2NhdGlvbiI6IkFkZCBGcmllbmQifQ==";
+pub(super) const CONTEXT_MENU_CONTEXT: &str = "eyJsb2NhdGlvbiI6IkNvbnRleHRNZW51In0=";
+const PROFILE_MODAL_CONTEXT: &str = "eyJsb2NhdGlvbiI6InVzZXIgcHJvZmlsZSBtb2RhbCB2MiJ9";
 
 #[derive(Serialize)]
 struct OpenDm {
@@ -17,30 +21,67 @@ struct AddFriend<'a> {
 }
 
 #[derive(Serialize)]
-struct EmptyBody {}
+struct PutRelationship {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    confirm_stranger_request: Option<bool>,
+}
+
+pub(super) fn relationship_context(location: model::RelationshipLocation) -> &'static str {
+    match location {
+        model::RelationshipLocation::ContextMenu => CONTEXT_MENU_CONTEXT,
+        model::RelationshipLocation::ProfileModal => PROFILE_MODAL_CONTEXT,
+    }
+}
 
 fn relationship_url(user_id: u64) -> String {
     format!("{RELATIONSHIPS_URL}/{user_id}")
 }
 
 fn friend_request(client: &Client, username: &str) -> RequestBuilder {
-    client.post(RELATIONSHIPS_URL).json(&AddFriend {
-        username,
-        discriminator: None,
-    })
+    client
+        .post(RELATIONSHIPS_URL)
+        .header(REFERER, FRIENDS_REFERER)
+        .header("x-context-properties", ADD_FRIEND_CONTEXT)
+        .json(&AddFriend {
+            username,
+            discriminator: None,
+        })
 }
 
-fn relationship_put(client: &Client, user_id: u64, referer: &str) -> RequestBuilder {
+fn relationship_put(
+    client: &Client,
+    user_id: u64,
+    referer: &str,
+    location: model::RelationshipLocation,
+    confirm_stranger_request: Option<bool>,
+) -> RequestBuilder {
     client
         .put(relationship_url(user_id))
         .header("origin", "https://discord.com")
         .header(REFERER, referer)
-        .header("x-context-properties", PROFILE_CONTEXT)
-        .json(&EmptyBody {})
+        .header("x-context-properties", relationship_context(location))
+        .json(&PutRelationship {
+            confirm_stranger_request,
+        })
 }
 
-fn relationship_delete(client: &Client, user_id: u64) -> RequestBuilder {
-    client.delete(relationship_url(user_id))
+fn relationship_delete(
+    client: &Client,
+    user_id: u64,
+    location: model::RelationshipLocation,
+) -> RequestBuilder {
+    client
+        .delete(relationship_url(user_id))
+        .header("x-context-properties", relationship_context(location))
+}
+
+fn open_dm(client: &Client, user_id: u64) -> RequestBuilder {
+    client
+        .post("https://discord.com/api/v9/users/@me/channels")
+        .header("x-context-properties", EMPTY_CONTEXT)
+        .json(&OpenDm {
+            recipients: vec![user_id.to_string()],
+        })
 }
 
 #[derive(Serialize)]
@@ -54,14 +95,16 @@ impl Rest {
         Ok(())
     }
 
-    pub async fn put_relationship(
+    async fn put_relationship(
         &self,
         user_id: u64,
+        location: model::RelationshipLocation,
         guild_id: Option<u64>,
         channel_id: Option<u64>,
+        confirm_stranger_request: Option<bool>,
     ) -> Result<(), Error> {
         let referer = channel_id.map_or_else(
-            || "https://discord.com/channels/@me".to_owned(),
+            || FRIENDS_REFERER.to_owned(),
             |channel_id| referer(guild_id, channel_id),
         );
         if self
@@ -71,13 +114,55 @@ impl Rest {
         {
             log::warn!("Could not fetch Discord installation metadata");
         }
-        self.send(|| relationship_put(&self.client, user_id, &referer))
-            .await?;
+        self.send(|| {
+            relationship_put(
+                &self.client,
+                user_id,
+                &referer,
+                location,
+                confirm_stranger_request,
+            )
+        })
+        .await?;
         Ok(())
     }
 
-    pub async fn delete_relationship(&self, user_id: u64) -> Result<(), Error> {
-        self.send(|| relationship_delete(&self.client, user_id))
+    pub async fn add_friend(
+        &self,
+        user_id: u64,
+        location: model::RelationshipLocation,
+        guild_id: Option<u64>,
+        channel_id: Option<u64>,
+    ) -> Result<(), Error> {
+        self.put_relationship(user_id, location, guild_id, channel_id, None)
+            .await
+    }
+
+    pub async fn accept_friend_request(
+        &self,
+        user_id: u64,
+        location: model::RelationshipLocation,
+        guild_id: Option<u64>,
+        channel_id: Option<u64>,
+    ) -> Result<(), Error> {
+        let confirm_stranger_request =
+            (location == model::RelationshipLocation::ProfileModal).then_some(false);
+        self.put_relationship(
+            user_id,
+            location,
+            guild_id,
+            channel_id,
+            confirm_stranger_request,
+        )
+        .await
+    }
+
+    pub async fn delete_relationship(
+        &self,
+        user_id: u64,
+        location: model::RelationshipLocation,
+    ) -> Result<(), Error> {
+        self.send(|| relationship_delete(&self.client, user_id, location))
             .await?;
         Ok(())
     }
@@ -87,7 +172,7 @@ impl Rest {
             .send(|| {
                 self.client
                     .get(FRIEND_SUGGESTIONS_URL)
-                    .header(REFERER, "https://discord.com/channels/@me")
+                    .header(REFERER, FRIENDS_REFERER)
             })
             .await?;
         let value = response.json::<Value>().await.map_err(|_| Error::Decode)?;
@@ -95,16 +180,7 @@ impl Rest {
     }
 
     pub async fn open_dm(&self, user_id: u64) -> Result<model::Channel, Error> {
-        let body = OpenDm {
-            recipients: vec![user_id.to_string()],
-        };
-        let response = self
-            .send(|| {
-                self.client
-                    .post("https://discord.com/api/v9/users/@me/channels")
-                    .json(&body)
-            })
-            .await?;
+        let response = self.send(|| open_dm(&self.client, user_id)).await?;
         response
             .json::<model::Channel>()
             .await
@@ -152,7 +228,7 @@ impl Rest {
                         .get(
                             "https://discord.com/api/v9/users/@me/message-requests/supplemental-data",
                         )
-                        .header(REFERER, "https://discord.com/channels/@me")
+                        .header(REFERER, "https://discord.com/message-requests")
                         .query(&query)
                 })
                 .await?;
@@ -168,11 +244,18 @@ mod tests {
     use super::*;
     use reqwest::Client;
 
+    fn context(request: &reqwest::Request) -> Option<&str> {
+        request
+            .headers()
+            .get("x-context-properties")
+            .map(|value| value.to_str().unwrap())
+    }
+
     #[test]
     fn relationship_requests_use_the_friend_routes() {
         let client = Client::new();
 
-        let request = friend_request(&client, "a.b_c1").build().unwrap();
+        let request = friend_request(&client, "A.b_c1").build().unwrap();
         assert_eq!(request.method(), reqwest::Method::POST);
         assert_eq!(
             request.url().as_str(),
@@ -180,11 +263,21 @@ mod tests {
         );
         assert_eq!(
             request.body().and_then(reqwest::Body::as_bytes),
-            Some(br#"{"username":"a.b_c1","discriminator":null}"#.as_slice())
+            Some(br#"{"username":"A.b_c1","discriminator":null}"#.as_slice())
         );
+        assert_eq!(context(&request), Some(ADD_FRIEND_CONTEXT));
+        assert_eq!(request.headers()[REFERER], FRIENDS_REFERER);
 
         let referer = super::referer(Some(7), 8);
-        let request = relationship_put(&client, 42, &referer).build().unwrap();
+        let request = relationship_put(
+            &client,
+            42,
+            &referer,
+            model::RelationshipLocation::ProfileModal,
+            None,
+        )
+        .build()
+        .unwrap();
         assert_eq!(request.method(), reqwest::Method::PUT);
         assert_eq!(
             request.url().as_str(),
@@ -195,8 +288,8 @@ mod tests {
             Some(b"{}".as_slice())
         );
         assert_eq!(
-            request.headers()["x-context-properties"],
-            "eyJsb2NhdGlvbiI6InVzZXIgcHJvZmlsZSBtb2RhbCB2MiJ9"
+            context(&request),
+            Some("eyJsb2NhdGlvbiI6InVzZXIgcHJvZmlsZSBtb2RhbCB2MiJ9")
         );
         assert_eq!(request.headers()["origin"], "https://discord.com");
         assert_eq!(
@@ -204,27 +297,47 @@ mod tests {
             "https://discord.com/channels/7/8"
         );
         assert_eq!(request.headers()["content-type"], "application/json");
-        let request = relationship_put(&client, 42, &super::referer(None, 8))
-            .build()
-            .unwrap();
-        assert_eq!(
-            request.headers()[REFERER],
-            "https://discord.com/channels/@me/8"
-        );
-        let request = relationship_put(&client, 42, "https://discord.com/channels/@me")
-            .build()
-            .unwrap();
-        assert_eq!(
-            request.headers()[REFERER],
-            "https://discord.com/channels/@me"
-        );
 
-        let request = relationship_delete(&client, 42).build().unwrap();
+        let request = relationship_put(
+            &client,
+            42,
+            FRIENDS_REFERER,
+            model::RelationshipLocation::ContextMenu,
+            Some(false),
+        )
+        .build()
+        .unwrap();
+        assert_eq!(
+            request.body().and_then(reqwest::Body::as_bytes),
+            Some(br#"{"confirm_stranger_request":false}"#.as_slice())
+        );
+        assert_eq!(context(&request), Some(CONTEXT_MENU_CONTEXT));
+        assert_eq!(request.headers()[REFERER], FRIENDS_REFERER);
+
+        let request = relationship_delete(&client, 42, model::RelationshipLocation::ContextMenu)
+            .build()
+            .unwrap();
         assert_eq!(request.method(), reqwest::Method::DELETE);
         assert_eq!(
             request.url().as_str(),
             "https://discord.com/api/v9/users/@me/relationships/42"
         );
         assert!(request.body().is_none());
+        assert_eq!(context(&request), Some(CONTEXT_MENU_CONTEXT));
+    }
+
+    #[test]
+    fn open_dm_sends_an_empty_context() {
+        let request = open_dm(&Client::new(), 42).build().unwrap();
+        assert_eq!(request.method(), reqwest::Method::POST);
+        assert_eq!(
+            request.url().as_str(),
+            "https://discord.com/api/v9/users/@me/channels"
+        );
+        assert_eq!(
+            request.body().and_then(reqwest::Body::as_bytes),
+            Some(br#"{"recipients":["42"]}"#.as_slice())
+        );
+        assert_eq!(context(&request), Some("e30="));
     }
 }

@@ -11,7 +11,6 @@ fn offline_session(
     let session = Session {
         inner: Arc::new(Inner {
             rest: Err(Error::Network),
-            gif_client: Err(Error::Network),
             cache: Mutex::default(),
             requests: Mutex::default(),
             sends: Mutex::default(),
@@ -176,7 +175,7 @@ async fn account_settings_use_cached_values_and_guard_saves_by_generation() {
             .inner
             .generation
             .store(generation, Ordering::Release);
-        let results = [
+        let [unchanged, results @ ..] = [
             session
                 .set_text_images(TextImages::default(), TextImages::default())
                 .await,
@@ -192,6 +191,11 @@ async fn account_settings_use_cached_values_and_guard_saves_by_generation() {
                 )
                 .await,
         ];
+        if generation == 1 {
+            assert!(unchanged.is_ok());
+        } else {
+            assert!(matches!(unchanged, Err(Error::Closed)));
+        }
         for result in results {
             if generation == 1 {
                 assert!(matches!(result, Err(Error::Network)));

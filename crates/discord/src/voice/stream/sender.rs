@@ -1,12 +1,17 @@
 use super::super::{
-    crypto::{Cipher, Mode},
-    dave::{Dave, EncryptOutcome},
+    crypto::Cipher,
+    dave::{
+        Dave, EncryptOutcome, INVALID_MLS_LIMIT, REFUSED_DOWNGRADE, REFUSED_DOWNGRADE_REASON,
+        REPEATED_INVALID_MLS, REPEATED_INVALID_MLS_REASON,
+    },
     gateway::{
-        self, commit_welcome_body, parse_binary_seq, ready_on_prepare, send_binary, send_json,
+        NORMAL_CLOSE, close_socket, commit_welcome_body, flag_invalid_commit_welcome,
+        heartbeat_payload, parse_binary_seq, ready_on_prepare, send_binary, send_json,
         send_key_package, send_ready,
     },
     rtcp,
     rtp::Header,
+    udp as discord_udp,
 };
 use super::{
     handshake::{self, HEARTBEAT_DEFAULT, HandshakeConfig, Socket},
@@ -26,7 +31,7 @@ use std::{
         atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc::Receiver,
     },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 use tokio::{
     net::UdpSocket,
@@ -49,13 +54,14 @@ pub(crate) struct SenderConfig {
     pub token: Secret,
     pub endpoint: String,
     pub rtc_server_id: u64,
-    pub key: String,
+    pub rtc_channel_id: Option<u64>,
     pub keyframe: Arc<AtomicBool>,
     pub bitrate: Arc<AtomicU32>,
     pub reannounce: Arc<AtomicBool>,
     pub failure: Arc<Mutex<Option<String>>>,
     pub events: UnboundedSender<Event>,
     pub ended: Arc<AtomicBool>,
+    pub unpause: Option<Box<dyn FnOnce() + Send>>,
 }
 
 pub(crate) async fn run(
@@ -71,9 +77,8 @@ pub(crate) async fn run(
             token: config.token.clone(),
             endpoint: config.endpoint.clone(),
             rtc_server_id: config.rtc_server_id,
-            streams: json!([{"type": "video", "rid": "100", "quality": 100}]),
-            encode: true,
-            decode: false,
+            rtc_channel_id: super::rtc_channel_id(config.rtc_server_id, config.rtc_channel_id)?,
+            streams: super::screen_streams(),
         },
         &mut cancel,
     )
@@ -97,9 +102,6 @@ pub(crate) async fn run(
         });
         audio_receiver
     });
-    if handshake.video_ssrc == 0 {
-        return Err("Discord did not assign a stream SSRC".into());
-    }
     let mut sender = Sender::new(config);
     sender.sound = audio.is_some();
     sender.audio_ssrc = handshake.ssrc;
@@ -116,36 +118,41 @@ pub(crate) async fn run(
     let mut tick = interval(Duration::from_millis(10));
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut buffer = [0u8; MAX_PACKET];
-    loop {
-        tokio::select! {
-            biased;
-            _ = cancel.changed() => return Ok(()),
-            _ = tick.tick() => sender.tick(&mut socket, &udp, peer).await?,
-            _ = sleep_until(tokio::time::Instant::from_std(sender.pacer.deadline())), if !sender.pacer.is_empty() || sender.history.has_pending() => {
-                sender.flush(&udp, peer, Instant::now()).await?;
-            }
-            frame = frame_receiver.recv(), if sender.pacer.is_empty() => {
-                let Some(frame) = frame else {
-                    return Err("The screen capture stopped".into());
-                };
-                sender.frame(&mut socket, frame, Instant::now()).await?;
-            }
-            sound = next_audio(&mut audio) => match sound {
-                Some(sound) => sender.audio(&udp, peer, sound, Instant::now()).await?,
-                None => audio = None,
-            },
-            received = udp.recv_from(&mut buffer) => {
-                let Ok((size, _)) = received else { continue };
-                sender.feedback(&udp, peer, &buffer[..size], Instant::now()).await?;
-            }
-            message = socket.next() => {
-                let Some(Ok(message)) = message else {
-                    return Err("Discord stream socket failed".into());
-                };
-                sender.message(&mut socket, message).await?;
+    let result: Result<(), String> = async {
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancel.changed() => return Ok(()),
+                _ = tick.tick() => sender.tick(&mut socket, &udp, peer).await?,
+                _ = sleep_until(tokio::time::Instant::from_std(sender.pacer.deadline())), if !sender.pacer.is_empty() || sender.history.has_pending() => {
+                    sender.flush(&udp, peer, Instant::now()).await?;
+                }
+                frame = frame_receiver.recv(), if sender.pacer.is_empty() => {
+                    let Some(frame) = frame else {
+                        return Err("The screen capture stopped".into());
+                    };
+                    sender.frame(&mut socket, frame, Instant::now()).await?;
+                }
+                sound = next_audio(&mut audio) => match sound {
+                    Some(sound) => sender.audio(&udp, peer, sound, Instant::now()).await?,
+                    None => audio = None,
+                },
+                received = udp.recv_from(&mut buffer) => {
+                    let Ok((size, _)) = received else { continue };
+                    sender.feedback(&udp, peer, &buffer[..size], Instant::now()).await?;
+                }
+                message = socket.next() => {
+                    let Some(Ok(message)) = message else {
+                        return Err("Discord stream socket failed".into());
+                    };
+                    sender.message(&mut socket, message).await?;
+                }
             }
         }
     }
+    .await;
+    close_socket(&mut socket, sender.close_code).await;
+    result
 }
 
 struct Sender {
@@ -181,6 +188,10 @@ struct Sender {
     sound: bool,
     audio_packets: u32,
     audio_octets: u32,
+    ping_sequence: u32,
+    next_ping: Instant,
+    invalid_mls: u8,
+    close_code: u16,
 }
 
 struct Stats {
@@ -247,6 +258,10 @@ impl Sender {
             sound: false,
             audio_packets: 0,
             audio_octets: 0,
+            ping_sequence: 0,
+            next_ping: now,
+            invalid_mls: 0,
+            close_code: NORMAL_CLOSE,
         }
     }
 
@@ -271,6 +286,9 @@ impl Sender {
     async fn signal(&mut self, socket: &mut Socket, op: u8, data: Value) -> Result<(), String> {
         match op {
             2 => Err("Unexpected stream transport replacement".into()),
+            3 => send_json(socket, heartbeat_payload(self.seq_ack))
+                .await
+                .map_err(|_| "Discord stream heartbeat failed".to_owned()),
             4 => self.session(socket, &data).await,
             5 | 6 | 12 => Ok(()),
             8 => {
@@ -313,7 +331,9 @@ impl Sender {
                     .and_then(Value::as_u64)
                     .unwrap_or(0) as u16;
                 if let Some(dave) = &mut self.dave {
-                    dave.prepare_transition(version, transition);
+                    if !dave.prepare_transition(version, transition) {
+                        return self.refuse_downgrade();
+                    }
                     if transition == 0 {
                         dave.execute_transition(0);
                     } else if ready_on_prepare(transition, version, false) {
@@ -338,7 +358,10 @@ impl Sender {
                     .and_then(Value::as_u64)
                     .unwrap_or(0) as u16;
                 let epoch = data.get("epoch").and_then(Value::as_u64).unwrap_or(0);
-                if version > 0 && self.dave.is_none() {
+                if version == 0 {
+                    return self.refuse_downgrade();
+                }
+                if self.dave.is_none() {
                     let group = self.rtc_group()?;
                     let mut dave =
                         Dave::new(version, self.config.user_id, group).ok_or_else(|| {
@@ -399,15 +422,15 @@ impl Sender {
                     false
                 };
                 if !result {
-                    if transition != 0 {
-                        let _ = send_json(
-                            socket,
-                            json!({"op": 31, "d": {"transition_id": transition}}),
-                        )
-                        .await;
+                    self.invalid_mls = self.invalid_mls.saturating_add(1);
+                    if self.invalid_mls >= INVALID_MLS_LIMIT {
+                        self.close_code = REPEATED_INVALID_MLS;
+                        return Err(REPEATED_INVALID_MLS_REASON.into());
                     }
+                    flag_invalid_commit_welcome(socket, self.dave.as_mut(), transition).await;
                     return Ok(());
                 }
+                self.invalid_mls = 0;
                 if transition == 0 {
                     if let Some(dave) = &mut self.dave {
                         dave.execute_transition(0);
@@ -428,19 +451,19 @@ impl Sender {
     }
 
     fn rtc_group(&self) -> Result<u64, String> {
-        self.config
-            .rtc_server_id
-            .checked_sub(1)
-            .filter(|id| *id != 0)
-            .ok_or_else(|| "Unsupported Discord stream media-session identifier".to_owned())
+        super::rtc_channel_id(self.config.rtc_server_id, self.config.rtc_channel_id)
+    }
+
+    fn refuse_downgrade(&mut self) -> Result<(), String> {
+        self.close_code = REFUSED_DOWNGRADE;
+        Err(REFUSED_DOWNGRADE_REASON.into())
     }
 
     async fn session(&mut self, socket: &mut Socket, data: &Value) -> Result<(), String> {
-        if data.get("mode").and_then(Value::as_str) != Some(Mode::Aes256Gcm.name()) {
-            return Err("Discord did not negotiate the required stream transport".into());
-        }
-        if data.get("dave_protocol_version").and_then(Value::as_u64) != Some(1) {
-            return Err("Discord did not negotiate DAVE stream media".into());
+        let mode = super::transport_mode(data)?;
+        let version = super::dave_version(data);
+        if version == 0 {
+            return self.refuse_downgrade();
         }
         if !data
             .get("video_codec")
@@ -464,11 +487,11 @@ impl Sender {
                 .ok_or_else(|| "Discord sent an invalid stream transport key".to_owned())?;
         }
         self.cipher = Some(
-            Cipher::new(Mode::Aes256Gcm, &key)
+            Cipher::new(mode, &key)
                 .ok_or_else(|| "Discord sent an invalid stream transport key".to_owned())?,
         );
         let group = self.rtc_group()?;
-        let mut dave = Dave::new(1, self.config.user_id, group)
+        let mut dave = Dave::new(version, self.config.user_id, group)
             .ok_or_else(|| "Discord requested unsupported stream encryption".to_owned())?;
         dave.add_user(self.config.user_id);
         let key_package = dave
@@ -559,11 +582,9 @@ impl Sender {
             )
             .await;
         }
-        let _ = send_json(
-            socket,
-            json!({"op": 22, "d": {"stream_key": self.config.key, "paused": false}}),
-        )
-        .await;
+        if let Some(unpause) = self.config.unpause.take() {
+            unpause();
+        }
         self.announced = true;
         self.config.reannounce.store(false, Ordering::Release);
         self.next_report = Instant::now() + SENDER_REPORT;
@@ -591,7 +612,7 @@ impl Sender {
             return Ok(());
         };
         let payload = match dave.encrypt(&sound.opus) {
-            EncryptOutcome::Plaintext(payload) | EncryptOutcome::Encrypted(payload) => payload,
+            EncryptOutcome::Encrypted(payload) => payload,
             EncryptOutcome::NotReady | EncryptOutcome::Failed => return Ok(()),
         };
         let talkspurt = self
@@ -724,13 +745,17 @@ impl Sender {
             }
         }
         if now >= self.next_heartbeat {
-            send_json(
-                socket,
-                json!({"op": 3, "d": {"t": gateway::unix_ms(), "seq_ack": self.seq_ack}}),
-            )
-            .await
-            .map_err(|_| "Discord stream heartbeat failed".to_owned())?;
+            send_json(socket, heartbeat_payload(self.seq_ack))
+                .await
+                .map_err(|_| "Discord stream heartbeat failed".to_owned())?;
             self.next_heartbeat = now + self.heartbeat;
+        }
+        if now >= self.next_ping {
+            let _ = udp
+                .send_to(&discord_udp::ping(self.ping_sequence), peer)
+                .await;
+            self.ping_sequence = self.ping_sequence.wrapping_add(1);
+            self.next_ping = now + discord_udp::PING_INTERVAL;
         }
         Ok(())
     }
@@ -739,14 +764,13 @@ impl Sender {
         if self.video_ssrc == 0 {
             return;
         }
-        let elapsed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default();
+        let (ntp_seconds, ntp_fraction) = rtcp::ntp_now();
         let now = Instant::now();
+        let since = |sent: Option<Instant>| sent.map(|sent| now.saturating_duration_since(sent));
         let stats = rtcp::SenderStats {
-            ntp_seconds: elapsed.as_secs() as u32,
-            ntp_fraction: (((elapsed.subsec_nanos() as u64) << 32) / 1_000_000_000) as u32,
-            rtp_timestamp: rtp_at(self.rtp_timestamp, self.video_sent, now, 90),
+            ntp_seconds,
+            ntp_fraction,
+            rtp_timestamp: rtcp::rtp_at(self.rtp_timestamp, since(self.video_sent), 90),
             packet_count: self.packets,
             octet_count: self.octets,
         };
@@ -754,7 +778,7 @@ impl Sender {
         self.send_rtcp(udp, peer, clear).await;
         if self.audio_packets > 0 {
             let stats = rtcp::SenderStats {
-                rtp_timestamp: rtp_at(self.audio_timestamp, self.audio_sent, now, 48),
+                rtp_timestamp: rtcp::rtp_at(self.audio_timestamp, since(self.audio_sent), 48),
                 packet_count: self.audio_packets,
                 octet_count: self.audio_octets,
                 ..stats
@@ -771,7 +795,7 @@ impl Sender {
         packet: &[u8],
         now: Instant,
     ) -> Result<(), String> {
-        if packet.len() == 8 && packet.starts_with(&[0x13, 0x37, 0xca, 0xfe]) {
+        if discord_udp::is_ping(packet) {
             return Ok(());
         }
         if rtcp::packet_type(packet).is_none() {
@@ -853,14 +877,6 @@ impl Sender {
         packet.extend_from_slice(&sealed);
         let _ = udp.send_to(&packet, peer).await;
     }
-}
-
-fn rtp_at(timestamp: u32, taken: Option<Instant>, now: Instant, khz: u128) -> u32 {
-    let Some(taken) = taken else {
-        return timestamp;
-    };
-    let ticks = now.saturating_duration_since(taken).as_micros() * khz / 1000;
-    timestamp.wrapping_add(ticks as u32)
 }
 
 async fn next_audio(

@@ -11,6 +11,7 @@ pub(super) mod sender;
 pub(super) mod share;
 pub(super) mod viewer;
 
+use super::crypto::Mode;
 use std::sync::{Arc, Mutex};
 
 pub(crate) use convert::nv12_to_bgra;
@@ -22,6 +23,35 @@ pub struct StreamFrame {
 }
 
 pub type FrameSlot = Arc<Mutex<Option<StreamFrame>>>;
+
+pub(crate) fn rtc_channel_id(
+    rtc_server_id: u64,
+    rtc_channel_id: Option<u64>,
+) -> Result<u64, String> {
+    rtc_channel_id
+        .or_else(|| rtc_server_id.checked_sub(1))
+        .filter(|id| *id != 0)
+        .ok_or_else(|| "Unsupported Discord stream media-session identifier".to_owned())
+}
+
+pub(crate) fn screen_streams() -> serde_json::Value {
+    serde_json::json!([{"type": "screen", "rid": "100", "quality": 100}])
+}
+
+fn transport_mode(session: &serde_json::Value) -> Result<Mode, String> {
+    session
+        .get("mode")
+        .and_then(serde_json::Value::as_str)
+        .and_then(Mode::from_name)
+        .ok_or_else(|| "Discord did not negotiate a supported stream transport".to_owned())
+}
+
+fn dave_version(session: &serde_json::Value) -> u16 {
+    session
+        .get("dave_protocol_version")
+        .and_then(serde_json::Value::as_u64)
+        .map_or(0, |version| u16::try_from(version).unwrap_or(u16::MAX))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ScreenSourceId {

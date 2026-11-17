@@ -22,6 +22,13 @@ fn upload_preview(client: &Client, stream_key: &str, thumbnail: &str) -> Request
         .json(&serde_json::json!({"thumbnail": thumbnail}))
 }
 
+fn fetch_preview(client: &Client, stream_key: &str, version: i64) -> RequestBuilder {
+    client.get(format!(
+        "{}?version={version}",
+        stream_preview_url(stream_key)
+    ))
+}
+
 impl Rest {
     pub async fn upload_stream_preview(
         &self,
@@ -34,8 +41,10 @@ impl Rest {
     }
 
     pub async fn stream_preview(&self, stream_key: &str) -> Result<String, Error> {
-        let url = stream_preview_url(stream_key);
-        let response = self.send(|| self.client.get(&url)).await?;
+        let version = chrono::Utc::now().timestamp_millis();
+        let response = self
+            .send(|| fetch_preview(&self.client, stream_key, version))
+            .await?;
         let bytes = response.bytes().await.map_err(|_| Error::Decode)?;
         parse_preview(&bytes)
     }
@@ -54,6 +63,18 @@ mod tests {
         assert_eq!(
             stream_preview_url("call:9:3"),
             "https://discord.com/api/v9/streams/call:9:3/preview"
+        );
+    }
+
+    #[test]
+    fn preview_fetch_carries_a_cache_busting_version() {
+        let request = fetch_preview(&Client::new(), "guild:1:2:3", 1_700_000_000_000)
+            .build()
+            .unwrap();
+        assert_eq!(request.method(), reqwest::Method::GET);
+        assert_eq!(
+            request.url().as_str(),
+            "https://discord.com/api/v9/streams/guild:1:2:3/preview?version=1700000000000"
         );
     }
 

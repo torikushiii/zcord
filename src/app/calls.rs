@@ -167,9 +167,10 @@ impl DiscordApp {
         };
         self.calls.error = None;
         let user_id = self.store.current_user_id;
-        let request = Tokio::spawn(cx, async move {
-            session.stop_ringing_call(channel_id, user_id).await
-        });
+        let request = Tokio::spawn(
+            cx,
+            async move { session.stop_ringing_call(channel_id).await },
+        );
         cx.spawn(async move |this, cx| {
             let result = request.await;
             this.update(cx, |app, cx| {

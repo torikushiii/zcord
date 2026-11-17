@@ -20,6 +20,12 @@ pub struct Relationship {
     pub user: Option<User>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelationshipLocation {
+    ContextMenu,
+    ProfileModal,
+}
+
 #[derive(Clone, Deserialize)]
 pub struct FriendSuggestion {
     pub suggested_user: User,

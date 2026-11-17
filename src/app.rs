@@ -86,7 +86,6 @@ struct ParseCache {
 }
 
 const PARSED_CACHE_LIMIT: usize = 4096;
-const MESSAGE_PAGE: usize = 50;
 const OLDER_PAGE: usize = 20;
 const JUMP_PAGE: usize = 30;
 const OLDER_MESSAGES_THRESHOLD: usize = 8;
@@ -383,6 +382,7 @@ impl DiscordApp {
                 delete_closing: None,
                 failed_sends: HashMap::new(),
                 last_nonce: 0,
+                retry_nonce: None,
                 pending_sends: compose::sending::PendingSends::default(),
                 drafts: HashMap::new(),
                 send_fill: Cell::default(),
@@ -603,6 +603,9 @@ impl DiscordApp {
         cx.observe_window_activation(window, |app, window, cx| {
             app.window_active = window.is_window_active();
             crate::settings::set_window_focused(cx, app.window_active);
+            if let Some(session) = &app.session {
+                session.set_focused(app.window_active);
+            }
             if app.window_active {
                 crate::settings::apply_reduce_motion(cx);
             }

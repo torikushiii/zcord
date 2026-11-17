@@ -30,6 +30,7 @@ use tokio_tungstenite::{
 
 const GATEWAY: &str = "wss://remote-auth-gateway.discord.gg/?v=2";
 const LOGIN: &str = "https://discord.com/api/v9/users/@me/remote-auth/login";
+const EXPERIMENTS: &str = "https://discord.com/api/v9/experiments?with_guild_experiments=true";
 const MAX_FAILURES: u32 = 5;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
@@ -103,6 +104,7 @@ pub fn qr_matrix(text: &str) -> Option<QrMatrix> {
 struct Endpoints {
     gateway: String,
     login: String,
+    experiments: String,
 }
 
 impl Default for Endpoints {
@@ -110,6 +112,7 @@ impl Default for Endpoints {
         Self {
             gateway: GATEWAY.to_owned(),
             login: LOGIN.to_owned(),
+            experiments: EXPERIMENTS.to_owned(),
         }
     }
 }
@@ -362,6 +365,7 @@ async fn attempt(
                 };
                 let ticket = Ticket {
                     login: &endpoints.login,
+                    experiments: &endpoints.experiments,
                     ticket,
                     key: &key,
                 };
@@ -465,6 +469,7 @@ fn parse_user_payload(payload: &[u8]) -> Option<RemoteUser> {
 
 struct Ticket<'a> {
     login: &'a str,
+    experiments: &'a str,
     ticket: &'a str,
     key: &'a RsaPrivateKey,
 }
@@ -487,12 +492,16 @@ async fn trade(
     sender: &UnboundedSender<RemoteAuthEvent>,
     shutdown: &mut watch::Receiver<bool>,
 ) -> Traded {
+    let session = match LoginSession::start(ticket.experiments).await {
+        Ok(session) => session,
+        Err(message) => return Traded::Failed(message),
+    };
     let mut solved: Option<(Captcha, String)> = None;
     for shown in 0..=captcha::TRIES {
         let solution = solved
             .as_ref()
             .map(|(captcha, solution)| (captcha, solution.as_str()));
-        let captcha = match exchange_ticket(&ticket, solution).await {
+        let captcha = match exchange_ticket(&session, &ticket, solution).await {
             Ok(Exchange::Token(token)) => return Traded::Token(token),
             Ok(Exchange::Captcha(captcha)) => captcha,
             Err(message) => return Traded::Failed(message),
@@ -534,23 +543,60 @@ async fn trade(
     unreachable!("the last try returns before showing another captcha")
 }
 
+struct LoginSession {
+    client: reqwest::Client,
+    fingerprint: Option<String>,
+}
+
+impl LoginSession {
+    async fn start(experiments: &str) -> Result<Self, String> {
+        let unprepared = || "Could not prepare the QR login request.".to_owned();
+        let client = reqwest::Client::builder()
+            .default_headers(rest::client_headers().map_err(|_| unprepared())?)
+            .cookie_store(true)
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|_| unprepared())?;
+        let fingerprint = match client
+            .get(experiments)
+            .header("x-super-properties", properties::super_properties())
+            .header(reqwest::header::REFERER, "https://discord.com/login")
+            .send()
+            .await
+        {
+            Ok(response) => response.json::<Value>().await.ok().and_then(|value| {
+                value
+                    .get("fingerprint")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            }),
+            Err(_) => None,
+        };
+        Ok(Self {
+            client,
+            fingerprint,
+        })
+    }
+}
+
 async fn exchange_ticket(
+    session: &LoginSession,
     ticket: &Ticket<'_>,
     solved: Option<(&Captcha, &str)>,
 ) -> Result<Exchange, String> {
-    let headers =
-        rest::client_headers().map_err(|_| "Could not prepare the QR login request.".to_owned())?;
-    let client = reqwest::Client::builder()
-        .default_headers(headers)
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|_| "Could not prepare the QR login request.".to_owned())?;
-    let mut request = client
+    let mut request = session
+        .client
         .post(ticket.login)
         .header("x-super-properties", properties::super_properties())
         .header(reqwest::header::REFERER, "https://discord.com/login")
         .header(reqwest::header::ORIGIN, "https://discord.com");
+    if let Some(fingerprint) = &session.fingerprint {
+        request = request.header("x-fingerprint", fingerprint);
+    }
+    if let Some(installation) = properties::installation_id() {
+        request = request.header("x-installation-id", installation);
+    }
     if let Some((captcha, solution)) = solved {
         for (name, value) in captcha.headers(solution) {
             request = request.header(name, value);

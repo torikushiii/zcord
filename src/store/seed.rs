@@ -491,6 +491,7 @@ fn seed_messages(
             forward: None,
             forwardable: false,
             mentions_me: false,
+            mention_ids: Vec::new(),
             uploads: Vec::new(),
             thread: None,
             reference_id: None,

@@ -21,7 +21,6 @@ impl Session {
         source_guild: Option<u64>,
         source_channel: u64,
         message_id: u64,
-        target_guild: Option<u64>,
         target_channel: u64,
         nonce: u64,
     ) -> Result<model::Message, Error> {
@@ -30,7 +29,6 @@ impl Session {
                 source_guild,
                 source_channel,
                 message_id,
-                target_guild,
                 target_channel,
                 nonce,
             )
@@ -55,11 +53,10 @@ impl Session {
 
     pub async fn ack_bulk(
         &self,
-        guild_id: Option<u64>,
-        channel_id: u64,
-        acks: Vec<(u64, u64)>,
+        view: Option<(Option<u64>, u64)>,
+        acks: Vec<(u64, u64, u8)>,
     ) -> Result<(), Error> {
-        self.rest(async |rest| rest.ack_bulk(guild_id, channel_id, &acks).await)
+        self.rest(async |rest| rest.ack_bulk(view, &acks).await)
             .await
     }
 
@@ -69,9 +66,10 @@ impl Session {
         channel_id: u64,
         message_id: u64,
         last_viewed: u32,
+        flags: Option<u32>,
     ) -> Result<(), Error> {
         self.rest(async |rest| {
-            rest.ack_message(guild_id, channel_id, message_id, last_viewed)
+            rest.ack_message(guild_id, channel_id, message_id, last_viewed, flags)
                 .await
         })
         .await
@@ -221,9 +219,10 @@ impl Session {
         channel_id: u64,
         message_id: u64,
         content: String,
+        quiet_reply: bool,
     ) -> Result<model::MessageUpdate, Error> {
         self.rest(async |rest| {
-            rest.edit_message(guild_id, channel_id, message_id, &content)
+            rest.edit_message(guild_id, channel_id, message_id, &content, quiet_reply)
                 .await
         })
         .await
@@ -281,6 +280,15 @@ impl Session {
         .await
     }
 
+    pub async fn fetch_inbox_messages(
+        &self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+    ) -> Result<Vec<model::Message>, Error> {
+        self.rest(async |rest| rest.fetch_inbox_messages(guild_id, channel_id).await)
+            .await
+    }
+
     pub async fn fetch_messages_around(
         &self,
         guild_id: Option<u64>,
@@ -301,9 +309,10 @@ impl Session {
         channel_id: u64,
         message_id: u64,
         emoji: &str,
+        location: model::ReactionLocation,
     ) -> Result<(), Error> {
         self.rest(async |rest| {
-            rest.add_reaction(guild_id, channel_id, message_id, emoji)
+            rest.add_reaction(guild_id, channel_id, message_id, emoji, location)
                 .await
         })
         .await
@@ -330,9 +339,10 @@ impl Session {
         channel_id: u64,
         message_id: u64,
         emoji: &str,
+        location: model::ReactionLocation,
     ) -> Result<(), Error> {
         self.rest(async |rest| {
-            rest.remove_reaction(guild_id, channel_id, message_id, emoji)
+            rest.remove_reaction(guild_id, channel_id, message_id, emoji, location)
                 .await
         })
         .await

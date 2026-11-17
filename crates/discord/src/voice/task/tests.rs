@@ -23,6 +23,66 @@ fn server_name_strips_scheme_path_and_port() {
 }
 
 #[test]
+fn ws_url_drops_default_ports() {
+    assert_eq!(
+        ws_url("c-sin20-b41c6763.discord.media:443").as_deref(),
+        Some("wss://c-sin20-b41c6763.discord.media/?v=9")
+    );
+    assert_eq!(
+        ws_url("c-sin20-b41c6763.discord.media:80").as_deref(),
+        Some("wss://c-sin20-b41c6763.discord.media/?v=9")
+    );
+    assert_eq!(
+        ws_url("c-sin20-b41c6763.discord.media:2096").as_deref(),
+        Some("wss://c-sin20-b41c6763.discord.media:2096/?v=9")
+    );
+    assert_eq!(
+        ws_url("ws://127.0.0.1:443").as_deref(),
+        Some("ws://127.0.0.1:443/?v=9")
+    );
+    assert_eq!(ws_url("  "), None);
+}
+
+#[test]
+fn reconnect_backoff_stays_within_ten_seconds() {
+    assert!(reconnect_delay(1) < Duration::from_millis(1501));
+    for failures in [5, 50, u32::MAX] {
+        let delay = reconnect_delay(failures);
+        assert!(delay >= MAX_BACKOFF && delay <= MAX_BACKOFF + Duration::from_millis(500));
+    }
+}
+
+#[test]
+fn switching_streams_ends_the_previous_watch_first() {
+    let (commands, mut sent) = tokio::sync::mpsc::unbounded_channel();
+    let manager = VoiceManager {
+        commands: Some(commands),
+        gateway_generation: Some(Arc::new(AtomicU64::new(1))),
+        ..VoiceManager::default()
+    };
+    manager.gateway_ready(1, "own-session", false);
+    manager.join(10, 20);
+    let state: model::VoiceState = serde_json::from_value(json!({
+        "guild_id": "10", "channel_id": "20", "user_id": "1"
+    }))
+    .unwrap();
+    manager.voice_state(&state, Some("own-session".into()));
+
+    manager.watch(2);
+    assert!(sent.try_recv().is_err());
+    let watch = manager.watch(3).unwrap();
+    let (_, stop) = sent.try_recv().unwrap();
+    assert_eq!(
+        stop.payload,
+        json!({"op": 19, "d": {"stream_key": "guild:10:20:2"}})
+    );
+    assert_eq!(
+        watch,
+        json!({"op": 20, "d": {"stream_key": "guild:10:20:3"}})
+    );
+}
+
+#[test]
 fn voice_server_restarts_only_when_endpoint_or_token_changes() {
     assert_eq!(server_restart_reason(false, false), None);
     assert_eq!(server_restart_reason(true, false), Some("token changed"));
@@ -46,7 +106,7 @@ fn op4_join_leave_and_mute_flags() {
     assert_eq!(join["d"]["self_mute"], false);
     assert_eq!(join["d"]["self_deaf"], false);
     assert_eq!(join["d"]["self_video"], false);
-    assert_eq!(join["d"]["flags"], 3);
+    assert_eq!(join["d"]["flags"], 2);
     assert_eq!(manager.take_pending_op4(), Some(join));
 
     let deaf = manager.set_deaf(true).unwrap();
@@ -59,7 +119,7 @@ fn op4_join_leave_and_mute_flags() {
     assert_eq!(undeafened["d"]["self_deaf"], false);
 
     let leave = manager.leave().unwrap();
-    assert_eq!(leave["d"]["guild_id"], "10");
+    assert_eq!(leave["d"]["guild_id"], serde_json::Value::Null);
     assert_eq!(leave["d"]["channel_id"], serde_json::Value::Null);
 }
 
@@ -137,7 +197,7 @@ fn giving_up_queues_leave_op4_but_server_disconnects_do_not() {
     manager.give_up(true);
     let leave = manager.take_pending_op4().unwrap();
     assert_eq!(leave["op"], 4);
-    assert_eq!(leave["d"]["guild_id"], "10");
+    assert_eq!(leave["d"]["guild_id"], serde_json::Value::Null);
     assert_eq!(leave["d"]["channel_id"], serde_json::Value::Null);
 
     let manager = VoiceManager::default();
@@ -165,7 +225,7 @@ async fn give_up_sends_leave_through_gateway() {
     assert_eq!(sent_generation, 1);
     assert_eq!(command.payload["op"], 4);
     assert_eq!(command.payload["d"]["channel_id"], serde_json::Value::Null);
-    assert_eq!(command.payload["d"]["guild_id"], "10");
+    assert_eq!(command.payload["d"]["guild_id"], serde_json::Value::Null);
 }
 
 #[tokio::test]
@@ -438,4 +498,16 @@ fn stopping_a_watch_clears_queued_stream_audio() {
     assert_eq!(flags.queued_stream_audio(), 1);
     manager.stop_watching();
     assert_eq!(flags.queued_stream_audio(), 0);
+}
+
+#[test]
+fn voice_recording_opt_out_clears_the_flag_and_resume_resends_op4() {
+    let manager = VoiceManager::default();
+    assert!(manager.set_allow_voice_recording(false).is_none());
+    let join = manager.join(10, 20);
+    assert_eq!(join["d"]["flags"], 0);
+    let allowed = manager.set_allow_voice_recording(true).unwrap();
+    assert_eq!(allowed["d"]["flags"], 2);
+    assert!(manager.set_allow_voice_recording(true).is_none());
+    assert_eq!(manager.resumed_op4().unwrap()["d"]["channel_id"], "20");
 }

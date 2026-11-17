@@ -321,7 +321,12 @@ fn starter_actions(app: &DiscordApp, thread_id: u64) -> impl IntoElement {
                         .on_click(move |_, _, cx| {
                             follow
                                 .update(cx, |app, cx| {
-                                    app.join_or_leave_thread(thread_id, joined, cx)
+                                    app.join_or_leave_thread(
+                                        thread_id,
+                                        joined,
+                                        crate::discord::model::ThreadFollowLocation::ForumToolbar,
+                                        cx,
+                                    )
                                 })
                                 .ok();
                         })

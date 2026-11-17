@@ -46,8 +46,18 @@ impl Session {
     }
 
     pub async fn billing_country(&self) -> Result<Option<String>, Error> {
-        self.rest(async |rest| rest.fetch_billing_country().await)
-            .await
+        let _request = self
+            .request_lock(CacheRequest::BillingCountry)
+            .lock_owned()
+            .await;
+        if let Some(country) = self.cache().billing_country.clone() {
+            return Ok(country);
+        }
+        let country = self
+            .rest(async |rest| rest.fetch_billing_country().await)
+            .await?;
+        self.cache().billing_country = Some(country.clone());
+        Ok(country)
     }
 
     pub async fn owned_shop_skus(&self) -> Result<Vec<u64>, Error> {

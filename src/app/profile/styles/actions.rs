@@ -2,6 +2,15 @@ use super::values::{
     guild_values, main_values, name_style, normalize_draft, style_error, style_patch,
 };
 use super::*;
+use md5::{Digest, Md5};
+
+async fn original_md5(change: Option<&ImageChange>) -> Option<String> {
+    let Some(ImageChange::Upload { path, .. }) = change else {
+        return None;
+    };
+    let bytes = tokio::fs::read(path).await.ok()?;
+    Some(format!("{:x}", Md5::digest(bytes)))
+}
 
 impl DiscordApp {
     pub(crate) fn load_style_shop(&mut self, cx: &mut Context<Self>) {
@@ -557,12 +566,11 @@ impl DiscordApp {
             editor.draft.clone(),
         );
         let avatar_description = match &draft.avatar {
-            Some(ImageChange::Upload { path, .. }) => Some(
-                path.file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned(),
-            ),
+            Some(ImageChange::Upload { path, .. }) => Some(format!(
+                "{}, added {}",
+                path.file_name().unwrap_or_default().to_string_lossy(),
+                chrono::Local::now().format("%B %-d, %Y at %-I:%M %p")
+            )),
             Some(ImageChange::Recent { id, .. }) => Some(
                 editor
                     .recent_avatars
@@ -587,6 +595,8 @@ impl DiscordApp {
             patch.name = identity_changes.name;
             patch.pronouns = identity_changes.pronouns;
             patch.tag_guild = identity_changes.tag_guild;
+            patch.avatar_original_md5 = original_md5(draft.avatar.as_ref()).await;
+            patch.banner_original_md5 = original_md5(draft.banner.as_ref()).await;
             if let Some(ImageChange::Recent { storage_hash, id }) = &draft.avatar {
                 if scope.guild_id().is_some() {
                     patch.avatar = Some(Some(

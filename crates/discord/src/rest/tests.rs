@@ -1,6 +1,6 @@
 use super::messages::{
-    forum_search_query, history_query, message_body, parse_uploads, put_request, reaction_url,
-    upload_stream, uploads_body,
+    forum_search_query, history_query, message_body, own_reaction_url, parse_uploads, put_request,
+    reaction_url, upload_stream, uploads_body,
 };
 use super::profiles::profile_query;
 use super::*;
@@ -22,7 +22,9 @@ fn local_rest() -> Rest {
             .unwrap(),
         upload_client: upload_client().unwrap(),
         limits: Limiter::default(),
-        installation_id: OnceCell::new(),
+        installation_id: std::sync::RwLock::new(None),
+        authorization: std::sync::RwLock::new(HeaderValue::from_static("fixture-token")),
+        view: std::sync::RwLock::new((0, 0)),
     }
 }
 
@@ -249,11 +251,15 @@ async fn unauthorized_response_stops_subsequent_dispatches() {
 fn emoji_api_reaction_path_encodes_custom_and_unicode() {
     assert_eq!(
         reaction_url(20, 30, "wave:123"),
-        "https://discord.com/api/v9/channels/20/messages/30/reactions/wave%3A123/@me"
+        "https://discord.com/api/v9/channels/20/messages/30/reactions/wave%3A123/%40me"
     );
     assert_eq!(
         reaction_url(20, 30, "\u{1F44D}"),
-        "https://discord.com/api/v9/channels/20/messages/30/reactions/%F0%9F%91%8D/@me"
+        "https://discord.com/api/v9/channels/20/messages/30/reactions/%F0%9F%91%8D/%40me"
+    );
+    assert_eq!(
+        own_reaction_url(20, 30, "\u{1F44D}"),
+        "https://discord.com/api/v9/channels/20/messages/30/reactions/%F0%9F%91%8D/0/%40me"
     );
 }
 
@@ -269,7 +275,7 @@ fn open_at_query_builds_history_anchors() {
     assert_eq!(encode(Anchor::Latest), "limit=50");
     assert_eq!(encode(Anchor::Before(61)), "before=61&limit=50");
     assert_eq!(encode(Anchor::After(61)), "after=61&limit=50");
-    assert_eq!(encode(Anchor::Around(61)), "around=61&limit=50");
+    assert_eq!(encode(Anchor::Around(61)), "limit=50&around=61");
 }
 
 #[test]
@@ -284,7 +290,7 @@ fn forum_search_query_matches_the_user_client() {
     .join("&");
     assert_eq!(
         query,
-        "sort_by=last_message_time&sort_order=desc&limit=25&tag_setting=match_some&offset=25"
+        "archived=true&sort_by=last_message_time&sort_order=desc&limit=25&tag_setting=match_some&offset=25"
     );
     let query = forum_search_query(&ForumQuery {
         sort: ForumSort::Created,
@@ -298,7 +304,7 @@ fn forum_search_query_matches_the_user_client() {
     .join("&");
     assert_eq!(
         query,
-        "sort_by=creation_time&sort_order=desc&limit=25&tag=7&tag=9&tag_setting=match_all&offset=0"
+        "archived=true&sort_by=last_message_time&sort_order=desc&limit=25&tag=7,9&tag_setting=match_all&offset=0"
     );
 }
 
@@ -317,11 +323,23 @@ fn profile_queries_match_the_official_client() {
     );
     assert_eq!(
         encode(ProfileKind::Modal, Some(1191168956170240010)),
-        "type=modal&with_mutual_guilds=true&with_mutual_friends=true&with_mutual_friends_count=true&guild_id=1191168956170240010"
+        "type=modal&with_mutual_guilds=true&with_mutual_friends=false&with_mutual_friends_count=true&guild_id=1191168956170240010"
     );
     assert_eq!(
         encode(ProfileKind::Modal, None),
-        "type=modal&with_mutual_guilds=true&with_mutual_friends=true&with_mutual_friends_count=true"
+        "type=modal&with_mutual_guilds=true&with_mutual_friends=false&with_mutual_friends_count=true"
+    );
+    assert_eq!(
+        encode(ProfileKind::Sidebar { bot: false }, None),
+        "type=sidebar&with_mutual_guilds=true&with_mutual_friends=false&with_mutual_friends_count=true"
+    );
+    assert_eq!(
+        encode(ProfileKind::Sidebar { bot: true }, None),
+        "type=sidebar&with_mutual_guilds=true&with_mutual_friends=false&with_mutual_friends_count=false"
+    );
+    assert_eq!(
+        encode(ProfileKind::MessageRequest, None),
+        "with_mutual_guilds=true&with_mutual_friends=false&with_mutual_friends_count=false"
     );
 }
 
@@ -333,6 +351,7 @@ fn outgoing(reply: Option<OutgoingReply>) -> OutgoingMessage {
         attachments: Vec::new(),
         sticker_ids: Vec::new(),
         content_inventory_entry: None,
+        retry: false,
     }
 }
 
@@ -362,7 +381,7 @@ fn send_payload_field_order_and_reply_mentions() {
     });
     assert_eq!(
         body_json(ping, Some(10)),
-        r#"{"mobile_network_type":"unknown","content":"hi","nonce":"123","tts":false,"message_reference":{"guild_id":"10","channel_id":"20","message_id":"30","type":0},"flags":0}"#
+        r#"{"mobile_network_type":"unknown","content":"hi","nonce":"123","tts":false,"message_reference":{"guild_id":"10","channel_id":"20","message_id":"30"},"flags":0}"#
     );
     let no_ping = Some(OutgoingReply {
         message_id: 30,
@@ -370,7 +389,7 @@ fn send_payload_field_order_and_reply_mentions() {
     });
     assert_eq!(
         body_json(no_ping, Some(10)),
-        r#"{"mobile_network_type":"unknown","content":"hi","nonce":"123","tts":false,"message_reference":{"guild_id":"10","channel_id":"20","message_id":"30","type":0},"allowed_mentions":{"parse":["users","roles","everyone"],"replied_user":false},"flags":0}"#
+        r#"{"mobile_network_type":"unknown","content":"hi","nonce":"123","tts":false,"message_reference":{"guild_id":"10","channel_id":"20","message_id":"30"},"allowed_mentions":{"parse":["users","roles","everyone"],"replied_user":false},"flags":0}"#
     );
     assert_eq!(
         body_json(
@@ -380,7 +399,7 @@ fn send_payload_field_order_and_reply_mentions() {
             }),
             None
         ),
-        r#"{"mobile_network_type":"unknown","content":"hi","nonce":"123","tts":false,"message_reference":{"channel_id":"20","message_id":"30","type":0},"flags":0}"#
+        r#"{"mobile_network_type":"unknown","content":"hi","nonce":"123","tts":false,"message_reference":{"channel_id":"20","message_id":"30"},"flags":0}"#
     );
 }
 
@@ -395,7 +414,7 @@ fn send_payload_attachments_follow_flags() {
     }];
     assert_eq!(
         serde_json::to_string(&message_body(None, 20, &message)).unwrap(),
-        r#"{"mobile_network_type":"unknown","content":"hi","nonce":"123","tts":false,"flags":0,"attachments":[{"id":"0","description":"","filename":"image.png","uploaded_filename":"uuid/image.png","is_spoiler":true,"original_content_type":"image/png"}]}"#
+        r#"{"mobile_network_type":"unknown","content":"hi","nonce":"123","tts":false,"flags":0,"attachments":[{"id":"0","filename":"image.png","uploaded_filename":"uuid/image.png","is_spoiler":true,"original_content_type":"image/png"}]}"#
     );
     message.attachments[0].spoiler = false;
     assert!(
@@ -527,7 +546,7 @@ async fn relationship_installation_rejects_invalid_metadata_and_can_retry() {
                 rest.fetch_installation(&url, referer).await,
                 Err(Error::Decode)
             ));
-            assert!(rest.installation_id.get().is_none());
+            assert!(rest.installation_id().is_none());
         }
         assert_eq!(
             rest.fetch_installation(&url, referer).await.unwrap(),

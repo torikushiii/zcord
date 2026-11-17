@@ -84,6 +84,10 @@ pub struct Channel {
     pub default_sort_order: Option<u8>,
     #[serde(default)]
     pub default_forum_layout: Option<u8>,
+    #[serde(default)]
+    pub default_auto_archive_duration: Option<u16>,
+    #[serde(default)]
+    pub default_tag_setting: Option<String>,
     #[serde(default, deserialize_with = "ids")]
     pub recipient_ids: Vec<u64>,
     #[serde(default, deserialize_with = "entries")]
@@ -120,6 +124,8 @@ impl Channel {
             available_tags,
             default_sort_order,
             default_forum_layout,
+            default_auto_archive_duration,
+            default_tag_setting,
             is_message_request,
             is_spam,
             icon

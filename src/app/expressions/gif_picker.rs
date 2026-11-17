@@ -86,8 +86,10 @@ struct GifPicker {
 
 #[derive(Clone)]
 struct GifItem {
+    id: Option<String>,
     url: String,
     src: String,
+    gif_src: Option<String>,
     width: u32,
     height: u32,
     video: bool,
@@ -147,19 +149,23 @@ fn image_rendition(src: &str) -> Option<String> {
 impl GifItem {
     fn from_gif(gif: &Gif) -> Self {
         Self {
+            id: Some(gif.id.clone()),
             url: gif.url.clone(),
             src: gif.src.clone(),
+            gif_src: gif.gif_src.clone(),
             width: gif.width,
             height: gif.height,
-            video: false,
-            preview: Preview::Image(gif.src.clone()),
+            video: is_video_path(&gif.src),
+            preview: Preview::of(&gif.src, false),
         }
     }
 
     fn from_favorite(favorite: &FavoriteGif) -> Self {
         Self {
+            id: None,
             url: favorite.url.clone(),
             src: favorite.src.clone(),
+            gif_src: None,
             width: favorite.width,
             height: favorite.height,
             video: favorite.format == FORMAT_VIDEO,
@@ -336,7 +342,7 @@ impl DiscordApp {
             return;
         };
         self.gifs.categories.insert(provider, Load::Loading);
-        let request = Tokio::spawn(cx, async move { session.gif_categories(provider).await });
+        let request = Tokio::spawn(cx, async move { session.gif_categories().await });
         cx.spawn(async move |this, cx| {
             let load = match request.await {
                 Ok(Ok(categories)) => Load::Ready(Rc::new(categories)),
@@ -363,7 +369,7 @@ impl DiscordApp {
             return;
         };
         self.gifs.trending.insert(provider, Load::Loading);
-        let request = Tokio::spawn(cx, async move { session.gif_trending(provider).await });
+        let request = Tokio::spawn(cx, async move { session.gif_trending().await });
         cx.spawn(async move |this, cx| {
             let load = match request.await {
                 Ok(Ok(gifs)) => Load::Ready(Rc::new(gifs)),
@@ -448,10 +454,7 @@ impl DiscordApp {
         };
         picker.results = Load::Loading;
         cx.notify();
-        let request = Tokio::spawn(
-            cx,
-            async move { session.gif_search(provider, &query).await },
-        );
+        let request = Tokio::spawn(cx, async move { session.gif_search(&query).await });
         cx.spawn(async move |this, cx| {
             let result = request.await;
             this.update(cx, |app, cx| {
@@ -541,14 +544,30 @@ impl DiscordApp {
         }
     }
 
-    fn pick_gif(&mut self, url: String, src: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn pick_gif(&mut self, item: GifItem, window: &mut Window, cx: &mut Context<Self>) {
+        let query = match self.gifs.picker.as_ref().map(|picker| &picker.view) {
+            Some(View::Search(query)) => query.clone(),
+            _ => String::new(),
+        };
         self.close_gif_picker(cx);
+        if let Some((id, session)) = item
+            .id
+            .clone()
+            .zip(self.session.clone().filter(|_| self.live))
+        {
+            Tokio::spawn(cx, async move {
+                if let Err(error) = session.select_gif(&id, &query).await {
+                    log::debug!("Could not report the GIF pick: {error}");
+                }
+            })
+            .detach();
+        }
         if let Some(target) = self.gifs.style_target {
-            self.pick_style_gif(target, src, cx);
+            self.pick_style_gif(target, item.gif_src.unwrap_or(item.src), cx);
         } else if self.gifs.pane {
-            self.send_pane_content(url, window, cx);
+            self.send_pane_content(item.url, window, cx);
         } else {
-            self.send_content(url, Vec::new(), window, cx);
+            self.send_content(item.url, Vec::new(), window, cx);
         }
     }
 
@@ -577,17 +596,22 @@ impl DiscordApp {
                 order,
             });
         }
-        let Ok(next) = settings_proto::with_favorite_gifs(&previous, &favorites) else {
+        let Ok((patch, next)) = settings_proto::favorite_gifs_patch(&previous, &favorites)
+            .and_then(|patch| {
+                let next = settings_proto::merge_partial(&previous, &patch)?;
+                Ok((patch, next))
+            })
+        else {
             log::warn!("Could not encode favorite GIFs");
             return;
         };
-        self.store.set_frecency(next.clone());
+        self.store.set_frecency(next);
         self.gifs.favorite_writes += 1;
         let write = self.gifs.favorite_writes;
         cx.notify();
         let request = Tokio::spawn(
             cx,
-            async move { session.update_frecency_settings(&next).await },
+            async move { session.update_frecency_settings(&patch).await },
         );
         cx.spawn(async move |this, cx| {
             let result = request.await;

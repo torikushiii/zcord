@@ -161,6 +161,7 @@ fn download(path: &Path) -> Result<Vec<u8>, String> {
 
 async fn fetch(path: &Path) -> Result<Vec<u8>, String> {
     let client = reqwest::Client::builder()
+        .user_agent(crate::discord::user_agent())
         .timeout(Duration::from_secs(10))
         .build()
         .map_err(|error| error.to_string())?;

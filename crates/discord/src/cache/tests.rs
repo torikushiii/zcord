@@ -6,7 +6,6 @@ fn offline_session() -> Session {
     Session {
         inner: Arc::new(Inner {
             rest: Err(Error::Network),
-            gif_client: Err(Error::Network),
             cache: Mutex::default(),
             requests: Mutex::default(),
             sends: Mutex::default(),

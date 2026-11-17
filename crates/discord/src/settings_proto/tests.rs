@@ -339,7 +339,7 @@ fn favorite_gifs_decode_and_sort_newest_first() {
 }
 
 #[test]
-fn with_favorite_gifs_replaces_only_map_entries() {
+fn favorite_gifs_patch_replaces_only_map_entries() {
     let old = favorite(
         "https://klipy.com/gifs/old",
         "https://static.klipy.com/old.webp",
@@ -367,7 +367,9 @@ fn with_favorite_gifs_replaces_only_map_entries() {
     expected.extend(field(6, &[8, 5]));
     expected.extend(field(99, b"unknown-top-level"));
 
-    let updated = with_favorite_gifs(&original, &[first.clone(), second.clone()]).unwrap();
+    let patch = favorite_gifs_patch(&original, &[first.clone(), second.clone()]).unwrap();
+    assert_eq!(patch, field(2, &expected_favorites));
+    let updated = merge_partial(&original, &patch).unwrap();
     assert_eq!(updated, expected);
     assert_eq!(favorite_gifs(&updated).unwrap(), [second, first]);
 
@@ -379,20 +381,21 @@ fn with_favorite_gifs_replaces_only_map_entries() {
     expected_empty.extend(field(6, &[8, 5]));
     expected_empty.extend(field(99, b"unknown-top-level"));
 
-    let removed = with_favorite_gifs(&updated, &[]).unwrap();
+    let removed = merge_partial(&updated, &favorite_gifs_patch(&updated, &[]).unwrap()).unwrap();
     assert_eq!(removed, expected_empty);
     assert!(favorite_gifs(&removed).unwrap().is_empty());
 }
 
 #[test]
-fn with_favorite_gifs_creates_the_favorites_field_when_missing() {
+fn favorite_gifs_patch_creates_the_favorites_field_when_missing() {
     let gif = favorite(
         "https://klipy.com/gifs/new",
         "https://static.klipy.com/new.webp",
         1,
     );
     let bare = field(1, &uint(1, 3));
-    let updated = with_favorite_gifs(&bare, std::slice::from_ref(&gif)).unwrap();
+    let patch = favorite_gifs_patch(&bare, std::slice::from_ref(&gif)).unwrap();
+    let updated = merge_partial(&bare, &patch).unwrap();
     assert_eq!(&updated[..bare.len()], &bare[..]);
     assert_eq!(favorite_gifs(&updated).unwrap(), [gif]);
 }
@@ -434,12 +437,12 @@ fn malformed_frecency_input_is_rejected_without_panicking() {
         assert!(favorite_gifs(bytes).is_err());
     }
     for bytes in [&[18][..], &[18, 5, 10][..], &[0xff; 11][..], &[0][..]] {
-        assert!(with_favorite_gifs(bytes, &[]).is_err());
+        assert!(favorite_gifs_patch(bytes, &[]).is_err());
     }
     let valid = frecency_fixture(&[]);
     for length in 0..valid.len() {
         let _ = favorite_gifs(&valid[..length]);
-        let _ = with_favorite_gifs(&valid[..length], &[]);
+        let _ = favorite_gifs_patch(&valid[..length], &[]);
         let _ = merge_partial(&valid[..length], &valid);
     }
     assert!(merge_partial(&valid, &[18, 9]).is_err());

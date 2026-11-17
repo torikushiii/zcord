@@ -8,6 +8,7 @@ pub(crate) struct Compose {
     pub(in crate::app) delete_closing: Option<Task<()>>,
     pub(crate) failed_sends: HashMap<u64, FailedSend>,
     pub(in crate::app) last_nonce: u64,
+    pub(in crate::app) retry_nonce: Option<u64>,
     pub(in crate::app) pending_sends: compose::sending::PendingSends,
     pub(in crate::app) drafts: HashMap<u64, ComposerDraft>,
     pub(crate) send_fill: Cell<chat::SendFill>,

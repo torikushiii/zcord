@@ -305,10 +305,9 @@ impl DiscordApp {
         }
         threads.searching = true;
         let parent_id = threads.parent_id;
-        let request = Tokio::spawn(
-            cx,
-            async move { session.search_threads(parent_id, &name).await },
-        );
+        let request = Tokio::spawn(cx, async move {
+            session.search_threads(parent_id, &name, None).await
+        });
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = request.await;

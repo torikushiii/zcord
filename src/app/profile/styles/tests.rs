@@ -253,9 +253,10 @@ fn profile_styles_patch_keeps_the_unchanged_effect_or_frame() {
 }
 
 #[test]
-fn profile_styles_patch_only_changes_the_edited_name_style_component() {
+fn profile_styles_patch_sends_the_whole_name_style_when_any_part_changes() {
     let saved = main_values(&profile());
-    let mut next = saved.name_style.clone().unwrap();
+    let saved_style = saved.name_style.clone().unwrap();
+    let mut next = saved_style.clone();
     next.font_id = 16;
     let patch = style_patch(
         &StyleDraft {
@@ -265,8 +266,11 @@ fn profile_styles_patch_only_changes_the_edited_name_style_component() {
         &saved,
     );
     assert_eq!(patch.display_name_font_id, Some(Some(16)));
-    assert_eq!(patch.display_name_effect_id, None);
-    assert_eq!(patch.display_name_colors, None);
+    assert_eq!(
+        patch.display_name_effect_id,
+        Some(Some(saved_style.effect_id))
+    );
+    assert_eq!(patch.display_name_colors, Some(Some(saved_style.colors)));
     let patch = style_patch(
         &StyleDraft {
             name_style: Some(None),

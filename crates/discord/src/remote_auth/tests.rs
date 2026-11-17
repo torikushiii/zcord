@@ -131,6 +131,7 @@ async fn local_gateway_emits_qr_then_scanned_user() {
         Endpoints {
             gateway: format!("ws://{address}"),
             login: "http://127.0.0.1:9/not-used".to_owned(),
+            experiments: "http://127.0.0.1:9/not-used".to_owned(),
         },
         sender,
         stopped,
@@ -242,6 +243,7 @@ async fn local_login_exchange_returns_the_decrypted_token() {
         Endpoints {
             gateway: format!("ws://{gateway}"),
             login,
+            experiments: "http://127.0.0.1:9/not-used".to_owned(),
         },
         sender,
         stopped,
@@ -416,6 +418,7 @@ async fn captcha_is_shown_then_the_ticket_is_retried_with_its_solution() {
         Endpoints {
             gateway: format!("ws://{gateway}"),
             login,
+            experiments: "http://127.0.0.1:9/not-used".to_owned(),
         },
         sender,
         stopped,

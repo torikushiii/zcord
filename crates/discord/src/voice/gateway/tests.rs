@@ -41,7 +41,7 @@ fn early_ssrc_mapping_survives_the_session_description() {
         "secret_key": vec![0u8; 32],
         "dave_protocol_version": 1,
     });
-    assert!(connection.start_session(&session, &events));
+    assert!(connection.start_session(&session, 1, &events).is_ok());
     assert_eq!(connection.ssrc_users.get(&4242), Some(&30));
     assert_eq!(connection.user_ssrcs.get(&30), Some(&4242));
 }
@@ -69,20 +69,16 @@ fn dave_framing_helpers_match_gateway() {
 }
 
 #[test]
-fn close_codes_choose_whether_to_leave() {
+fn close_codes_never_leave_the_call() {
     for code in [4014, 4021, 4022] {
         assert!(matches!(
             close_outcome(code),
             Outcome::Fatal { leave: false, .. }
         ));
     }
-    for code in [4006, 4009, 4016, 4017] {
-        assert!(matches!(
-            close_outcome(code),
-            Outcome::Fatal { leave: true, .. }
-        ));
+    for code in [1006, 4004, 4006, 4009, 4011, 4015, 4016, 4017] {
+        assert!(matches!(close_outcome(code), Outcome::Reconnect));
     }
-    assert!(matches!(close_outcome(4015), Outcome::Reconnect));
 }
 
 #[test]
@@ -93,17 +89,26 @@ fn gateway_payload_shapes() {
     assert_eq!(identify["d"]["channel_id"], "20");
     assert_eq!(identify["d"]["user_id"], "30");
     assert_eq!(identify["d"]["session_id"], "fixture-session");
-    assert_eq!(identify["d"]["video"], false);
-    assert_eq!(identify["d"]["streams"], json!([]));
+    assert_eq!(identify["d"]["video"], true);
+    assert_eq!(
+        identify["d"]["streams"],
+        json!([{"type": "video", "rid": "100", "quality": 100}])
+    );
     assert_eq!(
         identify["d"]["max_dave_protocol_version"],
         davey::DAVE_PROTOCOL_VERSION
     );
 
+    let resume = resume_payload(&config(), None);
+    assert_eq!(resume["op"], 7);
+    assert_eq!(resume["d"]["token"], "fixture-token");
+    assert_eq!(resume["d"]["seq_ack"], -1);
+
     let heartbeat = heartbeat_payload(Some(7));
     assert_eq!(heartbeat["op"], 3);
     assert!(heartbeat["d"]["t"].as_u64().unwrap() > 0);
     assert_eq!(heartbeat["d"]["seq_ack"], 7);
+    assert_eq!(heartbeat_payload(None)["d"]["seq_ack"], -1);
 
     let speaking = speaking_payload(99, 1);
     assert_eq!(speaking["op"], 5);
@@ -111,15 +116,64 @@ fn gateway_payload_shapes() {
     assert_eq!(speaking["d"]["ssrc"], 99);
     assert_eq!(speaking["d"]["delay"], 0);
 
-    let select = select_protocol_payload("198.51.100.7", 50000, Mode::Aes256Gcm);
+    let select = select_protocol_payload(
+        "198.51.100.7",
+        50000,
+        Mode::Aes256Gcm,
+        "d6b92f64-40df-48eb-8bce-7facb043149a",
+    );
     assert_eq!(select["op"], 1);
     assert_eq!(select["d"]["protocol"], "udp");
-    assert_eq!(select["d"]["data"]["address"], "198.51.100.7");
-    assert_eq!(select["d"]["data"]["port"], 50000);
-    assert_eq!(select["d"]["data"]["mode"], "aead_aes256_gcm_rtpsize");
-    assert_eq!(select["d"]["codecs"][0]["payload_type"], 120);
-    assert_eq!(select["d"]["codecs"][0]["priority"], 1000);
-    assert_eq!(select["d"]["rtc_connection_id"].as_str().unwrap().len(), 36);
+    let data = json!({"address": "198.51.100.7", "port": 50000, "mode": "aead_aes256_gcm_rtpsize"});
+    assert_eq!(select["d"]["data"], data);
+    for key in ["address", "port", "mode"] {
+        assert_eq!(select["d"][key], data[key]);
+    }
+    assert_eq!(
+        select["d"]["rtc_connection_id"],
+        "d6b92f64-40df-48eb-8bce-7facb043149a"
+    );
+    assert_eq!(
+        select["d"]["experiments"],
+        json!(["fixed_keyframe_interval"])
+    );
+    let codecs = select["d"]["codecs"].as_array().unwrap();
+    assert_eq!(
+        codecs[0],
+        json!({"name": "opus", "type": "audio", "priority": 1000, "payload_type": 120})
+    );
+    let video: Vec<_> = codecs[1..]
+        .iter()
+        .map(|codec| {
+            (
+                codec["name"].as_str().unwrap(),
+                codec["priority"].as_u64().unwrap(),
+                codec["payload_type"].as_u64().unwrap(),
+                codec["rtx_payload_type"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        video,
+        [
+            ("H265", 1000, 101, 102),
+            ("H264", 2000, 103, 104),
+            ("VP8", 3000, 105, 106)
+        ]
+    );
+    assert_eq!(codecs[2]["payload_type"], VIDEO_PAYLOAD);
+    assert_eq!(codecs[2]["rtx_payload_type"], RTX_PAYLOAD);
+}
+
+#[test]
+fn reidentify_closes_drop_the_resumable_session() {
+    let mut connection = Connection::new(config(), AudioFlags::new());
+    connection.handshake_done = true;
+    connection.seq = Some(4);
+    assert!(connection.can_resume());
+    assert!(REIDENTIFY_CLOSES.contains(&4006));
+    connection.forget_session();
+    assert!(!connection.can_resume());
 }
 
 #[tokio::test]
@@ -157,6 +211,10 @@ async fn local_handshake_reaches_select_protocol() {
             ))
             .await
             .unwrap();
+
+        let version: Value =
+            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(version, json!({"op": 16, "d": {}}));
 
         let mut buffer = [0u8; 128];
         let (size, peer) = udp.recv_from(&mut buffer).await.unwrap();

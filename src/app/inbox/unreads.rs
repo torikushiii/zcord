@@ -8,8 +8,6 @@ use super::*;
 use crate::discord::model::{ChannelSetting, NotificationLevel};
 
 const BATCH: usize = 5;
-const MESSAGES: usize = 25;
-const BULK_ACK: usize = 100;
 
 #[derive(Default)]
 pub(in crate::app) struct Unreads {
@@ -71,8 +69,12 @@ impl DiscordApp {
                 (unread.guild_id, unread.channel_id, unread.last_read);
             let request = Tokio::spawn(cx, async move {
                 session
-                    .fetch_messages_after(Some(guild_id), channel_id, after, MESSAGES)
+                    .fetch_inbox_messages(Some(guild_id), channel_id)
                     .await
+                    .map(|mut messages| {
+                        messages.retain(|message| message.id > after);
+                        messages
+                    })
             });
             cx.spawn(async move |this, cx| {
                 let result = request.await;
@@ -120,9 +122,10 @@ impl DiscordApp {
         }
         cx.notify();
         let days = days_since_discord_epoch();
+        let flags = self.store.take_ack_flags(channel_id);
         let request = Tokio::spawn(cx, async move {
             session
-                .ack_message(Some(guild_id), channel_id, message_id, days)
+                .ack_message(Some(guild_id), channel_id, message_id, days, flags)
                 .await
         });
         cx.spawn(async move |_, _| match request.await {
@@ -158,19 +161,17 @@ impl DiscordApp {
             inbox.unreads = Unreads::default();
         }
         cx.notify();
-        for chunk in acks.chunks(BULK_ACK) {
-            let chunk = chunk.to_vec();
-            let session = session.clone();
-            let request = Tokio::spawn(cx, async move {
-                session.ack_bulk(None, chunk[0].0, chunk).await
-            });
-            cx.spawn(async move |_, _| match request.await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => log::warn!("Could not mark all read: {error}"),
-                Err(error) => log::warn!("Mark all read task failed: {error}"),
-            })
-            .detach();
-        }
+        let acks = acks
+            .into_iter()
+            .map(|(channel_id, message_id)| (channel_id, message_id, 0))
+            .collect();
+        let request = Tokio::spawn(cx, async move { session.ack_bulk(None, acks).await });
+        cx.spawn(async move |_, _| match request.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => log::warn!("Could not mark all read: {error}"),
+            Err(error) => log::warn!("Mark all read task failed: {error}"),
+        })
+        .detach();
     }
 
     fn toggle_unread_collapsed(&mut self, channel_id: u64, cx: &mut Context<Self>) {
@@ -190,11 +191,17 @@ impl DiscordApp {
         cx: &mut Context<Self>,
     ) {
         self.set_inbox_menu(None, cx);
+        let notification_flags = match setting {
+            ChannelSetting::Notifications(level) => self
+                .store
+                .channel_notification_flags(guild_id, channel_id, level),
+            ChannelSetting::Mute(_) => None,
+        };
         self.run_guild_action(
             "change channel notifications",
             move |session| async move {
                 session
-                    .set_channel_setting(guild_id, channel_id, setting)
+                    .set_channel_setting(guild_id, channel_id, setting, notification_flags)
                     .await
             },
             cx,

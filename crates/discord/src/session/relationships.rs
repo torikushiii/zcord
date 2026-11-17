@@ -6,18 +6,40 @@ impl Session {
             .await
     }
 
-    pub async fn put_relationship(
+    pub async fn add_friend(
         &self,
         user_id: u64,
+        location: model::RelationshipLocation,
         guild_id: Option<u64>,
         channel_id: Option<u64>,
     ) -> Result<(), Error> {
-        self.rest(async |rest| rest.put_relationship(user_id, guild_id, channel_id).await)
-            .await
+        self.rest(async |rest| {
+            rest.add_friend(user_id, location, guild_id, channel_id)
+                .await
+        })
+        .await
     }
 
-    pub async fn delete_relationship(&self, user_id: u64) -> Result<(), Error> {
-        self.rest(async |rest| rest.delete_relationship(user_id).await)
+    pub async fn accept_friend_request(
+        &self,
+        user_id: u64,
+        location: model::RelationshipLocation,
+        guild_id: Option<u64>,
+        channel_id: Option<u64>,
+    ) -> Result<(), Error> {
+        self.rest(async |rest| {
+            rest.accept_friend_request(user_id, location, guild_id, channel_id)
+                .await
+        })
+        .await
+    }
+
+    pub async fn delete_relationship(
+        &self,
+        user_id: u64,
+        location: model::RelationshipLocation,
+    ) -> Result<(), Error> {
+        self.rest(async |rest| rest.delete_relationship(user_id, location).await)
             .await
     }
 

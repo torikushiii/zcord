@@ -194,9 +194,15 @@ fn cache_files_round_trip() {
             {"name": "game.exe", "os": host_os()}
         ]}
     ]));
-    write_cache(&path, &catalog).expect("cache writes");
+    write_cache(&path, &catalog, Some("\"etag\"")).expect("cache writes");
     let (restored, age) = read_cache(&path).expect("cache reads");
     assert!(age < MAX_AGE);
     assert!(restored.matches("/opt/game.exe", String::new).is_some());
+    assert_eq!(
+        fs::read_to_string(etag_path(&path)).ok().as_deref(),
+        Some("\"etag\"")
+    );
+    write_cache(&path, &catalog, None).expect("cache rewrites");
+    assert!(!etag_path(&path).exists());
     let _ = fs::remove_dir_all(&directory);
 }

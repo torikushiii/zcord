@@ -510,7 +510,12 @@ pub fn init(cx: &mut App) {
         let Ok(identity) = refresh.await else {
             return;
         };
-        cx.update(|cx| update(cx, |settings| settings.discord_identity = identity));
+        cx.update(|cx| {
+            update(cx, |settings| {
+                settings.discord_identity.absorb(identity);
+                crate::discord::apply_identity(&settings.discord_identity);
+            })
+        });
     })
     .detach();
 }

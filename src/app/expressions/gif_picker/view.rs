@@ -66,8 +66,6 @@ pub(super) fn body(app: &DiscordApp, picker: &GifPicker, provider: GifProvider) 
 fn unavailable(provider: GifProvider) -> &'static str {
     match provider {
         GifProvider::Klipy => "Klipy is unavailable right now",
-        GifProvider::Tenor => "Tenor is unavailable right now — try another provider",
-        GifProvider::Giphy => "Giphy is unavailable right now — try another provider",
     }
 }
 

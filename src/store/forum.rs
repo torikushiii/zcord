@@ -205,6 +205,11 @@ impl Store {
         }
     }
 
+    pub fn forum_default_tag_setting(&self, forum_id: u64) -> Option<&str> {
+        self.source_channel_guild(forum_id)
+            .and_then(|(_, channel)| channel.default_tag_setting.as_deref())
+    }
+
     pub fn forum_requires_tag(&self, forum_id: u64) -> bool {
         self.source_channel_guild(forum_id)
             .is_some_and(|(_, channel)| channel.flags.unwrap_or(0) & (1 << 4) != 0)

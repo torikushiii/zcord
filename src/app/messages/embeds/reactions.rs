@@ -1,4 +1,5 @@
 use super::*;
+use crate::discord::model::ReactionLocation;
 
 pub(crate) fn emoji_element(emoji: &ReactionEmoji, size: f32, cx: &App) -> AnyElement {
     match emoji.id {
@@ -221,7 +222,7 @@ pub fn render_reactions(
                         window.prevent_default();
                         open.update(cx, |app, cx| {
                             app.toggle_emoji_picker(
-                                PickerTarget::Reaction(message_id),
+                                PickerTarget::Reaction(message_id, ReactionLocation::InlineButton),
                                 position,
                                 window,
                                 cx,

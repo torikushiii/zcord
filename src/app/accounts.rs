@@ -10,7 +10,7 @@ pub(crate) use toast::toast;
 use super::*;
 use crate::{
     credentials::CredentialError,
-    discord::{Error, model},
+    discord::{Error, Secret, model},
     settings::{self, SavedAccount},
 };
 use login::LoginMode;
@@ -188,8 +188,14 @@ impl DiscordApp {
         accounts
     }
 
-    pub(super) fn account_ready(&mut self, user: &model::User, cx: &mut Context<Self>) -> bool {
-        if let Some(token) = self.pending_token.take()
+    pub(super) fn account_ready(
+        &mut self,
+        user: &model::User,
+        refreshed: Option<Secret>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let pending = self.pending_token.take();
+        if let Some(token) = refreshed.map(Secret::into_inner).or(pending)
             && let Err(error) = credentials::save(user.id, &token)
         {
             log::warn!("{error}");

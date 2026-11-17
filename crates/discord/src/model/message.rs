@@ -299,3 +299,24 @@ pub struct Attachment {
     #[serde(default)]
     pub description: Option<String>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReactionLocation {
+    Message,
+    InlineButton,
+    HoverBar,
+    ReactionPicker,
+    ContextMenu,
+}
+
+impl ReactionLocation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Message => "Message",
+            Self::InlineButton => "Message Inline Button",
+            Self::HoverBar => "Message Hover Bar",
+            Self::ReactionPicker => "Message Reaction Picker",
+            Self::ContextMenu => "Message Context Menu",
+        }
+    }
+}

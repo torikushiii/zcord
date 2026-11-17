@@ -6,6 +6,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::{
     app::DiscordApp,
+    discord::model::RelationshipLocation,
     store::RelationshipKind,
     theme::{self, WithoutTextSelection, rpx},
 };
@@ -200,13 +201,24 @@ impl DiscordApp {
                 let existing = channel_id
                     .and_then(|id| self.store.private_channel(id))
                     .map(|dm| (dm.channel.id, dm.group, dm.recipient_ids.clone()));
+                let friend = |id: &u64| {
+                    self.store
+                        .relationship(*id)
+                        .is_some_and(|found| found.kind == RelationshipKind::Friend)
+                };
                 match existing {
-                    Some((id, true, _)) => self.add_group_recipients(id, selected, cx),
+                    Some((id, true, _)) => self.add_group_recipients(id, selected, window, cx),
+                    Some((id, false, recipients)) if recipients.iter().all(friend) => {
+                        self.add_group_recipients(id, selected, window, cx)
+                    }
                     Some((_, false, mut recipients)) => {
                         recipients.extend(selected);
                         self.create_group_dm(recipients, window, cx);
                     }
-                    None if selected.len() == 1 => self.open_dm(selected[0], window, cx),
+                    None if selected.len() == 1 => match self.store.dm_channel_with(selected[0]) {
+                        Some(dm) => self.select_dm(dm, window, cx),
+                        None => self.create_group_dm(selected, window, cx),
+                    },
                     None => self.create_group_dm(selected, window, cx),
                 }
             }
@@ -404,16 +416,18 @@ pub(crate) fn menu(app: &DiscordApp) -> Option<AnyElement> {
             &'static str,
             fn(&mut DiscordApp, u64, &mut Context<DiscordApp>),
         ) = match kind {
-            Some(RelationshipKind::Friend) => {
-                ("Remove Friend", |app, id, cx| app.ask_remove_friend(id, cx))
-            }
+            Some(RelationshipKind::Friend) => ("Remove Friend", |app, id, cx| {
+                app.ask_remove_friend(id, RelationshipLocation::ContextMenu, cx)
+            }),
             Some(RelationshipKind::Incoming) => ("Accept Friend Request", |app, id, cx| {
-                app.add_friend(id, cx)
+                app.add_friend(id, RelationshipLocation::ContextMenu, cx)
             }),
             Some(RelationshipKind::Outgoing) => ("Cancel Friend Request", |app, id, cx| {
-                app.drop_friend_request(id, cx)
+                app.drop_friend_request(id, RelationshipLocation::ContextMenu, cx)
             }),
-            None if !bot && app.live => ("Add Friend", |app, id, cx| app.add_friend(id, cx)),
+            None if !bot && app.live => ("Add Friend", |app, id, cx| {
+                app.add_friend(id, RelationshipLocation::ContextMenu, cx)
+            }),
             _ => return None,
         };
         Some(menu_row(
@@ -565,7 +579,9 @@ pub(crate) fn menu(app: &DiscordApp) -> Option<AnyElement> {
                         None,
                         "Unblock",
                         text,
-                        move |app, _, cx| app.unblock_user(user_id, cx),
+                        move |app, _, cx| {
+                            app.unblock_user(user_id, Some(RelationshipLocation::ContextMenu), cx)
+                        },
                     )
                 } else {
                     menu_row(

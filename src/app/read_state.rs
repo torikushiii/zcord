@@ -99,6 +99,7 @@ impl DiscordApp {
         });
         cx.notify();
         let guild_id = self.request_guild();
+        let flags = self.store.take_ack_flags(channel_id);
         let task = cx.spawn(async move |this, cx| {
             if let Some(delay) = delay {
                 cx.background_executor().timer(delay).await;
@@ -106,7 +107,7 @@ impl DiscordApp {
             let days = days_since_discord_epoch();
             let request = Tokio::spawn(cx, async move {
                 session
-                    .ack_message(guild_id, channel_id, message_id, days)
+                    .ack_message(guild_id, channel_id, message_id, days, flags)
                     .await
             });
             match request.await {
@@ -138,9 +139,10 @@ impl DiscordApp {
         });
         cx.notify();
         let days = days_since_discord_epoch();
+        let flags = self.store.take_ack_flags(channel_id);
         let request = Tokio::spawn(cx, async move {
             session
-                .ack_message(None, channel_id, message_id, days)
+                .ack_message(None, channel_id, message_id, days, flags)
                 .await
         });
         cx.spawn(async move |_, _| match request.await {
@@ -165,11 +167,13 @@ impl DiscordApp {
         if acks.is_empty() {
             return;
         }
-        for &(channel_id, message_id) in &acks {
-            self.store.apply(Event::MessageAck {
-                channel_id,
-                message_id,
-            });
+        for &(channel_id, message_id, kind) in &acks {
+            if kind == 0 {
+                self.store.apply(Event::MessageAck {
+                    channel_id,
+                    message_id,
+                });
+            }
         }
         let channel_id = if guild_id == self.selected_guild_id {
             self.selected_channel_id
@@ -177,7 +181,9 @@ impl DiscordApp {
             acks[0].0
         };
         let request = Tokio::spawn(cx, async move {
-            session.ack_bulk(Some(guild_id), channel_id, acks).await
+            session
+                .ack_bulk(Some((Some(guild_id), channel_id)), acks)
+                .await
         });
         cx.spawn(async move |_, _| match request.await {
             Ok(Ok(())) => {}

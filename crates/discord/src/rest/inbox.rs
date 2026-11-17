@@ -10,12 +10,16 @@ fn mentions_request(
     roles: bool,
     everyone: bool,
 ) -> RequestBuilder {
-    let mut query = vec![
+    let mut query: Vec<_> = before
+        .map(|before| ("before", before.to_string()))
+        .into_iter()
+        .collect();
+    query.extend([
         ("limit", "25".to_owned()),
         ("roles", roles.to_string()),
         ("everyone", everyone.to_string()),
-    ];
-    query.extend(before.map(|before| ("before", before.to_string())));
+        ("feature", "notifications-inbox".to_owned()),
+    ]);
     client.get(format!("{API}/mentions")).query(&query)
 }
 
@@ -112,14 +116,14 @@ mod tests {
             .unwrap();
         assert_eq!(
             request.url().as_str(),
-            "https://discord.com/api/v9/users/@me/mentions?limit=25&roles=true&everyone=false"
+            "https://discord.com/api/v9/users/@me/mentions?limit=25&roles=true&everyone=false&feature=notifications-inbox"
         );
         let request = mentions_request(&client, Some(9), false, true)
             .build()
             .unwrap();
         assert_eq!(
             request.url().as_str(),
-            "https://discord.com/api/v9/users/@me/mentions?limit=25&roles=false&everyone=true&before=9"
+            "https://discord.com/api/v9/users/@me/mentions?before=9&limit=25&roles=false&everyone=true&feature=notifications-inbox"
         );
 
         let request = update_scheduled_request(&client, 5, Some("2026-11-07T13:00:00.000Z"), None)

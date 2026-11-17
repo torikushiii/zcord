@@ -2,6 +2,7 @@ use gpui_component::ElementExt;
 
 use super::super::*;
 use crate::app::direct::friends::FriendAction;
+use crate::discord::model::RelationshipLocation;
 
 type MenuBounds = Rc<Cell<Option<Bounds<Pixels>>>>;
 
@@ -229,10 +230,11 @@ pub(in crate::app::profile) fn more_button(
                         menu_entry(id, title, None, move |cx| {
                             friend
                                 .update(cx, |app, cx| {
+                                    let location = RelationshipLocation::ProfileModal;
                                     if action == FriendAction::Friends {
-                                        app.ask_remove_friend(user_id, cx);
+                                        app.ask_remove_friend(user_id, location, cx);
                                     } else {
-                                        app.drop_friend_request(user_id, cx);
+                                        app.drop_friend_request(user_id, location, cx);
                                         app.set_profile_menu(false, cx);
                                     }
                                 })
@@ -437,7 +439,9 @@ fn friend_button(app: &DiscordApp, card: &ProfileCard, action: FriendAction) -> 
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
                     entity
-                        .update(cx, |app, cx| app.add_friend(user_id, cx))
+                        .update(cx, |app, cx| {
+                            app.add_friend(user_id, RelationshipLocation::ProfileModal, cx)
+                        })
                         .ok();
                 })
         })

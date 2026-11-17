@@ -1,6 +1,6 @@
 use super::super::{
     crypto::Mode,
-    gateway::{send_json, ws_request},
+    gateway::{NORMAL_CLOSE, close_socket, select_protocol_payload, send_json, ws_request},
     udp,
 };
 use crate::{Secret, properties};
@@ -10,17 +10,15 @@ use std::{net::SocketAddr, time::Duration};
 use tokio::{
     net::{TcpStream, UdpSocket},
     sync::watch,
-    time::timeout,
+    time::{Instant, sleep_until, timeout},
 };
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 
 pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const HELLO_TIMEOUT: Duration = Duration::from_secs(20);
 pub(crate) const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const DISCOVERY_ATTEMPTS: usize = 3;
 pub(crate) const HEARTBEAT_DEFAULT: Duration = Duration::from_secs(60);
-pub(crate) const AUDIO_PAYLOAD: u8 = 120;
-pub(crate) const VIDEO_PAYLOAD: u8 = 101;
-pub(crate) const RTX_PAYLOAD: u8 = 102;
 
 pub(crate) type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -30,9 +28,8 @@ pub(crate) struct HandshakeConfig {
     pub token: Secret,
     pub endpoint: String,
     pub rtc_server_id: u64,
+    pub rtc_channel_id: u64,
     pub streams: Value,
-    pub encode: bool,
-    pub decode: bool,
 }
 
 pub(crate) struct Handshake {
@@ -43,6 +40,15 @@ pub(crate) struct Handshake {
     pub video_ssrc: u32,
     pub rtx_ssrc: u32,
     pub heartbeat: Duration,
+}
+
+struct Transport {
+    udp: UdpSocket,
+    peer: SocketAddr,
+    ssrc: u32,
+    video_ssrc: u32,
+    rtx_ssrc: u32,
+    heartbeat: Duration,
 }
 
 pub(crate) async fn handshake(
@@ -60,10 +66,50 @@ pub(crate) async fn handshake(
     let (mut socket, _) = connection
         .map_err(|_| "Discord stream connection timed out".to_owned())?
         .map_err(|_| "Discord stream TLS connection failed".to_owned())?;
+    match negotiate(config, &mut socket, cancel).await {
+        Ok(transport) => Ok(Handshake {
+            socket,
+            udp: transport.udp,
+            peer: transport.peer,
+            ssrc: transport.ssrc,
+            video_ssrc: transport.video_ssrc,
+            rtx_ssrc: transport.rtx_ssrc,
+            heartbeat: transport.heartbeat,
+        }),
+        Err(reason) => {
+            close_socket(&mut socket, NORMAL_CLOSE).await;
+            Err(reason)
+        }
+    }
+}
+
+async fn negotiate(
+    config: &HandshakeConfig,
+    socket: &mut Socket,
+    cancel: &mut watch::Receiver<bool>,
+) -> Result<Transport, String> {
+    let identify = json!({"op": 0, "d": {
+        "server_id": config.rtc_server_id.to_string(),
+        "channel_id": config.rtc_channel_id.to_string(),
+        "user_id": config.user_id.to_string(),
+        "session_id": config.session_id.expose(),
+        "token": config.token.expose(),
+        "max_dave_protocol_version": davey::DAVE_PROTOCOL_VERSION,
+        "video": true,
+        "streams": config.streams.clone(),
+    }});
+    send_json(socket, identify)
+        .await
+        .map_err(|_| "Discord stream identify failed".to_owned())?;
+    let hello_deadline = Instant::now() + HELLO_TIMEOUT;
+    let mut hello = false;
     let mut heartbeat = HEARTBEAT_DEFAULT;
     loop {
         let message = tokio::select! {
             _ = cancel.changed() => return Err("Stream connection stopped".into()),
+            _ = sleep_until(hello_deadline), if !hello => {
+                return Err("Discord stream server did not say hello".into());
+            }
             message = socket.next() => message,
         };
         let Some(Ok(message)) = message else {
@@ -76,26 +122,18 @@ pub(crate) async fn handshake(
             .map_err(|_| "Discord sent invalid stream signaling".to_owned())?;
         match event.get("op").and_then(Value::as_u64) {
             Some(8) => {
+                hello = true;
                 heartbeat = event
                     .get("d")
                     .and_then(|data| data.get("heartbeat_interval"))
                     .and_then(Value::as_u64)
                     .filter(|ms| *ms >= 100 && *ms <= 120_000)
                     .map_or(HEARTBEAT_DEFAULT, Duration::from_millis);
-                let identify = json!({"op": 0, "d": {
-                    "server_id": config.rtc_server_id.to_string(),
-                    "user_id": config.user_id.to_string(),
-                    "session_id": config.session_id.expose(),
-                    "token": config.token.expose(),
-                    "video": true,
-                    "streams": config.streams.clone(),
-                    "max_dave_protocol_version": davey::DAVE_PROTOCOL_VERSION,
-                }});
-                send_json(&mut socket, identify)
-                    .await
-                    .map_err(|_| "Discord stream identify failed".to_owned())?;
             }
             Some(2) => {
+                send_json(socket, json!({"op": 16, "d": {}}))
+                    .await
+                    .map_err(|_| "Discord stream version request failed".to_owned())?;
                 let data = event.get("d").cloned().unwrap_or(Value::Null);
                 let ssrc = data
                     .get("ssrc")
@@ -113,7 +151,8 @@ pub(crate) async fn handshake(
                     .and_then(|port| u16::try_from(port).ok())
                     .filter(|port| *port != 0)
                     .ok_or_else(|| "Discord sent an invalid stream port".to_owned())?;
-                let (video_ssrc, rtx_ssrc) = stream_ssrcs(&data).unwrap_or((0, 0));
+                let (video_ssrc, rtx_ssrc) =
+                    stream_ssrcs(&data).unwrap_or((ssrc.wrapping_add(1), ssrc.wrapping_add(2)));
                 let modes: Vec<String> = data
                     .get("modes")
                     .and_then(Value::as_array)
@@ -121,34 +160,17 @@ pub(crate) async fn handshake(
                     .flatten()
                     .filter_map(|mode| mode.as_str().map(str::to_owned))
                     .collect();
-                if !modes.iter().any(|mode| mode == Mode::Aes256Gcm.name()) {
-                    return Err("Discord offered no supported stream encryption".into());
-                }
-                let udp = discover(ssrc, ip, port).await?;
-                let peer = udp.0;
-                let udp = udp.1;
-                let select = json!({"op": 1, "d": {
-                    "protocol": "udp",
-                    "data": {
-                        "address": peer.0,
-                        "port": peer.1,
-                        "mode": Mode::Aes256Gcm.name(),
-                    },
-                    "rtc_connection_id": properties::uuid_v4(),
-                    "codecs": [
-                        {"name": "opus", "type": "audio", "priority": 1000, "payload_type": 120},
-                        {"name": "H264", "type": "video", "priority": 1000,
-                         "payload_type": VIDEO_PAYLOAD, "rtx_payload_type": RTX_PAYLOAD,
-                         "encode": config.encode, "decode": config.decode},
-                    ],
-                }});
-                send_json(&mut socket, select)
+                let mode = Mode::preferred(&modes)
+                    .ok_or_else(|| "Discord offered no supported stream encryption".to_owned())?;
+                let ((address, external_port, peer), udp) = discover(ssrc, ip, port).await?;
+                let select =
+                    select_protocol_payload(&address, external_port, mode, &properties::uuid_v4());
+                send_json(socket, select)
                     .await
                     .map_err(|_| "Discord stream UDP selection failed".to_owned())?;
-                return Ok(Handshake {
-                    socket,
+                return Ok(Transport {
                     udp,
-                    peer: peer.2,
+                    peer,
                     ssrc,
                     video_ssrc,
                     rtx_ssrc,
@@ -242,6 +264,7 @@ mod tests {
                     .unwrap();
             assert_eq!(identify["op"], 0);
             assert_eq!(identify["d"]["server_id"], "30");
+            assert_eq!(identify["d"]["channel_id"], "31");
             assert_eq!(identify["d"]["user_id"], "1");
             assert_eq!(identify["d"]["session_id"], "call-session");
             assert_eq!(identify["d"]["token"], "stream-token");
@@ -265,6 +288,11 @@ mod tests {
                 .await
                 .unwrap();
 
+            let version: Value =
+                serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
+                    .unwrap();
+            assert_eq!(version, json!({"op": 16, "d": {}}));
+
             let mut buffer = [0u8; 128];
             let (size, peer) = udp.recv_from(&mut buffer).await.unwrap();
             assert_eq!(size, 74);
@@ -282,11 +310,9 @@ mod tests {
             assert_eq!(select["d"]["data"]["port"], 50000);
             assert_eq!(select["d"]["data"]["mode"], "aead_aes256_gcm_rtpsize");
             let codecs = select["d"]["codecs"].as_array().unwrap();
-            assert_eq!(codecs[1]["name"], "H264");
-            assert_eq!(codecs[1]["payload_type"], 101);
-            assert_eq!(codecs[1]["rtx_payload_type"], 102);
-            assert_eq!(codecs[1]["encode"], false);
-            assert_eq!(codecs[1]["decode"], true);
+            assert_eq!(codecs[2]["name"], "H264");
+            assert_eq!(codecs[2]["payload_type"], 103);
+            assert_eq!(codecs[2]["rtx_payload_type"], 104);
         });
 
         let config = HandshakeConfig {
@@ -295,9 +321,8 @@ mod tests {
             token: Secret("stream-token".into()),
             endpoint: format!("ws://{ws_address}"),
             rtc_server_id: 30,
+            rtc_channel_id: 31,
             streams: json!([]),
-            encode: false,
-            decode: true,
         };
         let (_cancel, mut cancel) = watch::channel(false);
         let handshake = timeout(Duration::from_secs(10), handshake(&config, &mut cancel))

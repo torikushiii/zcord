@@ -3,8 +3,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
-    sync::{Mutex, OnceLock},
-    time::{Duration, Instant},
+    sync::{
+        Mutex, OnceLock, PoisonError, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 pub const LOCALE: &str = "en-US";
@@ -14,10 +17,10 @@ pub fn timezone() -> String {
 pub const ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
 pub const SEC_CH_UA: &str = "\"Not?A_Brand\";v=\"24\", \"Chromium\";v=\"152\"";
 
-const CHROME_VERSION: &str = "152.0.7977.167";
-const ELECTRON_VERSION: &str = "44.9.3";
-const CLIENT_BUILD_NUMBER: u32 = 660103;
-const NATIVE_BUILD_NUMBER: u32 = 97026;
+const CHROME_VERSION: &str = "152.0.7977.169";
+const ELECTRON_VERSION: &str = "44.10.2";
+const CLIENT_BUILD_NUMBER: u32 = 673919;
+const NATIVE_BUILD_NUMBER: u32 = 98625;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -25,6 +28,22 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30 * 60);
 pub struct IdentityCache {
     build_number: Option<u32>,
     client_versions: HashMap<String, String>,
+    installation_id: Option<String>,
+}
+
+impl IdentityCache {
+    pub fn absorb(&mut self, refreshed: IdentityCache) {
+        self.build_number = refreshed.build_number;
+        self.client_versions = refreshed.client_versions;
+    }
+
+    pub fn installation_id(&self) -> Option<&str> {
+        self.installation_id.as_deref()
+    }
+
+    pub fn set_installation_id(&mut self, id: &str) {
+        self.installation_id = Some(id.to_owned());
+    }
 }
 
 struct Identity {
@@ -62,24 +81,51 @@ pub fn set_identity_source(load: fn() -> IdentityCache) {
     let _ = IDENTITY_SOURCE.set(load);
 }
 
+static IDENTITY: RwLock<Option<&'static Identity>> = RwLock::new(None);
+
 fn identity() -> &'static Identity {
-    static IDENTITY: OnceLock<Identity> = OnceLock::new();
-    IDENTITY.get_or_init(|| {
+    if let Some(identity) = *IDENTITY.read().unwrap_or_else(PoisonError::into_inner) {
+        return identity;
+    }
+    let mut slot = IDENTITY.write().unwrap_or_else(PoisonError::into_inner);
+    slot.get_or_insert_with(|| {
         let cache = IDENTITY_SOURCE.get().map(|load| load()).unwrap_or_default();
+        seed_installation_id(&cache);
+        Box::leak(Box::new(build_identity(&cache)))
+    })
+}
+
+/// Leaks one small allocation per refresh so callers can keep borrowing `&'static str`s.
+pub fn apply_identity(cache: &IdentityCache) {
+    seed_installation_id(cache);
+    *IDENTITY.write().unwrap_or_else(PoisonError::into_inner) =
+        Some(Box::leak(Box::new(build_identity(cache))));
+}
+
+fn seed_installation_id(cache: &IdentityCache) {
+    let mut installation = INSTALLATION_ID
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if installation.is_none() {
+        installation.clone_from(&cache.installation_id);
+    }
+}
+
+fn build_identity(cache: &IdentityCache) -> Identity {
+    {
         let fallback = if cfg!(target_os = "linux") {
             "1.0.168"
         } else if cfg!(target_os = "macos") {
             "0.0.421"
         } else {
-            "1.0.9266"
+            "1.0.9269"
         };
-        let client_version = if cfg!(target_os = "windows") {
-            fallback.to_owned()
-        } else {
-            cache.client_versions.get(&version_key())
-                .filter(|version| valid_client_version(version))
-                .cloned().unwrap_or_else(|| fallback.to_owned())
-        };
+        let client_version = cache
+            .client_versions
+            .get(&version_key())
+            .filter(|version| valid_client_version(version))
+            .cloned()
+            .unwrap_or_else(|| fallback.to_owned());
         let platform = if cfg!(target_os = "linux") {
             match app_arch() {
                 "arm64" => "X11; Linux aarch64",
@@ -95,13 +141,18 @@ fn identity() -> &'static Identity {
         } else {
             "Windows NT 10.0; Win64; x64"
         };
-        let user_agent = format!("Mozilla/5.0 ({platform}) AppleWebKit/537.36 (KHTML, like Gecko) discord/{client_version} Chrome/{CHROME_VERSION} Electron/{ELECTRON_VERSION} Safari/537.36");
+        let user_agent = format!(
+            "Mozilla/5.0 ({platform}) AppleWebKit/537.36 (KHTML, like Gecko) discord/{client_version} Chrome/{CHROME_VERSION} Electron/{ELECTRON_VERSION} Safari/537.36"
+        );
         Identity {
-            build_number: cache.build_number.filter(|number| *number > 0).unwrap_or(CLIENT_BUILD_NUMBER),
+            build_number: cache
+                .build_number
+                .filter(|number| *number > 0)
+                .unwrap_or(CLIENT_BUILD_NUMBER),
             client_version,
             user_agent,
         }
-    })
+    }
 }
 
 pub fn user_agent() -> &'static str {
@@ -154,13 +205,16 @@ pub async fn refresh_identity(mut cache: IdentityCache) -> IdentityCache {
     {
         cache.build_number = Some(number);
     }
-    // The legacy Windows endpoint still advertises a 2021 build.
+    if cfg!(target_os = "windows") {
+        if let Some(version) = windows_host_version(&client).await {
+            cache.client_versions.insert(version_key(), version);
+        }
+        return cache;
+    }
     let platform = if cfg!(target_os = "linux") {
         "linux"
-    } else if cfg!(target_os = "macos") {
-        "osx"
     } else {
-        return cache;
+        "osx"
     };
     if let Ok(response) = client
         .get("https://discord.com/api/updates/stable")
@@ -179,8 +233,40 @@ pub async fn refresh_identity(mut cache: IdentityCache) -> IdentityCache {
     cache
 }
 
+// The legacy /api/updates endpoint still advertises a 2021 Windows build.
+async fn windows_host_version(client: &reqwest::Client) -> Option<String> {
+    let arch = match app_arch() {
+        "ia32" => "x86",
+        arch => arch,
+    };
+    let manifest = client
+        .get("https://updates.discord.com/distributions/app/manifests/latest")
+        .query(&[("channel", "stable"), ("platform", "win"), ("arch", arch)])
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?
+        .json::<Value>()
+        .await
+        .ok()?;
+    host_version(&manifest)
+}
+
+fn host_version(manifest: &Value) -> Option<String> {
+    let parts = manifest.get("full")?.get("host_version")?.as_array()?;
+    let version = parts
+        .iter()
+        .map(|part| part.as_u64().map(|part| part.to_string()))
+        .collect::<Option<Vec<_>>>()?
+        .join(".");
+    valid_client_version(&version).then_some(version)
+}
+
 struct Platform {
     version: String,
+    sdk_version: Option<String>,
+    build_revision: Option<String>,
     os_arch: String,
     window_manager: Option<String>,
     distro: Option<String>,
@@ -195,12 +281,24 @@ fn platform() -> &'static Platform {
         let env = |key| std::env::var(key).unwrap_or_else(|_| "unknown".to_owned());
         let os_arch =
             sysinfo::System::cpu_arch().unwrap_or_else(|| std::env::consts::ARCH.to_owned());
+        let kernel = sysinfo::System::kernel_version().unwrap_or_else(|| "unknown".to_owned());
+        let windows = windows_build();
         Platform {
             version: if cfg!(target_os = "windows") {
-                "10.0.26300".to_owned()
+                format!("10.0.{}", windows.0.as_deref().unwrap_or("26100"))
+            } else if cfg!(target_os = "macos") {
+                sysinfo::System::os_version().unwrap_or_else(|| kernel.clone())
             } else {
-                sysinfo::System::kernel_version().unwrap_or_else(|| "unknown".to_owned())
+                kernel.clone()
             },
+            sdk_version: if cfg!(target_os = "windows") {
+                Some(windows.0.unwrap_or_else(|| "26100".to_owned()))
+            } else if cfg!(target_os = "macos") {
+                kernel.split('.').next().map(str::to_owned)
+            } else {
+                None
+            },
+            build_revision: windows.1,
             os_arch: match os_arch.as_str() {
                 "x86_64" | "amd64" => "x64".to_owned(),
                 "aarch64" => "arm64".to_owned(),
@@ -237,6 +335,44 @@ fn platform() -> &'static Platform {
     })
 }
 
+#[cfg(windows)]
+fn windows_build() -> (Option<String>, Option<String>) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let Ok(output) = std::process::Command::new("reg")
+        .args([
+            "query",
+            r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    else {
+        return (None, None);
+    };
+    parse_windows_build(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(not(windows))]
+fn windows_build() -> (Option<String>, Option<String>) {
+    (None, None)
+}
+
+#[cfg(any(windows, test))]
+fn parse_windows_build(output: &str) -> (Option<String>, Option<String>) {
+    let value = |name: &str| {
+        output.lines().find_map(|line| {
+            let mut fields = line.split_whitespace();
+            (fields.next()? == name).then(|| fields.nth(1).map(str::to_owned))?
+        })
+    };
+    let build = value("CurrentBuildNumber")
+        .filter(|build| !build.is_empty() && build.bytes().all(|byte| byte.is_ascii_digit()));
+    let revision = value("UBR")
+        .and_then(|ubr| u64::from_str_radix(ubr.trim_start_matches("0x"), 16).ok())
+        .map(|ubr| ubr.to_string());
+    (build, revision)
+}
+
 // https://docs.discord.food/gateway/gateway-events#example-identify
 // 1734653 enables DEDUPE_USER_OBJECTS, PRIORITIZED_READY_PAYLOAD, VERSIONED_READ_STATES,
 // and CLIENT_STATE_V2: users live in `users`, own members in guild-indexed `merged_members`,
@@ -252,6 +388,9 @@ struct ClientProperties {
     release_channel: &'static str,
     client_version: &'static str,
     os_version: &'static str,
+    os_version_is_release: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    os_sdk_version: Option<&'static str>,
     os_arch: &'static str,
     app_arch: &'static str,
     system_locale: &'static str,
@@ -260,14 +399,6 @@ struct ClientProperties {
     browser_user_agent: &'static str,
     browser_version: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    os_sdk_version: Option<&'static str>,
-    client_build_number: u32,
-    native_build_number: u32,
-    client_event_source: Option<()>,
-    launch_signature: &'static str,
-    client_heartbeat_session_id: String,
-    client_app_state: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
     window_manager: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     distro: Option<&'static str>,
@@ -275,6 +406,37 @@ struct ClientProperties {
     runtime_environment: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     display_server: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    os_build_revision: Option<&'static str>,
+    client_build_number: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    native_build_number: Option<u32>,
+    client_event_source: Option<()>,
+    launch_signature: &'static str,
+    client_heartbeat_session_id: String,
+    client_app_state: &'static str,
+}
+
+static FOCUSED: AtomicBool = AtomicBool::new(true);
+static INSTALLATION_ID: Mutex<Option<String>> = Mutex::new(None);
+static IDENTIFIED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_focused(focused: bool) {
+    FOCUSED.store(focused, Ordering::Relaxed);
+}
+
+pub fn installation_id() -> Option<String> {
+    identity();
+    INSTALLATION_ID
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
+pub fn set_installation_id(id: Option<String>) {
+    *INSTALLATION_ID
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = id.filter(|id| !id.is_empty());
 }
 
 struct Launch {
@@ -285,23 +447,41 @@ struct Launch {
 
 struct Heartbeat {
     session: String,
-    started: Instant,
+    created_ms: u64,
+    last_used: Instant,
 }
 
 impl Heartbeat {
     fn new(now: Instant) -> Self {
         Self {
             session: uuid_v4(),
-            started: now,
+            created_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_millis() as u64),
+            last_used: now,
         }
     }
 
     fn session_at(&mut self, now: Instant) -> &str {
-        if now.saturating_duration_since(self.started) >= HEARTBEAT_INTERVAL {
+        if now.saturating_duration_since(self.last_used) >= HEARTBEAT_INTERVAL {
             *self = Self::new(now);
         }
+        self.last_used = now;
         &self.session
     }
+}
+
+/// Reading does not count as a use, so it never postpones the idle rotation.
+pub fn heartbeat_session() -> (String, u64) {
+    let heartbeat = launch()
+        .heartbeat
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    (heartbeat.session.clone(), heartbeat.created_ms)
+}
+
+pub fn launch_id() -> &'static str {
+    &launch().id
 }
 
 fn launch() -> &'static Launch {
@@ -375,6 +555,8 @@ fn properties() -> ClientProperties {
         release_channel: "stable",
         client_version: &identity.client_version,
         os_version: &platform.version,
+        os_version_is_release: true,
+        os_sdk_version: platform.sdk_version.as_deref(),
         os_arch: &platform.os_arch,
         app_arch: app_arch(),
         system_locale: LOCALE,
@@ -382,17 +564,21 @@ fn properties() -> ClientProperties {
         client_launch_id: &launch.id,
         browser_user_agent: user_agent(),
         browser_version: ELECTRON_VERSION,
-        os_sdk_version: cfg!(target_os = "windows").then_some("26300"),
-        client_build_number: identity.build_number,
-        native_build_number: NATIVE_BUILD_NUMBER,
-        client_event_source: None,
-        launch_signature: &launch.signature,
-        client_heartbeat_session_id: heartbeat,
-        client_app_state: "focused",
         window_manager: platform.window_manager.as_deref(),
         distro: platform.distro.as_deref(),
         runtime_environment: platform.runtime_environment,
         display_server: platform.display_server.as_deref(),
+        os_build_revision: platform.build_revision.as_deref(),
+        client_build_number: identity.build_number,
+        native_build_number: cfg!(target_os = "windows").then_some(NATIVE_BUILD_NUMBER),
+        client_event_source: None,
+        launch_signature: &launch.signature,
+        client_heartbeat_session_id: heartbeat,
+        client_app_state: if FOCUSED.load(Ordering::Relaxed) {
+            "focused"
+        } else {
+            "unfocused"
+        },
     }
 }
 
@@ -404,11 +590,27 @@ pub fn super_properties() -> String {
     STANDARD.encode(serde_json::to_string(&properties()).unwrap_or_default())
 }
 
-pub fn identify(token: &str) -> Value {
+pub fn identify(token: &str, active: bool) -> Value {
+    let mut properties = client_properties();
+    let fast_connect = !IDENTIFIED.swap(true, Ordering::Relaxed);
+    properties["is_fast_connect"] = json!(fast_connect);
+    if !fast_connect {
+        properties["gateway_connect_reasons"] = json!("NO_REASONS");
+    }
+    if let Some(installation_id) = installation_id() {
+        properties["installation_id"] = json!(installation_id);
+    }
+    if fast_connect {
+        return json!({"op": 2, "d": {
+            "token": token, "capabilities": CAPABILITIES, "properties": properties,
+            "client_state": {"guild_versions": {}}
+        }});
+    }
     json!({"op": 2, "d": {
-        "token": token, "capabilities": CAPABILITIES, "properties": client_properties(),
-        "compress": false, "presence": {"status": "unknown", "activities": [], "since": 0, "afk": false},
-        "client_state": {"guild_versions": {}, "api_code_version": 0}
+        "token": token, "capabilities": CAPABILITIES, "properties": properties,
+        "presence": {"status": "unknown", "since": 0, "activities": [], "afk": false},
+        "compress": false, "client_state": {"guild_versions": {}},
+        "qos_token": if active { "CgIIAQ==" } else { "CgA=" }
     }})
 }
 
@@ -418,14 +620,26 @@ mod tests {
 
     #[test]
     fn identify_is_user_identify_and_properties_match_rest() {
-        let payload = identify("fixture-secret");
+        identify("fixture-secret", true);
+        let payload = identify("fixture-secret", false);
         assert_eq!(payload["d"]["capabilities"], CAPABILITIES);
-        assert!(payload["d"]["client_state"].is_object());
+        assert_eq!(payload["d"]["client_state"], json!({"guild_versions": {}}));
         assert_eq!(payload["d"]["presence"]["status"], "unknown");
+        assert_eq!(payload["d"]["compress"], false);
+        assert_eq!(payload["d"]["qos_token"], "CgA=");
         assert!(!payload.to_string().contains("Bot "));
+        let mut properties = payload["d"]["properties"].clone();
+        let extras = properties.as_object_mut().unwrap();
+        assert_eq!(extras.remove("is_fast_connect"), Some(json!(false)));
+        assert_eq!(
+            extras.remove("gateway_connect_reasons"),
+            Some(json!("NO_REASONS"))
+        );
+        extras.remove("installation_id");
         let raw = STANDARD.decode(super_properties()).unwrap();
         let decoded: Value = serde_json::from_slice(&raw).unwrap();
-        assert_eq!(payload["d"]["properties"], decoded);
+        assert_eq!(properties, decoded);
+        assert_eq!(decoded["os_version_is_release"], true);
         let raw = String::from_utf8(raw).unwrap();
         let expected_os = if cfg!(target_os = "linux") {
             "Linux"
@@ -434,7 +648,7 @@ mod tests {
         } else {
             "Windows"
         };
-        assert!(raw.starts_with(&format!(r#"{{"os":"{expected_os}","browser":"Discord Client","release_channel":"stable","client_version":"{}","os_version":"{}""#, identity().client_version, platform().version)));
+        assert!(raw.starts_with(&format!(r#"{{"os":"{expected_os}","browser":"Discord Client","release_channel":"stable","client_version":"{}","os_version":"{}","os_version_is_release":true,"#, identity().client_version, platform().version)));
         assert_eq!(decoded["browser_user_agent"], user_agent());
         assert!(user_agent().contains(&format!(
             "discord/{} ",
@@ -445,15 +659,18 @@ mod tests {
         assert_eq!(decoded["client_build_number"], identity().build_number);
         if cfg!(target_os = "windows") {
             assert!(raw.ends_with(r#""client_app_state":"focused"}"#));
-            assert_eq!(decoded["os_sdk_version"], "26300");
-            assert_eq!(identity().client_version, "1.0.9266");
+            assert_eq!(decoded["native_build_number"], NATIVE_BUILD_NUMBER);
+            assert_eq!(identity().client_version, "1.0.9269");
             if app_arch() == "x64" {
                 assert_eq!(
                     user_agent(),
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) discord/1.0.9266 Chrome/152.0.7977.167 Electron/44.9.3 Safari/537.36"
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) discord/1.0.9269 Chrome/152.0.7977.169 Electron/44.10.2 Safari/537.36"
                 );
             }
         } else {
+            assert!(decoded.get("native_build_number").is_none());
+        }
+        if cfg!(target_os = "linux") {
             assert!(decoded.get("os_sdk_version").is_none());
             assert_eq!(
                 decoded["os_version"],
@@ -476,6 +693,22 @@ mod tests {
         assert_eq!(launch_id.len(), 36);
         assert_eq!(&launch_id[14..15], "4");
         assert_eq!(super_properties(), super_properties());
+    }
+
+    #[test]
+    fn host_version_and_windows_build_parse() {
+        let manifest = json!({"full": {"host_version": [1, 0, 9269]}});
+        assert_eq!(host_version(&manifest).as_deref(), Some("1.0.9269"));
+        assert_eq!(
+            host_version(&json!({"full": {"host_version": [1, "0"]}})),
+            None
+        );
+        let output = "\r\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\r\n    CurrentBuild    REG_SZ    26300\r\n    CurrentBuildNumber    REG_SZ    26300\r\n    UBR    REG_DWORD    0x26f6\r\n";
+        assert_eq!(
+            parse_windows_build(output),
+            (Some("26300".to_owned()), Some("9974".to_owned()))
+        );
+        assert_eq!(parse_windows_build(""), (None, None));
     }
 
     #[test]
@@ -509,7 +742,7 @@ mod tests {
     }
 
     #[test]
-    fn heartbeat_rotates_at_thirty_minutes_without_changing_launch_ids() {
+    fn heartbeat_rotates_after_thirty_idle_minutes_without_changing_launch_ids() {
         let now = Instant::now();
         let launch = Launch {
             id: uuid_v4(),
@@ -520,25 +753,13 @@ mod tests {
         let signature = launch.signature.clone();
         let mut heartbeat = launch.heartbeat.lock().unwrap();
         let first = heartbeat.session_at(now).to_owned();
-        assert_eq!(
-            heartbeat.session_at(now + HEARTBEAT_INTERVAL - Duration::from_nanos(1)),
-            first
-        );
-        let second = heartbeat.session_at(now + HEARTBEAT_INTERVAL).to_owned();
+        let almost = now + HEARTBEAT_INTERVAL - Duration::from_nanos(1);
+        assert_eq!(heartbeat.session_at(almost), first);
+        assert_eq!(heartbeat.session_at(now + HEARTBEAT_INTERVAL), first);
+        let idle = almost + HEARTBEAT_INTERVAL;
+        let second = heartbeat.session_at(idle).to_owned();
         assert_ne!(second, first);
-        assert_eq!(heartbeat.session_at(now + HEARTBEAT_INTERVAL), second);
-        assert_eq!(
-            heartbeat.session_at(now + HEARTBEAT_INTERVAL * 2 - Duration::from_nanos(1)),
-            second
-        );
-        assert_ne!(heartbeat.session_at(now + HEARTBEAT_INTERVAL * 2), second);
-        let after_idle = heartbeat
-            .session_at(now + HEARTBEAT_INTERVAL * 10)
-            .to_owned();
-        assert_eq!(
-            heartbeat.session_at(now + HEARTBEAT_INTERVAL * 10),
-            after_idle
-        );
+        assert_eq!(heartbeat.session_at(idle), second);
         assert_eq!(launch.id, launch_id);
         assert_eq!(launch.signature, signature);
     }

@@ -222,6 +222,10 @@ impl DiscordApp {
             self.ack_channel(cx);
         }
         if needs_history {
+            if unread_since.is_none() {
+                let limit = self.page_size(cx);
+                self.history.present_limit.insert(id, limit);
+            }
             self.fetch_history(id, unread_since, window, cx);
         } else if self.live
             && let Some(since) = unread_since

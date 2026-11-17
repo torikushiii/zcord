@@ -6,9 +6,10 @@ impl Session {
         guild_id: u64,
         channel_id: u64,
         setting: model::ChannelSetting,
+        notification_flags: Option<u64>,
     ) -> Result<(), Error> {
         self.rest(async |rest| {
-            rest.set_channel_setting(guild_id, channel_id, setting)
+            rest.set_channel_setting(guild_id, channel_id, setting, notification_flags)
                 .await
         })
         .await

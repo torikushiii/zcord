@@ -51,7 +51,6 @@ async fn deliver(
                 source_guild,
                 source_channel,
                 message_id,
-                guild,
                 channel,
                 forward_nonce,
             )
@@ -232,7 +231,7 @@ impl DiscordApp {
         .detach();
     }
 
-    fn next_nonce(&mut self) -> u64 {
+    pub(in crate::app) fn next_nonce(&mut self) -> u64 {
         self.compose.last_nonce = now_snowflake().max(self.compose.last_nonce + 1);
         self.compose.last_nonce
     }

@@ -3,6 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::discord::model::ReactionLocation;
 use gpui::{prelude::*, *};
 use gpui_component::input::{Input, InputEvent, InputState};
 
@@ -47,7 +48,7 @@ const NO_SERVER: (u64, u64) = (0, 0);
 pub(crate) enum PickerTarget {
     Composer,
     Pane,
-    Reaction(u64),
+    Reaction(u64, ReactionLocation),
     Activity(u64),
     CustomStatus,
 }
@@ -213,10 +214,9 @@ impl DiscordApp {
     }
 
     pub(crate) fn picking_reaction_for(&self, message_id: u64) -> bool {
-        self.emoji
-            .picker
-            .as_ref()
-            .is_some_and(|picker| picker.target == PickerTarget::Reaction(message_id))
+        self.emoji.picker.as_ref().is_some_and(
+            |picker| matches!(picker.target, PickerTarget::Reaction(id, _) if id == message_id),
+        )
     }
 
     pub(crate) fn close_emoji_picker(&mut self, cx: &mut Context<Self>) -> bool {
@@ -283,7 +283,9 @@ impl DiscordApp {
         match target {
             PickerTarget::Composer => self.insert_emoji(choice, window, cx),
             PickerTarget::Pane => self.insert_pane_emoji(choice, window, cx),
-            PickerTarget::Reaction(message_id) => self.react(message_id, choice, cx),
+            PickerTarget::Reaction(message_id, location) => {
+                self.react(message_id, choice, location, cx)
+            }
             PickerTarget::Activity(entry_id) => self.react_to_activity(entry_id, choice, cx),
             PickerTarget::CustomStatus => self.set_status_emoji(choice, cx),
         }

@@ -166,26 +166,15 @@ pub(super) fn style_patch(draft: &StyleDraft, saved: &StyleValues) -> model::Pro
     if let Some(style) = &draft.name_style {
         match style {
             Some(style) => {
-                if saved
-                    .name_style
-                    .as_ref()
-                    .is_none_or(|saved| saved.font_id != style.font_id)
-                {
-                    patch.display_name_font_id = Some(Some(style.font_id));
-                }
                 let effect = name_style(None, Some(style.effect_id), &[]).effect_id;
-                if saved
-                    .name_style
-                    .as_ref()
-                    .is_none_or(|saved| saved.effect_id != effect)
-                {
+                let unchanged = saved.name_style.as_ref().is_some_and(|saved| {
+                    saved.font_id == style.font_id
+                        && saved.effect_id == effect
+                        && saved.colors == style.colors
+                });
+                if !unchanged {
+                    patch.display_name_font_id = Some(Some(style.font_id));
                     patch.display_name_effect_id = Some(Some(effect));
-                }
-                if saved
-                    .name_style
-                    .as_ref()
-                    .is_none_or(|saved| saved.colors != style.colors)
-                {
                     patch.display_name_colors = Some(Some(style.colors.clone()));
                 }
             }

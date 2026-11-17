@@ -1,4 +1,3 @@
-use super::signaling::select_protocol_payload;
 use super::*;
 
 impl Connection {
@@ -15,7 +14,7 @@ impl Connection {
             ));
         };
         let Ok(udp) = UdpSocket::bind("0.0.0.0:0").await else {
-            return Err(Outcome::fatal("Could not open the voice UDP socket"));
+            return Err(Outcome::Reconnect);
         };
         let mut buffer = [0u8; 128];
         let mut discovered = None;
@@ -37,15 +36,22 @@ impl Connection {
             }
         }
         let Some((external_address, external_port)) = discovered else {
-            return Err(Outcome::fatal("Could not discover the voice UDP endpoint"));
+            log::warn!("Could not discover the voice UDP endpoint");
+            return Err(Outcome::Reconnect);
         };
         if let Ok(peer) = tokio::net::lookup_host((ip, port)).await {
             self.peer = peer.into_iter().next();
         }
         self.socket = Some(udp);
+        self.next_ping = Instant::now();
         send_json(
             socket,
-            select_protocol_payload(&external_address, external_port, mode),
+            select_protocol_payload(
+                &external_address,
+                external_port,
+                mode,
+                &self.rtc_connection_id,
+            ),
         )
         .await
         .map_err(|_| Outcome::Reconnect)?;
@@ -61,7 +67,10 @@ impl Connection {
         match event {
             Outgoing::Speaking(true) => {
                 self.new_talkspurt = true;
-                self.send_speaking(socket, 1).await;
+                if self.speaking_ssrc != Some(self.ssrc) {
+                    self.speaking_ssrc = Some(self.ssrc);
+                    self.send_speaking(socket, 1).await;
+                }
                 emit(
                     events,
                     VoiceEvent::Speaking {
@@ -71,7 +80,6 @@ impl Connection {
                 );
             }
             Outgoing::Speaking(false) => {
-                self.send_speaking(socket, 0).await;
                 emit(
                     events,
                     VoiceEvent::Speaking {
@@ -91,24 +99,24 @@ impl Connection {
         let (Some(socket_udp), Some(cipher)) = (&self.socket, &mut self.cipher) else {
             return;
         };
-        let mut payload = opus.to_vec();
-        if let Some(dave) = &mut self.dave {
-            match dave.encrypt(opus) {
-                EncryptOutcome::Plaintext(data) => payload = data,
-                EncryptOutcome::Encrypted(data) => {
-                    payload = data;
-                    self.tx.dave_encrypted = self.tx.dave_encrypted.saturating_add(1);
-                }
-                EncryptOutcome::NotReady => {
-                    self.tx.dave_not_ready = self.tx.dave_not_ready.saturating_add(1);
-                    return;
-                }
-                EncryptOutcome::Failed => {
-                    self.tx.dave_failed = self.tx.dave_failed.saturating_add(1);
-                    return;
-                }
+        let Some(dave) = &mut self.dave else {
+            self.tx.dave_not_ready = self.tx.dave_not_ready.saturating_add(1);
+            return;
+        };
+        let payload = match dave.encrypt(opus) {
+            EncryptOutcome::Encrypted(data) => {
+                self.tx.dave_encrypted = self.tx.dave_encrypted.saturating_add(1);
+                data
             }
-        }
+            EncryptOutcome::NotReady => {
+                self.tx.dave_not_ready = self.tx.dave_not_ready.saturating_add(1);
+                return;
+            }
+            EncryptOutcome::Failed => {
+                self.tx.dave_failed = self.tx.dave_failed.saturating_add(1);
+                return;
+            }
+        };
         let now = Instant::now();
         let timestamp = if self.new_talkspurt {
             now.duration_since(self.rtp_epoch)
@@ -130,6 +138,11 @@ impl Connection {
             match socket_udp.send_to(&packet, peer).await {
                 Ok(_) => {
                     self.tx.sent = self.tx.sent.saturating_add(1);
+                    self.audio_packets = self.audio_packets.wrapping_add(1);
+                    self.audio_octets = self
+                        .audio_octets
+                        .wrapping_add(u32::try_from(payload.len()).unwrap_or(u32::MAX));
+                    self.audio_sent = Some(now);
                     true
                 }
                 Err(_) => {
@@ -146,52 +159,39 @@ impl Connection {
             self.rtp_sequence = self.rtp_sequence.wrapping_add(1);
             self.new_talkspurt = false;
         }
-        self.last_send = now;
     }
 
-    pub(super) async fn send_keepalive(&mut self) {
-        let timestamp = self.rtp_timestamp.wrapping_add(960);
-        let mut payload = SILENCE.to_vec();
-        if let Some(dave) = &mut self.dave {
-            match dave.encrypt(&SILENCE) {
-                EncryptOutcome::Plaintext(data) => payload = data,
-                EncryptOutcome::Encrypted(data) => {
-                    payload = data;
-                    self.tx.dave_encrypted = self.tx.dave_encrypted.saturating_add(1);
-                }
-                EncryptOutcome::NotReady => {
-                    self.tx.dave_not_ready = self.tx.dave_not_ready.saturating_add(1);
-                    self.last_send = Instant::now();
-                    return;
-                }
-                EncryptOutcome::Failed => {
-                    self.tx.dave_failed = self.tx.dave_failed.saturating_add(1);
-                    self.last_send = Instant::now();
-                    return;
-                }
-            }
-        }
-        let (Some(udp), Some(peer), Some(cipher)) = (&self.socket, self.peer, &mut self.cipher)
+    async fn send_ping(&mut self) {
+        let (Some(socket), Some(peer)) = (&self.socket, self.peer) else {
+            return;
+        };
+        let _ = socket.send_to(&udp::ping(self.ping_sequence), peer).await;
+        self.ping_sequence = self.ping_sequence.wrapping_add(1);
+    }
+
+    async fn send_sender_report(&mut self) {
+        let (Some(socket), Some(peer), Some(cipher)) = (&self.socket, self.peer, &mut self.cipher)
         else {
             return;
         };
-        let header = Header::audio(self.ssrc, self.rtp_sequence, timestamp, false);
-        let aad = header.encode();
-        if let Some(encrypted) = cipher.encrypt(&aad, &payload) {
-            let mut packet = aad.to_vec();
-            packet.extend_from_slice(&encrypted);
-            match udp.send_to(&packet, peer).await {
-                Ok(_) => {
-                    self.tx.sent = self.tx.sent.saturating_add(1);
-                    self.rtp_timestamp = timestamp;
-                    self.rtp_sequence = self.rtp_sequence.wrapping_add(1);
-                }
-                Err(_) => {
-                    self.tx.send_errors = self.tx.send_errors.saturating_add(1);
-                }
-            }
-        }
-        self.last_send = Instant::now();
+        let (ntp_seconds, ntp_fraction) = rtcp::ntp_now();
+        let since_sent = self.audio_sent.map(|sent| sent.elapsed());
+        let clear = rtcp::sender_report(
+            self.ssrc,
+            &rtcp::SenderStats {
+                ntp_seconds,
+                ntp_fraction,
+                rtp_timestamp: rtcp::rtp_at(self.rtp_timestamp, since_sent, 48),
+                packet_count: self.audio_packets,
+                octet_count: self.audio_octets,
+            },
+        );
+        let Some(sealed) = cipher.encrypt(&clear[..8], &clear[8..]) else {
+            return;
+        };
+        let mut packet = clear[..8].to_vec();
+        packet.extend_from_slice(&sealed);
+        let _ = socket.send_to(&packet, peer).await;
     }
 
     pub(super) async fn tick(&mut self, events: &UnboundedSender<Event>) {
@@ -251,13 +251,21 @@ impl Connection {
                 );
             }
         }
-        if self.last_send.elapsed() >= KEEPALIVE {
-            self.send_keepalive().await;
+        if self.socket.is_some() && now >= self.next_ping {
+            self.send_ping().await;
+            self.next_ping = now + udp::PING_INTERVAL;
+        }
+        if self.audio_packets > 0 && now >= self.next_sender_report {
+            self.send_sender_report().await;
+            self.next_sender_report = now + SENDER_REPORT;
         }
     }
 
     pub(super) async fn on_datagram(&mut self, packet: &[u8], events: &UnboundedSender<Event>) {
         self.rx.datagrams = self.rx.datagrams.saturating_add(1);
+        if udp::is_ping(packet) {
+            return;
+        }
         if let Some(packet_type) = rtcp::packet_type(packet) {
             self.on_rtcp(packet_type, packet, events);
             return;

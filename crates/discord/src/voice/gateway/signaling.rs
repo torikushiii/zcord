@@ -11,6 +11,10 @@ impl Connection {
         let data = value.get("d").cloned().unwrap_or(Value::Null);
         match op {
             2 => {
+                self.reached_ready = true;
+                send_json(socket, json!({"op": 16, "d": {}}))
+                    .await
+                    .map_err(|_| Outcome::Reconnect)?;
                 self.ssrc = data.get("ssrc").and_then(Value::as_u64).unwrap_or(0) as u32;
                 let ip = data.get("ip").and_then(Value::as_str).unwrap_or_default();
                 let port = data.get("port").and_then(Value::as_u64).unwrap_or(0) as u16;
@@ -24,17 +28,19 @@ impl Connection {
                 self.start_udp(ip, port, &modes, socket).await?;
             }
             4 => {
-                if !self.start_session(&data, events) {
-                    return Err(Outcome::fatal(
-                        "Discord sent an invalid voice session description",
-                    ));
+                let version = data
+                    .get("dave_protocol_version")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0) as u16;
+                if version == 0 {
+                    return Err(self.refuse_downgrade(socket, "init").await);
                 }
+                self.start_session(&data, version, events)?;
                 if let Some(dave) = &mut self.dave
                     && let Some(key_package) = dave.key_package()
                 {
                     send_key_package(socket, &key_package).await;
                 }
-                self.send_keepalive().await;
             }
             5 => {
                 let user_id = data
@@ -59,12 +65,12 @@ impl Connection {
                     self.handshake_done = false;
                     return Err(Outcome::Reconnect);
                 }
+                self.reached_ready = true;
                 self.handshake_done = true;
                 self.rtp_epoch = Instant::now();
                 if self.audio.is_none() {
                     self.audio = Some(AudioHandle::start(self.flags.clone()));
                 }
-                self.send_keepalive().await;
             }
             11 => {
                 if let Some(ids) = data.get("user_ids").and_then(Value::as_array) {
@@ -107,10 +113,14 @@ impl Connection {
                     .get("transition_id")
                     .and_then(Value::as_u64)
                     .unwrap_or(0) as u16;
+                if version == 0 {
+                    return Err(self.refuse_downgrade(socket, "transition").await);
+                }
                 let mut executed = false;
                 let mut ready_sent = false;
-                if let Some(dave) = &mut self.dave {
-                    dave.prepare_transition(version, transition);
+                if let Some(dave) = &mut self.dave
+                    && dave.prepare_transition(version, transition)
+                {
                     if transition == 0 {
                         if let Some(code) = dave.execute_transition(0) {
                             emit(events, VoiceEvent::PrivacyCode(code));
@@ -155,8 +165,11 @@ impl Connection {
                     .and_then(Value::as_u64)
                     .unwrap_or(0) as u16;
                 let epoch = data.get("epoch").and_then(Value::as_u64).unwrap_or(0);
+                if version == 0 {
+                    return Err(self.refuse_downgrade(socket, "epoch").await);
+                }
                 self.dave_epoch_reset = epoch == 1;
-                if version > 0 && self.dave.is_none() {
+                if self.dave.is_none() {
                     self.dave = Dave::new(version, self.config.user_id, self.config.channel_id);
                     if let Some(dave) = &mut self.dave {
                         dave.mark_upgrade();
@@ -177,11 +190,7 @@ impl Connection {
                 );
             }
             3 => {
-                let _ = send_json(
-                    socket,
-                    json!({"op": 3, "d": {"t": unix_ms(), "seq_ack": self.seq}}),
-                )
-                .await;
+                let _ = send_json(socket, heartbeat_payload(self.seq)).await;
             }
             _ => log::debug!("Ignoring voice op {op}"),
         }
@@ -193,9 +202,9 @@ impl Connection {
         bytes: &[u8],
         socket: &mut Socket,
         events: &UnboundedSender<Event>,
-    ) {
+    ) -> Result<(), Outcome> {
         if bytes.len() < 3 {
-            return;
+            return Ok(());
         }
         let op = bytes[2];
         let payload = &bytes[3..];
@@ -214,7 +223,7 @@ impl Connection {
             27 => {
                 if payload.is_empty() {
                     log::info!("DAVE rx op=27 proposals len=0 -> ok=false");
-                    return;
+                    return Ok(());
                 }
                 let operation = payload[0];
                 let proposals_len = payload.len() - 1;
@@ -240,7 +249,7 @@ impl Connection {
             }
             29 | 30 => {
                 if payload.len() < 2 {
-                    return;
+                    return Ok(());
                 }
                 let transition = u16::from_be_bytes([payload[0], payload[1]]);
                 let body = &payload[2..];
@@ -263,23 +272,20 @@ impl Connection {
                         "DAVE rx op={op} {label} transition={transition} len={} -> ok=false version={version} ready={ready}",
                         body.len()
                     );
-                    if transition != 0 {
-                        log::info!("DAVE tx op=31 invalid_commit_welcome transition={transition}");
-                        let _ = send_json(
-                            socket,
-                            json!({"op": 31, "d": {"transition_id": transition}}),
-                        )
-                        .await;
+                    self.invalid_mls = self.invalid_mls.saturating_add(1);
+                    if self.invalid_mls >= INVALID_MLS_LIMIT {
+                        log::warn!(
+                            "{} consecutive invalid MLS commit/welcome messages, disconnecting",
+                            self.invalid_mls
+                        );
+                        self.invalid_mls = 0;
+                        return Err(self.drop_session(socket, REPEATED_INVALID_MLS).await);
                     }
                     self.dave_epoch_reset = true;
-                    if let Some(dave) = &mut self.dave {
-                        let version = dave.version();
-                        if let Some(key_package) = dave.prepare_epoch(version, 1) {
-                            send_key_package(socket, &key_package).await;
-                        }
-                    }
-                    return;
+                    flag_invalid_commit_welcome(socket, self.dave.as_mut(), transition).await;
+                    return Ok(());
                 }
+                self.invalid_mls = 0;
                 if transition == 0 {
                     let mut privacy_code = false;
                     if let Some(dave) = &mut self.dave
@@ -314,48 +320,65 @@ impl Connection {
             }
             _ => log::debug!("Ignoring voice binary op {op}"),
         }
+        Ok(())
     }
 
-    pub(super) fn start_session(&mut self, data: &Value, events: &UnboundedSender<Event>) -> bool {
-        let Some(mode) = data
+    /// Only stage channels may start at DAVE version 0, and voice never joins those.
+    /// https://docs.discord.food/topics/voice-connections#end-to-end-encryption
+    pub(super) async fn refuse_downgrade(&mut self, socket: &mut Socket, at: &str) -> Outcome {
+        log::warn!("Refusing DAVE protocol downgrade to version 0 at {at}, disconnecting");
+        self.drop_session(socket, REFUSED_DOWNGRADE).await
+    }
+
+    async fn drop_session(&mut self, socket: &mut Socket, code: u16) -> Outcome {
+        self.dave = None;
+        self.cipher = None;
+        self.audio.take();
+        self.forget_session();
+        self.last_close = Some(code);
+        close_socket(socket, code).await;
+        Outcome::Reconnect
+    }
+
+    pub(super) fn start_session(
+        &mut self,
+        data: &Value,
+        version: u16,
+        events: &UnboundedSender<Event>,
+    ) -> Result<(), Outcome> {
+        let invalid = || Outcome::fatal("Discord sent an invalid voice session description");
+        let mode = data
             .get("mode")
             .and_then(Value::as_str)
             .and_then(Mode::from_name)
-        else {
-            return false;
-        };
-        let Some(key) = data.get("secret_key").and_then(Value::as_array) else {
-            return false;
-        };
+            .ok_or_else(invalid)?;
+        let key = data
+            .get("secret_key")
+            .and_then(Value::as_array)
+            .ok_or_else(invalid)?;
         let key: Vec<u8> = key
             .iter()
             .filter_map(|byte| byte.as_u64())
             .map(|b| b as u8)
             .collect();
-        let Some(cipher) = Cipher::new(mode, &key) else {
-            return false;
-        };
-        self.cipher = Some(cipher);
+        let cipher = Cipher::new(mode, &key).ok_or_else(invalid)?;
+        let mut dave = Dave::new(version, self.config.user_id, self.config.channel_id)
+            .ok_or_else(|| Outcome::fatal("Could not start end-to-end voice encryption"))?;
         // Discord sends op 5 for users who are already speaking during the handshake,
         // before op 4. Clearing here would lose those SSRC mappings.
-        let version = data
-            .get("dave_protocol_version")
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as u16;
-        self.dave = Dave::new(version, self.config.user_id, self.config.channel_id);
-        if let Some(dave) = &mut self.dave {
-            for user_id in &self.recognized {
-                dave.add_user(*user_id);
-            }
+        for user_id in &self.recognized {
+            dave.add_user(*user_id);
         }
+        self.cipher = Some(cipher);
+        self.dave = Some(dave);
         log::info!("Voice connected: mode={} dave={}", mode.name(), version);
-        if self.dave.is_none() {
-            emit(events, VoiceEvent::PrivacyCode(None));
-        }
         self.rtp_epoch = Instant::now();
         self.rtp_sequence = 0;
         self.rtp_timestamp = 0;
         self.new_talkspurt = false;
+        self.audio_packets = 0;
+        self.audio_octets = 0;
+        self.audio_sent = None;
         self.handshake_done = true;
         self.dave_epoch_reset = version > 0;
         if self.audio.is_none() {
@@ -369,7 +392,7 @@ impl Connection {
                 channel_id: self.config.channel_id,
             },
         );
-        true
+        Ok(())
     }
 
     pub(super) async fn send_speaking(&mut self, socket: &mut Socket, flags: u32) {
@@ -385,8 +408,11 @@ impl Connection {
 pub(in crate::voice) fn ws_request(url: &str) -> Option<Request> {
     let mut request = url.into_client_request().ok()?;
     for (name, value) in [
+        ("pragma", "no-cache"),
+        ("cache-control", "no-cache"),
         ("user-agent", properties::user_agent()),
         ("origin", "https://discord.com"),
+        ("accept-encoding", "gzip, deflate, br, zstd"),
         ("accept-language", properties::ACCEPT_LANGUAGE),
     ] {
         request
@@ -439,6 +465,36 @@ pub(in crate::voice) async fn send_key_package(socket: &mut Socket, key_package:
     send_binary(socket, 26, key_package).await;
 }
 
+/// https://docs.discord.food/topics/voice-connections#invalid-group
+pub(in crate::voice) async fn flag_invalid_commit_welcome(
+    socket: &mut Socket,
+    dave: Option<&mut Dave>,
+    transition_id: u16,
+) {
+    log::info!("DAVE tx op=31 invalid_commit_welcome transition={transition_id}");
+    let _ = send_json(
+        socket,
+        json!({"op": 31, "d": {"transition_id": transition_id}}),
+    )
+    .await;
+    if let Some(dave) = dave {
+        let version = dave.version();
+        if let Some(key_package) = dave.prepare_epoch(version, 1) {
+            send_key_package(socket, &key_package).await;
+        }
+    }
+}
+
+pub(in crate::voice) const NORMAL_CLOSE: u16 = 4000;
+
+pub(in crate::voice) async fn close_socket(socket: &mut Socket, code: u16) {
+    let frame = CloseFrame {
+        code: CloseCode::from(code),
+        reason: "".into(),
+    };
+    let _ = timeout(SEND_TIMEOUT, socket.close(Some(frame))).await;
+}
+
 pub(in crate::voice) async fn send_ready(socket: &mut Socket, transition_id: u16, version: u16) {
     log::info!("DAVE tx op=23 ready transition={transition_id} version={version}");
     let _ = send_json(socket, ready_payload(transition_id)).await;
@@ -463,36 +519,65 @@ pub(super) fn identify_payload(config: &Config) -> Value {
         "user_id": config.user_id.to_string(),
         "session_id": config.session_id.expose(),
         "token": config.token.expose(),
-        "video": false,
-        "streams": [],
         "max_dave_protocol_version": davey::DAVE_PROTOCOL_VERSION,
+        "video": true,
+        "streams": [{"type": "video", "rid": "100", "quality": 100}],
     }})
 }
 
 pub(super) fn resume_payload(config: &Config, seq: Option<u64>) -> Value {
     json!({"op": 7, "d": {
+        "token": config.token.expose(),
+        "session_id": config.session_id.expose(),
         "server_id": if config.guild_id == 0 { config.channel_id } else { config.guild_id }.to_string(),
         "channel_id": config.channel_id.to_string(),
-        "session_id": config.session_id.expose(),
-        "token": config.token.expose(),
-        "seq_ack": seq,
+        "seq_ack": seq_ack(seq),
     }})
 }
 
-pub(super) fn heartbeat_payload(seq: Option<u64>) -> Value {
-    json!({"op": 3, "d": {"t": unix_ms(), "seq_ack": seq.unwrap_or(0)}})
+pub(in crate::voice) fn heartbeat_payload(seq: Option<u64>) -> Value {
+    json!({"op": 3, "d": {"t": unix_ms(), "seq_ack": seq_ack(seq)}})
+}
+
+fn seq_ack(seq: Option<u64>) -> Value {
+    seq.map_or(json!(-1), Value::from)
 }
 
 pub(super) fn speaking_payload(ssrc: u32, flags: u32) -> Value {
     json!({"op": 5, "d": {"speaking": flags, "delay": 0, "ssrc": ssrc}})
 }
 
-pub(super) fn select_protocol_payload(address: &str, port: u16, mode: Mode) -> Value {
+pub(in crate::voice) const AUDIO_PAYLOAD: u8 = 120;
+pub(in crate::voice) const VIDEO_PAYLOAD: u8 = 103;
+pub(in crate::voice) const RTX_PAYLOAD: u8 = 104;
+
+fn codecs() -> Value {
+    json!([
+        {"name": "opus", "type": "audio", "priority": 1000, "payload_type": AUDIO_PAYLOAD},
+        {"name": "H265", "type": "video", "priority": 1000, "payload_type": 101,
+         "rtx_payload_type": 102, "encode": false, "decode": false},
+        {"name": "H264", "type": "video", "priority": 2000, "payload_type": VIDEO_PAYLOAD,
+         "rtx_payload_type": RTX_PAYLOAD, "encode": true, "decode": true},
+        {"name": "VP8", "type": "video", "priority": 3000, "payload_type": 105,
+         "rtx_payload_type": 106, "encode": false, "decode": false},
+    ])
+}
+
+pub(in crate::voice) fn select_protocol_payload(
+    address: &str,
+    port: u16,
+    mode: Mode,
+    rtc_connection_id: &str,
+) -> Value {
     json!({"op": 1, "d": {
         "protocol": "udp",
         "data": {"address": address, "port": port, "mode": mode.name()},
-        "rtc_connection_id": properties::uuid_v4(),
-        "codecs": [{"name": "opus", "type": "audio", "priority": 1000, "payload_type": 120}],
+        "address": address,
+        "port": port,
+        "mode": mode.name(),
+        "codecs": codecs(),
+        "rtc_connection_id": rtc_connection_id,
+        "experiments": ["fixed_keyframe_interval"],
     }})
 }
 

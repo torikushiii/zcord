@@ -128,7 +128,7 @@ fn assert_request(
         user_body(patch, guild.is_some())
     }
     .unwrap();
-    let request = style_request(&Client::new(), guild, profile, &body)
+    let request = style_request(&Client::new(), guild, profile, &body, None)
         .build()
         .unwrap();
     assert_eq!(request.method(), reqwest::Method::PATCH);
@@ -158,7 +158,8 @@ fn main_patch_set_and_reset() {
         &set_patch(),
         "https://discord.com/api/v9/users/@me",
         json!({
-            "avatar": "data:image/png;base64,avatar", "avatar_decoration_sku_id": "10", "nameplate_sku_id": "20",
+            "avatar": "data:image/png;base64,avatar", "avatar_description": "42, added yesterday",
+            "avatar_decoration_sku_id": "10", "nameplate_sku_id": "20",
             "display_name_font_id": 11, "display_name_effect_id": 1, "display_name_colors": [0x112233]
         }),
     );
@@ -166,7 +167,7 @@ fn main_patch_set_and_reset() {
         None,
         true,
         &set_patch(),
-        "https://discord.com/api/v9/users/@me/profile",
+        "https://discord.com/api/v9/users/%40me/profile",
         json!({
             "banner": "data:image/png;base64,banner", "theme_colors": [1, 2], "accent_color": 3, "collectibles_sku_ids": ["30", "40"]
         }),
@@ -185,7 +186,7 @@ fn main_patch_set_and_reset() {
         None,
         true,
         &reset_patch(),
-        "https://discord.com/api/v9/users/@me/profile",
+        "https://discord.com/api/v9/users/%40me/profile",
         json!({
             "banner": null, "theme_colors": [null, null], "accent_color": null, "collectibles_sku_ids": []
         }),
@@ -209,7 +210,7 @@ fn guild_patch_set_and_reset() {
         Some(7),
         true,
         &set_patch(),
-        "https://discord.com/api/v9/guilds/7/profile/@me",
+        "https://discord.com/api/v9/guilds/7/profile/%40me",
         json!({
             "banner": "data:image/png;base64,banner", "theme_colors": [1, 2], "collectibles_sku_ids": ["30", "40"]
         }),
@@ -228,7 +229,7 @@ fn guild_patch_set_and_reset() {
         Some(7),
         true,
         &reset_patch(),
-        "https://discord.com/api/v9/guilds/7/profile/@me",
+        "https://discord.com/api/v9/guilds/7/profile/%40me",
         json!({
             "banner": null, "theme_colors": [null, null], "collectibles_sku_ids": []
         }),
@@ -310,24 +311,47 @@ fn names_and_pronouns_go_where_discord_takes_them() {
 }
 
 #[test]
-fn clan_request_wears_or_drops_a_server_tag() {
-    let wear = clan_request(&Client::new(), Some(890)).build().unwrap();
-    assert_eq!(wear.method(), reqwest::Method::PUT);
+fn server_tags_are_worn_through_the_main_user_patch() {
+    let wear = model::ProfileStylePatch {
+        tag_guild: Some(Some(890)),
+        ..Default::default()
+    };
     assert_eq!(
-        wear.url().as_str(),
-        "https://discord.com/api/v9/users/@me/clan"
+        user_body(&wear, false),
+        Some(json!({"primary_guild_id": "890"}))
     );
-    let body: Value = serde_json::from_slice(wear.body().unwrap().as_bytes().unwrap()).unwrap();
+    assert_eq!(user_body(&wear, true), None);
+    let drop = model::ProfileStylePatch {
+        tag_guild: Some(None),
+        ..Default::default()
+    };
     assert_eq!(
-        body,
-        json!({"identity_guild_id": "890", "identity_enabled": true})
+        user_body(&drop, false),
+        Some(json!({"primary_guild_id": null}))
     );
-    let drop = clan_request(&Client::new(), None).build().unwrap();
-    let body: Value = serde_json::from_slice(drop.body().unwrap().as_bytes().unwrap()).unwrap();
-    assert_eq!(
-        body,
-        json!({"identity_guild_id": null, "identity_enabled": false})
-    );
+}
+
+#[test]
+fn uploads_carry_the_original_md5_for_their_surface() {
+    let md5 = "0123456789abcdef0123456789abcdef";
+    for (guild, profile, surface) in [
+        (None, false, "user_default_profile_avatar"),
+        (None, true, "user_default_profile_banner"),
+        (Some(7), false, "user_guild_profile_avatar"),
+        (Some(7), true, "user_guild_profile_banner"),
+    ] {
+        let request = style_request(&Client::new(), guild, profile, &json!({}), Some(md5))
+            .build()
+            .unwrap();
+        assert_eq!(
+            request.headers()["x-discord-original-md5"],
+            format!("{surface}=\"{md5}\"").as_str()
+        );
+    }
+    let request = style_request(&Client::new(), None, false, &json!({}), Some("not-md5"))
+        .build()
+        .unwrap();
+    assert!(!request.headers().contains_key("x-discord-original-md5"));
 }
 
 #[test]

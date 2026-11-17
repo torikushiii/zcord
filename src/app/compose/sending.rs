@@ -1,7 +1,7 @@
 use super::super::messages::attachments::{StagedFile, remove_pasted};
 use super::super::*;
-use crate::discord::UploadFile;
-use crate::store::{PendingUpload, Sticker};
+use crate::discord::{UploadFile, model::ReactionLocation};
+use crate::store::{PendingUpload, ReplyState, Sticker};
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -73,15 +73,22 @@ impl DiscordApp {
         emoji: ReactionEmoji,
         cx: &mut Context<Self>,
     ) {
+        let location = ReactionLocation::InlineButton;
         let channel_id = self.selected_channel_id;
         let me = self
             .store
             .reaction_state(channel_id, message_id, &emoji)
             .unwrap_or(false);
-        self.set_reaction(message_id, emoji, !me, cx);
+        self.set_reaction(message_id, emoji, !me, location, cx);
     }
 
-    pub(crate) fn react(&mut self, message_id: u64, choice: &EmojiChoice, cx: &mut Context<Self>) {
+    pub(crate) fn react(
+        &mut self,
+        message_id: u64,
+        choice: &EmojiChoice,
+        location: ReactionLocation,
+        cx: &mut Context<Self>,
+    ) {
         let emoji = match choice {
             EmojiChoice::Custom(custom) => {
                 if self
@@ -109,7 +116,7 @@ impl DiscordApp {
             .reaction_state(channel_id, message_id, &emoji)
             .unwrap_or(false);
         if !already {
-            self.set_reaction(message_id, emoji, true, cx);
+            self.set_reaction(message_id, emoji, true, location, cx);
         }
         self.record_emoji_use(choice, cx);
     }
@@ -119,6 +126,7 @@ impl DiscordApp {
         message_id: u64,
         emoji: ReactionEmoji,
         add: bool,
+        location: ReactionLocation,
         cx: &mut Context<Self>,
     ) {
         let channel_id = self.selected_channel_id;
@@ -138,7 +146,7 @@ impl DiscordApp {
             return;
         }
         let guild_id = self.request_guild();
-        self.send_reaction(guild_id, channel_id, message_id, emoji, add, cx);
+        self.send_reaction(guild_id, channel_id, message_id, emoji, add, location, cx);
     }
 
     fn send_reaction(
@@ -148,6 +156,7 @@ impl DiscordApp {
         message_id: u64,
         emoji: ReactionEmoji,
         add: bool,
+        location: ReactionLocation,
         cx: &mut Context<Self>,
     ) {
         let Some(session) = self.session.clone().filter(|_| self.live) else {
@@ -160,11 +169,11 @@ impl DiscordApp {
         let request = Tokio::spawn(cx, async move {
             if add {
                 session
-                    .add_reaction(guild_id, channel_id, message_id, &text)
+                    .add_reaction(guild_id, channel_id, message_id, &text, location)
                     .await
             } else {
                 session
-                    .remove_reaction(guild_id, channel_id, message_id, &text)
+                    .remove_reaction(guild_id, channel_id, message_id, &text, location)
                     .await
             }
         });
@@ -183,7 +192,9 @@ impl DiscordApp {
                             .reaction_state(channel_id, message_id, &emoji)
                             .unwrap_or(false);
                         if desired != add && app.live && app.session.is_some() {
-                            app.send_reaction(guild_id, channel_id, message_id, emoji, desired, cx);
+                            app.send_reaction(
+                                guild_id, channel_id, message_id, emoji, desired, location, cx,
+                            );
                             return;
                         }
                     }
@@ -336,6 +347,7 @@ impl DiscordApp {
             self.store.at_present(channel_id),
             self.history.loading.contains(&channel_id),
         ) {
+            self.compose.retry_nonce = None;
             self.compose
                 .pending_sends
                 .push(channel_id, content, reply, files, entry);
@@ -366,8 +378,8 @@ impl DiscordApp {
             .iter()
             .find(|guild| guild.channel(channel_id).is_some())
             .map(|guild| guild.id);
-        self.compose.last_nonce = now_snowflake().max(self.compose.last_nonce + 1);
-        let nonce = self.compose.last_nonce;
+        let retry = self.compose.retry_nonce.take();
+        let nonce = retry.unwrap_or_else(|| self.next_nonce());
         let uploads = files
             .iter()
             .map(|file| PendingUpload {
@@ -394,6 +406,7 @@ impl DiscordApp {
             attachments: Vec::new(),
             sticker_ids: Vec::new(),
             content_inventory_entry: entry,
+            retry: retry.is_some(),
         };
         let request = if files.is_empty() {
             Tokio::spawn(cx, session.send_message(guild_id, channel_id, outgoing))
@@ -501,8 +514,8 @@ impl DiscordApp {
             .iter()
             .find(|guild| guild.channel(channel_id).is_some())
             .map(|guild| guild.id);
-        self.compose.last_nonce = now_snowflake().max(self.compose.last_nonce + 1);
-        let nonce = self.compose.last_nonce;
+        let retry = self.compose.retry_nonce.take();
+        let nonce = retry.unwrap_or_else(|| self.next_nonce());
         let sticker_id = sticker.id;
         let change = self.store.queue_sticker(
             channel_id,
@@ -521,6 +534,7 @@ impl DiscordApp {
             attachments: Vec::new(),
             sticker_ids: vec![sticker_id],
             content_inventory_entry: None,
+            retry: retry.is_some(),
         };
         let request = Tokio::spawn(cx, session.send_message(guild_id, channel_id, outgoing));
         cx.spawn_in(window, async move |this, cx| {
@@ -609,11 +623,13 @@ impl DiscordApp {
         let change = self.store.discard_message(channel_id, nonce);
         self.apply_change(change, window, cx);
         self.messages.set_follow_mode(FollowMode::Tail);
+        self.compose.retry_nonce = Some(nonce);
         if let Some(sticker) = sticker {
             self.submit_sticker(channel_id, sticker, reply, window, cx);
         } else {
             self.submit_send(channel_id, content, reply, files, entry, window, cx);
         }
+        self.compose.retry_nonce = None;
     }
 
     pub(crate) fn discard_message(
@@ -762,14 +778,17 @@ impl DiscordApp {
             return;
         }
         let channel_id = self.selected_channel_id;
-        let Some(original) = self
+        let Some(message) = self
             .message_index(message_id)
             .and_then(|index| self.channel()?.messages.get(index))
-            .map(|message| message.content.clone())
-            .filter(|original| *original != content)
+            .filter(|message| message.content != content)
         else {
             return;
         };
+        let original = message.content.clone();
+        let quiet_reply = message.kind == 19
+            && matches!(&message.reply, Some(ReplyState::Loaded(reply))
+                if !message.mention_ids.contains(&reply.author_id));
         let change = self
             .store
             .edit_message_locally(channel_id, message_id, content.clone());
@@ -780,7 +799,7 @@ impl DiscordApp {
         let guild_id = self.request_guild();
         let request = Tokio::spawn(cx, async move {
             session
-                .edit_message(guild_id, channel_id, message_id, content)
+                .edit_message(guild_id, channel_id, message_id, content, quiet_reply)
                 .await
         });
         cx.spawn_in(window, async move |this, cx| {

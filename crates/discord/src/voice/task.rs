@@ -22,8 +22,9 @@ use std::{
 };
 use tokio::{sync::watch, time::sleep};
 
-const CONNECT_ATTEMPTS: u32 = 5;
-const OP4_FLAGS: u64 = 3;
+const RESUME_ATTEMPTS: u32 = 3;
+const MAX_BACKOFF: Duration = Duration::from_secs(10);
+const ALLOW_VOICE_RECORDING: u64 = 1 << 1;
 
 struct Server {
     token: Secret,
@@ -91,6 +92,7 @@ struct Shared {
     generation: u64,
     dirty: bool,
     restart: Option<&'static str>,
+    allow_voice_recording: bool,
 }
 
 #[derive(Clone)]
@@ -124,6 +126,7 @@ impl Default for VoiceManager {
                 generation: 0,
                 dirty: false,
                 restart: None,
+                allow_voice_recording: true,
             })),
             events: None,
             runtime: None,
@@ -456,6 +459,26 @@ impl VoiceManager {
         }
     }
 
+    pub fn resumed_op4(&self) -> Option<Value> {
+        let shared = self.lock();
+        if shared.desired.is_some() {
+            return Some(op4(&shared));
+        }
+        drop(shared);
+        self.take_pending_op4()
+    }
+
+    pub fn set_allow_voice_recording(&self, allow: bool) -> Option<Value> {
+        let mut shared = self.lock();
+        if shared.allow_voice_recording == allow {
+            return None;
+        }
+        shared.allow_voice_recording = allow;
+        shared.desired?;
+        shared.dirty = true;
+        Some(op4(&shared))
+    }
+
     fn give_up(&self, leave: bool) {
         let mut shared = self.lock();
         shared.desired = None;
@@ -469,13 +492,18 @@ impl VoiceManager {
             shared.dirty = true;
             op4(&shared)
         });
-        let sender = self.commands.clone();
+        drop(shared);
+        if let Some(payload) = payload {
+            self.send_gateway(payload);
+        }
+    }
+
+    pub(super) fn send_gateway(&self, payload: Value) {
         let generation = self
             .gateway_generation
             .as_ref()
             .map(|generation| generation.load(Ordering::Acquire));
-        drop(shared);
-        if let (Some(sender), Some(generation), Some(payload)) = (sender, generation, payload)
+        if let (Some(sender), Some(generation)) = (&self.commands, generation)
             && generation % 2 == 1
         {
             let _ = sender.send((generation, commands::voice_state(payload)));
@@ -606,14 +634,12 @@ fn op4(shared: &Shared) -> Value {
     let (guild_id, channel_id) = match shared.desired {
         Some((0, channel)) => (Value::Null, json!(channel.to_string())),
         Some((guild, channel)) => (json!(guild.to_string()), json!(channel.to_string())),
-        None => (
-            shared
-                .last_guild
-                .filter(|guild| *guild != 0)
-                .map(|guild| json!(guild.to_string()))
-                .unwrap_or(Value::Null),
-            Value::Null,
-        ),
+        None => (Value::Null, Value::Null),
+    };
+    let flags = if shared.allow_voice_recording {
+        ALLOW_VOICE_RECORDING
+    } else {
+        0
     };
     json!({"op": 4, "d": {
         "guild_id": guild_id,
@@ -621,7 +647,7 @@ fn op4(shared: &Shared) -> Value {
         "self_mute": shared.mute || shared.deaf,
         "self_deaf": shared.deaf,
         "self_video": false,
-        "flags": OP4_FLAGS,
+        "flags": flags,
     }})
 }
 
@@ -639,13 +665,14 @@ pub(super) fn ws_url(endpoint: &str) -> Option<String> {
     if endpoint.is_empty() {
         return None;
     }
-    Some(
-        if endpoint.starts_with("ws://") || endpoint.starts_with("wss://") {
-            format!("{endpoint}/?v=9")
-        } else {
-            format!("wss://{endpoint}/?v=9")
-        },
-    )
+    if endpoint.starts_with("ws://") || endpoint.starts_with("wss://") {
+        return Some(format!("{endpoint}/?v=9"));
+    }
+    let host = match endpoint.rsplit_once(':') {
+        Some((host, "443" | "80")) => host,
+        _ => endpoint,
+    };
+    Some(format!("wss://{host}/?v=9"))
 }
 
 pub(super) fn server_name(endpoint: &str) -> Option<String> {
@@ -675,13 +702,17 @@ async fn connection_loop(
     manager: VoiceManager,
 ) {
     let mut connection = Connection::new(config, flags);
-    let mut attempts = 0;
+    let mut failures = 0;
     let mut resume = false;
     loop {
         if *shutdown.borrow() {
             break;
         }
-        match connection.attempt(&events, &mut shutdown, resume).await {
+        let outcome = connection.attempt(&events, &mut shutdown, resume).await;
+        if connection.reached_ready() {
+            failures = 0;
+        }
+        match outcome {
             Outcome::Stopped => break,
             Outcome::Fatal { reason, leave } => {
                 emit(
@@ -694,17 +725,7 @@ async fn connection_loop(
                 break;
             }
             Outcome::Reconnect => {
-                attempts += 1;
-                if attempts > CONNECT_ATTEMPTS {
-                    emit(
-                        &events,
-                        VoiceEvent::Disconnected {
-                            reason: Some("Could not connect to voice".into()),
-                        },
-                    );
-                    manager.give_up(true);
-                    break;
-                }
+                failures += 1;
                 let reason = match connection.last_close() {
                     Some(code) => format!("reconnect after close {code}"),
                     None => "reconnect after connection loss".into(),
@@ -717,12 +738,10 @@ async fn connection_loop(
                         channel_id: connection.channel_id(),
                     },
                 );
-                resume = connection.can_resume();
-                let base = 1000u64 << (attempts - 1).min(4);
-                let jitter = rand::thread_rng().gen_range(0..=500);
+                resume = failures <= RESUME_ATTEMPTS && connection.can_resume();
                 tokio::select! {
                     _ = shutdown.changed() => break,
-                    _ = sleep(Duration::from_millis(base + jitter)) => {}
+                    _ = sleep(reconnect_delay(failures)) => {}
                 }
             }
         }
@@ -731,6 +750,11 @@ async fn connection_loop(
     if shared.generation == generation {
         shared.task = None;
     }
+}
+
+fn reconnect_delay(failures: u32) -> Duration {
+    let backoff = Duration::from_secs(1 << failures.saturating_sub(1).min(4)).min(MAX_BACKOFF);
+    backoff + Duration::from_millis(rand::thread_rng().gen_range(0..=500))
 }
 
 #[cfg(test)]

@@ -736,7 +736,7 @@ pub(crate) fn blocked_bar(app: &DiscordApp, id: u64) -> Option<AnyElement> {
                             .hover(|style| style.bg(rgba(theme::hover())))
                             .on_click(move |_, _, cx| {
                                 entity
-                                    .update(cx, |app, cx| app.unblock_user(user_id, cx))
+                                    .update(cx, |app, cx| app.unblock_user(user_id, None, cx))
                                     .ok();
                             })
                     })

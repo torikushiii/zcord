@@ -67,8 +67,8 @@ fn mark_unread_returns_the_cursor_and_counts_guild_mentions() {
     channel.messages[1].mentions_me = true;
     channel.messages[2].mentions_me = true;
 
-    assert_eq!(store.mark_unread(2002, 45), Some((44, 3)));
-    assert_eq!(store.last_read(2002), Some(44));
+    assert_eq!(store.mark_unread(2002, 45), Some((40, 3)));
+    assert_eq!(store.last_read(2002), Some(40));
     assert_eq!(store.guilds[0].channel(2002).unwrap().mentions, 3);
     assert!(store.channel_ack(2002).is_some());
 }
@@ -90,8 +90,8 @@ fn mark_unread_counts_every_dm_message_from_someone_else() {
         ],
     );
 
-    assert_eq!(store.mark_unread(900, 450), Some((449, 2)));
-    assert_eq!(store.last_read(900), Some(449));
+    assert_eq!(store.mark_unread(900, 450), Some((400, 2)));
+    assert_eq!(store.last_read(900), Some(400));
     assert_eq!(store.private_channel(900).unwrap().channel.mentions, 2);
 }
 

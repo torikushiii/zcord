@@ -16,6 +16,8 @@ pub struct ReadState {
     pub kind: u8,
     #[serde(default, deserialize_with = "optional_timestamp")]
     pub last_pin_timestamp: Option<String>,
+    #[serde(default)]
+    pub flags: Option<u32>,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -24,8 +26,25 @@ pub struct ReadStates {
     pub entries: Vec<ReadState>,
 }
 
+const USE_NEW_NOTIFICATIONS: u64 = 1 << 4;
+
+pub fn uses_new_notifications(settings: &Value) -> bool {
+    settings
+        .get("flags")
+        .and_then(Value::as_u64)
+        .is_some_and(|flags| flags & USE_NEW_NOTIFICATIONS != 0)
+}
+
+#[derive(Default, Deserialize)]
+struct NotificationSettings {
+    #[serde(default, deserialize_with = "default_value")]
+    flags: u64,
+}
+
 #[derive(Clone)]
 pub struct Ready {
+    pub auth_token: Option<crate::Secret>,
+    pub installation_id: Option<String>,
     pub user: User,
     pub users: Vec<User>,
     pub guilds: Vec<Guild>,
@@ -38,6 +57,7 @@ pub struct Ready {
     pub user_settings_proto: Option<String>,
     pub user_guild_settings: Vec<UserGuildSettings>,
     pub guild_notification_defaults: HashMap<u64, NotificationLevel>,
+    pub use_new_notifications: bool,
     pub sessions: Vec<Session>,
     pub relationships: Vec<Relationship>,
     pub friend_suggestion_count: u32,
@@ -49,6 +69,8 @@ impl<'de> Deserialize<'de> for Ready {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
         struct Wire {
+            #[serde(default)]
+            auth_token: Option<String>,
             user: User,
             #[serde(default, deserialize_with = "entries")]
             users: Vec<User>,
@@ -69,6 +91,8 @@ impl<'de> Deserialize<'de> for Ready {
             user_settings_proto: Option<String>,
             #[serde(default, deserialize_with = "user_guild_settings")]
             user_guild_settings: Vec<UserGuildSettings>,
+            #[serde(default, deserialize_with = "default_value")]
+            notification_settings: NotificationSettings,
             #[serde(default, deserialize_with = "entries")]
             sessions: Vec<Session>,
             #[serde(default, deserialize_with = "entries")]
@@ -124,7 +148,18 @@ impl<'de> Deserialize<'de> for Ready {
             "READY: {} guild notification settings",
             wire.user_guild_settings.len()
         );
+        let installation_id = wire
+            .apex_experiments
+            .get("installation")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned);
         Ok(Self {
+            installation_id,
+            auth_token: wire
+                .auth_token
+                .filter(|token| !token.is_empty())
+                .map(crate::Secret),
             user: wire.user,
             users: wire.users,
             guilds,
@@ -137,6 +172,7 @@ impl<'de> Deserialize<'de> for Ready {
             user_settings_proto: wire.user_settings_proto,
             user_guild_settings: wire.user_guild_settings,
             guild_notification_defaults,
+            use_new_notifications: wire.notification_settings.flags & USE_NEW_NOTIFICATIONS != 0,
             sessions: wire.sessions,
             relationships: wire.relationships,
             friend_suggestion_count: wire.friend_suggestion_count,

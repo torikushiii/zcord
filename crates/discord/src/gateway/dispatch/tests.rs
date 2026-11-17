@@ -335,12 +335,7 @@ fn social_dispatches_and_disconnect_generations() {
     ));
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
     let generation = Arc::new(AtomicU64::new(0));
-    let mut commands = CommandReceiver {
-        receiver,
-        generation: generation.clone(),
-        presence: Arc::default(),
-        presence_after: Instant::now(),
-    };
+    let mut commands = CommandReceiver::new(receiver, generation.clone(), Arc::default());
     commands.ready();
     assert_eq!(generation.load(Ordering::Acquire), 1);
     sender

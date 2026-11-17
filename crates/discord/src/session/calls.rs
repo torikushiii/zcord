@@ -6,12 +6,7 @@ impl Session {
     }
 
     pub fn request_dm_call(&self, channel_id: u64) {
-        self.command(commands::Command {
-            payload: serde_json::json!({"op": 13, "d": {"channel_id": channel_id.to_string()}}),
-            members: false,
-            presence_revision: None,
-            completion: None,
-        });
+        self.command(commands::call_connect(channel_id));
     }
 
     pub async fn call_ringable(&self, channel_id: u64) -> Result<bool, Error> {
@@ -24,8 +19,8 @@ impl Session {
             .await
     }
 
-    pub async fn stop_ringing_call(&self, channel_id: u64, user_id: u64) -> Result<(), Error> {
-        self.rest(async |rest| rest.stop_ringing_call(channel_id, user_id).await)
+    pub async fn stop_ringing_call(&self, channel_id: u64) -> Result<(), Error> {
+        self.rest(async |rest| rest.stop_ringing_call(channel_id).await)
             .await
     }
 }

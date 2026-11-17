@@ -37,6 +37,9 @@ pub(super) fn dispatch(kind: &str, value: Value, ignored: &mut HashSet<String>) 
             "USER_SETTINGS_PROTO_UPDATE" => serde_json::from_value(value)
                 .ok()
                 .map(|settings| Event::SettingsUpdate(Box::new(settings))),
+            "NOTIFICATION_SETTINGS_UPDATE" => Some(Event::NotificationSettingsUpdate {
+                use_new_notifications: model::uses_new_notifications(&value),
+            }),
             "USER_GUILD_SETTINGS_UPDATE" => serde_json::from_value(value)
                 .ok()
                 .map(|settings| Event::UserGuildSettingsUpdate(Box::new(settings))),

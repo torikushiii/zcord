@@ -8,6 +8,13 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::json;
 use std::time::{Duration, UNIX_EPOCH};
 
+fn custom_status(state: &str) -> serde_json::Value {
+    json!({
+        "name":"Custom Status","type":4,"state":state,"timestamps":null,
+        "emoji":{"id":"42","name":"party","animated":false},"details":null,"metadata":{"label":null}
+    })
+}
+
 fn snapshot(status: &str, version: u64) -> Vec<u8> {
     let mut proto = STANDARD
         .decode(status_fixture(
@@ -57,8 +64,11 @@ fn manual_status_expires_exactly_to_online_without_clearing_custom_status() {
         presence
             .install(timed_snapshot(status.wire(), 1, 2_000, 1_000))
             .unwrap();
-        let custom = presence.payload(1_999).unwrap()["d"]["activities"].clone();
-        assert_eq!(custom.as_array().unwrap().len(), 1);
+        let before = presence.payload(1_999).unwrap()["d"]["activities"].clone();
+        assert_eq!(
+            before.as_array().unwrap().len(),
+            usize::from(status != SelfStatus::Invisible)
+        );
         assert_eq!(presence.status_at(1_999), Some(status));
         assert_eq!(
             presence.next_status_expiry_at(1_999),
@@ -69,7 +79,10 @@ fn manual_status_expires_exactly_to_online_without_clearing_custom_status() {
             let payload = presence.payload(now).unwrap();
             assert_eq!(payload["d"]["status"], "online");
             assert_eq!(payload["d"]["since"], 0);
-            assert_eq!(payload["d"]["activities"], custom);
+            assert_eq!(
+                payload["d"]["activities"],
+                json!([custom_status("working")])
+            );
             assert_eq!(presence.next_status_expiry_at(now), None);
         }
     }
@@ -148,19 +161,19 @@ fn only_a_known_non_online_future_manual_deadline_is_schedulable() {
 fn custom_activity_is_withdrawn_at_the_exact_expiry_boundary() {
     let mut presence = Presence::default();
     presence.replace(Some(&status_fixture(
-        Some("invisible"),
+        Some("dnd"),
         Some(("expiring", 0, "", u64::MAX)),
     )));
     assert_eq!(
-        presence.payload(u64::MAX - 1).unwrap()["d"]["activities"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
+        presence.payload(u64::MAX - 1).unwrap()["d"]["activities"],
+        json!([{
+            "name":"Custom Status","type":4,"state":"expiring",
+            "timestamps":{"end":u64::MAX},"emoji":null,"details":null,"metadata":{"label":null}
+        }])
     );
     let expired = presence.payload(u64::MAX).unwrap();
     assert_eq!(expired["d"]["activities"], json!([]));
-    assert_eq!(expired["d"]["status"], "invisible");
+    assert_eq!(expired["d"]["status"], "dnd");
 }
 
 #[test]
@@ -173,17 +186,15 @@ fn choices_round_trip_and_invisible_is_never_sent_as_offline() {
         let payload = presence.payload(1234).unwrap();
         assert_eq!(payload["op"], 3);
         assert_eq!(payload["d"]["status"], status.wire());
-        assert_eq!(
-            payload["d"]["since"],
-            if status == SelfStatus::Idle { 1234 } else { 0 }
-        );
+        assert_eq!(payload["d"]["since"], 0);
         assert_eq!(payload["d"]["afk"], false);
         assert_eq!(
             payload["d"]["activities"],
-            json!([{
-                "name":"Custom Status","type":4,"state":"working",
-                "emoji":{"id":"42","name":"party"}
-            }])
+            if status == SelfStatus::Invisible {
+                json!([])
+            } else {
+                json!([custom_status("working")])
+            }
         );
     }
     assert_eq!(SelfStatus::parse("offline"), Some(SelfStatus::Invisible));
@@ -249,10 +260,7 @@ fn local_activity_follows_custom_status_and_respects_account_privacy() {
     assert!(hidden.set_local_activity(Some(json!({"type":0,"name":"Game"}))));
     assert_eq!(
         hidden.payload(0).unwrap()["d"]["activities"],
-        json!([{
-            "name":"Custom Status","type":4,"state":"working",
-            "emoji":{"id":"42","name":"party"}
-        }])
+        json!([custom_status("working")])
     );
 
     let mut shown = Presence::default();
@@ -306,4 +314,50 @@ fn unrelated_or_malformed_settings_do_not_publish_presence_or_erase_custom_statu
         Some(("expired", 0, "", 1)),
     )));
     assert_eq!(presence.payload(0).unwrap()["d"]["activities"], json!([]));
+}
+
+#[test]
+fn invisible_hides_every_activity_and_unicode_emoji_carry_null_ids() {
+    let mut presence = Presence::default();
+    presence
+        .install(
+            STANDARD
+                .decode(status_fixture(Some("invisible"), Some(("", 0, "🔥", 0))))
+                .unwrap(),
+        )
+        .unwrap();
+    assert!(presence.set_local_activity(Some(json!({"type":0,"name":"Game"}))));
+    assert_eq!(
+        presence.payload(5).unwrap(),
+        json!({"op":3,"d":{"status":"invisible","since":0,"activities":[],"afk":false}})
+    );
+    presence
+        .install(
+            STANDARD
+                .decode(status_fixture(Some("online"), Some(("", 0, "🔥", 0))))
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        presence.payload(5).unwrap()["d"]["activities"],
+        json!([
+            {
+                "name":"Custom Status","type":4,"state":null,"timestamps":null,
+                "emoji":{"id":null,"name":"🔥","animated":false},"details":null,
+                "metadata":{"label":null}
+            },
+            {"type":0,"name":"Game"}
+        ])
+    );
+}
+
+#[test]
+fn focus_changes_report_transitions_only() {
+    let mut presence = Presence::default();
+    assert!(presence.focused());
+    assert!(!presence.set_focused(true));
+    assert!(presence.set_focused(false));
+    assert!(!presence.focused());
+    assert!(!presence.set_focused(false));
+    assert!(presence.set_focused(true));
 }

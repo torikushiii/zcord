@@ -74,6 +74,8 @@ pub struct ChannelOverride {
     pub mute_config: Option<MuteConfig>,
     #[serde(default, deserialize_with = "level")]
     pub message_notifications: NotificationLevel,
+    #[serde(default, deserialize_with = "default_value")]
+    pub flags: u64,
 }
 
 #[derive(Clone, Default, Deserialize)]

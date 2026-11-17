@@ -1,13 +1,10 @@
+use super::requests::{CONTEXT_MENU_CONTEXT, relationship_context};
 use super::*;
 use chrono::{DateTime, Utc};
 
-const DM_REFERER: &str = "https://discord.com/channels/@me";
 const RELATIONSHIPS_URL: &str = "https://discord.com/api/v9/users/@me/relationships";
-const CONTEXT_MENU: &str = "eyJsb2NhdGlvbiI6IkNvbnRleHRNZW51In0=";
 const ADD_FRIENDS_TO_DM: &str = "eyJsb2NhdGlvbiI6IkFkZCBGcmllbmRzIHRvIERNIn0=";
-
-#[derive(Serialize)]
-struct EmptyBody {}
+const NEW_GROUP_DM: &str = "eyJsb2NhdGlvbiI6Ik5ldyBHcm91cCBETSJ9";
 
 #[derive(Serialize)]
 struct Nickname<'a> {
@@ -62,49 +59,47 @@ fn relationship_url(user_id: u64) -> String {
 }
 
 fn close_dm(client: &Client, channel_id: u64) -> RequestBuilder {
-    client
-        .delete(format!("{}?silent=false", channel_url(channel_id)))
-        .header(REFERER, DM_REFERER)
+    client.delete(format!("{}?silent=false", channel_url(channel_id)))
 }
 
 fn leave_group(client: &Client, channel_id: u64, silent: bool) -> RequestBuilder {
-    client
-        .delete(format!("{}?silent={silent}", channel_url(channel_id)))
-        .header(REFERER, DM_REFERER)
+    client.delete(format!("{}?silent={silent}", channel_url(channel_id)))
 }
 
 fn block_user(client: &Client, user_id: u64) -> RequestBuilder {
     client
         .put(relationship_url(user_id))
-        .header(REFERER, DM_REFERER)
-        .header("x-context-properties", CONTEXT_MENU)
+        .header("x-context-properties", CONTEXT_MENU_CONTEXT)
         .json(&serde_json::json!({"type": 2}))
 }
 
-fn unblock_user(client: &Client, user_id: u64) -> RequestBuilder {
-    client
-        .delete(relationship_url(user_id))
-        .header(REFERER, DM_REFERER)
-        .header("x-context-properties", CONTEXT_MENU)
+fn unblock_user(
+    client: &Client,
+    user_id: u64,
+    location: Option<model::RelationshipLocation>,
+) -> RequestBuilder {
+    let request = client.delete(relationship_url(user_id));
+    match location {
+        Some(location) => request.header("x-context-properties", relationship_context(location)),
+        None => request,
+    }
 }
 
 fn ignore_user(client: &Client, user_id: u64) -> RequestBuilder {
     client
         .put(format!("{}/ignore", relationship_url(user_id)))
-        .header(REFERER, DM_REFERER)
-        .json(&EmptyBody {})
+        .header("x-context-properties", CONTEXT_MENU_CONTEXT)
 }
 
 fn unignore_user(client: &Client, user_id: u64) -> RequestBuilder {
     client
         .delete(format!("{}/ignore", relationship_url(user_id)))
-        .header(REFERER, DM_REFERER)
+        .header("x-context-properties", CONTEXT_MENU_CONTEXT)
 }
 
 fn set_friend_nickname(client: &Client, user_id: u64, nickname: Option<&str>) -> RequestBuilder {
     client
         .patch(relationship_url(user_id))
-        .header(REFERER, DM_REFERER)
         .json(&Nickname { nickname })
 }
 
@@ -122,8 +117,7 @@ fn set_dm_mute(
         )]),
     };
     client
-        .patch("https://discord.com/api/v9/users/@me/guilds/@me/settings")
-        .header(REFERER, DM_REFERER)
+        .patch("https://discord.com/api/v9/users/@me/guilds/%40me/settings")
         .json(&body)
 }
 
@@ -133,22 +127,18 @@ fn create_group_dm(client: &Client, recipients: &[u64]) -> RequestBuilder {
     };
     client
         .post("https://discord.com/api/v9/users/@me/channels")
-        .header(REFERER, DM_REFERER)
-        .header("x-context-properties", ADD_FRIENDS_TO_DM)
+        .header("x-context-properties", NEW_GROUP_DM)
         .json(&body)
 }
 
 fn add_group_recipient(client: &Client, channel_id: u64, user_id: u64) -> RequestBuilder {
     client
         .put(format!("{}/recipients/{user_id}", channel_url(channel_id)))
-        .header(REFERER, DM_REFERER)
-        .json(&EmptyBody {})
+        .header("x-context-properties", ADD_FRIENDS_TO_DM)
 }
 
 fn remove_group_recipient(client: &Client, channel_id: u64, user_id: u64) -> RequestBuilder {
-    client
-        .delete(format!("{}/recipients/{user_id}", channel_url(channel_id)))
-        .header(REFERER, DM_REFERER)
+    client.delete(format!("{}/recipients/{user_id}", channel_url(channel_id)))
 }
 
 impl Rest {
@@ -168,8 +158,13 @@ impl Rest {
         Ok(())
     }
 
-    pub async fn unblock_user(&self, user_id: u64) -> Result<(), Error> {
-        self.send(|| unblock_user(&self.client, user_id)).await?;
+    pub async fn unblock_user(
+        &self,
+        user_id: u64,
+        location: Option<model::RelationshipLocation>,
+    ) -> Result<(), Error> {
+        self.send(|| unblock_user(&self.client, user_id, location))
+            .await?;
         Ok(())
     }
 
@@ -210,10 +205,24 @@ impl Rest {
             .map_err(|_| Error::Decode)
     }
 
-    pub async fn add_group_recipient(&self, channel_id: u64, user_id: u64) -> Result<(), Error> {
-        self.send(|| add_group_recipient(&self.client, channel_id, user_id))
+    /// Adding to a 1:1 DM creates a new group DM and returns it with a 201.
+    /// https://docs.discord.food/resources/channel#add-channel-recipient
+    pub async fn add_group_recipient(
+        &self,
+        channel_id: u64,
+        user_id: u64,
+    ) -> Result<Option<model::Channel>, Error> {
+        let response = self
+            .send(|| add_group_recipient(&self.client, channel_id, user_id))
             .await?;
-        Ok(())
+        if response.status() != reqwest::StatusCode::CREATED {
+            return Ok(None);
+        }
+        response
+            .json::<model::Channel>()
+            .await
+            .map(Some)
+            .map_err(|_| Error::Decode)
     }
 
     pub async fn remove_group_recipient(&self, channel_id: u64, user_id: u64) -> Result<(), Error> {
@@ -240,7 +249,7 @@ mod tests {
         assert_eq!(request.method(), method);
         assert_eq!(request.url().as_str(), url);
         assert_eq!(request.body().and_then(reqwest::Body::as_bytes), body);
-        assert_eq!(request.headers()[REFERER], DM_REFERER);
+        assert!(request.headers().get(REFERER).is_none());
         assert_eq!(
             request
                 .headers()
@@ -280,28 +289,35 @@ mod tests {
             reqwest::Method::PUT,
             "https://discord.com/api/v9/users/@me/relationships/42",
             Some(br#"{"type":2}"#),
-            Some(CONTEXT_MENU),
+            Some(CONTEXT_MENU_CONTEXT),
         );
         assert_request(
-            unblock_user(&client, 42),
+            unblock_user(&client, 42, Some(model::RelationshipLocation::ContextMenu)),
             reqwest::Method::DELETE,
             "https://discord.com/api/v9/users/@me/relationships/42",
             None,
-            Some(CONTEXT_MENU),
+            Some(CONTEXT_MENU_CONTEXT),
+        );
+        assert_request(
+            unblock_user(&client, 42, None),
+            reqwest::Method::DELETE,
+            "https://discord.com/api/v9/users/@me/relationships/42",
+            None,
+            None,
         );
         assert_request(
             ignore_user(&client, 42),
             reqwest::Method::PUT,
             "https://discord.com/api/v9/users/@me/relationships/42/ignore",
-            Some(b"{}"),
             None,
+            Some(CONTEXT_MENU_CONTEXT),
         );
         assert_request(
             unignore_user(&client, 42),
             reqwest::Method::DELETE,
             "https://discord.com/api/v9/users/@me/relationships/42/ignore",
             None,
-            None,
+            Some(CONTEXT_MENU_CONTEXT),
         );
         assert_request(
             set_friend_nickname(&client, 42, Some("nick")),
@@ -322,14 +338,14 @@ mod tests {
             reqwest::Method::POST,
             "https://discord.com/api/v9/users/@me/channels",
             Some(br#"{"recipients":["1","2"]}"#),
-            Some(ADD_FRIENDS_TO_DM),
+            Some("eyJsb2NhdGlvbiI6Ik5ldyBHcm91cCBETSJ9"),
         );
         assert_request(
             add_group_recipient(&client, 7, 42),
             reqwest::Method::PUT,
             "https://discord.com/api/v9/channels/7/recipients/42",
-            Some(b"{}"),
             None,
+            Some("eyJsb2NhdGlvbiI6IkFkZCBGcmllbmRzIHRvIERNIn0="),
         );
         assert_request(
             remove_group_recipient(&client, 7, 42),
@@ -348,7 +364,7 @@ mod tests {
         assert_request(
             set_dm_mute(&client, 7, Some(-1), now),
             reqwest::Method::PATCH,
-            "https://discord.com/api/v9/users/@me/guilds/@me/settings",
+            "https://discord.com/api/v9/users/@me/guilds/%40me/settings",
             Some(
                 br#"{"channel_overrides":{"7":{"muted":true,"mute_config":{"selected_time_window":-1,"end_time":null}}}}"#,
             ),
@@ -357,7 +373,7 @@ mod tests {
         assert_request(
             set_dm_mute(&client, 7, Some(3600), now),
             reqwest::Method::PATCH,
-            "https://discord.com/api/v9/users/@me/guilds/@me/settings",
+            "https://discord.com/api/v9/users/@me/guilds/%40me/settings",
             Some(
                 br#"{"channel_overrides":{"7":{"muted":true,"mute_config":{"selected_time_window":3600,"end_time":"2024-01-01T01:00:00.000Z"}}}}"#,
             ),
@@ -366,7 +382,7 @@ mod tests {
         assert_request(
             set_dm_mute(&client, 7, None, now),
             reqwest::Method::PATCH,
-            "https://discord.com/api/v9/users/@me/guilds/@me/settings",
+            "https://discord.com/api/v9/users/@me/guilds/%40me/settings",
             Some(br#"{"channel_overrides":{"7":{"muted":false}}}"#),
             None,
         );

@@ -1,21 +1,24 @@
 use super::super::{
     audio::AudioFlags,
-    crypto::{Cipher, Mode},
-    dave::Dave,
+    crypto::Cipher,
+    dave::{
+        Dave, INVALID_MLS_LIMIT, REFUSED_DOWNGRADE, REFUSED_DOWNGRADE_REASON, REPEATED_INVALID_MLS,
+        REPEATED_INVALID_MLS_REASON,
+    },
     gateway::{
-        self, commit_welcome_body, parse_binary_seq, ready_on_prepare, send_binary, send_json,
-        send_key_package, send_ready,
+        AUDIO_PAYLOAD, NORMAL_CLOSE, RTX_PAYLOAD, VIDEO_PAYLOAD, close_socket, commit_welcome_body,
+        flag_invalid_commit_welcome, heartbeat_payload, parse_binary_seq, ready_on_prepare,
+        send_binary, send_json, send_key_package, send_ready,
     },
     rtcp,
     rtp::Header,
+    udp as discord_udp,
 };
 use super::{
     FrameSlot, decode, h264,
     h264::{Assembler, Packet, Reorder},
     handshake,
-    handshake::{
-        AUDIO_PAYLOAD, HEARTBEAT_DEFAULT, HandshakeConfig, RTX_PAYLOAD, Socket, VIDEO_PAYLOAD,
-    },
+    handshake::{HEARTBEAT_DEFAULT, HandshakeConfig, Socket},
 };
 use crate::{Event, Secret, StreamEvent, VoiceEvent, model};
 use futures::{StreamExt, channel::mpsc::UnboundedSender};
@@ -38,6 +41,7 @@ use tokio_tungstenite::tungstenite::Message;
 const RECEIVER_REPORT: Duration = Duration::from_secs(1);
 const PLI_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_PACKET: usize = 2048;
+const DEFAULT_PIXELS: u64 = 1920 * 1080;
 
 pub(crate) struct ViewerConfig {
     pub user_id: u64,
@@ -46,6 +50,7 @@ pub(crate) struct ViewerConfig {
     pub token: Secret,
     pub endpoint: String,
     pub rtc_server_id: u64,
+    pub rtc_channel_id: Option<u64>,
     pub frames: FrameSlot,
     pub events: UnboundedSender<Event>,
     pub ended: Arc<AtomicBool>,
@@ -64,9 +69,8 @@ pub(crate) async fn run(
             token: config.token.clone(),
             endpoint: config.endpoint.clone(),
             rtc_server_id: config.rtc_server_id,
-            streams: json!([]),
-            encode: false,
-            decode: true,
+            rtc_channel_id: super::rtc_channel_id(config.rtc_server_id, config.rtc_channel_id)?,
+            streams: super::screen_streams(),
         },
         &mut cancel,
     )
@@ -84,23 +88,28 @@ pub(crate) async fn run(
     let mut tick = interval(Duration::from_millis(10));
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut buffer = [0u8; MAX_PACKET];
-    loop {
-        tokio::select! {
-            biased;
-            _ = cancel.changed() => return Ok(()),
-            _ = tick.tick() => viewer.tick(&mut socket, &udp, peer).await?,
-            received = udp.recv_from(&mut buffer) => {
-                let Ok((size, _)) = received else { continue };
-                viewer.datagram(&udp, peer, &buffer[..size], Instant::now()).await?;
-            }
-            message = socket.next() => {
-                let Some(Ok(message)) = message else {
-                    return Err("Discord stream socket failed".into());
-                };
-                viewer.message(&mut socket, message).await?;
+    let result: Result<(), String> = async {
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancel.changed() => return Ok(()),
+                _ = tick.tick() => viewer.tick(&mut socket, &udp, peer).await?,
+                received = udp.recv_from(&mut buffer) => {
+                    let Ok((size, _)) = received else { continue };
+                    viewer.datagram(&udp, peer, &buffer[..size], Instant::now()).await?;
+                }
+                message = socket.next() => {
+                    let Some(Ok(message)) = message else {
+                        return Err("Discord stream socket failed".into());
+                    };
+                    viewer.message(&mut socket, message).await?;
+                }
             }
         }
     }
+    .await;
+    close_socket(&mut socket, viewer.close_code).await;
+    result
 }
 
 fn ssrc(value: Option<&Value>) -> Option<u32> {
@@ -131,6 +140,31 @@ fn stream_ssrcs(data: &Value) -> Option<(u32, u32)> {
             .and_then(|stream| ssrc(stream.get("rtx_ssrc")))
     });
     Some((video, rtx.unwrap_or(0)))
+}
+
+fn stream_pixels(data: &Value, video_ssrc: u32) -> u64 {
+    data.get("streams")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|stream| ssrc(stream.get("ssrc")) == Some(video_ssrc))
+        .and_then(|stream| stream.get("max_resolution"))
+        .map(|resolution| {
+            let side = |key| resolution.get(key).and_then(Value::as_u64).unwrap_or(0);
+            side("width").saturating_mul(side("height"))
+        })
+        .filter(|pixels| *pixels > 0)
+        .unwrap_or(DEFAULT_PIXELS)
+}
+
+fn sink_wants(video_ssrc: u32, pixels: u64) -> Value {
+    let ssrc = video_ssrc.to_string();
+    let mut pixel_counts = serde_json::Map::new();
+    pixel_counts.insert(ssrc.clone(), pixels.into());
+    let mut wants = serde_json::Map::new();
+    wants.insert(ssrc, 100.into());
+    wants.insert("pixelCounts".into(), pixel_counts.into());
+    json!({"op": 15, "d": wants})
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,8 +205,12 @@ struct Viewer {
     next_report: Instant,
     heartbeat: Duration,
     next_heartbeat: Instant,
-    sink_wants: bool,
-    next_sink_wants: Instant,
+    wants_pending: bool,
+    video_pixels: u64,
+    ping_sequence: u32,
+    next_ping: Instant,
+    invalid_mls: u8,
+    close_code: u16,
     highest_sequence: u32,
     seq_ack: Option<u64>,
     lsr: u32,
@@ -201,8 +239,12 @@ impl Viewer {
             next_report: Instant::now() + RECEIVER_REPORT,
             heartbeat: HEARTBEAT_DEFAULT,
             next_heartbeat: Instant::now() + HEARTBEAT_DEFAULT,
-            sink_wants: false,
-            next_sink_wants: Instant::now(),
+            wants_pending: false,
+            video_pixels: DEFAULT_PIXELS,
+            ping_sequence: 0,
+            next_ping: Instant::now(),
+            invalid_mls: 0,
+            close_code: NORMAL_CLOSE,
             highest_sequence: 0,
             seq_ack: None,
             lsr: 0,
@@ -235,6 +277,9 @@ impl Viewer {
     async fn signal(&mut self, socket: &mut Socket, op: u8, data: Value) -> Result<(), String> {
         match op {
             2 => Err("Unexpected stream transport replacement".into()),
+            3 => send_json(socket, heartbeat_payload(self.seq_ack))
+                .await
+                .map_err(|_| "Discord stream heartbeat failed".to_owned()),
             4 => self.session(socket, &data).await,
             5 => {
                 if let Some(audio) = speaking_audio_ssrc(&data, self.config.streamer_id) {
@@ -277,6 +322,8 @@ impl Viewer {
                 if let Some((video, rtx)) = stream_ssrcs(&data) {
                     self.video_ssrc = video;
                     self.rtx_ssrc = rtx;
+                    self.video_pixels = stream_pixels(&data, video);
+                    self.wants_pending = true;
                 }
                 Ok(())
             }
@@ -302,7 +349,9 @@ impl Viewer {
                     .and_then(Value::as_u64)
                     .unwrap_or(0) as u16;
                 if let Some(dave) = &mut self.dave {
-                    dave.prepare_transition(version, transition);
+                    if !dave.prepare_transition(version, transition) {
+                        return self.refuse_downgrade();
+                    }
                     if transition == 0 {
                         dave.execute_transition(0);
                     } else if ready_on_prepare(transition, version, false) {
@@ -327,7 +376,10 @@ impl Viewer {
                     .and_then(Value::as_u64)
                     .unwrap_or(0) as u16;
                 let epoch = data.get("epoch").and_then(Value::as_u64).unwrap_or(0);
-                if version > 0 && self.dave.is_none() {
+                if version == 0 {
+                    return self.refuse_downgrade();
+                }
+                if self.dave.is_none() {
                     let group = self.rtc_group()?;
                     let mut dave =
                         Dave::new(version, self.config.user_id, group).ok_or_else(|| {
@@ -388,15 +440,15 @@ impl Viewer {
                     false
                 };
                 if !result {
-                    if transition != 0 {
-                        let _ = send_json(
-                            socket,
-                            json!({"op": 31, "d": {"transition_id": transition}}),
-                        )
-                        .await;
+                    self.invalid_mls = self.invalid_mls.saturating_add(1);
+                    if self.invalid_mls >= INVALID_MLS_LIMIT {
+                        self.close_code = REPEATED_INVALID_MLS;
+                        return Err(REPEATED_INVALID_MLS_REASON.into());
                     }
+                    flag_invalid_commit_welcome(socket, self.dave.as_mut(), transition).await;
                     return Ok(());
                 }
+                self.invalid_mls = 0;
                 if transition == 0 {
                     if let Some(dave) = &mut self.dave {
                         dave.execute_transition(0);
@@ -417,19 +469,19 @@ impl Viewer {
     }
 
     fn rtc_group(&self) -> Result<u64, String> {
-        self.config
-            .rtc_server_id
-            .checked_sub(1)
-            .filter(|id| *id != 0)
-            .ok_or_else(|| "Unsupported Discord stream media-session identifier".to_owned())
+        super::rtc_channel_id(self.config.rtc_server_id, self.config.rtc_channel_id)
+    }
+
+    fn refuse_downgrade(&mut self) -> Result<(), String> {
+        self.close_code = REFUSED_DOWNGRADE;
+        Err(REFUSED_DOWNGRADE_REASON.into())
     }
 
     async fn session(&mut self, socket: &mut Socket, data: &Value) -> Result<(), String> {
-        if data.get("mode").and_then(Value::as_str) != Some(Mode::Aes256Gcm.name()) {
-            return Err("Discord did not negotiate the required stream transport".into());
-        }
-        if data.get("dave_protocol_version").and_then(Value::as_u64) != Some(1) {
-            return Err("Discord did not negotiate DAVE stream media".into());
+        let mode = super::transport_mode(data)?;
+        let version = super::dave_version(data);
+        if version == 0 {
+            return self.refuse_downgrade();
         }
         if !data
             .get("video_codec")
@@ -453,11 +505,11 @@ impl Viewer {
                 .ok_or_else(|| "Discord sent an invalid stream transport key".to_owned())?;
         }
         self.cipher = Some(
-            Cipher::new(Mode::Aes256Gcm, &key)
+            Cipher::new(mode, &key)
                 .ok_or_else(|| "Discord sent an invalid stream transport key".to_owned())?,
         );
         let group = self.rtc_group()?;
-        let mut dave = Dave::new(1, self.config.user_id, group)
+        let mut dave = Dave::new(version, self.config.user_id, group)
             .ok_or_else(|| "Discord requested unsupported stream encryption".to_owned())?;
         dave.add_user(self.config.streamer_id);
         let key_package = dave
@@ -550,22 +602,23 @@ impl Viewer {
             self.next_report = now + RECEIVER_REPORT;
         }
         if now >= self.next_heartbeat {
-            let heartbeat = json!({"op": 3, "d": {
-                "t": gateway::unix_ms(), "seq_ack": self.seq_ack,
-            }});
-            send_json(socket, heartbeat)
+            send_json(socket, heartbeat_payload(self.seq_ack))
                 .await
                 .map_err(|_| "Discord stream heartbeat failed".to_owned())?;
             self.next_heartbeat = now + self.heartbeat;
         }
-        if self.dave.as_ref().is_some_and(Dave::is_ready)
-            && (!self.sink_wants || now >= self.next_sink_wants)
-        {
-            send_json(socket, json!({"op": 15, "d": {"any": 100}}))
+        if now >= self.next_ping {
+            let _ = udp
+                .send_to(&discord_udp::ping(self.ping_sequence), peer)
+                .await;
+            self.ping_sequence = self.ping_sequence.wrapping_add(1);
+            self.next_ping = now + discord_udp::PING_INTERVAL;
+        }
+        if self.wants_pending && self.cipher.is_some() && self.video_ssrc != 0 {
+            send_json(socket, sink_wants(self.video_ssrc, self.video_pixels))
                 .await
                 .map_err(|_| "Discord stream sink update failed".to_owned())?;
-            self.sink_wants = true;
-            self.next_sink_wants = now + Duration::from_secs(5);
+            self.wants_pending = false;
         }
         Ok(())
     }
@@ -577,6 +630,9 @@ impl Viewer {
         packet: &[u8],
         now: Instant,
     ) -> Result<(), String> {
+        if discord_udp::is_ping(packet) {
+            return Ok(());
+        }
         if rtcp::packet_type(packet).is_some() {
             if let Some(plaintext) = self.rtcp_plaintext(packet)
                 && let Some(lsr) = rtcp::sender_report_lsr(&plaintext, self.video_ssrc)
@@ -794,6 +850,25 @@ mod tests {
             Some((710, 712))
         );
         assert_eq!(stream_ssrcs(&json!({"video_ssrc": 0, "streams": []})), None);
+    }
+
+    #[test]
+    fn sink_wants_request_the_streamed_ssrc_with_its_pixel_count() {
+        let op_12 = json!({"video_ssrc": 700, "streams": [
+            {"ssrc": 700, "max_resolution": {"type": "fixed", "width": 1280, "height": 720}},
+        ]});
+        assert_eq!(stream_pixels(&op_12, 700), 1280 * 720);
+        assert_eq!(stream_pixels(&op_12, 710), DEFAULT_PIXELS);
+        assert_eq!(
+            stream_pixels(&json!({"streams": [{"ssrc": 700}]}), 700),
+            DEFAULT_PIXELS
+        );
+        let wants = sink_wants(700, 921_600);
+        assert_eq!(wants["op"], 15);
+        assert_eq!(
+            wants["d"],
+            json!({"700": 100, "pixelCounts": {"700": 921_600}})
+        );
     }
 
     #[test]

@@ -405,13 +405,18 @@ impl DiscordApp {
             return;
         };
         let forum_id = header.forum_id;
+        let tag_setting = self
+            .store
+            .forum_default_tag_setting(forum_id)
+            .map(str::to_owned);
         header.searching = true;
         header.search = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(SEARCH_DELAY).await;
-            let result = Tokio::spawn(
-                cx,
-                async move { session.search_threads(forum_id, &query).await },
-            )
+            let result = Tokio::spawn(cx, async move {
+                session
+                    .search_threads(forum_id, &query, tag_setting.as_deref())
+                    .await
+            })
             .await;
             this.update(cx, |app, cx| {
                 let Some(header) = app
@@ -524,6 +529,7 @@ impl DiscordApp {
             return;
         }
         let requires_tag = self.store.forum_requires_tag(forum_id);
+        let archive = self.store.default_auto_archive_duration(forum_id);
         let Some(header) = &mut self.forum_header else {
             return;
         };
@@ -550,7 +556,7 @@ impl DiscordApp {
         let (content, _) = self.encode_emoji_text(&content);
         let request = Tokio::spawn(cx, async move {
             session
-                .create_forum_post(forum_id, &name, &content, &tags)
+                .create_forum_post(forum_id, &name, &content, &tags, archive)
                 .await
         });
         cx.spawn_in(window, async move |this, cx| {

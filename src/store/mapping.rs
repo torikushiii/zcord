@@ -439,6 +439,7 @@ pub(super) fn map_message(message: &model::Message) -> Option<Message> {
         forward: map_forward(message),
         forwardable: is_forwardable(message),
         mentions_me: false,
+        mention_ids: message.mentions.iter().map(|user| user.id).collect(),
         uploads: Vec::new(),
         thread: message
             .thread

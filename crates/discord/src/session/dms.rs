@@ -15,8 +15,12 @@ impl Session {
         self.rest(async |rest| rest.block_user(user_id).await).await
     }
 
-    pub async fn unblock_user(&self, user_id: u64) -> Result<(), Error> {
-        self.rest(async |rest| rest.unblock_user(user_id).await)
+    pub async fn unblock_user(
+        &self,
+        user_id: u64,
+        location: Option<model::RelationshipLocation>,
+    ) -> Result<(), Error> {
+        self.rest(async |rest| rest.unblock_user(user_id, location).await)
             .await
     }
 
@@ -49,7 +53,11 @@ impl Session {
             .await
     }
 
-    pub async fn add_group_recipient(&self, channel_id: u64, user_id: u64) -> Result<(), Error> {
+    pub async fn add_group_recipient(
+        &self,
+        channel_id: u64,
+        user_id: u64,
+    ) -> Result<Option<model::Channel>, Error> {
         self.rest(async |rest| rest.add_group_recipient(channel_id, user_id).await)
             .await
     }

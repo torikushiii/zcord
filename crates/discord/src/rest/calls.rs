@@ -8,12 +8,12 @@ fn ring(client: &Client, channel_id: u64) -> RequestBuilder {
         .json(&serde_json::json!({"recipients": null}))
 }
 
-fn stop_ringing(client: &Client, channel_id: u64, user_id: u64) -> RequestBuilder {
+fn stop_ringing(client: &Client, channel_id: u64) -> RequestBuilder {
     client
         .post(format!(
             "https://discord.com/api/v9/channels/{channel_id}/call/stop-ringing"
         ))
-        .json(&serde_json::json!({"recipients": [user_id.to_string()]}))
+        .json(&serde_json::json!({}))
 }
 
 impl Rest {
@@ -39,9 +39,8 @@ impl Rest {
         Ok(())
     }
 
-    pub async fn stop_ringing_call(&self, channel_id: u64, user_id: u64) -> Result<(), Error> {
-        self.send(|| stop_ringing(&self.client, channel_id, user_id))
-            .await?;
+    pub async fn stop_ringing_call(&self, channel_id: u64) -> Result<(), Error> {
+        self.send(|| stop_ringing(&self.client, channel_id)).await?;
         Ok(())
     }
 }
@@ -51,7 +50,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn call_requests_use_channel_routes_and_explicit_recipients() {
+    fn call_requests_use_channel_routes() {
         let client = Client::new();
         for (request, path, body) in [
             (
@@ -60,9 +59,9 @@ mod tests {
                 serde_json::json!({"recipients": null}),
             ),
             (
-                stop_ringing(&client, 42, 7),
+                stop_ringing(&client, 42),
                 "stop-ringing",
-                serde_json::json!({"recipients": ["7"]}),
+                serde_json::json!({}),
             ),
         ] {
             let request = request.build().unwrap();

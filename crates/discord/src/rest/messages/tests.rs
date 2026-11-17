@@ -11,6 +11,7 @@ fn message_body_serializes_sticker_ids_only_when_non_empty() {
         attachments: Vec::new(),
         sticker_ids: Vec::new(),
         content_inventory_entry: None,
+        retry: false,
     };
     let body = serde_json::to_string(&message_body(None, 20, &message)).unwrap();
     assert_eq!(
@@ -24,6 +25,7 @@ fn message_body_serializes_sticker_ids_only_when_non_empty() {
         attachments: Vec::new(),
         sticker_ids: vec![9001, 9002],
         content_inventory_entry: None,
+        retry: false,
     };
     let body = serde_json::to_string(&message_body(None, 20, &message)).unwrap();
     assert_eq!(
@@ -49,6 +51,7 @@ fn message_body_wraps_the_content_inventory_entry_verbatim() {
         attachments: Vec::new(),
         sticker_ids: Vec::new(),
         content_inventory_entry: Some(std::sync::Arc::new(entry)),
+        retry: false,
     };
     let body = serde_json::to_string(&message_body(None, 20, &message)).unwrap();
     assert_eq!(

@@ -7,9 +7,20 @@ fn pins_url(channel_id: u64, before: Option<&str>) -> String {
         format!("https://discord.com/api/v9/channels/{channel_id}/messages/pins?limit=25");
     if let Some(before) = before {
         url.push_str("&before=");
-        url.push_str(&percent_encode(before));
+        url.push_str(&percent_encode(&iso_millis(before)));
     }
     url
+}
+
+fn iso_millis(timestamp: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(timestamp).map_or_else(
+        |_| timestamp.to_owned(),
+        |time| {
+            time.with_timezone(&chrono::Utc)
+                .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                .to_string()
+        },
+    )
 }
 
 fn pin_url(channel_id: u64, message_id: u64) -> String {
@@ -103,7 +114,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             request.url().as_str(),
-            "https://discord.com/api/v9/channels/20/messages/pins?limit=25&before=2026-09-10T11%3A00%3A00.123456789Z"
+            "https://discord.com/api/v9/channels/20/messages/pins?limit=25&before=2026-09-10T11%3A00%3A00.123Z"
         );
 
         let request = pin_request(&client, 20, 30).build().unwrap();

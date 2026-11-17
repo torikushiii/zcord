@@ -14,6 +14,16 @@ impl Store {
         Some((source.guilds.get(guild)?, entry.get(source)?))
     }
 
+    pub fn is_announcement_channel(&self, channel_id: u64) -> bool {
+        self.source_channel_guild(channel_id)
+            .is_some_and(|(_, channel)| channel.kind == Some(5))
+    }
+
+    pub fn default_auto_archive_duration(&self, channel_id: u64) -> Option<u16> {
+        self.source_channel_guild(channel_id)
+            .and_then(|(_, channel)| channel.default_auto_archive_duration)
+    }
+
     pub(super) fn permissions(&self, channel_id: u64) -> Option<u64> {
         if let Some(permissions) = self.permission_cache.borrow().get(&channel_id) {
             return Some(*permissions);

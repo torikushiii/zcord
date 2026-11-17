@@ -196,9 +196,15 @@ pub(super) fn tile(
             .into_any_element(),
         Tile::Trending(preview) => frame
             .cursor_pointer()
-            .children(
-                preview.map(|src| media(&Preview::Image(src), (0, 0), animate, placed.height, cx)),
-            )
+            .children(preview.map(|src| {
+                media(
+                    &Preview::of(&src, false),
+                    (0, 0),
+                    animate,
+                    placed.height,
+                    cx,
+                )
+            }))
             .child(scrim(0x000000A6, 0x00000073))
             .on_click(move |_, _, cx| {
                 entity
@@ -212,7 +218,7 @@ pub(super) fn tile(
             frame
                 .cursor_pointer()
                 .child(media(
-                    &Preview::Image(category.src.clone()),
+                    &Preview::of(&category.src, false),
                     (0, 0),
                     animate,
                     placed.height,
@@ -231,7 +237,7 @@ pub(super) fn tile(
         Tile::Gif(item) => {
             let favorite = app.store.is_favorite_gif(&item.url);
             let can_favorite = app.store.frecency().is_some() && app.live;
-            let (url, src) = (item.url.clone(), item.src.clone());
+            let picked = item.clone();
             let star = can_favorite.then(|| {
                 let entity = entity.clone();
                 let item = item.clone();
@@ -275,9 +281,9 @@ pub(super) fn tile(
                     cx,
                 ))
                 .on_click(move |_, window, cx| {
-                    let (url, src) = (url.clone(), src.clone());
+                    let item = picked.clone();
                     entity
-                        .update(cx, |app, cx| app.pick_gif(url, src, window, cx))
+                        .update(cx, |app, cx| app.pick_gif(item, window, cx))
                         .ok();
                 })
                 .children(star)
@@ -386,6 +392,7 @@ pub(crate) fn category_previews(app: &DiscordApp, count: usize, cx: &App) -> Vec
         Some(Load::Ready(categories)) => categories
             .categories
             .iter()
+            .filter(|category| !is_video_path(&category.src))
             .take(count)
             .map(|category| category.src.clone())
             .collect(),

@@ -4,7 +4,7 @@ use std::future::Future;
 
 use crate::{
     app::{DiscordApp, direct::friends::failure_text},
-    discord::{Error, Event, Session},
+    discord::{Error, Event, Session, model::RelationshipLocation},
 };
 
 impl DiscordApp {
@@ -126,12 +126,17 @@ impl DiscordApp {
         );
     }
 
-    pub(crate) fn unblock_user(&mut self, user_id: u64, cx: &mut Context<Self>) {
+    pub(crate) fn unblock_user(
+        &mut self,
+        user_id: u64,
+        location: Option<RelationshipLocation>,
+        cx: &mut Context<Self>,
+    ) {
         self.run_dm_action(
             "unblock user",
             move |session| async move {
                 session
-                    .unblock_user(user_id)
+                    .unblock_user(user_id, location)
                     .await
                     .map_err(|error| (user_id, error))
             },
@@ -205,20 +210,55 @@ impl DiscordApp {
         &mut self,
         channel_id: u64,
         recipients: Vec<u64>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.run_dm_action(
-            "add group recipient",
-            move |session| async move {
-                for user_id in recipients {
-                    if let Err(error) = session.add_group_recipient(channel_id, user_id).await {
-                        return Err((user_id, error));
+        let Some(session) = self.session.clone().filter(|_| self.live) else {
+            return;
+        };
+        self.dm_error = None;
+        cx.notify();
+        let request = Tokio::spawn(cx, async move {
+            let mut target = channel_id;
+            let mut created = None;
+            for user_id in recipients {
+                match session.add_group_recipient(target, user_id).await {
+                    Ok(Some(group)) => {
+                        target = group.id;
+                        created = Some(group);
                     }
+                    Ok(None) => {}
+                    Err(error) => return (created, Some((user_id, error))),
                 }
-                Ok(())
-            },
-            cx,
-        );
+            }
+            (created, None)
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = request.await;
+            this.update_in(cx, |app, window, cx| {
+                match result {
+                    Ok((created, failure)) => {
+                        if let Some(group) = created {
+                            let group_id = group.id;
+                            let change = app.store.apply(Event::ChannelUpsert(Box::new(group)));
+                            app.apply_change(change, window, cx);
+                            app.select_dm(group_id, window, cx);
+                        }
+                        if let Some((user_id, error)) = failure {
+                            log::warn!("Could not add group recipient: {error}");
+                            app.dm_error = Some((
+                                user_id,
+                                failure_text(&error, "Discord refused this.").to_owned(),
+                            ));
+                        }
+                    }
+                    Err(error) => log::warn!("add group recipient task failed: {error}"),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub(crate) fn remove_group_recipient(

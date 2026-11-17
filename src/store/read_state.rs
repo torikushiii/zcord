@@ -97,7 +97,14 @@ impl Store {
         if message_id == 0 || message_id > previous {
             return None;
         }
-        let cursor = message_id - 1;
+        let cursor =
+            self.network_channel(channel_id)
+                .and_then(|channel| {
+                    channel.messages.iter().rev().find(|message| {
+                        message.delivery == Delivery::Sent && message.id < message_id
+                    })
+                })
+                .map_or(message_id - 1, |message| message.id);
         let private = self.private_locations.contains_key(&channel_id);
         let mut count = if private {
             0
@@ -142,7 +149,7 @@ impl Store {
         }
     }
 
-    pub fn unread_acks(&self, guild_id: u64, _now_snowflake: u64) -> Vec<(u64, u64)> {
+    pub fn unread_acks(&self, guild_id: u64, now_snowflake: u64) -> Vec<(u64, u64, u8)> {
         let Some(source) = &self.source else {
             return Vec::new();
         };
@@ -153,23 +160,33 @@ impl Store {
         else {
             return Vec::new();
         };
-        guild
+        let user_id = source.user.id;
+        let unread = |channel: &model::Channel| {
+            let state = read_state(source, &self.read_states, channel.id);
+            channel_unread(channel, state) || state.is_some_and(|state| state.mention_count > 0)
+        };
+        let channels = guild
             .channels
             .iter()
             .flatten()
+            .filter(|channel| discord::can_view(guild, channel, user_id))
             .filter_map(|channel| {
                 let message_id = match channel.kind {
-                    Some(0 | 5) => channel.last_message_id.flatten()?,
-                    Some(15 | 16) => self.latest_forum_post_id(channel.id)?,
+                    Some(0 | 2 | 5 | 13) if unread(channel) => channel.last_message_id.flatten()?,
+                    Some(15 | 16) => now_snowflake,
                     _ => return None,
                 };
-                let unread =
-                    channel_unread(channel, read_state(source, &self.read_states, channel.id))
-                        || (matches!(channel.kind, Some(15 | 16))
-                            && self.forum_new_post_count(channel.id) > 0);
-                (discord::can_view(guild, channel, source.user.id) && unread)
-                    .then_some((channel.id, message_id))
-            })
+                Some((channel.id, message_id, 0))
+            });
+        let threads = guild
+            .threads
+            .iter()
+            .flatten()
+            .filter(|thread| thread.member.is_some() && unread(thread))
+            .filter_map(|thread| Some((thread.id, thread.last_message_id.flatten()?, 0)));
+        channels
+            .chain(threads)
+            .chain(guild_event_ack(source, guild))
             .collect()
     }
 
@@ -202,10 +219,29 @@ impl Store {
                 mention_count: 0,
                 kind: 0,
                 last_pin_timestamp: None,
+                flags: None,
             });
             index
         });
         source.read_state.entries.get_mut(index)
+    }
+
+    pub fn take_ack_flags(&mut self, channel_id: u64) -> Option<u32> {
+        let kind = self
+            .source
+            .as_ref()
+            .and_then(|source| self.source_channels.get(&channel_id)?.get(source))?
+            .kind;
+        let expected = match kind {
+            Some(10..=12) => 2,
+            Some(1 | 3) => 0,
+            _ => 1,
+        };
+        let state = self.read_state_mut(channel_id, 0)?;
+        (state.flags != Some(expected)).then(|| {
+            state.flags = Some(expected);
+            expected
+        })
     }
 
     pub(super) fn is_private_conversation(&self, channel_id: u64) -> bool {
@@ -282,4 +318,30 @@ impl Store {
             post.unread = latest > read_last;
         }
     }
+}
+
+const GUILD_EVENT_READ_STATE: u8 = 3;
+
+fn guild_event_ack(source: &model::Ready, guild: &model::Guild) -> Option<(u64, u64, u8)> {
+    let latest = guild
+        .guild_scheduled_events
+        .iter()
+        .flatten()
+        .map(|event| event.id)
+        .max()?;
+    let acked = source
+        .read_state
+        .entries
+        .iter()
+        .find(|state| state.kind == GUILD_EVENT_READ_STATE && state.id == guild.id)
+        .and_then(|state| state.last_message_id)
+        .or_else(|| {
+            let joined = chrono::DateTime::parse_from_rfc3339(guild.joined_at.as_deref()?).ok()?;
+            let since_epoch = u64::try_from(joined.timestamp_millis())
+                .ok()?
+                .checked_sub(crate::app::DISCORD_EPOCH_MS)?;
+            Some(since_epoch << 22)
+        })
+        .unwrap_or(0);
+    (latest > acked).then_some((guild.id, latest, GUILD_EVENT_READ_STATE))
 }

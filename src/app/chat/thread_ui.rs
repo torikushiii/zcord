@@ -6,7 +6,7 @@ use super::actions::{menu_divider, menu_entry};
 use super::*;
 use crate::{
     app::{guilds::forum::relative_time, titlebar},
-    discord::Error,
+    discord::{Error, model::ThreadFollowLocation},
 };
 
 const NAME_LIMIT: usize = 100;
@@ -112,12 +112,18 @@ impl DiscordApp {
         dialog.error = None;
         let (channel_id, message_id, private) =
             (dialog.channel_id, dialog.message_id, dialog.private);
+        let announcement = self.store.is_announcement_channel(channel_id);
+        let archive = self.store.default_auto_archive_duration(channel_id);
         let request = Tokio::spawn(cx, async move {
             match message_id {
-                Some(message_id) => session.create_thread(channel_id, message_id, &name).await,
+                Some(message_id) => {
+                    session
+                        .create_thread(channel_id, message_id, &name, announcement, archive)
+                        .await
+                }
                 None => {
                     session
-                        .create_standalone_thread(channel_id, &name, private)
+                        .create_standalone_thread(channel_id, &name, private, announcement, archive)
                         .await
                 }
             }
@@ -177,6 +183,7 @@ impl DiscordApp {
         &mut self,
         thread_id: u64,
         joined: bool,
+        location: ThreadFollowLocation,
         cx: &mut Context<Self>,
     ) {
         let Some(session) = self.session.clone().filter(|_| self.live) else {
@@ -184,9 +191,9 @@ impl DiscordApp {
         };
         let call: ThreadCall = Box::pin(async move {
             if joined {
-                session.leave_thread(thread_id).await
+                session.leave_thread(thread_id, location).await
             } else {
-                session.join_thread(thread_id).await
+                session.join_thread(thread_id, location).await
             }
         });
         self.run_thread_call(if joined { "leave" } else { "join" }, call, cx);
@@ -277,7 +284,7 @@ pub(in crate::app) fn thread_menu(app: &DiscordApp) -> Option<AnyElement> {
             text,
             move |app, _, _, cx| {
                 app.thread_menu = None;
-                app.join_or_leave_thread(id, joined, cx);
+                app.join_or_leave_thread(id, joined, ThreadFollowLocation::ToolbarOverflow, cx);
             },
         ))
         .when(manage, |this| {

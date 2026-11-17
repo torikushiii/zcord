@@ -51,7 +51,13 @@ impl DiscordApp {
                     return;
                 };
                 app.activity_feed.fetching = true;
-                let request = Tokio::spawn(cx, async move { session.content_inbox().await });
+                let refresh_token = app
+                    .store
+                    .content_inbox()
+                    .and_then(|inbox| inbox.refresh_token.clone());
+                let request = Tokio::spawn(cx, async move {
+                    session.content_inbox(refresh_token.as_deref()).await
+                });
                 cx.spawn(async move |this, cx| {
                     let result = request.await;
                     this.update(cx, |app, cx| app.activity_inbox_result(result, cx))

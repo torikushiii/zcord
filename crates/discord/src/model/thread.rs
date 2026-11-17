@@ -62,6 +62,12 @@ pub struct ThreadMemberUpdate {
     pub member: Option<Member>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThreadFollowLocation {
+    ToolbarOverflow,
+    ForumToolbar,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct ThreadSettings {
     #[serde(skip_serializing_if = "Option::is_none")]

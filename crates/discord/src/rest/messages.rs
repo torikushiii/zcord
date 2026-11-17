@@ -1,5 +1,5 @@
 use super::*;
-use crate::{ForumQuery, ForumSort, SearchOutcome, SearchQuery, SearchScope};
+use crate::{ForumQuery, SearchOutcome, SearchQuery, SearchScope};
 use futures::Stream;
 use reqwest::{
     Body,
@@ -14,30 +14,30 @@ const UPLOAD_STALL: Duration = Duration::from_secs(60);
 const UPLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const CHAT_INPUT_CONTEXT: &str = "eyJsb2NhdGlvbiI6ImNoYXRfaW5wdXQifQ==";
 const FORWARD_CONTEXT: &str = "eyJsb2NhdGlvbiI6ImZvcndhcmRpbmcifQ==";
+const RETRY_CONTEXT: &str = "eyJsb2NhdGlvbiI6ImV4cGxpY2l0X3JldHJ5In0=";
+const MEMBER_LIST_CONTEXT: &str = "eyJsb2NhdGlvbiI6ImNvbnRlbnRfaW52ZW50b3J5X21lbWJlcmxpc3QifQ==";
 
 pub(super) fn history_query(anchor: Anchor, limit: usize) -> Vec<(&'static str, String)> {
-    let mut query = Vec::new();
+    let limit = ("limit", limit.to_string());
     match anchor {
-        Anchor::Before(id) => query.push(("before", id.to_string())),
-        Anchor::After(id) => query.push(("after", id.to_string())),
-        Anchor::Around(id) => query.push(("around", id.to_string())),
-        Anchor::Latest => {}
+        Anchor::Before(id) => vec![("before", id.to_string()), limit],
+        Anchor::After(id) => vec![("after", id.to_string()), limit],
+        Anchor::Around(id) => vec![limit, ("around", id.to_string())],
+        Anchor::Latest => vec![limit],
     }
-    query.push(("limit", limit.to_string()));
-    query
 }
 
 pub(super) fn forum_search_query(query: &ForumQuery) -> Vec<(&'static str, String)> {
-    let sort_by = match query.sort {
-        ForumSort::Activity => "last_message_time",
-        ForumSort::Created => "creation_time",
-    };
     let mut params = vec![
-        ("sort_by", sort_by.to_owned()),
+        ("archived", "true".to_owned()),
+        ("sort_by", "last_message_time".to_owned()),
         ("sort_order", "desc".to_owned()),
         ("limit", "25".to_owned()),
     ];
-    params.extend(query.tags.iter().map(|tag| ("tag", tag.to_string())));
+    if !query.tags.is_empty() {
+        let tags: Vec<String> = query.tags.iter().map(u64::to_string).collect();
+        params.push(("tag", tags.join(",")));
+    }
     let tag_setting = if query.match_all {
         "match_all"
     } else {
@@ -75,7 +75,6 @@ struct ContentInventoryEntryBody<'a> {
 #[derive(Serialize)]
 struct AttachmentBody<'a> {
     id: String,
-    description: &'a str,
     filename: &'a str,
     uploaded_filename: &'a str,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -89,8 +88,6 @@ struct MessageReferenceBody {
     guild_id: Option<String>,
     channel_id: String,
     message_id: String,
-    #[serde(rename = "type")]
-    kind: u8,
 }
 
 // `parse` must stay explicit: with any allowed_mentions object present, an omitted
@@ -104,40 +101,43 @@ struct AllowedMentions {
 #[derive(Serialize)]
 struct EditMessage<'a> {
     content: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    allowed_mentions: Option<AllowedMentions>,
 }
+
+const QUIET_REPLY: AllowedMentions = AllowedMentions {
+    parse: ["users", "roles", "everyone"],
+    replied_user: false,
+};
 
 pub(super) fn message_body<'a>(
     guild_id: Option<u64>,
     channel_id: u64,
     message: &'a OutgoingMessage,
 ) -> CreateMessage<'a> {
+    let silent = super::threads::strip_silent(&message.content);
     CreateMessage {
         mobile_network_type: "unknown",
-        content: &message.content,
+        content: silent.unwrap_or(&message.content),
         nonce: message.nonce.to_string(),
         tts: false,
         message_reference: message.reply.as_ref().map(|reply| MessageReferenceBody {
             guild_id: guild_id.map(|id| id.to_string()),
             channel_id: channel_id.to_string(),
             message_id: reply.message_id.to_string(),
-            kind: 0,
         }),
         allowed_mentions: message
             .reply
             .as_ref()
             .filter(|reply| !reply.mention)
-            .map(|_| AllowedMentions {
-                parse: ["users", "roles", "everyone"],
-                replied_user: false,
-            }),
-        flags: 0,
+            .map(|_| QUIET_REPLY),
+        flags: silent.map_or(0, |_| super::threads::SUPPRESS_NOTIFICATIONS),
         attachments: message
             .attachments
             .iter()
             .enumerate()
             .map(|(index, attachment)| AttachmentBody {
                 id: index.to_string(),
-                description: "",
                 filename: &attachment.filename,
                 uploaded_filename: &attachment.uploaded_filename,
                 is_spoiler: attachment.spoiler,
@@ -247,6 +247,7 @@ pub(super) fn delete_upload_url(uploaded_filename: &str) -> String {
 
 pub(crate) fn upload_client() -> Result<Client, Error> {
     Client::builder()
+        .user_agent(properties::user_agent())
         .connect_timeout(UPLOAD_CONNECT_TIMEOUT)
         .build()
         .map_err(|_| Error::Network)
@@ -352,6 +353,8 @@ pub(super) async fn put_upload_watched(
 struct AckMessage {
     token: Option<String>,
     last_viewed: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    flags: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -380,7 +383,11 @@ fn reactions_url(channel_id: u64, message_id: u64, emoji: &str) -> String {
 }
 
 pub(super) fn reaction_url(channel_id: u64, message_id: u64, emoji: &str) -> String {
-    format!("{}/@me", reactions_url(channel_id, message_id, emoji))
+    format!("{}/%40me", reactions_url(channel_id, message_id, emoji))
+}
+
+pub(super) fn own_reaction_url(channel_id: u64, message_id: u64, emoji: &str) -> String {
+    format!("{}/0/%40me", reactions_url(channel_id, message_id, emoji))
 }
 
 impl Rest {
@@ -413,6 +420,9 @@ impl Rest {
                     .header(REFERER, &referer)
             })
             .await?;
+        if response.status() == reqwest::StatusCode::ACCEPTED {
+            return Err(Error::Http(202));
+        }
         response.json().await.map_err(|_| Error::Decode)
     }
 
@@ -421,31 +431,25 @@ impl Rest {
         scope: SearchScope,
         query: &SearchQuery,
     ) -> Result<SearchOutcome, Error> {
-        let (url, referer) = match scope {
-            SearchScope::Guild(guild_id) => (
-                format!("https://discord.com/api/v9/guilds/{guild_id}/messages/search"),
-                format!("https://discord.com/channels/{guild_id}"),
-            ),
-            SearchScope::Channel(channel_id) => (
-                format!("https://discord.com/api/v9/channels/{channel_id}/messages/search"),
-                "https://discord.com/channels/@me".to_owned(),
-            ),
-            SearchScope::Dms => (
-                "https://discord.com/api/v9/users/@me/messages/search/tabs".to_owned(),
-                "https://discord.com/channels/@me".to_owned(),
-            ),
+        let url = match scope {
+            SearchScope::Guild(guild_id) => {
+                format!("https://discord.com/api/v9/guilds/{guild_id}/messages/search")
+            }
+            SearchScope::Channel(channel_id) => {
+                format!("https://discord.com/api/v9/channels/{channel_id}/messages/search")
+            }
+            SearchScope::Dms => {
+                "https://discord.com/api/v9/users/@me/messages/search/tabs".to_owned()
+            }
         };
         let params = crate::search::search_params(scope, query);
         let body = crate::search::dm_search_body(query);
         let response = self
-            .send(|| {
-                let request = match scope {
-                    SearchScope::Dms => self.client.post(&url).json(&body),
-                    SearchScope::Guild(_) | SearchScope::Channel(_) => {
-                        self.client.get(&url).query(&params)
-                    }
-                };
-                request.header(REFERER, &referer)
+            .send(|| match scope {
+                SearchScope::Dms => self.client.post(&url).json(&body),
+                SearchScope::Guild(_) | SearchScope::Channel(_) => {
+                    self.client.get(&url).query(&params)
+                }
             })
             .await;
         parse_search_response(response, scope).await
@@ -458,9 +462,30 @@ impl Rest {
         anchor: Anchor,
         limit: usize,
     ) -> Result<Vec<model::Message>, Error> {
+        let query = history_query(anchor, limit);
+        self.fetch_messages_query(guild_id, channel_id, query).await
+    }
+
+    pub(crate) async fn fetch_inbox_messages(
+        &self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+    ) -> Result<Vec<model::Message>, Error> {
+        let query = vec![
+            ("limit", "50".to_owned()),
+            ("feature", "notifications-inbox".to_owned()),
+        ];
+        self.fetch_messages_query(guild_id, channel_id, query).await
+    }
+
+    async fn fetch_messages_query(
+        &self,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        query: Vec<(&'static str, String)>,
+    ) -> Result<Vec<model::Message>, Error> {
         let referer = referer(guild_id, channel_id);
         let url = format!("https://discord.com/api/v9/channels/{channel_id}/messages");
-        let query = history_query(anchor, limit);
         let response = self
             .send(|| {
                 self.client
@@ -486,6 +511,7 @@ impl Rest {
         channel_id: u64,
         message_id: u64,
         emoji: &str,
+        location: model::ReactionLocation,
     ) -> Result<(), Error> {
         let referer = referer(guild_id, channel_id);
         let url = reaction_url(channel_id, message_id, emoji);
@@ -493,7 +519,7 @@ impl Rest {
             self.client
                 .put(&url)
                 .header(REFERER, &referer)
-                .query(&[("location", "Message"), ("type", "0")])
+                .query(&[("location", location.as_str()), ("type", "0")])
         })
         .await?;
         Ok(())
@@ -505,14 +531,15 @@ impl Rest {
         channel_id: u64,
         message_id: u64,
         emoji: &str,
+        location: model::ReactionLocation,
     ) -> Result<(), Error> {
         let referer = referer(guild_id, channel_id);
-        let url = reaction_url(channel_id, message_id, emoji);
+        let url = own_reaction_url(channel_id, message_id, emoji);
         self.send(|| {
             self.client
                 .delete(&url)
                 .header(REFERER, &referer)
-                .query(&[("location", "Message"), ("type", "0")])
+                .query(&[("location", location.as_str()), ("burst", "false")])
         })
         .await?;
         Ok(())
@@ -528,11 +555,9 @@ impl Rest {
     ) -> Result<Vec<model::User>, Error> {
         let referer = referer(guild_id, channel_id);
         let url = reactions_url(channel_id, message_id, emoji);
-        let mut query = vec![
-            ("limit", page.limit.to_string()),
-            ("type", u8::from(page.burst).to_string()),
-        ];
+        let mut query = vec![("limit", page.limit.to_string())];
         query.extend(page.after.map(|after| ("after", after.to_string())));
+        query.push(("type", u8::from(page.burst).to_string()));
         let response = self
             .send(|| {
                 self.client
@@ -546,26 +571,32 @@ impl Rest {
 
     pub async fn ack_bulk(
         &self,
-        guild_id: Option<u64>,
-        channel_id: u64,
-        acks: &[(u64, u64)],
+        view: Option<(Option<u64>, u64)>,
+        acks: &[(u64, u64, u8)],
     ) -> Result<(), Error> {
-        let referer = referer(guild_id, channel_id);
-        for chunk in acks.chunks(ACK_BULK_LIMIT) {
+        let referer = view.map(|(guild_id, channel_id)| referer(guild_id, channel_id));
+        for (index, chunk) in acks.chunks(ACK_BULK_LIMIT).enumerate() {
+            if index > 0 {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
             let read_states: Vec<_> = chunk
                 .iter()
-                .map(|(channel_id, message_id)| ReadStateAck {
+                .map(|&(channel_id, message_id, read_state_type)| ReadStateAck {
                     channel_id: channel_id.to_string(),
                     message_id: message_id.to_string(),
-                    read_state_type: 0,
+                    read_state_type,
                 })
                 .collect();
             let body = AckBulk { read_states };
             self.send(|| {
-                self.client
+                let request = self
+                    .client
                     .post("https://discord.com/api/v9/read-states/ack-bulk")
-                    .header(REFERER, &referer)
-                    .json(&body)
+                    .json(&body);
+                match &referer {
+                    Some(referer) => request.header(REFERER, referer),
+                    None => request,
+                }
             })
             .await?;
         }
@@ -603,12 +634,19 @@ impl Rest {
         let referer = referer(guild_id, channel_id);
         let url = format!("https://discord.com/api/v9/channels/{channel_id}/messages");
         let body = message_body(guild_id, channel_id, message);
+        let context = if message.retry {
+            RETRY_CONTEXT
+        } else if message.content_inventory_entry.is_some() {
+            MEMBER_LIST_CONTEXT
+        } else {
+            CHAT_INPUT_CONTEXT
+        };
         let response = self
             .send(|| {
                 self.client
                     .post(&url)
                     .header(REFERER, &referer)
-                    .header("x-context-properties", CHAT_INPUT_CONTEXT)
+                    .header("x-context-properties", context)
                     .json(&body)
             })
             .await?;
@@ -623,18 +661,15 @@ impl Rest {
         source_guild: Option<u64>,
         source_channel: u64,
         message_id: u64,
-        target_guild: Option<u64>,
         target_channel: u64,
         nonce: u64,
     ) -> Result<model::Message, Error> {
-        let referer = referer(target_guild, target_channel);
         let url = format!("https://discord.com/api/v9/channels/{target_channel}/messages");
         let body = forward_body(source_guild, source_channel, message_id, nonce);
         let response = self
             .send(|| {
                 self.client
                     .post(&url)
-                    .header(REFERER, &referer)
                     .header("x-context-properties", FORWARD_CONTEXT)
                     .json(&body)
             })
@@ -652,7 +687,6 @@ impl Rest {
         content: &str,
         nonce: u64,
     ) -> Result<model::Message, Error> {
-        let referer = referer(target_guild, target_channel);
         let url = format!("https://discord.com/api/v9/channels/{target_channel}/messages");
         let message = OutgoingMessage {
             content: content.to_owned(),
@@ -661,13 +695,13 @@ impl Rest {
             attachments: Vec::new(),
             sticker_ids: Vec::new(),
             content_inventory_entry: None,
+            retry: false,
         };
         let body = message_body(target_guild, target_channel, &message);
         let response = self
             .send(|| {
                 self.client
                     .post(&url)
-                    .header(REFERER, &referer)
                     .header("x-context-properties", FORWARD_CONTEXT)
                     .json(&body)
             })
@@ -684,10 +718,14 @@ impl Rest {
         channel_id: u64,
         message_id: u64,
         content: &str,
+        quiet_reply: bool,
     ) -> Result<model::MessageUpdate, Error> {
         let referer = referer(guild_id, channel_id);
         let url = format!("https://discord.com/api/v9/channels/{channel_id}/messages/{message_id}");
-        let body = EditMessage { content };
+        let body = EditMessage {
+            content,
+            allowed_mentions: quiet_reply.then_some(QUIET_REPLY),
+        };
         let response = self
             .send(|| {
                 self.client
@@ -728,11 +766,7 @@ impl Rest {
             .header(REFERER, &referer)
             .build()
             .map_err(|_| Error::Network)?;
-        let Some(permit) = self.limits.try_acquire(Route::of(&request))? else {
-            return Ok(false);
-        };
-        self.execute(request, permit).await?;
-        Ok(true)
+        self.try_send(request).await
     }
 
     pub async fn ack_message(
@@ -741,6 +775,7 @@ impl Rest {
         channel_id: u64,
         message_id: u64,
         days_since_discord_epoch: u32,
+        flags: Option<u32>,
     ) -> Result<(), Error> {
         let referer = referer(guild_id, channel_id);
         let url =
@@ -748,6 +783,7 @@ impl Rest {
         let body = AckMessage {
             token: None,
             last_viewed: days_since_discord_epoch,
+            flags,
         };
         self.send(|| self.client.post(&url).header(REFERER, &referer).json(&body))
             .await?;

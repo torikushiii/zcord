@@ -28,22 +28,8 @@ impl Rest {
         decode_settings(&value)
     }
 
-    pub async fn update_status_settings(
-        &self,
-        proto: &[u8],
-        version: u64,
-    ) -> Result<Vec<u8>, Error> {
-        self.update_preloaded_settings(proto, version).await
-    }
-
-    pub async fn update_preloaded_settings(
-        &self,
-        proto: &[u8],
-        version: u64,
-    ) -> Result<Vec<u8>, Error> {
-        let body = serde_json::json!({
-            "settings": STANDARD.encode(proto), "required_data_version": version
-        });
+    pub async fn update_preloaded_settings(&self, proto: &[u8]) -> Result<Vec<u8>, Error> {
+        let body = serde_json::json!({"settings": STANDARD.encode(proto)});
         let response = self
             .send(|| {
                 self.client

@@ -7,29 +7,16 @@ use std::{
 
 pub(super) const SILENCE: [u8; 3] = [0xF8, 0xFF, 0xFE];
 const RETIRED_FOR: Duration = Duration::from_secs(10);
+pub(super) const REFUSED_DOWNGRADE: u16 = 4804;
+pub(super) const REFUSED_DOWNGRADE_REASON: &str = "Refused DAVE protocol downgrade";
+pub(super) const REPEATED_INVALID_MLS: u16 = 4803;
+pub(super) const REPEATED_INVALID_MLS_REASON: &str = "Repeated invalid MLS commit/welcome messages";
+pub(super) const INVALID_MLS_LIMIT: u8 = 5;
 
 pub(super) enum EncryptOutcome {
-    Plaintext(Vec<u8>),
     Encrypted(Vec<u8>),
     NotReady,
     Failed,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum EncryptPlan {
-    Plaintext,
-    Encrypt,
-    Drop,
-}
-
-fn encryption_plan(version: u16, ready: bool) -> EncryptPlan {
-    if version == 0 {
-        EncryptPlan::Plaintext
-    } else if ready {
-        EncryptPlan::Encrypt
-    } else {
-        EncryptPlan::Drop
-    }
 }
 
 pub(super) struct Dave {
@@ -155,25 +142,16 @@ impl Dave {
     }
 
     pub fn prepare_transition(&mut self, version: u16, transition_id: u16) -> bool {
-        self.pending.insert(transition_id, version);
         if version == 0 {
-            self.passthrough = true;
-            self.passthrough_until = None;
-            self.session.set_passthrough_mode(true, Some(120));
+            return false;
         }
+        self.pending.insert(transition_id, version);
         true
     }
 
     pub fn execute_transition(&mut self, transition_id: u16) -> Option<Option<String>> {
         let version = self.pending.remove(&transition_id)?;
         let previous = self.active_version;
-        if version == 0 {
-            self.version = 0;
-            self.active_version = 0;
-            self.passthrough = true;
-            self.passthrough_until = None;
-            return Some(None);
-        }
         if version != self.version {
             self.version = version;
         }
@@ -214,23 +192,22 @@ impl Dave {
     }
 
     pub fn encrypt(&mut self, packet: &[u8]) -> EncryptOutcome {
-        match encryption_plan(self.version, self.can_encrypt()) {
-            EncryptPlan::Plaintext => EncryptOutcome::Plaintext(packet.to_vec()),
-            EncryptPlan::Drop => EncryptOutcome::NotReady,
-            EncryptPlan::Encrypt => match self
-                .media_session()
-                .map(|session| session.encrypt_opus(packet))
-                .unwrap_or(Err(davey::errors::EncryptError::NotReady))
-            {
-                Ok(encrypted) => {
-                    if !self.encrypting_logged {
-                        self.encrypting_logged = true;
-                        log::info!("DAVE encrypting: version={} ready=true", self.version);
-                    }
-                    EncryptOutcome::Encrypted(encrypted.into_owned())
+        if !self.can_encrypt() {
+            return EncryptOutcome::NotReady;
+        }
+        match self
+            .media_session()
+            .map(|session| session.encrypt_opus(packet))
+            .unwrap_or(Err(davey::errors::EncryptError::NotReady))
+        {
+            Ok(encrypted) => {
+                if !self.encrypting_logged {
+                    self.encrypting_logged = true;
+                    log::info!("DAVE encrypting: version={} ready=true", self.version);
                 }
-                Err(_) => EncryptOutcome::Failed,
-            },
+                EncryptOutcome::Encrypted(encrypted.into_owned())
+            }
+            Err(_) => EncryptOutcome::Failed,
         }
     }
 
@@ -244,9 +221,6 @@ impl Dave {
     pub fn decrypt(&mut self, user_id: u64, media: MediaType, packet: &[u8]) -> Option<Vec<u8>> {
         if packet == SILENCE {
             return Some(packet.to_vec());
-        }
-        if self.version == 0 {
-            return self.passthrough.then(|| packet.to_vec());
         }
         let passthrough = self.passthrough_allowed();
         if self
@@ -292,8 +266,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_one_starts_not_ready_then_downgrade_is_plaintext() {
+    fn version_one_starts_not_ready_and_refuses_downgrade() {
         let mut dave = Dave::new(1, 42, 99).unwrap();
+        assert!(Dave::new(0, 42, 99).is_none());
         assert!(Dave::new(2, 42, 99).is_none());
         assert!(matches!(dave.encrypt(&SILENCE), EncryptOutcome::NotReady));
         assert_eq!(
@@ -303,14 +278,12 @@ mod tests {
         assert!(matches!(dave.encrypt(&[1, 2, 3]), EncryptOutcome::NotReady));
         assert!(dave.decrypt(7, MediaType::AUDIO, &[1, 2, 3]).is_none());
         assert!(dave.execute_transition(9).is_none());
-        assert!(dave.prepare_transition(0, 4));
-        assert_eq!(dave.execute_transition(4), Some(None));
-        assert_eq!(dave.version(), 0);
-        assert!(matches!(
-            dave.encrypt(&[4, 5, 6]),
-            EncryptOutcome::Plaintext(_)
-        ));
-        assert!(dave.decrypt(7, MediaType::AUDIO, &[4, 5, 6]).is_some());
+        assert!(!dave.prepare_transition(0, 4));
+        assert!(dave.execute_transition(4).is_none());
+        assert_eq!(dave.version(), 1);
+        assert!(matches!(dave.encrypt(&[4, 5, 6]), EncryptOutcome::NotReady));
+        assert!(dave.decrypt(7, MediaType::AUDIO, &[4, 5, 6]).is_none());
+        assert!(dave.prepare_epoch(0, 1).is_none());
     }
 
     #[test]
@@ -329,13 +302,5 @@ mod tests {
         assert!(dave.execute_transition(7).is_none());
         assert_eq!(dave.version(), 2);
         assert!(matches!(dave.encrypt(&[1, 2, 3]), EncryptOutcome::NotReady));
-    }
-
-    #[test]
-    fn encryption_plan_follows_version_and_readiness() {
-        assert_eq!(encryption_plan(0, false), EncryptPlan::Plaintext);
-        assert_eq!(encryption_plan(0, true), EncryptPlan::Plaintext);
-        assert_eq!(encryption_plan(1, true), EncryptPlan::Encrypt);
-        assert_eq!(encryption_plan(1, false), EncryptPlan::Drop);
     }
 }

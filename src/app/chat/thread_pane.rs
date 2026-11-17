@@ -357,9 +357,15 @@ impl DiscordApp {
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;
         };
+        let joined = self
+            .store
+            .thread_row_by_id(thread_id)
+            .is_some_and(|row| row.joined);
         self.store.set_thread_settings(thread_id, settings);
         let request = Tokio::spawn(cx, async move {
-            session.update_thread_settings(thread_id, settings).await
+            session
+                .update_thread_settings(thread_id, settings, joined)
+                .await
         });
         cx.spawn(async move |_, _| match request.await {
             Ok(Ok(())) => {}
@@ -665,7 +671,12 @@ fn post_menu(app: &DiscordApp, id: u64, notify_open: bool) -> impl IntoElement +
                         },
                         None,
                         Some(Box::new(move |app, _, cx| {
-                            app.join_or_leave_thread(id, joined, cx)
+                            app.join_or_leave_thread(
+                                id,
+                                joined,
+                                model::ThreadFollowLocation::ToolbarOverflow,
+                                cx,
+                            )
                         })),
                     ))
                     .child(item(
@@ -845,8 +856,15 @@ fn header(app: &DiscordApp, id: u64, name: &str) -> impl IntoElement + use<> {
                     .text_color(rgb(theme::strong()))
                     .hover(|style| style.bg(rgba(theme::hover())))
                     .on_click(move |_, _, cx| {
-                        join.update(cx, |app, cx| app.join_or_leave_thread(id, false, cx))
-                            .ok();
+                        join.update(cx, |app, cx| {
+                            app.join_or_leave_thread(
+                                id,
+                                false,
+                                model::ThreadFollowLocation::ToolbarOverflow,
+                                cx,
+                            )
+                        })
+                        .ok();
                     })
                     .child("Join Thread"),
             )

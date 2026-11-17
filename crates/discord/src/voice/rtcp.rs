@@ -1,3 +1,5 @@
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 pub(super) fn packet_type(packet: &[u8]) -> Option<u8> {
     let packet_type = *packet.get(1)?;
     (192..=223).contains(&packet_type).then_some(packet_type)
@@ -251,6 +253,22 @@ pub(super) struct SenderStats {
     pub rtp_timestamp: u32,
     pub packet_count: u32,
     pub octet_count: u32,
+}
+
+pub(super) fn ntp_now() -> (u32, u32) {
+    const UNIX_TO_NTP: u64 = 2_208_988_800;
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let fraction = (u64::from(elapsed.subsec_nanos()) << 32) / 1_000_000_000;
+    ((elapsed.as_secs() + UNIX_TO_NTP) as u32, fraction as u32)
+}
+
+pub(super) fn rtp_at(timestamp: u32, since_sent: Option<Duration>, khz: u128) -> u32 {
+    let Some(since_sent) = since_sent else {
+        return timestamp;
+    };
+    timestamp.wrapping_add((since_sent.as_micros() * khz / 1000) as u32)
 }
 
 pub(super) fn sender_report(sender: u32, stats: &SenderStats) -> Vec<u8> {

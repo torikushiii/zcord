@@ -68,12 +68,7 @@ impl Session {
         } else {
             duration.deadline_ms(now)?
         };
-        let proto = self
-            .rest(async |rest| rest.fetch_preloaded_settings().await)
-            .await?;
-        let version = settings_proto::data_version(&proto)
-            .map_err(|_| Error::Decode)?
-            .ok_or(Error::Decode)?;
+        let proto = self.preloaded_settings().await?;
         let patch = match expires_at {
             Some(expires_at) => {
                 settings_proto::status_patch_at(&proto, status.wire(), expires_at, Some(now))
@@ -85,7 +80,7 @@ impl Session {
             return Err(Error::Closed);
         }
         let proto = self
-            .rest(async |rest| rest.update_status_settings(&patch, version).await)
+            .rest(async |rest| rest.update_preloaded_settings(&patch).await)
             .await?;
         if self.status_generation()? != generation {
             return Err(Error::Closed);
@@ -122,12 +117,7 @@ impl Session {
         custom: Option<settings_proto::CustomStatus>,
     ) -> Result<settings_proto::StatusSettings, Error> {
         let generation = self.status_generation()?;
-        let proto = self
-            .rest(async |rest| rest.fetch_preloaded_settings().await)
-            .await?;
-        let version = settings_proto::data_version(&proto)
-            .map_err(|_| Error::Decode)?
-            .ok_or(Error::Decode)?;
+        let proto = self.preloaded_settings().await?;
         let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
         let patch = settings_proto::custom_status_patch(&proto, custom.as_ref(), now)
             .map_err(|_| Error::Decode)?;
@@ -135,7 +125,7 @@ impl Session {
             return Err(Error::Closed);
         }
         let proto = self
-            .rest(async |rest| rest.update_status_settings(&patch, version).await)
+            .rest(async |rest| rest.update_preloaded_settings(&patch).await)
             .await?;
         if self.status_generation()? != generation {
             return Err(Error::Closed);
@@ -179,12 +169,7 @@ impl Session {
         edited: settings_proto::ActivityPrivacy,
     ) -> Result<(), Error> {
         let generation = self.status_generation()?;
-        let proto = self
-            .rest(async |rest| rest.fetch_preloaded_settings().await)
-            .await?;
-        let version = settings_proto::data_version(&proto)
-            .map_err(|_| Error::Decode)?
-            .ok_or(Error::Decode)?;
+        let proto = self.preloaded_settings().await?;
         let latest = settings_proto::activity_privacy(&proto).map_err(|_| Error::Decode)?;
         let desired = edited.rebase(&base, &latest);
         let sharing_changed = latest.share_activity != desired.share_activity;
@@ -227,7 +212,7 @@ impl Session {
             return Err(Error::Closed);
         }
         let proto = self
-            .rest(async |rest| rest.update_preloaded_settings(&patch, version).await)
+            .rest(async |rest| rest.update_preloaded_settings(&patch).await)
             .await?;
         if self.status_generation()? != generation {
             return Err(Error::Closed);
@@ -277,9 +262,7 @@ impl Session {
         edited: settings_proto::TextImages,
     ) -> Result<(), Error> {
         let generation = self.status_generation()?;
-        let proto = self
-            .rest(async |rest| rest.fetch_preloaded_settings().await)
-            .await?;
+        let proto = self.preloaded_settings().await?;
         let latest = settings_proto::text_images(&proto).map_err(|_| Error::Decode)?;
         let desired = edited.rebase(&base, &latest);
         let patch =
@@ -319,9 +302,7 @@ impl Session {
         edit: ClientThemeEdit,
     ) -> Result<(), Error> {
         let generation = self.status_generation()?;
-        let proto = self
-            .rest(async |rest| rest.fetch_preloaded_settings().await)
-            .await?;
+        let proto = self.preloaded_settings().await?;
         let (client_theme, patch) = match edit {
             ClientThemeEdit::Keep => (
                 settings_proto::client_theme(&proto).map_err(|_| Error::Decode)?,
@@ -355,9 +336,7 @@ impl Session {
 
     pub async fn set_favorites_visible(&self, visible: bool) -> Result<(), Error> {
         let generation = self.status_generation()?;
-        let proto = self
-            .rest(async |rest| rest.fetch_preloaded_settings().await)
-            .await?;
+        let proto = self.preloaded_settings().await?;
         let patch =
             settings_proto::favorites_visible_patch(&proto, visible).map_err(|_| Error::Decode)?;
         let saved = self.save_preloaded_patch(generation, proto, patch).await?;
@@ -377,9 +356,7 @@ impl Session {
         channel: Option<settings_proto::FavoriteChannel>,
     ) -> Result<(), Error> {
         let generation = self.status_generation()?;
-        let proto = self
-            .rest(async |rest| rest.fetch_preloaded_settings().await)
-            .await?;
+        let proto = self.preloaded_settings().await?;
         let patch = settings_proto::favorite_channel_patch(&proto, channel_id, channel.clone())
             .map_err(|_| Error::Decode)?;
         let saved = self.save_preloaded_patch(generation, proto, patch).await?;
@@ -390,21 +367,35 @@ impl Session {
         Ok(())
     }
 
+    async fn preloaded_settings(&self) -> Result<Vec<u8>, Error> {
+        let cached = self
+            .inner
+            .presence
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .proto()
+            .map(<[u8]>::to_vec);
+        match cached {
+            Some(proto) => Ok(proto),
+            None => {
+                self.rest(async |rest| rest.fetch_preloaded_settings().await)
+                    .await
+            }
+        }
+    }
+
     async fn save_preloaded_patch(
         &self,
         generation: u64,
         proto: Vec<u8>,
         patch: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, Error> {
-        let version = settings_proto::data_version(&proto)
-            .map_err(|_| Error::Decode)?
-            .ok_or(Error::Decode)?;
         if self.status_generation()? != generation {
             return Err(Error::Closed);
         }
         let proto = match patch {
             Some(patch) => {
-                self.rest(async |rest| rest.update_preloaded_settings(&patch, version).await)
+                self.rest(async |rest| rest.update_preloaded_settings(&patch).await)
                     .await?
             }
             None => proto,
@@ -420,37 +411,24 @@ impl Session {
         Ok(proto)
     }
 
-    pub async fn gif_search(&self, provider: GifProvider, query: &str) -> Result<Vec<Gif>, Error> {
-        match provider {
-            GifProvider::Klipy => {
-                self.rest(async |rest| rest.fetch_gif_search(query).await)
-                    .await
-            }
-            GifProvider::Tenor => gifs::tenor_search(self.gif_client()?, query).await,
-            GifProvider::Giphy => gifs::giphy_search(self.gif_client()?, query).await,
-        }
+    pub async fn gif_search(&self, query: &str) -> Result<Vec<Gif>, Error> {
+        self.rest(async |rest| rest.fetch_gif_search(query).await)
+            .await
     }
 
-    pub async fn gif_trending(&self, provider: GifProvider) -> Result<Vec<Gif>, Error> {
-        match provider {
-            GifProvider::Klipy => {
-                self.rest(async |rest| rest.fetch_gif_trending().await)
-                    .await
-            }
-            GifProvider::Tenor => gifs::tenor_trending(self.gif_client()?).await,
-            GifProvider::Giphy => gifs::giphy_trending(self.gif_client()?).await,
-        }
+    pub async fn gif_trending(&self) -> Result<Vec<Gif>, Error> {
+        self.rest(async |rest| rest.fetch_gif_trending().await)
+            .await
     }
 
-    pub async fn gif_categories(&self, provider: GifProvider) -> Result<GifCategories, Error> {
-        match provider {
-            GifProvider::Klipy => {
-                self.rest(async |rest| rest.fetch_gif_categories().await)
-                    .await
-            }
-            GifProvider::Tenor => gifs::tenor_categories_request(self.gif_client()?).await,
-            GifProvider::Giphy => gifs::giphy_categories_request(self.gif_client()?).await,
-        }
+    pub async fn gif_categories(&self) -> Result<GifCategories, Error> {
+        self.rest(async |rest| rest.fetch_gif_categories().await)
+            .await
+    }
+
+    pub async fn select_gif(&self, id: &str, query: &str) -> Result<(), Error> {
+        self.rest(async |rest| rest.select_gif(id, query).await)
+            .await
     }
 
     pub async fn frecency_settings(&self) -> Result<Vec<u8>, Error> {
@@ -458,13 +436,16 @@ impl Session {
             .await
     }
 
-    pub async fn content_inbox(&self) -> Result<model::ContentInbox, Error> {
-        self.rest(async |rest| rest.fetch_content_inbox().await)
+    pub async fn content_inbox(
+        &self,
+        refresh_token: Option<&str>,
+    ) -> Result<model::ContentInbox, Error> {
+        self.rest(async |rest| rest.fetch_content_inbox(refresh_token).await)
             .await
     }
 
-    pub async fn update_frecency_settings(&self, proto: &[u8]) -> Result<Vec<u8>, Error> {
-        self.rest(async |rest| rest.update_frecency_settings(proto).await)
+    pub async fn update_frecency_settings(&self, patch: &[u8]) -> Result<Vec<u8>, Error> {
+        self.rest(async |rest| rest.update_frecency_settings(patch).await)
             .await
     }
 }

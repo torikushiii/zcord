@@ -388,6 +388,7 @@ pub struct Message {
     pub forward: Option<Forward>,
     pub forwardable: bool,
     pub mentions_me: bool,
+    pub mention_ids: Vec<u64>,
     pub uploads: Vec<PendingUpload>,
     pub thread: Option<MessageThread>,
     pub reference_id: Option<u64>,

@@ -53,7 +53,7 @@ impl Session {
             return Err(error);
         }
         let revision = self.cache().profile_revision;
-        let profile = match self
+        let mut profile = match self
             .rest(async |rest| {
                 rest.fetch_profile(user_id, guild_id, channel_id, kind)
                     .await
@@ -73,6 +73,19 @@ impl Session {
                 return Err(error);
             }
         };
+        let lists_friends = matches!(kind, ProfileKind::Modal | ProfileKind::Sidebar { .. });
+        if lists_friends && profile.mutual_friends_count.is_some_and(|count| count > 0) {
+            match self
+                .rest(async |rest| {
+                    rest.fetch_mutual_friends(user_id, guild_id, channel_id)
+                        .await
+                })
+                .await
+            {
+                Ok(friends) => profile.mutual_friends = Some(friends),
+                Err(error) => log::warn!("Could not load mutual friends of {user_id}: {error}"),
+            }
+        }
         let profile = Arc::new(profile);
         let mut cache = self.cache();
         if cache.profile_revision == revision {
@@ -185,8 +198,12 @@ impl Session {
         {
             return Err(error);
         }
+        let country = self.billing_country().await.unwrap_or_else(|error| {
+            log::debug!("Could not load the billing country: {error}");
+            None
+        });
         let wishlist = match self
-            .rest(async |rest| rest.fetch_wishlist(wishlist_id).await)
+            .rest(async |rest| rest.fetch_wishlist(wishlist_id, country.as_deref()).await)
             .await
         {
             Ok(wishlist) => wishlist,

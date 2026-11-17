@@ -1,6 +1,9 @@
 use super::*;
 use crate::text::{markdown, timestamp::format_timestamp};
 
+const UNREADS_ALL_MESSAGES: u64 = 1 << 10;
+const UNREADS_ONLY_MENTIONS: u64 = 1 << 9;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Alert {
     pub guild_id: Option<u64>,
@@ -133,6 +136,34 @@ impl Store {
             Some(model::NotificationLevel::Inherit) | None => model::NotificationLevel::All,
             Some(level) => *level,
         }
+    }
+
+    pub fn channel_notification_flags(
+        &self,
+        guild_id: u64,
+        channel_id: u64,
+        level: model::NotificationLevel,
+    ) -> Option<u64> {
+        if !self
+            .source
+            .as_ref()
+            .is_some_and(|ready| ready.use_new_notifications)
+        {
+            return None;
+        }
+        let flags = self
+            .notification_settings
+            .get(&Some(guild_id))
+            .and_then(|settings| override_for(settings, channel_id))
+            .map_or(0, |setting| setting.flags)
+            & !(UNREADS_ALL_MESSAGES | UNREADS_ONLY_MENTIONS);
+        Some(match level {
+            model::NotificationLevel::Inherit => flags,
+            model::NotificationLevel::All => flags | UNREADS_ALL_MESSAGES,
+            model::NotificationLevel::Mentions | model::NotificationLevel::Nothing => {
+                flags | UNREADS_ONLY_MENTIONS
+            }
+        })
     }
 
     pub fn guild_notification_flags(&self, guild_id: u64) -> model::GuildNotificationFlags {

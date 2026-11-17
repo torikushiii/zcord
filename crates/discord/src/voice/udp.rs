@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 pub(super) const DISCOVERY_LEN: usize = 74;
 const DISCOVERY_REQUEST: u16 = 1;
 const DISCOVERY_RESPONSE: u16 = 2;
@@ -28,6 +30,21 @@ pub(super) fn parse_discovery_response(packet: &[u8]) -> Option<(String, u16)> {
     }
     let port = u16::from_be_bytes([packet[72], packet[73]]);
     (port != 0).then_some((address, port))
+}
+
+pub(super) const PING_INTERVAL: Duration = Duration::from_secs(5);
+const PING_REQUEST: [u8; 4] = [0x13, 0x37, 0xCA, 0xFE];
+const PING_RESPONSE: [u8; 4] = [0x13, 0x37, 0xF0, 0x0D];
+
+pub(super) fn ping(sequence: u32) -> [u8; 8] {
+    let mut packet = [0; 8];
+    packet[..4].copy_from_slice(&PING_REQUEST);
+    packet[4..].copy_from_slice(&sequence.to_be_bytes());
+    packet
+}
+
+pub(super) fn is_ping(packet: &[u8]) -> bool {
+    packet.len() == 8 && (packet[..4] == PING_REQUEST || packet[..4] == PING_RESPONSE)
 }
 
 #[cfg(test)]
@@ -64,5 +81,15 @@ mod tests {
         malformed[0] = 1;
         assert!(parse_discovery_response(&malformed).is_none());
         assert!(parse_discovery_response(&response[..73]).is_none());
+    }
+
+    #[test]
+    fn ping_packets_are_recognised() {
+        let request = ping(7);
+        assert_eq!(request, [0x13, 0x37, 0xCA, 0xFE, 0, 0, 0, 7]);
+        assert!(is_ping(&request));
+        assert!(is_ping(&[0x13, 0x37, 0xF0, 0x0D, 0, 0, 0, 7]));
+        assert!(!is_ping(&request[..7]));
+        assert!(!is_ping(&discovery_request(1)));
     }
 }

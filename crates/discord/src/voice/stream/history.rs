@@ -125,7 +125,7 @@ mod tests {
         let resend = history
             .repair(77, &mut rtx_sequence, &mut rtx_transport, now)
             .unwrap();
-        assert_eq!(resend.header[1], 0x80 | 102);
+        assert_eq!(resend.header[1], 0x80 | crate::voice::gateway::RTX_PAYLOAD);
         assert_eq!(&resend.header[2..4], &500u16.to_be_bytes());
         assert_eq!(&resend.header[8..12], &77u32.to_be_bytes());
         assert_eq!(&resend.payload[..2], &[0, 1]);

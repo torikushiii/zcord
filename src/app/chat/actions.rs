@@ -2,6 +2,7 @@ use super::rows::is_system;
 use super::*;
 use crate::app::expressions::emoji_picker::{PickerTarget, choice_name, emoji_image};
 use crate::app::menu::PopupButton as _;
+use crate::discord::model::ReactionLocation;
 use crate::store::EmojiChoice;
 
 const BAR_REACTIONS: usize = 3;
@@ -134,6 +135,7 @@ fn quick_reaction(
     id: impl Into<ElementId>,
     message_id: u64,
     choice: EmojiChoice,
+    location: ReactionLocation,
     size: f32,
     cx: &App,
 ) -> Stateful<Div> {
@@ -155,7 +157,7 @@ fn quick_reaction(
             entity
                 .update(cx, |app, cx| {
                     app.close_message_menu(cx);
-                    app.react(message_id, &choice, cx);
+                    app.react(message_id, &choice, location, cx);
                 })
                 .ok();
         })
@@ -191,7 +193,7 @@ fn reaction_submenu(app: &DiscordApp, message_id: u64, cx: &App) -> Div {
                     entity
                         .update(cx, |app, cx| {
                             app.close_message_menu(cx);
-                            app.react(message_id, &choice, cx);
+                            app.react(message_id, &choice, ReactionLocation::ContextMenu, cx);
                         })
                         .ok();
                 })
@@ -215,7 +217,7 @@ fn reaction_submenu(app: &DiscordApp, message_id: u64, cx: &App) -> Div {
                 .update(cx, |app, cx| {
                     app.close_message_menu(cx);
                     app.toggle_emoji_picker(
-                        PickerTarget::Reaction(message_id),
+                        PickerTarget::Reaction(message_id, ReactionLocation::ContextMenu),
                         position,
                         window,
                         cx,
@@ -295,6 +297,7 @@ pub(super) fn message_actions(app: &DiscordApp, message: &Message, cx: &App) -> 
                 ("bar-reaction", id + index as u64),
                 id,
                 choice,
+                ReactionLocation::HoverBar,
                 22.,
                 cx,
             )
@@ -323,7 +326,12 @@ pub(super) fn message_actions(app: &DiscordApp, message: &Message, cx: &App) -> 
                 window.prevent_default();
                 react
                     .update(cx, |app, cx| {
-                        app.toggle_emoji_picker(PickerTarget::Reaction(id), position, window, cx)
+                        app.toggle_emoji_picker(
+                            PickerTarget::Reaction(id, ReactionLocation::ReactionPicker),
+                            position,
+                            window,
+                            cx,
+                        )
                     })
                     .ok();
             },
@@ -529,10 +537,18 @@ pub(in crate::app) fn message_menu(app: &DiscordApp, cx: &App) -> Option<AnyElem
         .take(MENU_REACTIONS)
         .enumerate()
         .map(|(index, choice)| {
-            quick_reaction(app, ("menu-reaction", index), id, choice, 24., cx)
-                .flex_1()
-                .h(rpx(40.))
-                .bg(rgba(theme::hover()))
+            quick_reaction(
+                app,
+                ("menu-reaction", index),
+                id,
+                choice,
+                ReactionLocation::ContextMenu,
+                24.,
+                cx,
+            )
+            .flex_1()
+            .h(rpx(40.))
+            .bg(rgba(theme::hover()))
         })
         .collect();
     let text = theme::text();
@@ -571,7 +587,12 @@ pub(in crate::app) fn message_menu(app: &DiscordApp, cx: &App) -> Option<AnyElem
                     "Add Reaction",
                     text,
                     move |app, position, window, cx| {
-                        app.toggle_emoji_picker(PickerTarget::Reaction(id), position, window, cx);
+                        app.toggle_emoji_picker(
+                            PickerTarget::Reaction(id, ReactionLocation::ContextMenu),
+                            position,
+                            window,
+                            cx,
+                        );
                     },
                 )
                 .relative()

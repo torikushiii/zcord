@@ -18,7 +18,7 @@ pub mod settings_proto;
 mod voice;
 
 use futures::channel::mpsc::{self, UnboundedReceiver};
-use gifs::{Gif, GifCategories, GifProvider};
+use gifs::{Gif, GifCategories};
 use std::{
     collections::{HashMap, HashSet},
     fmt,
@@ -40,7 +40,7 @@ pub use permissions::{
 };
 pub use presence::{SelfStatus, StatusDuration};
 pub use properties::user_agent;
-pub use properties::{IdentityCache, refresh_identity, set_identity_source};
+pub use properties::{IdentityCache, apply_identity, refresh_identity, set_identity_source};
 pub use voice::{
     AudioDevice, AudioDeviceKind, AudioDevices, FrameSlot, MicTest, ScreenSource, StreamFrame,
     StreamQuality, audio_devices,
@@ -93,8 +93,6 @@ enum Control {
 
 struct Inner {
     rest: Result<rest::Rest, Error>,
-    // Tenor/Giphy only: never carries the Discord session headers.
-    gif_client: Result<reqwest::Client, Error>,
     cache: Mutex<Cache>,
     requests: Mutex<HashMap<CacheRequest, Weak<AsyncMutex<()>>>>,
     sends: Mutex<HashMap<u64, tokio::sync::oneshot::Receiver<()>>>,
@@ -117,6 +115,7 @@ pub struct OutgoingMessage {
     pub attachments: Vec<OutgoingAttachment>,
     pub sticker_ids: Vec<u64>,
     pub content_inventory_entry: Option<Arc<serde_json::Value>>,
+    pub retry: bool,
 }
 
 pub struct OutgoingReply {
@@ -167,14 +166,10 @@ impl Session {
         token: String,
         runtime: &tokio::runtime::Handle,
     ) -> (Session, UnboundedReceiver<Event>) {
-        let token = Arc::new(Secret(token));
+        let token = Secret(token);
         let (sender, receiver) = mpsc::unbounded();
         let (control, shutdown) = watch::channel(Control::Running);
         let rest = rest::Rest::new(&token.0);
-        let gif_client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .map_err(|_| Error::Network);
         let (commands, command_receiver) = tokio::sync::mpsc::unbounded_channel();
         let generation = Arc::new(AtomicU64::new(0));
         let presence = Arc::new(Mutex::new(presence::Presence::default()));
@@ -187,7 +182,6 @@ impl Session {
         let session = Self {
             inner: Arc::new(Inner {
                 rest,
-                gif_client,
                 cache: Mutex::default(),
                 requests: Mutex::default(),
                 sends: Mutex::default(),
@@ -210,10 +204,6 @@ impl Session {
             presence,
         ));
         (session, receiver)
-    }
-
-    fn gif_client(&self) -> Result<&reqwest::Client, Error> {
-        self.inner.gif_client.as_ref().map_err(Clone::clone)
     }
 
     fn request_lock(&self, key: CacheRequest) -> Arc<AsyncMutex<()>> {
@@ -441,6 +431,8 @@ impl Session {
 pub enum ProfileKind {
     Popout,
     Modal,
+    Sidebar { bot: bool },
+    MessageRequest,
 }
 
 const PROFILE_TTL: Duration = Duration::from_secs(5 * 60);

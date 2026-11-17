@@ -20,6 +20,25 @@ impl Session {
         }
     }
 
+    pub fn set_view(&self, guild_id: u64, channel_id: u64) {
+        if let Ok(rest) = &self.inner.rest {
+            rest.set_view(guild_id, channel_id);
+        }
+    }
+
+    pub fn set_focused(&self, focused: bool) {
+        crate::properties::set_focused(focused);
+        let changed = self
+            .inner
+            .presence
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .set_focused(focused);
+        if changed {
+            self.command(commands::activity());
+        }
+    }
+
     pub fn shows_current_game(&self) -> bool {
         self.inner
             .presence

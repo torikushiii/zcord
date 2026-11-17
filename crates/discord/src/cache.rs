@@ -14,6 +14,7 @@ pub(super) enum CacheRequest {
     WidgetConfigs,
     WidgetConfig(u64),
     Badges(u64),
+    BillingCountry,
 }
 
 pub struct ProfileDetails {
@@ -31,6 +32,7 @@ pub(super) struct Cache {
     pub(super) profile_revision: u64,
     pub(super) products: HashMap<u64, Arc<model::CollectibleProduct>>,
     pub(super) collectible_catalog: Option<Arc<Vec<Arc<model::CollectibleProduct>>>>,
+    pub(super) billing_country: Option<Option<String>>,
     pub(super) outboxes: HashMap<u64, Cached<model::Outbox>>,
     pub(super) wishlists: HashMap<u64, Cached<model::Wishlist>>,
     pub(super) invites: HashMap<String, CachedInvite>,
@@ -81,7 +83,7 @@ impl Cache {
         profile: Arc<model::Profile>,
         now: Instant,
     ) {
-        if kind == ProfileKind::Popout && self.profile(key, ProfileKind::Modal, now).is_some() {
+        if kind != ProfileKind::Modal && self.profile(key, ProfileKind::Modal, now).is_some() {
             return;
         }
         if self.profiles.len() >= CACHE_LIMIT && !self.profiles.contains_key(&key) {

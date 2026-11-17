@@ -1,7 +1,10 @@
 use super::{Error, settings_proto};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    collections::HashSet,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelfStatus {
@@ -99,11 +102,23 @@ impl StatusDuration {
 pub(super) struct Presence {
     proto: Option<Vec<u8>>,
     local_activity: Option<Value>,
+    unfocused: bool,
+    animated_emojis: HashSet<u64>,
     pub revision: u64,
     pub settings_revision: u64,
 }
 
 impl Presence {
+    pub fn focused(&self) -> bool {
+        !self.unfocused
+    }
+
+    pub fn set_focused(&mut self, focused: bool) -> bool {
+        let changed = self.unfocused == focused;
+        self.unfocused = !focused;
+        changed
+    }
+
     pub fn set_local_activity(&mut self, activity: Option<Value>) -> bool {
         if self.local_activity == activity {
             return false;
@@ -111,6 +126,10 @@ impl Presence {
         self.local_activity = activity;
         self.revision = self.revision.wrapping_add(1);
         true
+    }
+
+    pub fn set_animated_emojis(&mut self, ids: impl IntoIterator<Item = u64>) {
+        self.animated_emojis = ids.into_iter().collect();
     }
 
     pub fn proto(&self) -> Option<&[u8]> {
@@ -214,31 +233,37 @@ impl Presence {
         let settings = settings.status?;
         let status = self.status_at(now_ms)?;
         let mut activities = Vec::new();
-        if let Some(custom) = settings
-            .custom_status
-            .filter(|custom| custom.expires_at_ms == 0 || custom.expires_at_ms > now_ms)
-        {
-            let mut activity = json!({"name":"Custom Status", "type":4});
-            if !custom.text.is_empty() {
-                activity["state"] = custom.text.into();
+        if status != SelfStatus::Invisible {
+            if let Some(custom) = settings
+                .custom_status
+                .filter(|custom| custom.expires_at_ms == 0 || custom.expires_at_ms > now_ms)
+            {
+                let emoji = if custom.emoji_id != 0 {
+                    json!({
+                        "id": custom.emoji_id.to_string(), "name": custom.emoji_name,
+                        "animated": self.animated_emojis.contains(&custom.emoji_id)
+                    })
+                } else if !custom.emoji_name.is_empty() {
+                    json!({"id": null, "name": custom.emoji_name, "animated": false})
+                } else {
+                    Value::Null
+                };
+                activities.push(json!({
+                    "name": "Custom Status", "type": 4,
+                    "state": (!custom.text.is_empty()).then_some(custom.text),
+                    "timestamps": (custom.expires_at_ms != 0)
+                        .then(|| json!({"end": custom.expires_at_ms})),
+                    "emoji": emoji, "details": null, "metadata": {"label": null}
+                }));
             }
-            if custom.emoji_id != 0 {
-                activity["emoji"] = json!({
-                    "id": custom.emoji_id.to_string(), "name": custom.emoji_name
-                });
-            } else if !custom.emoji_name.is_empty() {
-                activity["emoji"] = json!({"name":custom.emoji_name});
+            if settings.show_current_game != Some(false)
+                && let Some(activity) = &self.local_activity
+            {
+                activities.push(activity.clone());
             }
-            activities.push(activity);
-        }
-        if settings.show_current_game != Some(false)
-            && let Some(activity) = &self.local_activity
-        {
-            activities.push(activity.clone());
         }
         Some(json!({"op":3,"d":{
-            "status":status.wire(),"since":if status == SelfStatus::Idle { now_ms } else { 0 },
-            "afk":false,"activities":activities
+            "status":status.wire(),"since":0,"activities":activities,"afk":false
         }}))
     }
 }

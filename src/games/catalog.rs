@@ -9,12 +9,13 @@ use std::{
 };
 use tokio::sync::watch;
 
-const URL: &str = "https://discord.com/api/v9/applications/detectable";
+const URL: &str = "https://cdn.discordapp.com/detectables/games-v1.json";
 const MAX_BODY: usize = 32 * 1024 * 1024;
 const MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const RETRY: Duration = Duration::from_secs(60 * 60);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const CACHE_FILE: &str = "detectable-games.json";
+const ETAG_FILE: &str = "detectable-games.etag";
 
 pub(crate) struct GameInfo {
     pub(crate) id: u64,
@@ -237,6 +238,10 @@ fn cache_path() -> Option<PathBuf> {
     dirs::cache_dir().map(|directory| directory.join("zcord").join(CACHE_FILE))
 }
 
+fn etag_path(cache: &Path) -> PathBuf {
+    cache.with_file_name(ETAG_FILE)
+}
+
 fn read_cache(path: &Path) -> Option<(Catalog, Duration)> {
     let metadata = fs::metadata(path).ok()?;
     if metadata.len() > MAX_BODY as u64 {
@@ -249,25 +254,51 @@ fn read_cache(path: &Path) -> Option<(Catalog, Duration)> {
     Some((decode_cached(&bytes)?, age))
 }
 
-fn write_cache(path: &Path, catalog: &Catalog) -> std::io::Result<()> {
+fn write_cache(path: &Path, catalog: &Catalog, etag: Option<&str>) -> std::io::Result<()> {
     if let Some(directory) = path.parent() {
         fs::create_dir_all(directory)?;
     }
+    let etag_file = etag_path(path);
+    let _ = fs::remove_file(&etag_file);
     let bytes = serde_json::to_vec(&catalog.cached()).map_err(std::io::Error::other)?;
     let temporary = path.with_extension("tmp");
     fs::write(&temporary, bytes)?;
-    fs::rename(&temporary, path)
+    fs::rename(&temporary, path)?;
+    match etag {
+        Some(etag) => fs::write(etag_file, etag),
+        None => Ok(()),
+    }
 }
 
-async fn download(client: &reqwest::Client) -> Result<Vec<u8>, String> {
-    let mut response = client
-        .get(URL)
-        .send()
-        .await
-        .map_err(|error| error.to_string())?;
+fn touch_cache(path: &Path) -> std::io::Result<()> {
+    fs::File::options()
+        .write(true)
+        .open(path)?
+        .set_modified(SystemTime::now())
+}
+
+enum Download {
+    Modified { body: Vec<u8>, etag: Option<String> },
+    NotModified,
+}
+
+async fn download(client: &reqwest::Client, etag: Option<&str>) -> Result<Download, String> {
+    let mut request = client.get(URL);
+    if let Some(etag) = etag {
+        request = request.header(reqwest::header::IF_NONE_MATCH, etag);
+    }
+    let mut response = request.send().await.map_err(|error| error.to_string())?;
+    if response.status() == reqwest::StatusCode::NOT_MODIFIED && etag.is_some() {
+        return Ok(Download::NotModified);
+    }
     if !response.status().is_success() {
         return Err(format!("HTTP {}", response.status()));
     }
+    let etag = response
+        .headers()
+        .get(reqwest::header::ETAG)
+        .and_then(|etag| etag.to_str().ok())
+        .map(str::to_owned);
     if response
         .content_length()
         .is_some_and(|length| length > MAX_BODY as u64)
@@ -281,26 +312,41 @@ async fn download(client: &reqwest::Client) -> Result<Vec<u8>, String> {
         }
         body.extend_from_slice(&chunk);
     }
-    Ok(body)
+    Ok(Download::Modified { body, etag })
 }
 
 pub(crate) async fn run(output: watch::Sender<Option<Arc<Catalog>>>) {
     let client = reqwest::Client::builder()
+        .user_agent(crate::discord::user_agent())
         .timeout(DOWNLOAD_TIMEOUT)
         .build()
         .unwrap_or_default();
     let path = cache_path();
     loop {
-        if let Some((catalog, age)) = path.as_deref().and_then(read_cache) {
+        let mut etag = None;
+        if let Some(path) = &path
+            && let Some((catalog, age)) = read_cache(path)
+        {
             if output.borrow().is_none() {
                 output.send_replace(Some(Arc::new(catalog)));
             }
             if age < MAX_AGE {
                 tokio::time::sleep(MAX_AGE - age).await;
             }
+            etag = fs::read_to_string(etag_path(path)).ok();
         }
-        let body = match download(&client).await {
-            Ok(body) => body,
+        let (body, etag) = match download(&client, etag.as_deref()).await {
+            Ok(Download::Modified { body, etag }) => (body, etag),
+            Ok(Download::NotModified) => {
+                if let Some(path) = &path
+                    && let Err(error) = touch_cache(path)
+                {
+                    log::warn!("Could not refresh the detectable game list cache: {error}");
+                    let _ = fs::remove_file(etag_path(path));
+                }
+                tokio::time::sleep(MAX_AGE).await;
+                continue;
+            }
             Err(error) => {
                 log::warn!("Could not load the detectable game list: {error}");
                 tokio::time::sleep(RETRY).await;
@@ -321,7 +367,7 @@ pub(crate) async fn run(output: watch::Sender<Option<Arc<Catalog>>>) {
             }
         };
         if let Some(path) = &path
-            && let Err(error) = write_cache(path, &catalog)
+            && let Err(error) = write_cache(path, &catalog, etag.as_deref())
         {
             log::warn!("Could not cache the detectable game list: {error}");
         }

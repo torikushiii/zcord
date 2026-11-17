@@ -13,6 +13,9 @@ impl Render for DiscordApp {
         self.rpx_per_pixel = theme::BASE_FONT_SIZE / f32::from(window.rem_size());
         self.window_height = f32::from(window.viewport_size().height) * self.rpx_per_pixel;
         if matches!(self.screen, Screen::Chat) {
+            if let Some(session) = &self.session {
+                session.set_view(self.selected_guild_id, self.selected_channel_id);
+            }
             self.update_member_subscription();
             self.load_active_now_apps(cx);
         }

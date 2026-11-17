@@ -239,6 +239,7 @@ fn outbox_traits(traits: &Value) -> Vec<OutboxTrait> {
 pub struct ContentInbox {
     pub entries: Vec<OutboxEntry>,
     pub wait_ms_until_next_fetch: Option<u64>,
+    pub refresh_token: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for ContentInbox {
@@ -254,6 +255,8 @@ impl<'de> Deserialize<'de> for ContentInbox {
             entries: Vec<Ranked>,
             #[serde(default, deserialize_with = "default_value")]
             wait_ms_until_next_fetch: Option<u64>,
+            #[serde(default, deserialize_with = "default_value")]
+            refresh_token: Option<String>,
         }
         let raw = Raw::deserialize(d)?;
         let mut entries = raw.entries;
@@ -261,6 +264,7 @@ impl<'de> Deserialize<'de> for ContentInbox {
         Ok(Self {
             entries: entries.into_iter().map(|entry| entry.content).collect(),
             wait_ms_until_next_fetch: raw.wait_ms_until_next_fetch,
+            refresh_token: raw.refresh_token,
         })
     }
 }

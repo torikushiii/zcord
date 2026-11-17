@@ -232,7 +232,7 @@ impl DiscordApp {
                     let session = session.clone();
                     Tokio::spawn(cx, async move {
                         let profile = session
-                            .profile(user_id, None, Some(channel_id), ProfileKind::Modal)
+                            .profile(user_id, None, Some(channel_id), ProfileKind::MessageRequest)
                             .await;
                         (user_id, profile)
                     })

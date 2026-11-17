@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use crate::{
     app::DiscordApp,
-    discord::{Error, valid_friend_username},
+    discord::{Error, model::RelationshipLocation, valid_friend_username},
     store::RelationshipKind,
     theme::{self, WithoutTextSelection, rpx},
 };
@@ -21,11 +21,18 @@ enum AddNote {
     Failed(&'static str),
 }
 
+#[derive(Clone, Copy)]
+enum RelationshipChange {
+    Add,
+    Accept,
+    Remove,
+}
+
 #[derive(Default)]
 pub(crate) struct Friends {
     busy: HashSet<u64>,
     error: Option<(u64, &'static str)>,
-    confirm_remove: Option<u64>,
+    confirm_remove: Option<(u64, RelationshipLocation)>,
     username: Option<Entity<InputState>>,
     _username_events: Option<Subscription>,
     note: Option<AddNote>,
@@ -50,7 +57,13 @@ pub(crate) fn failure_text(error: &Error, rejected: &'static str) -> &'static st
 }
 
 impl DiscordApp {
-    fn write_relationship(&mut self, user_id: u64, remove: bool, cx: &mut Context<Self>) {
+    fn write_relationship(
+        &mut self,
+        user_id: u64,
+        change: RelationshipChange,
+        location: RelationshipLocation,
+        cx: &mut Context<Self>,
+    ) {
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;
         };
@@ -62,12 +75,18 @@ impl DiscordApp {
         let guild_id = self.request_guild();
         let channel_id = (self.selected_channel_id != 0).then_some(self.selected_channel_id);
         let request = Tokio::spawn(cx, async move {
-            if remove {
-                session.delete_relationship(user_id).await
-            } else {
-                session
-                    .put_relationship(user_id, guild_id, channel_id)
-                    .await
+            match change {
+                RelationshipChange::Add => {
+                    session
+                        .add_friend(user_id, location, guild_id, channel_id)
+                        .await
+                }
+                RelationshipChange::Accept => {
+                    session
+                        .accept_friend_request(user_id, location, guild_id, channel_id)
+                        .await
+                }
+                RelationshipChange::Remove => session.delete_relationship(user_id, location).await,
             }
         });
         cx.spawn(async move |this, cx| {
@@ -93,16 +112,40 @@ impl DiscordApp {
         .detach();
     }
 
-    pub(crate) fn add_friend(&mut self, user_id: u64, cx: &mut Context<Self>) {
-        self.write_relationship(user_id, false, cx);
+    pub(crate) fn add_friend(
+        &mut self,
+        user_id: u64,
+        location: RelationshipLocation,
+        cx: &mut Context<Self>,
+    ) {
+        let incoming = self
+            .store
+            .relationship(user_id)
+            .is_some_and(|found| found.kind == RelationshipKind::Incoming);
+        let change = if incoming {
+            RelationshipChange::Accept
+        } else {
+            RelationshipChange::Add
+        };
+        self.write_relationship(user_id, change, location, cx);
     }
 
-    pub(crate) fn drop_friend_request(&mut self, user_id: u64, cx: &mut Context<Self>) {
-        self.write_relationship(user_id, true, cx);
+    pub(crate) fn drop_friend_request(
+        &mut self,
+        user_id: u64,
+        location: RelationshipLocation,
+        cx: &mut Context<Self>,
+    ) {
+        self.write_relationship(user_id, RelationshipChange::Remove, location, cx);
     }
 
-    pub(crate) fn ask_remove_friend(&mut self, user_id: u64, cx: &mut Context<Self>) {
-        self.home.friends.confirm_remove = Some(user_id);
+    pub(crate) fn ask_remove_friend(
+        &mut self,
+        user_id: u64,
+        location: RelationshipLocation,
+        cx: &mut Context<Self>,
+    ) {
+        self.home.friends.confirm_remove = Some((user_id, location));
         self.set_profile_menu(false, cx);
         cx.notify();
     }
@@ -116,8 +159,8 @@ impl DiscordApp {
     }
 
     fn confirm_remove_friend(&mut self, cx: &mut Context<Self>) {
-        if let Some(user_id) = self.home.friends.confirm_remove.take() {
-            self.write_relationship(user_id, true, cx);
+        if let Some((user_id, location)) = self.home.friends.confirm_remove.take() {
+            self.write_relationship(user_id, RelationshipChange::Remove, location, cx);
         }
     }
 
@@ -198,14 +241,15 @@ impl DiscordApp {
             return;
         };
         let value = input.read(cx).value();
-        let username = value.trim().trim_start_matches('@').to_lowercase();
+        let username = value.trim();
+        let username = username.strip_prefix('@').unwrap_or(username).to_owned();
         if username.is_empty() || self.home.friends.sending {
             return;
         }
         let Some(session) = self.session.clone().filter(|_| self.live) else {
             return;
         };
-        let refused = if !valid_friend_username(&username) {
+        let refused = if !valid_friend_username(&username.to_ascii_lowercase()) {
             Some("Usernames are 2-32 letters, numbers, underscores or periods.")
         } else if self.known_username(&username) {
             Some("You're already friends, or a request is pending.")
@@ -345,7 +389,7 @@ pub(crate) fn add_friend_page(app: &DiscordApp) -> impl IntoElement + use<> {
 }
 
 pub(crate) fn remove_dialog(app: &DiscordApp) -> Option<AnyElement> {
-    let user_id = app.home.friends.confirm_remove?;
+    let (user_id, _) = app.home.friends.confirm_remove?;
     let name = app.store.friend_name(user_id);
     let backdrop = app.entity.clone();
     let cancel = app.entity.clone();

@@ -14,6 +14,7 @@ pub enum Event {
     Ready(Box<model::Ready>),
     SettingsUpdate(Box<model::SettingsUpdate>),
     UserGuildSettingsUpdate(Box<model::UserGuildSettings>),
+    NotificationSettingsUpdate { use_new_notifications: bool },
     MessageCreate(Box<model::Message>),
     MessageUpdate(Box<model::MessageUpdate>),
     TypingStart(Box<model::TypingStart>),

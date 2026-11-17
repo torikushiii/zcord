@@ -2,16 +2,19 @@ mod media;
 mod signaling;
 
 pub(super) use signaling::{
-    commit_welcome_body, parse_binary_seq, ready_on_prepare, send_binary, send_json,
-    send_key_package, send_ready, ws_request,
+    AUDIO_PAYLOAD, NORMAL_CLOSE, RTX_PAYLOAD, VIDEO_PAYLOAD, close_socket, commit_welcome_body,
+    flag_invalid_commit_welcome, heartbeat_payload, parse_binary_seq, ready_on_prepare,
+    select_protocol_payload, send_binary, send_json, send_key_package, send_ready, ws_request,
 };
 
-use signaling::{heartbeat_payload, send_auth};
+use signaling::send_auth;
 
 use super::{
     audio::{AudioFlags, AudioHandle, Incoming, Outgoing},
     crypto::{Cipher, Mode},
-    dave::{Dave, EncryptOutcome, SILENCE},
+    dave::{
+        Dave, EncryptOutcome, INVALID_MLS_LIMIT, REFUSED_DOWNGRADE, REPEATED_INVALID_MLS, SILENCE,
+    },
     emit, rtcp,
     rtp::Header,
     udp,
@@ -31,7 +34,11 @@ use tokio::{
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async,
     tungstenite::{
-        Message, client::IntoClientRequest, handshake::client::Request, http::HeaderValue,
+        Message,
+        client::IntoClientRequest,
+        handshake::client::Request,
+        http::HeaderValue,
+        protocol::{CloseFrame, frame::coding::CloseCode},
     },
 };
 
@@ -39,7 +46,9 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const DISCOVERY_ATTEMPTS: usize = 3;
-const KEEPALIVE: Duration = Duration::from_secs(5);
+const HELLO_TIMEOUT: Duration = Duration::from_secs(20);
+const SENDER_REPORT: Duration = Duration::from_secs(5);
+const REIDENTIFY_CLOSES: [u16; 4] = [4004, 4006, 4011, 4015];
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -150,9 +159,18 @@ pub(super) struct Connection {
     rtp_timestamp: u32,
     rtp_epoch: Instant,
     new_talkspurt: bool,
-    last_send: Instant,
+    audio_packets: u32,
+    audio_octets: u32,
+    audio_sent: Option<Instant>,
+    next_sender_report: Instant,
+    ping_sequence: u32,
+    next_ping: Instant,
+    rtc_connection_id: String,
+    speaking_ssrc: Option<u32>,
     handshake_done: bool,
+    reached_ready: bool,
     dave_epoch_reset: bool,
+    invalid_mls: u8,
     last_close: Option<u16>,
     rx: RxStats,
     tx: TxStats,
@@ -180,9 +198,18 @@ impl Connection {
             rtp_timestamp: 0,
             rtp_epoch: Instant::now(),
             new_talkspurt: false,
-            last_send: Instant::now(),
+            audio_packets: 0,
+            audio_octets: 0,
+            audio_sent: None,
+            next_sender_report: Instant::now(),
+            ping_sequence: 0,
+            next_ping: Instant::now(),
+            rtc_connection_id: properties::uuid_v4(),
+            speaking_ssrc: None,
             handshake_done: false,
+            reached_ready: false,
             dave_epoch_reset: false,
+            invalid_mls: 0,
             last_close: None,
             rx: RxStats::new(),
             tx: TxStats::new(),
@@ -191,6 +218,15 @@ impl Connection {
 
     pub fn can_resume(&self) -> bool {
         self.handshake_done && self.seq.is_some()
+    }
+
+    pub fn reached_ready(&self) -> bool {
+        self.reached_ready
+    }
+
+    fn forget_session(&mut self) {
+        self.handshake_done = false;
+        self.seq = None;
     }
 
     pub fn last_close(&self) -> Option<u16> {
@@ -212,6 +248,7 @@ impl Connection {
         resume: bool,
     ) -> Outcome {
         self.last_close = None;
+        self.reached_ready = false;
         self.rx = RxStats::new();
         self.tx = TxStats::new();
         if !resume {
@@ -231,7 +268,9 @@ impl Connection {
         let Ok(Ok((mut socket, _))) = connection else {
             return Outcome::Reconnect;
         };
-        self.drive(&mut socket, events, shutdown, resume).await
+        let outcome = self.drive(&mut socket, events, shutdown, resume).await;
+        close_socket(&mut socket, NORMAL_CLOSE).await;
+        outcome
     }
 
     async fn drive(
@@ -242,6 +281,7 @@ impl Connection {
         resume: bool,
     ) -> Outcome {
         let mut hello = false;
+        let hello_deadline = Instant::now() + HELLO_TIMEOUT;
         let mut interval = Duration::from_secs(60);
         let mut next_heartbeat = Instant::now() + interval;
         let mut ack_at: Option<Instant> = None;
@@ -249,12 +289,19 @@ impl Connection {
         let mut audio_out: Option<tokio::sync::mpsc::UnboundedReceiver<Outgoing>> = None;
         let mut udp_buffer = [0u8; 2048];
 
+        if send_auth(socket, &self.config, self.seq, resume)
+            .await
+            .is_err()
+        {
+            return Outcome::Reconnect;
+        }
         loop {
             let socket_ref = &mut *socket;
             let udp = self.socket.as_ref();
             let received = tokio::select! {
                 biased;
                 _ = shutdown.changed() => return Outcome::Stopped,
+                _ = sleep_until(hello_deadline), if !hello => return Outcome::Reconnect,
                 _ = sleep_until(next_heartbeat), if hello => {
                     if ack_at.is_some_and(|sent| sent.elapsed() >= interval) {
                         return Outcome::Reconnect;
@@ -309,12 +356,7 @@ impl Connection {
                                     .filter(|ms| *ms > 0 && *ms <= 300_000)
                                     .map(Duration::from_millis)
                                     .unwrap_or(Duration::from_secs(60));
-                                next_heartbeat =
-                                    Instant::now() + interval.mul_f64(rand::random::<f64>().max(0.1));
-                                let resumed = send_auth(socket, &self.config, self.seq, resume).await;
-                                if resumed.is_err() {
-                                    return Outcome::Reconnect;
-                                }
+                                next_heartbeat = Instant::now() + interval;
                                 continue;
                             }
                             match self.on_json(op, &value, socket, events).await {
@@ -331,7 +373,9 @@ impl Connection {
                             if let Some(seq) = parse_binary_seq(&bytes) {
                                 self.seq = Some(seq);
                             }
-                            self.on_binary(&bytes, socket, events).await;
+                            if let Err(outcome) = self.on_binary(&bytes, socket, events).await {
+                                return outcome;
+                            }
                             if self.audio.is_some() && audio_out.is_none()
                                 && let Some(audio) = &mut self.audio
                             {
@@ -342,6 +386,9 @@ impl Connection {
                             let code = frame.map_or(1006, |frame| u16::from(frame.code));
                             self.last_close = Some(code);
                             log::info!("Voice gateway closed: {code}");
+                            if REIDENTIFY_CLOSES.contains(&code) {
+                                self.forget_session();
+                            }
                             return close_outcome(code);
                         }
                         Message::Ping(_)
@@ -401,9 +448,6 @@ fn close_outcome(code: u16) -> Outcome {
         4014 => Outcome::fatal_without_leave("Disconnected from voice"),
         4021 => Outcome::fatal_without_leave("Voice rate limited"),
         4022 => Outcome::fatal_without_leave("The voice call ended"),
-        4006 | 4009 => Outcome::fatal("The voice session expired"),
-        4016 => Outcome::fatal("Discord rejected the voice encryption mode"),
-        4017 => Outcome::fatal("This channel requires end-to-end encryption"),
         _ => Outcome::Reconnect,
     }
 }

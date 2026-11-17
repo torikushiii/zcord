@@ -59,6 +59,7 @@ pub struct Settings {
     pub appearance_present: bool,
     pub text_images: Option<TextImages>,
     pub favorites: Option<Favorites>,
+    pub allow_voice_recording: Option<bool>,
 }
 
 #[derive(Default, Debug, PartialEq, Eq)]
@@ -343,6 +344,15 @@ pub fn decode(bytes: &[u8]) -> Result<Settings> {
                 reader.bytes(wire)?,
                 settings.favorites.get_or_insert_with(Favorites::default),
             )?;
+        } else if field == 19 {
+            let mut clips = Reader::new(reader.bytes(wire)?);
+            while let Some((field, wire)) = clips.tag()? {
+                if field == 1 {
+                    settings.allow_voice_recording = Some(number_wrapper(clips.bytes(wire)?)? != 0);
+                } else {
+                    clips.skip(field, wire, 0)?;
+                }
+            }
         } else {
             reader.skip(field, wire, 0)?;
         }
@@ -672,46 +682,24 @@ fn favorite_entry_bytes(gif: &FavoriteGif) -> Vec<u8> {
     wrapped
 }
 
-pub fn with_favorite_gifs(frecency: &[u8], gifs: &[FavoriteGif]) -> Result<Vec<u8>> {
-    let top = fields(frecency)?;
-    let mut preserved = Vec::new();
-    for field in &top {
+pub fn favorite_gifs_patch(frecency: &[u8], gifs: &[FavoriteGif]) -> Result<Vec<u8>> {
+    let mut content = Vec::new();
+    for field in fields(frecency)? {
         if field.number != 2 {
             continue;
         }
-        let Some(value) = field.value else {
-            return Err(DecodeError);
-        };
-        for sub in fields(value)? {
-            if sub.number == 1 && sub.wire == 2 {
-                continue;
+        for sub in fields(field.value.ok_or(DecodeError)?)? {
+            if sub.number != 1 || sub.wire != 2 {
+                content.extend_from_slice(sub.raw);
             }
-            preserved.push(sub.raw);
         }
-    }
-    let mut content = Vec::new();
-    for raw in preserved {
-        content.extend_from_slice(raw);
     }
     for gif in gifs {
         content.extend(favorite_entry_bytes(gif));
     }
-    let mut out = Vec::with_capacity(frecency.len() + content.len());
-    let mut written = false;
-    for field in &top {
-        if field.number == 2 {
-            if !written {
-                push_bytes(&mut out, 2, &content);
-                written = true;
-            }
-        } else {
-            out.extend_from_slice(field.raw);
-        }
-    }
-    if !written {
-        push_bytes(&mut out, 2, &content);
-    }
-    Ok(out)
+    let mut patch = Vec::new();
+    push_bytes(&mut patch, 2, &content);
+    Ok(patch)
 }
 
 pub fn merge_partial(base: &[u8], update: &[u8]) -> Result<Vec<u8>> {

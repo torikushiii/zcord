@@ -25,8 +25,20 @@ enum GuildNotificationFlagPatch {
 }
 
 #[derive(Serialize)]
+struct ChannelNotifications {
+    message_notifications: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    flags: Option<u64>,
+}
+
+#[derive(Serialize)]
 struct ChannelOverrides {
     channel_overrides: HashMap<String, Value>,
+}
+
+#[derive(Serialize)]
+struct BulkGuildSettings<'a, T> {
+    guilds: HashMap<String, &'a T>,
 }
 
 fn set_channel_setting(
@@ -34,38 +46,43 @@ fn set_channel_setting(
     guild_id: u64,
     channel_id: u64,
     setting: model::ChannelSetting,
+    notification_flags: Option<u64>,
     now: DateTime<Utc>,
 ) -> RequestBuilder {
     let value = match setting {
         model::ChannelSetting::Mute(mute) => {
             let (muted, mute_config) = mute_fields(mute, now);
-            serde_json::to_value(GuildMute { muted, mute_config }).unwrap_or_default()
+            serde_json::to_value(GuildMute { muted, mute_config })
         }
         model::ChannelSetting::Notifications(level) => {
-            let level = match level {
+            let message_notifications = match level {
                 model::NotificationLevel::All => 0,
                 model::NotificationLevel::Mentions => 1,
                 model::NotificationLevel::Nothing => 2,
                 model::NotificationLevel::Inherit => 3,
             };
-            serde_json::json!({ "message_notifications": level })
+            serde_json::to_value(ChannelNotifications {
+                message_notifications,
+                flags: notification_flags,
+            })
         }
-    };
-    guild_settings(client, guild_id).json(&ChannelOverrides {
-        channel_overrides: HashMap::from([(channel_id.to_string(), value)]),
-    })
+    }
+    .unwrap_or_default();
+    guild_settings(
+        client,
+        guild_id,
+        &ChannelOverrides {
+            channel_overrides: HashMap::from([(channel_id.to_string(), value)]),
+        },
+    )
 }
 
-fn guild_referer(guild_id: u64) -> String {
-    format!("https://discord.com/channels/{guild_id}")
-}
-
-fn guild_settings(client: &Client, guild_id: u64) -> RequestBuilder {
+fn guild_settings(client: &Client, guild_id: u64, settings: &impl Serialize) -> RequestBuilder {
     client
-        .patch(format!(
-            "https://discord.com/api/v9/users/@me/guilds/{guild_id}/settings"
-        ))
-        .header(REFERER, guild_referer(guild_id))
+        .patch("https://discord.com/api/v9/users/@me/guilds/settings")
+        .json(&BulkGuildSettings {
+            guilds: HashMap::from([(guild_id.to_string(), settings)]),
+        })
 }
 
 fn set_guild_mute(
@@ -75,7 +92,7 @@ fn set_guild_mute(
     now: DateTime<Utc>,
 ) -> RequestBuilder {
     let (muted, mute_config) = mute_fields(mute, now);
-    guild_settings(client, guild_id).json(&GuildMute { muted, mute_config })
+    guild_settings(client, guild_id, &GuildMute { muted, mute_config })
 }
 
 fn set_guild_notifications(
@@ -91,9 +108,13 @@ fn set_guild_notifications(
             unreachable!("Guild notification levels must be explicit")
         }
     };
-    guild_settings(client, guild_id).json(&GuildNotifications {
-        message_notifications,
-    })
+    guild_settings(
+        client,
+        guild_id,
+        &GuildNotifications {
+            message_notifications,
+        },
+    )
 }
 
 fn set_guild_notification_flag(
@@ -117,7 +138,7 @@ fn set_guild_notification_flag(
         }
         model::GuildNotificationFlag::MobilePush => GuildNotificationFlagPatch::MobilePush(on),
     };
-    guild_settings(client, guild_id).json(&body)
+    guild_settings(client, guild_id, &body)
 }
 
 impl Rest {
@@ -126,10 +147,20 @@ impl Rest {
         guild_id: u64,
         channel_id: u64,
         setting: model::ChannelSetting,
+        notification_flags: Option<u64>,
     ) -> Result<(), Error> {
         let now = Utc::now();
-        self.send(|| set_channel_setting(&self.client, guild_id, channel_id, setting, now))
-            .await?;
+        self.send(|| {
+            set_channel_setting(
+                &self.client,
+                guild_id,
+                channel_id,
+                setting,
+                notification_flags,
+                now,
+            )
+        })
+        .await?;
         Ok(())
     }
 
@@ -167,16 +198,23 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
 
-    fn assert_request(builder: RequestBuilder, method: reqwest::Method, url: &str, body: &[u8]) {
+    fn assert_request(builder: RequestBuilder, settings: &[u8]) {
         let request = builder.build().unwrap();
-        assert_eq!(request.method(), method);
-        assert_eq!(request.url().as_str(), url);
-        assert_eq!(request.headers()[REFERER], "https://discord.com/channels/7");
+        assert_eq!(request.method(), reqwest::Method::PATCH);
+        assert_eq!(
+            request.url().as_str(),
+            "https://discord.com/api/v9/users/@me/guilds/settings"
+        );
+        assert!(request.headers().get(REFERER).is_none());
         assert_eq!(
             request.headers()[reqwest::header::CONTENT_TYPE],
             "application/json"
         );
-        assert_eq!(request.body().and_then(reqwest::Body::as_bytes), Some(body));
+        let body = [br#"{"guilds":{"7":"#.as_slice(), settings, b"}}"].concat();
+        assert_eq!(
+            request.body().and_then(reqwest::Body::as_bytes),
+            Some(body.as_slice())
+        );
     }
 
     #[test]
@@ -186,21 +224,38 @@ mod tests {
 
         assert_request(
             set_guild_mute(&client, 7, Some(-1), now),
-            reqwest::Method::PATCH,
-            "https://discord.com/api/v9/users/@me/guilds/7/settings",
             br#"{"muted":true,"mute_config":{"selected_time_window":-1,"end_time":null}}"#,
         );
         assert_request(
             set_guild_mute(&client, 7, Some(3600), now),
-            reqwest::Method::PATCH,
-            "https://discord.com/api/v9/users/@me/guilds/7/settings",
             br#"{"muted":true,"mute_config":{"selected_time_window":3600,"end_time":"2024-01-01T01:00:00.000Z"}}"#,
         );
+        assert_request(set_guild_mute(&client, 7, None, now), br#"{"muted":false}"#);
+    }
+
+    #[test]
+    fn channel_notifications_send_flags_only_when_given() {
+        let client = Client::new();
+        let now = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let level = model::ChannelSetting::Notifications(model::NotificationLevel::Mentions);
         assert_request(
-            set_guild_mute(&client, 7, None, now),
-            reqwest::Method::PATCH,
-            "https://discord.com/api/v9/users/@me/guilds/7/settings",
-            br#"{"muted":false}"#,
+            set_channel_setting(&client, 7, 9, level, None, now),
+            br#"{"channel_overrides":{"9":{"message_notifications":1}}}"#,
+        );
+        assert_request(
+            set_channel_setting(&client, 7, 9, level, Some(512), now),
+            br#"{"channel_overrides":{"9":{"message_notifications":1,"flags":512}}}"#,
+        );
+        assert_request(
+            set_channel_setting(
+                &client,
+                7,
+                9,
+                model::ChannelSetting::Mute(None),
+                Some(512),
+                now,
+            ),
+            br#"{"channel_overrides":{"9":{"muted":false}}}"#,
         );
     }
 
@@ -221,12 +276,7 @@ mod tests {
                 br#"{"message_notifications":2}"#.as_slice(),
             ),
         ] {
-            assert_request(
-                set_guild_notifications(&client, 7, level),
-                reqwest::Method::PATCH,
-                "https://discord.com/api/v9/users/@me/guilds/7/settings",
-                body,
-            );
+            assert_request(set_guild_notifications(&client, 7, level), body);
         }
     }
 
@@ -239,12 +289,7 @@ mod tests {
     fn assert_flag_requests(flag: model::GuildNotificationFlag, on_body: &[u8], off_body: &[u8]) {
         let client = Client::new();
         for (on, body) in [(true, on_body), (false, off_body)] {
-            assert_request(
-                set_guild_notification_flag(&client, 7, flag, on),
-                reqwest::Method::PATCH,
-                "https://discord.com/api/v9/users/@me/guilds/7/settings",
-                body,
-            );
+            assert_request(set_guild_notification_flag(&client, 7, flag, on), body);
         }
     }
 

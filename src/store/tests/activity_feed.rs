@@ -37,6 +37,7 @@ fn inbox(entries: Vec<model::OutboxEntry>) -> model::ContentInbox {
     model::ContentInbox {
         entries,
         wait_ms_until_next_fetch: None,
+        refresh_token: None,
     }
 }
 

@@ -347,12 +347,12 @@ impl DiscordApp {
             {
                 JUMP_PAGE
             }
-            Some(_) => MESSAGE_PAGE,
+            Some(_) => JUMP_PAGE,
             None => self
                 .history
                 .present_limit
                 .remove(&channel_id)
-                .unwrap_or(MESSAGE_PAGE),
+                .unwrap_or(JUMP_PAGE),
         };
         let guild_id = self
             .store

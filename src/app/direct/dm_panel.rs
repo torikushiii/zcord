@@ -43,10 +43,11 @@ impl DiscordApp {
             return;
         };
         let channel_id = self.selected_channel_id;
+        let kind = ProfileKind::Sidebar {
+            bot: self.store.user(user_id).is_some_and(|user| user.bot),
+        };
         let request = Tokio::spawn(cx, async move {
-            session
-                .profile(user_id, None, Some(channel_id), ProfileKind::Modal)
-                .await
+            session.profile(user_id, None, Some(channel_id), kind).await
         });
         cx.spawn(async move |this, cx| {
             let result = request.await;

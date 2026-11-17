@@ -151,6 +151,7 @@ impl Rest {
             ("include_google_sku_ids", "false"),
             ("include_unpublished_products", "false"),
             ("include_unpublished_collections", "false"),
+            ("ignore_cache", "false"),
         ]));
         let response = self
             .send(|| {

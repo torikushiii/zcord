@@ -12,12 +12,10 @@ fn saved_messages_request(client: &Client) -> RequestBuilder {
 }
 
 fn bookmarks_request(client: &Client, before: Option<&str>) -> RequestBuilder {
-    let request = client
-        .get(format!("{SAVED}/bookmarks"))
-        .query(&[("limit", "25")]);
+    let request = client.get(format!("{SAVED}/bookmarks"));
     match before {
-        Some(before) => request.query(&[("before", before)]),
-        None => request,
+        Some(before) => request.query(&[("before", before), ("limit", "25")]),
+        None => request.query(&[("limit", "25")]),
     }
 }
 
@@ -115,7 +113,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             request.url().as_str(),
-            "https://discord.com/api/v9/users/@me/saved-messages/bookmarks?limit=25&before=2026-11-06T20%3A11%3A29.594541%2B00%3A00"
+            "https://discord.com/api/v9/users/@me/saved-messages/bookmarks?before=2026-11-06T20%3A11%3A29.594541%2B00%3A00&limit=25"
         );
 
         let request = save_request(&client, 20, 30, None).build().unwrap();

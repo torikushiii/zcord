@@ -7,7 +7,7 @@ fn user_body(patch: &model::ProfileStylePatch, guild: bool) -> Option<Value> {
     let mut body = Map::new();
     if let Some(avatar) = &patch.avatar {
         body.insert("avatar".into(), json!(avatar));
-        if guild && let Some(description) = &patch.avatar_description {
+        if let Some(description) = &patch.avatar_description {
             body.insert("avatar_description".into(), json!(description));
         }
     } else if !guild && let Some(id) = patch.avatar_id {
@@ -50,7 +50,14 @@ fn user_body(patch: &model::ProfileStylePatch, guild: bool) -> Option<Value> {
             json!(name),
         );
     }
+    if !guild && let Some(tag_guild) = patch.tag_guild {
+        body.insert("primary_guild_id".into(), tag_body(tag_guild));
+    }
     (!body.is_empty()).then_some(Value::Object(body))
+}
+
+fn tag_body(guild_id: Option<u64>) -> Value {
+    json!(guild_id.map(|id| id.to_string()))
 }
 
 fn profile_body(patch: &model::ProfileStylePatch, guild: bool) -> Option<Value> {
@@ -79,33 +86,34 @@ fn profile_body(patch: &model::ProfileStylePatch, guild: bool) -> Option<Value> 
     (!body.is_empty()).then_some(Value::Object(body))
 }
 
-fn clan_request(client: &Client, guild_id: Option<u64>) -> RequestBuilder {
-    client
-        .put("https://discord.com/api/v9/users/@me/clan")
-        .header(REFERER, "https://discord.com/channels/@me")
-        .json(&json!({
-            "identity_guild_id": guild_id.map(|id| id.to_string()),
-            "identity_enabled": guild_id.is_some(),
-        }))
-}
-
 fn style_request(
     client: &Client,
     guild_id: Option<u64>,
     profile: bool,
     body: &Value,
+    original_md5: Option<&str>,
 ) -> RequestBuilder {
     let url = match (guild_id, profile) {
         (None, false) => "https://discord.com/api/v9/users/@me".to_owned(),
-        (None, true) => "https://discord.com/api/v9/users/@me/profile".to_owned(),
+        (None, true) => "https://discord.com/api/v9/users/%40me/profile".to_owned(),
         (Some(id), false) => format!("https://discord.com/api/v9/guilds/{id}/members/@me"),
-        (Some(id), true) => format!("https://discord.com/api/v9/guilds/{id}/profile/@me"),
+        (Some(id), true) => format!("https://discord.com/api/v9/guilds/{id}/profile/%40me"),
     };
     let referer = guild_id.map_or_else(
         || "https://discord.com/channels/@me".to_owned(),
         |id| format!("https://discord.com/channels/{id}"),
     );
-    client.patch(url).header(REFERER, referer).json(body)
+    let request = client.patch(url).header(REFERER, referer).json(body);
+    let surface = match (guild_id.is_some(), profile) {
+        (false, false) => "user_default_profile_avatar",
+        (false, true) => "user_default_profile_banner",
+        (true, false) => "user_guild_profile_avatar",
+        (true, true) => "user_guild_profile_banner",
+    };
+    match original_md5.filter(|md5| md5.len() == 32 && md5.bytes().all(|b| b.is_ascii_hexdigit())) {
+        Some(md5) => request.header("x-discord-original-md5", format!("{surface}=\"{md5}\"")),
+        None => request,
+    }
 }
 
 fn catalog_request(client: &Client) -> RequestBuilder {
@@ -266,16 +274,22 @@ impl Rest {
         guild_id: Option<u64>,
         patch: &model::ProfileStylePatch,
     ) -> Result<(), Error> {
+        let avatar_md5 = patch.avatar_original_md5.as_deref();
         if let Some(body) = user_body(patch, guild_id.is_some()) {
-            self.send(|| style_request(&self.client, guild_id, false, &body))
+            self.send(|| style_request(&self.client, guild_id, false, &body, avatar_md5))
                 .await?;
         }
+        let banner_md5 = patch.banner_original_md5.as_deref();
         if let Some(body) = profile_body(patch, guild_id.is_some()) {
-            self.send(|| style_request(&self.client, guild_id, true, &body))
+            self.send(|| style_request(&self.client, guild_id, true, &body, banner_md5))
                 .await?;
         }
-        if let Some(tag_guild) = patch.tag_guild {
-            self.send(|| clan_request(&self.client, tag_guild)).await?;
+        if guild_id.is_some()
+            && let Some(tag_guild) = patch.tag_guild
+        {
+            let body = json!({"primary_guild_id": tag_body(tag_guild)});
+            self.send(|| style_request(&self.client, None, false, &body, None))
+                .await?;
         }
         Ok(())
     }

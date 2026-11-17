@@ -9,6 +9,9 @@ impl VoiceManager {
         let (guild_id, channel_id) = shared.confirmed?;
         shared.session_id.as_ref()?;
         let key = stream::stream_key((guild_id != 0).then_some(guild_id), channel_id, user_id);
+        if let Some(previous) = &shared.stream {
+            self.send_gateway(json!({"op": 19, "d": {"stream_key": previous.key}}));
+        }
         self.end_stream(&mut shared, Some("Watching another stream".into()));
         shared.stream = Some(StreamWatch {
             user_id,
@@ -222,17 +225,8 @@ impl VoiceManager {
             .frames
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = None;
-        if notify
-            && let (Some(sender), Some(generation)) = (
-                self.commands.clone(),
-                self.gateway_generation
-                    .as_ref()
-                    .map(|generation| generation.load(Ordering::Acquire)),
-            )
-            && generation % 2 == 1
-        {
-            let payload = json!({"op": 19, "d": {"stream_key": share.key}});
-            let _ = sender.send((generation, commands::voice_state(payload)));
+        if notify {
+            self.send_gateway(json!({"op": 19, "d": {"stream_key": share.key}}));
         }
         if !share.ended.swap(true, Ordering::AcqRel) {
             self.emit_share(ShareEvent::Ended { reason });
@@ -251,6 +245,7 @@ impl VoiceManager {
         else {
             return;
         };
+        let rtc_channel_id = share.rtc_channel_id;
         let Some(endpoint) = share
             .endpoint
             .clone()
@@ -312,19 +307,26 @@ impl VoiceManager {
         share.shutdown = Some(shutdown);
         share.started = true;
         self.emit_share(ShareEvent::Starting);
+        let unpause: Box<dyn FnOnce() + Send> = {
+            let manager = self.clone();
+            Box::new(move || {
+                manager.send_gateway(json!({"op": 22, "d": {"stream_key": key, "paused": false}}));
+            })
+        };
         let config = SenderConfig {
             user_id,
             session_id,
             token,
             endpoint,
             rtc_server_id,
-            key,
+            rtc_channel_id,
             keyframe,
             bitrate,
             reannounce,
             failure,
             events: events.clone(),
             ended: ended.clone(),
+            unpause: Some(unpause),
         };
         let manager = self.clone();
         runtime.spawn(async move {
@@ -426,6 +428,7 @@ impl VoiceManager {
         else {
             return;
         };
+        let rtc_channel_id = stream.rtc_channel_id;
         let Some(endpoint) = stream
             .endpoint
             .clone()
@@ -461,6 +464,7 @@ impl VoiceManager {
             token,
             endpoint,
             rtc_server_id,
+            rtc_channel_id,
             frames,
             events: events.clone(),
             ended,

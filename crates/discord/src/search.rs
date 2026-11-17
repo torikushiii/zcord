@@ -174,13 +174,14 @@ pub(super) fn search_params(
             }
             .to_owned(),
         ),
-        ("limit", "25".to_owned()),
     ]);
-    if query.offset != 0 {
-        params.push(("offset", query.offset.to_string()));
-    }
     if matches!(scope, SearchScope::Guild(_)) {
-        params.push(("include_nsfw", "true".to_owned()));
+        params.push(("offset", query.offset.to_string()));
+    } else {
+        params.push(("limit", "25".to_owned()));
+        if query.offset != 0 {
+            params.push(("offset", query.offset.to_string()));
+        }
     }
     params
 }
@@ -295,9 +296,7 @@ mod tests {
                 ("pinned", "false".to_owned()),
                 ("sort_by", "timestamp".to_owned()),
                 ("sort_order", "asc".to_owned()),
-                ("limit", "25".to_owned()),
                 ("offset", "50".to_owned()),
-                ("include_nsfw", "true".to_owned()),
             ]
         );
     }
