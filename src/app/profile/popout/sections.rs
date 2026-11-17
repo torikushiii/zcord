@@ -12,10 +12,18 @@ pub(crate) fn bio(
     let profile = card.profile.as_deref()?;
     let palette = card.palette();
     let text = guild_profile(profile)
-        .and_then(|p| p.bio.clone())
-        .filter(|bio| !bio.trim().is_empty())
-        .or_else(|| profile.user_profile.as_ref()?.bio.clone())
-        .filter(|bio| !bio.trim().is_empty())?;
+        .and_then(|p| p.bio.as_deref())
+        .map(trim_blank)
+        .filter(|bio| !bio.is_empty())
+        .or_else(|| {
+            profile
+                .user_profile
+                .as_ref()?
+                .bio
+                .as_deref()
+                .map(trim_blank)
+        })
+        .filter(|bio| !bio.is_empty())?;
     Some(
         div()
             .text_size(rpx(14.))
@@ -24,9 +32,21 @@ pub(crate) fn bio(
             .when(clamped, |this| {
                 this.max_h(rpx(18. * BIO_LINES as f32)).overflow_hidden()
             })
-            .child(markdown(app, card, card.user_id, &text, cx))
+            .child(markdown(app, card, card.user_id, text, cx))
             .into_any_element(),
     )
+}
+
+/// `trim` keeps padding characters that render empty but are not Unicode whitespace.
+fn trim_blank(text: &str) -> &str {
+    text.trim_matches(|c: char| {
+        c.is_whitespace()
+            || matches!(
+                c,
+                '\u{115F}' | '\u{1160}' | '\u{180E}' | '\u{200B}'
+                    ..='\u{200D}' | '\u{2060}' | '\u{2800}' | '\u{3164}' | '\u{FEFF}' | '\u{FFA0}'
+            )
+    })
 }
 
 pub(crate) fn markdown(
