@@ -233,7 +233,7 @@ mod tests {
         assert_eq!(packets.len(), 1);
         assert_eq!(
             packets[0].header,
-            [0x90, 0x65 | 0x80, 0, 7, 0, 0, 0, 90, 0, 0, 0, 11]
+            [0x90, VIDEO_PAYLOAD | 0x80, 0, 7, 0, 0, 0, 90, 0, 0, 0, 11]
         );
         assert_eq!(packets[0].preamble, [0xbe, 0xde, 0, 4]);
         assert_eq!(

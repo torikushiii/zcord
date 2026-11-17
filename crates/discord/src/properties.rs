@@ -756,7 +756,7 @@ mod tests {
         let almost = now + HEARTBEAT_INTERVAL - Duration::from_nanos(1);
         assert_eq!(heartbeat.session_at(almost), first);
         assert_eq!(heartbeat.session_at(now + HEARTBEAT_INTERVAL), first);
-        let idle = almost + HEARTBEAT_INTERVAL;
+        let idle = now + HEARTBEAT_INTERVAL * 2;
         let second = heartbeat.session_at(idle).to_owned();
         assert_ne!(second, first);
         assert_eq!(heartbeat.session_at(idle), second);

@@ -215,11 +215,38 @@ async fn repeated_rate_limits_have_a_bounded_retry_count() {
     let server = async {
         for _ in 0..3 {
             let stream = accept_request(&listener).await;
-            respond(stream, "429 Too Many Requests", "", r#"{"retry_after":0}"#).await;
+            respond(
+                stream,
+                "429 Too Many Requests",
+                "Retry-After: 0\r\n",
+                r#"{"retry_after":0}"#,
+            )
+            .await;
         }
     };
     let ((), result) = tokio::join!(server, rest.send(|| rest.client.get(&url)));
     assert!(matches!(result, Err(Error::RateLimited { .. })));
+}
+
+#[tokio::test]
+async fn rate_limits_without_retry_after_are_not_resent() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "http://{}/api/v9/users/1/profile",
+        listener.local_addr().unwrap()
+    );
+    let rest = local_rest();
+    let server = async {
+        let stream = accept_request(&listener).await;
+        respond(stream, "429 Too Many Requests", "", r#"{"retry_after":0}"#).await;
+    };
+    let ((), result) = tokio::join!(server, rest.send(|| rest.client.get(&url)));
+    assert!(matches!(result, Err(Error::RateLimited { .. })));
+    assert!(
+        timeout(Duration::from_millis(50), listener.accept())
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
