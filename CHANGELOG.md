@@ -2,6 +2,15 @@
 
 ## Unversioned
 
+## 0.11.1
+
+- Bugfix: Fixed zcord sometimes logging you out right after Discord refreshed your login token.
+- Bugfix: Fixed a refreshed login token sometimes not being saved, so the next launch asked you to log in again.
+- Bugfix: Fixed zcord staying stuck on reconnecting when Discord never finished logging in.
+- Bugfix: Fixed a forum post or other change being sent twice when Discord was briefly unavailable.
+- Bugfix: Fixed voice calls retrying every second instead of slowing down when the connection kept failing.
+- Bugfix: Fixed Go Live staying paused for viewers when zcord reconnected just as the stream started.
+
 ## 0.11.0
 
 - Major: zcord now talks to Discord the way the official desktop client does. The gateway uses compressed ETF, requests go over HTTP/2 with the client's headers, retries and rate limits follow the client's rules, and the client version, build number and installation ID stay current.
