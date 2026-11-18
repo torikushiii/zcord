@@ -813,6 +813,9 @@ async fn drive(
                     if let Some(payload) = voice.resumed_op4() {
                         outgoing.push(true, voice_state(payload));
                     }
+                    if let Some(command) = voice.resumed_unpause() {
+                        outgoing.push(true, command);
+                    }
                     if sender.unbounded_send(Event::Resumed).is_err() {
                         return Outcome::Stop;
                     }

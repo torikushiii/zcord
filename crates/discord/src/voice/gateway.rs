@@ -47,6 +47,8 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const DISCOVERY_ATTEMPTS: usize = 3;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(20);
+// Encryption can still fail after the session starts, so starting alone is not progress.
+const STABLE_CONNECTION: Duration = Duration::from_secs(30);
 const SENDER_REPORT: Duration = Duration::from_secs(5);
 const REIDENTIFY_CLOSES: [u16; 4] = [4004, 4006, 4011, 4015];
 
@@ -168,7 +170,8 @@ pub(super) struct Connection {
     rtc_connection_id: String,
     speaking_ssrc: Option<u32>,
     handshake_done: bool,
-    reached_ready: bool,
+    established: Option<Instant>,
+    stable: Option<bool>,
     dave_epoch_reset: bool,
     invalid_mls: u8,
     last_close: Option<u16>,
@@ -207,7 +210,8 @@ impl Connection {
             rtc_connection_id: properties::uuid_v4(),
             speaking_ssrc: None,
             handshake_done: false,
-            reached_ready: false,
+            established: None,
+            stable: None,
             dave_epoch_reset: false,
             invalid_mls: 0,
             last_close: None,
@@ -220,8 +224,22 @@ impl Connection {
         self.handshake_done && self.seq.is_some()
     }
 
-    pub fn reached_ready(&self) -> bool {
-        self.reached_ready
+    pub fn established(&self) -> bool {
+        self.stable == Some(true)
+    }
+
+    /// Must run before the socket closes, or a slow close counts as uptime.
+    pub(super) fn sample_stability(&mut self) {
+        if self.stable.is_none() {
+            self.stable = Some(
+                self.established
+                    .is_some_and(|since| since.elapsed() >= STABLE_CONNECTION),
+            );
+        }
+    }
+
+    pub(super) fn mark_established(&mut self) {
+        self.established.get_or_insert_with(Instant::now);
     }
 
     fn forget_session(&mut self) {
@@ -248,7 +266,8 @@ impl Connection {
         resume: bool,
     ) -> Outcome {
         self.last_close = None;
-        self.reached_ready = false;
+        self.established = None;
+        self.stable = None;
         self.rx = RxStats::new();
         self.tx = TxStats::new();
         if !resume {
@@ -269,6 +288,7 @@ impl Connection {
             return Outcome::Reconnect;
         };
         let outcome = self.drive(&mut socket, events, shutdown, resume).await;
+        self.sample_stability();
         close_socket(&mut socket, NORMAL_CLOSE).await;
         outcome
     }

@@ -71,6 +71,7 @@ struct StreamShare {
     stop: Arc<AtomicBool>,
     reannounce: Arc<AtomicBool>,
     failure: Arc<Mutex<Option<String>>>,
+    unpause_owed: bool,
 }
 
 struct Shared {
@@ -468,6 +469,14 @@ impl VoiceManager {
         self.take_pending_op4()
     }
 
+    pub(crate) fn resumed_unpause(&self) -> Option<commands::Command> {
+        let shared = self.lock();
+        let share = shared.share.as_ref().filter(|share| share.unpause_owed)?;
+        let (key, ended) = (share.key.clone(), share.ended.clone());
+        drop(shared);
+        Some(self.unpause_command(&key, &ended))
+    }
+
     pub fn set_allow_voice_recording(&self, allow: bool) -> Option<Value> {
         let mut shared = self.lock();
         if shared.allow_voice_recording == allow {
@@ -499,6 +508,10 @@ impl VoiceManager {
     }
 
     pub(super) fn send_gateway(&self, payload: Value) {
+        self.send_command(commands::voice_state(payload));
+    }
+
+    pub(super) fn send_command(&self, command: commands::Command) {
         let generation = self
             .gateway_generation
             .as_ref()
@@ -506,7 +519,7 @@ impl VoiceManager {
         if let (Some(sender), Some(generation)) = (&self.commands, generation)
             && generation % 2 == 1
         {
-            let _ = sender.send((generation, commands::voice_state(payload)));
+            let _ = sender.send((generation, command));
         }
     }
 
@@ -709,7 +722,7 @@ async fn connection_loop(
             break;
         }
         let outcome = connection.attempt(&events, &mut shutdown, resume).await;
-        if connection.reached_ready() {
+        if connection.established() {
             failures = 0;
         }
         match outcome {

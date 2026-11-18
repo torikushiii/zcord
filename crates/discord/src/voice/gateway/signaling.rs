@@ -11,7 +11,6 @@ impl Connection {
         let data = value.get("d").cloned().unwrap_or(Value::Null);
         match op {
             2 => {
-                self.reached_ready = true;
                 send_json(socket, json!({"op": 16, "d": {}}))
                     .await
                     .map_err(|_| Outcome::Reconnect)?;
@@ -65,7 +64,7 @@ impl Connection {
                     self.handshake_done = false;
                     return Err(Outcome::Reconnect);
                 }
-                self.reached_ready = true;
+                self.mark_established();
                 self.handshake_done = true;
                 self.rtp_epoch = Instant::now();
                 if self.audio.is_none() {
@@ -331,6 +330,7 @@ impl Connection {
     }
 
     async fn drop_session(&mut self, socket: &mut Socket, code: u16) -> Outcome {
+        self.sample_stability();
         self.dave = None;
         self.cipher = None;
         self.audio.take();
@@ -371,6 +371,7 @@ impl Connection {
         }
         self.cipher = Some(cipher);
         self.dave = Some(dave);
+        self.mark_established();
         log::info!("Voice connected: mode={} dave={}", mode.name(), version);
         self.rtp_epoch = Instant::now();
         self.rtp_sequence = 0;

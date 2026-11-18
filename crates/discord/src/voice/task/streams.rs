@@ -199,6 +199,7 @@ impl VoiceManager {
             stop: Arc::new(AtomicBool::new(false)),
             reannounce: Arc::new(AtomicBool::new(false)),
             failure: Arc::new(Mutex::new(None)),
+            unpause_owed: false,
         });
         Some(json!({"op": 18, "d": {
             "type": if guild_id == 0 { "call" } else { "guild" },
@@ -308,9 +309,20 @@ impl VoiceManager {
         share.started = true;
         self.emit_share(ShareEvent::Starting);
         let unpause: Box<dyn FnOnce() + Send> = {
-            let manager = self.clone();
+            let (manager, ended) = (self.clone(), ended.clone());
             Box::new(move || {
-                manager.send_gateway(json!({"op": 22, "d": {"stream_key": key, "paused": false}}));
+                {
+                    let mut shared = manager.lock();
+                    let Some(share) = shared
+                        .share
+                        .as_mut()
+                        .filter(|share| Arc::ptr_eq(&share.ended, &ended))
+                    else {
+                        return;
+                    };
+                    share.unpause_owed = true;
+                }
+                manager.send_command(manager.unpause_command(&key, &ended));
             })
         };
         let config = SenderConfig {
@@ -333,7 +345,13 @@ impl VoiceManager {
             let result = stream::sender::run(config, frame_receiver, audio_frames, cancel).await;
             stop.store(true, Ordering::Release);
             let mut shared = manager.lock();
-            manager.end_share_with(&mut shared, result.err(), true);
+            if shared
+                .share
+                .as_ref()
+                .is_some_and(|share| Arc::ptr_eq(&share.ended, &ended))
+            {
+                manager.end_share_with(&mut shared, result.err(), true);
+            }
         });
     }
 
@@ -494,5 +512,30 @@ impl VoiceManager {
         if let Some(events) = &self.events {
             emit(events, VoiceEvent::Stream(event));
         }
+    }
+}
+
+impl VoiceManager {
+    pub(super) fn unpause_command(&self, key: &str, ended: &Arc<AtomicBool>) -> commands::Command {
+        let (done, written) = tokio::sync::oneshot::channel();
+        let mut command =
+            commands::voice_state(json!({"op": 22, "d": {"stream_key": key, "paused": false}}));
+        command.completion = Some(done);
+        if let Some(runtime) = &self.runtime {
+            let (manager, ended) = (self.clone(), ended.clone());
+            runtime.spawn(async move {
+                if matches!(written.await, Ok(Ok(()))) {
+                    let mut shared = manager.lock();
+                    if let Some(share) = shared
+                        .share
+                        .as_mut()
+                        .filter(|share| Arc::ptr_eq(&share.ended, &ended))
+                    {
+                        share.unpause_owed = false;
+                    }
+                }
+            });
+        }
+        command
     }
 }
