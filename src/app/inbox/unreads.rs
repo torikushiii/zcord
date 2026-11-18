@@ -122,14 +122,19 @@ impl DiscordApp {
         }
         cx.notify();
         let days = days_since_discord_epoch();
-        let flags = self.store.take_ack_flags(channel_id);
+        let flags = self.store.ack_flags(channel_id);
         let request = Tokio::spawn(cx, async move {
             session
                 .ack_message(Some(guild_id), channel_id, message_id, days, flags)
                 .await
         });
-        cx.spawn(async move |_, _| match request.await {
-            Ok(Ok(())) => {}
+        cx.spawn(async move |this, cx| match request.await {
+            Ok(Ok(())) => {
+                if let Some(flags) = flags {
+                    this.update(cx, |app, _| app.store.confirm_ack_flags(channel_id, flags))
+                        .ok();
+                }
+            }
             Ok(Err(error)) => log::warn!("Could not mark channel read: {error}"),
             Err(error) => log::warn!("Mark read task failed: {error}"),
         })

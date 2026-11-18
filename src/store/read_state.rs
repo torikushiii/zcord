@@ -226,22 +226,23 @@ impl Store {
         source.read_state.entries.get_mut(index)
     }
 
-    pub fn take_ack_flags(&mut self, channel_id: u64) -> Option<u32> {
-        let kind = self
-            .source
-            .as_ref()
-            .and_then(|source| self.source_channels.get(&channel_id)?.get(source))?
-            .kind;
+    /// Not marked as sent here: an ack cancelled or failed before reaching Discord would drop them.
+    pub fn ack_flags(&self, channel_id: u64) -> Option<u32> {
+        let source = self.source.as_ref()?;
+        let kind = self.source_channels.get(&channel_id)?.get(source)?.kind;
         let expected = match kind {
             Some(10..=12) => 2,
             Some(1 | 3) => 0,
             _ => 1,
         };
-        let state = self.read_state_mut(channel_id, 0)?;
-        (state.flags != Some(expected)).then(|| {
-            state.flags = Some(expected);
-            expected
-        })
+        let current = read_state(source, &self.read_states, channel_id).and_then(|s| s.flags);
+        (current != Some(expected)).then_some(expected)
+    }
+
+    pub fn confirm_ack_flags(&mut self, channel_id: u64, flags: u32) {
+        if let Some(state) = self.read_state_mut(channel_id, 0) {
+            state.flags = Some(flags);
+        }
     }
 
     pub(super) fn is_private_conversation(&self, channel_id: u64) -> bool {

@@ -99,7 +99,7 @@ impl DiscordApp {
         });
         cx.notify();
         let guild_id = self.request_guild();
-        let flags = self.store.take_ack_flags(channel_id);
+        let flags = self.store.ack_flags(channel_id);
         let task = cx.spawn(async move |this, cx| {
             if let Some(delay) = delay {
                 cx.background_executor().timer(delay).await;
@@ -111,7 +111,12 @@ impl DiscordApp {
                     .await
             });
             match request.await {
-                Ok(Ok(())) => {}
+                Ok(Ok(())) => {
+                    if let Some(flags) = flags {
+                        this.update(cx, |app, _| app.store.confirm_ack_flags(channel_id, flags))
+                            .ok();
+                    }
+                }
                 Ok(Err(error)) => log::warn!("Could not mark channel read: {error}"),
                 Err(error) => log::warn!("Mark read task failed: {error}"),
             }
@@ -139,14 +144,19 @@ impl DiscordApp {
         });
         cx.notify();
         let days = days_since_discord_epoch();
-        let flags = self.store.take_ack_flags(channel_id);
+        let flags = self.store.ack_flags(channel_id);
         let request = Tokio::spawn(cx, async move {
             session
                 .ack_message(None, channel_id, message_id, days, flags)
                 .await
         });
-        cx.spawn(async move |_, _| match request.await {
-            Ok(Ok(())) => {}
+        cx.spawn(async move |this, cx| match request.await {
+            Ok(Ok(())) => {
+                if let Some(flags) = flags {
+                    this.update(cx, |app, _| app.store.confirm_ack_flags(channel_id, flags))
+                        .ok();
+                }
+            }
             Ok(Err(error)) => log::warn!("Could not mark DM read: {error}"),
             Err(error) => log::warn!("Mark read task failed: {error}"),
         })
