@@ -256,6 +256,7 @@ fn unauthorized_stops_future_requests_even_on_other_routes() {
         .unwrap()
         .unwrap();
     permit.observe(401, &HeaderMap::new());
+    permit.revoke();
     assert!(matches!(
         limiter.try_acquire(route(Method::GET, "games")),
         Err(Error::Http(401))

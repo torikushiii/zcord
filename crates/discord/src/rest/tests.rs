@@ -23,7 +23,10 @@ fn local_rest() -> Rest {
         upload_client: upload_client().unwrap(),
         limits: Limiter::default(),
         installation_id: std::sync::RwLock::new(None),
-        authorization: std::sync::RwLock::new(HeaderValue::from_static("fixture-token")),
+        authorization: std::sync::RwLock::new(Credential {
+            generation: 0,
+            header: HeaderValue::from_static("fixture-token"),
+        }),
         view: std::sync::RwLock::new((0, 0)),
     }
 }
@@ -272,6 +275,64 @@ async fn unauthorized_response_stops_subsequent_dispatches() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn a_401_for_a_rotated_token_resends_with_the_new_one_and_stays_authorized() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "http://{}/api/v9/users/1/profile",
+        listener.local_addr().unwrap()
+    );
+    let rest = local_rest();
+    let server = async {
+        let (stream, headers) = accept_upload(&listener).await;
+        assert_eq!(authorization_header(&headers), Some("fixture-token"));
+        rest.set_token("rotated-token").unwrap();
+        respond(stream, "401 Unauthorized", "", "{}").await;
+        let (stream, headers) = accept_upload(&listener).await;
+        assert_eq!(authorization_header(&headers), Some("rotated-token"));
+        respond(stream, "200 OK", "", "{}").await;
+    };
+    let ((), result) = tokio::join!(server, rest.send(|| rest.client.get(&url)));
+    assert!(result.is_ok());
+    assert!(matches!(
+        rest.limits
+            .try_acquire(Route::of(&rest.client.get(&url).build().unwrap())),
+        Ok(Some(_))
+    ));
+    assert!(!rest.when_revoked(|| panic!("a retired token must not end the session")));
+}
+
+#[test]
+fn a_revoked_current_token_runs_the_revocation_and_rotation_clears_it() {
+    let rest = local_rest();
+    let permit = rest
+        .limits
+        .try_acquire(Route::of(
+            &rest
+                .client
+                .get("https://discord.com/api/v9/users/@me")
+                .build()
+                .unwrap(),
+        ))
+        .unwrap()
+        .unwrap();
+    permit.revoke();
+    drop(permit);
+    let mut ended = false;
+    assert!(rest.when_revoked(|| ended = true));
+    assert!(ended);
+    rest.set_token("rotated-token").unwrap();
+    assert!(!rest.when_revoked(|| panic!("rotation clears the latch")));
+}
+
+fn authorization_header(headers: &str) -> Option<&str> {
+    headers.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("authorization")
+            .then_some(value.trim())
+    })
 }
 
 #[test]

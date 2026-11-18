@@ -37,6 +37,8 @@ const QUERY: &str = "encoding=etf&v=9&compress=zstd-stream";
 const GATEWAY: &str = "wss://gateway.discord.gg/?encoding=etf&v=9&compress=zstd-stream";
 const MAX_PAYLOAD: usize = 64 * 1024 * 1024;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(30);
+const READY_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_REAUTHS: u32 = 3;
 const RESUME_WINDOW: Duration = Duration::from_secs(3 * 60);
 const MAX_FAILURES_BEFORE_RESET: u32 = 4;
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -102,8 +104,7 @@ impl CommandReceiver {
     }
 
     fn auth(&self, token: &Secret, state: &mut State) -> Value {
-        let now = Instant::now();
-        let payload = if state.can_resume(now) {
+        if state.can_resume(Instant::now()) {
             json!({"op": 6, "d": {
                 "token": token.expose(), "session_id": state.session_id, "seq": state.sequence
             }})
@@ -120,9 +121,7 @@ impl CommandReceiver {
                 identify["d"]["presence"] = presence["d"].take();
             }
             identify
-        };
-        state.last_ack = Some(now);
-        payload
+        }
     }
 
     fn time_spent(&mut self) -> Value {
@@ -410,16 +409,17 @@ fn sync_voice_recording(commands: &CommandReceiver, voice: &VoiceManager) -> Opt
 
 /// The old token stops working once READY carries `auth_token`.
 /// https://docs.discord.food/gateway/gateway-events#ready
-fn rotate_token(token: &mut Secret, owner: &Weak<Inner>, refreshed: &Secret) {
+fn rotate_token(token: &mut Secret, owner: &Weak<Inner>, refreshed: &Secret) -> bool {
     if let Some(inner) = owner.upgrade()
         && let Ok(rest) = &inner.rest
         && rest.set_token(refreshed.expose()).is_err()
     {
         log::warn!("Ignoring an unusable rotated auth token");
-        return;
+        return false;
     }
     *token = refreshed.clone();
     log::info!("Gateway rotated the auth token");
+    true
 }
 
 fn close_session(owner: &Weak<Inner>, control: Control) {
@@ -551,6 +551,8 @@ async fn drive(
         return retry();
     }
     outgoing.record_send(Instant::now());
+    let mut ready_deadline = Instant::now() + READY_TIMEOUT;
+    let mut reauths = 0;
     loop {
         let next_command = outgoing.next_send();
         let incoming = tokio::select! {
@@ -558,6 +560,11 @@ async fn drive(
             _ = shutdown.changed() => return Outcome::Stop,
             _ = sleep_until(hello_deadline), if interval.is_none() => {
                 log::warn!("Gateway did not say hello in time");
+                state.resume_url = None;
+                return retry();
+            }
+            _ = sleep_until(ready_deadline), if !healthy => {
+                log::warn!("Gateway did not finish logging in in time");
                 state.resume_url = None;
                 return retry();
             }
@@ -683,13 +690,18 @@ async fn drive(
             }
             7 => return Outcome::Reconnect,
             9 => {
+                if payload.d.as_bool() != Some(true) {
+                    state.clear();
+                }
+                reauths += 1;
+                if reauths > MAX_REAUTHS {
+                    log::warn!("Gateway kept invalidating the session");
+                    return retry();
+                }
                 commands.disconnected();
                 outgoing = Commands::new();
                 outgoing.presence_after = commands.presence_after;
                 healthy = false;
-                if payload.d.as_bool() != Some(true) {
-                    state.clear();
-                }
                 if sender.unbounded_send(Event::Reconnecting).is_err() {
                     return Outcome::Stop;
                 }
@@ -697,14 +709,17 @@ async fn drive(
                     return retry();
                 }
                 outgoing.record_send(Instant::now());
+                ready_deadline = Instant::now() + READY_TIMEOUT;
             }
             0 => {
                 let kind = payload.t.as_deref().unwrap_or("");
                 if kind == "READY" {
                     match serde_json::from_value::<model::Ready>(payload.d) {
-                        Ok(ready) => {
-                            if let Some(refreshed) = &ready.auth_token {
-                                rotate_token(token, owner, refreshed);
+                        Ok(mut ready) => {
+                            if let Some(refreshed) = &ready.auth_token
+                                && !rotate_token(token, owner, refreshed)
+                            {
+                                ready.auth_token = None;
                             }
                             if let Some(id) = &ready.installation_id
                                 && let Some(inner) = owner.upgrade()
@@ -713,6 +728,7 @@ async fn drive(
                                 rest.set_installation_id(id);
                             }
                             state.backoff.succeed();
+                            state.last_ack = Some(Instant::now());
                             state.session_id = Some(ready.session_id.clone());
                             state.user_id = Some(ready.user.id);
                             state.voice_connected = false;
@@ -723,6 +739,7 @@ async fn drive(
                                 .as_deref()
                                 .and_then(settings_version);
                             healthy = true;
+                            reauths = 0;
                             commands.ready();
                             {
                                 let mut presence = commands
@@ -750,6 +767,19 @@ async fn drive(
                             if let Some(payload) = voice.take_pending_op4() {
                                 outgoing.push(true, voice_state(payload));
                             }
+                            log::info!(
+                                "Gateway ready: {} guilds, {} users",
+                                ready.guilds.len(),
+                                ready.users.len()
+                            );
+                            // Delivered before any write that can fail: a retry after that
+                            // resumes, and RESUMED alone never seeds the app or saves the token.
+                            if sender
+                                .unbounded_send(Event::Ready(Box::new(ready)))
+                                .is_err()
+                            {
+                                return Outcome::Stop;
+                            }
                             let time_spent = commands.time_spent();
                             if send(socket, time_spent).await.is_err()
                                 || send(socket, commands.heartbeat(state)).await.is_err()
@@ -757,17 +787,6 @@ async fn drive(
                                 return retry();
                             }
                             outgoing.record_send(Instant::now());
-                            log::info!(
-                                "Gateway ready: {} guilds, {} users",
-                                ready.guilds.len(),
-                                ready.users.len()
-                            );
-                            if sender
-                                .unbounded_send(Event::Ready(Box::new(ready)))
-                                .is_err()
-                            {
-                                return Outcome::Stop;
-                            }
                         }
                         // Reconnecting would re-identify on every backoff step with
                         // the same unparseable result, and repeated identifies get
@@ -781,7 +800,9 @@ async fn drive(
                     }
                 } else if kind == "RESUMED" {
                     state.backoff.succeed();
+                    state.last_ack = Some(Instant::now());
                     healthy = true;
+                    reauths = 0;
                     commands.ready();
                     if let Some(command) = commands.presence_command() {
                         outgoing.push(true, command);

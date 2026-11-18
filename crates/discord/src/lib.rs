@@ -242,8 +242,12 @@ impl Session {
             _ = shutdown.changed() => Err(Error::Closed),
             result = call(rest) => result,
         };
-        if matches!(result, Err(Error::Http(401))) {
-            self.inner.control.send_replace(Control::InvalidToken);
+        if matches!(result, Err(Error::Http(401)))
+            && !rest.when_revoked(|| {
+                self.inner.control.send_replace(Control::InvalidToken);
+            })
+        {
+            return Err(Error::Network);
         }
         result
     }

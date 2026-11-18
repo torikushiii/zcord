@@ -330,13 +330,13 @@ fn sessions_resume_only_within_three_minutes_of_the_last_ack() {
 }
 
 #[test]
-fn reidentify_carries_the_current_presence_and_resume_refreshes_the_ack_clock() {
+fn reidentify_carries_the_current_presence_and_auth_does_not_refresh_the_ack_clock() {
     let (_sender, commands) = receiver();
     let token = Secret("fixture-secret".into());
     let mut state = State::default();
     let first = commands.auth(&token, &mut state);
     assert_eq!(first["op"], 2);
-    assert!(state.last_ack.is_some());
+    assert!(state.last_ack.is_none());
     commands
         .presence
         .lock()
@@ -354,6 +354,10 @@ fn reidentify_carries_the_current_presence_and_resume_refreshes_the_ack_clock() 
     assert_eq!(state.sequence, 0);
     state.session_id = Some("fixture-session".into());
     state.sequence = 7;
+    assert_eq!(commands.auth(&token, &mut state)["op"], 2);
+    state.session_id = Some("fixture-session".into());
+    state.sequence = 7;
+    state.last_ack = Some(Instant::now());
     let resume = commands.auth(&token, &mut state);
     assert_eq!(
         resume,

@@ -170,9 +170,6 @@ impl State {
             Some(id) => self.learn(route, id),
             None => self.bucket(route),
         };
-        if status == 401 {
-            self.unauthorized = true;
-        }
         let retry = header_seconds(headers, "retry-after");
         let exhausted = headers
             .get("x-ratelimit-remaining")
@@ -261,6 +258,15 @@ impl Limiter {
         }
     }
 
+    pub fn unauthorized(&self) -> bool {
+        self.state().unauthorized
+    }
+
+    pub fn reauthorize(&self) {
+        self.state().unauthorized = false;
+        self.changed.notify_waiters();
+    }
+
     pub fn try_acquire(&self, route: Route) -> Result<Option<Permit<'_>>, Error> {
         Ok(match self.state().admit(&route, Instant::now())? {
             Admission::Ready => Some(Permit {
@@ -282,6 +288,11 @@ impl Permit<'_> {
         self.limiter
             .state()
             .observe(&self.route, status, headers, Instant::now());
+        self.limiter.changed.notify_waiters();
+    }
+
+    pub fn revoke(&self) {
+        self.limiter.state().unauthorized = true;
         self.limiter.changed.notify_waiters();
     }
 

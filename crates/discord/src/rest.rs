@@ -52,8 +52,13 @@ pub(super) struct Rest {
     pub(super) upload_client: Client,
     limits: Limiter,
     installation_id: std::sync::RwLock<Option<HeaderValue>>,
-    authorization: std::sync::RwLock<HeaderValue>,
+    authorization: std::sync::RwLock<Credential>,
     view: std::sync::RwLock<(u64, u64)>,
+}
+
+struct Credential {
+    generation: u64,
+    header: HeaderValue,
 }
 
 fn authorization(token: &str) -> Result<HeaderValue, Error> {
@@ -79,18 +84,38 @@ impl Rest {
             installation_id: std::sync::RwLock::new(
                 properties::installation_id().and_then(|id| installation_header(&id)),
             ),
-            authorization: std::sync::RwLock::new(authorization),
+            authorization: std::sync::RwLock::new(Credential {
+                generation: 0,
+                header: authorization,
+            }),
             view: std::sync::RwLock::new((0, 0)),
         })
     }
 
     pub(super) fn set_token(&self, token: &str) -> Result<(), Error> {
-        let value = authorization(token)?;
-        *self
+        let header = authorization(token)?;
+        let mut credential = self
             .authorization
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = value;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        credential.generation += 1;
+        credential.header = header;
+        // A 401 for the previous token may already have latched the limiter.
+        self.limits.reauthorize();
         Ok(())
+    }
+
+    /// `revoked` runs under the credential guard, or READY could rotate in between.
+    pub(super) fn when_revoked(&self, revoked: impl FnOnce()) -> bool {
+        let _credential = self
+            .authorization
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let latched = self.limits.unauthorized();
+        if latched {
+            revoked();
+        }
+        latched
     }
 
     async fn send(&self, request: impl Fn() -> RequestBuilder) -> Result<Response, Error> {
@@ -156,18 +181,23 @@ impl Rest {
         }
     }
 
+    fn current_authorization(&self) -> (u64, HeaderValue) {
+        let credential = self
+            .authorization
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (credential.generation, credential.header.clone())
+    }
+
     fn prepare(&self, request: &mut Request) {
         if !request.headers().contains_key(REFERER)
             && let Ok(referer) = HeaderValue::from_str(&self.view_referer())
         {
             request.headers_mut().insert(REFERER, referer);
         }
-        let authorization = self
-            .authorization
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        request.headers_mut().insert(AUTHORIZATION, authorization);
+        request
+            .headers_mut()
+            .insert(AUTHORIZATION, self.current_authorization().1);
         request.headers_mut().insert(
             USER_AGENT,
             HeaderValue::from_static(properties::user_agent()),
@@ -237,11 +267,14 @@ impl Rest {
         self.installation_id().ok_or(Error::Decode)
     }
 
-    /// Only Retry-After makes a 429 or 503 safe to resend, and only reads are resent after a
-    /// server error or a dropped connection.
+    /// Only Retry-After makes a 429 safe to resend, or a 503 for a read; only reads are resent
+    /// after a server error or a dropped connection, since a write may already have landed.
     /// https://docs.discord.food/topics/rate-limits
-    async fn execute(&self, request: Request, permit: Permit<'_>) -> Attempt {
+    async fn execute(&self, mut request: Request, permit: Permit<'_>) -> Attempt {
         let idempotent = matches!(*request.method(), Method::GET | Method::HEAD);
+        // The token can rotate while a request waits for its permit.
+        let (generation, authorization) = self.current_authorization();
+        request.headers_mut().insert(AUTHORIZATION, authorization);
         let response = match self.client.execute(request).await {
             Ok(response) => response,
             Err(_) if idempotent => return Attempt::Backoff(Error::Network),
@@ -250,6 +283,16 @@ impl Rest {
         let status = response.status().as_u16();
         permit.observe(status, response.headers());
         if status == 401 {
+            // Held across the revoke so a rotation cannot land between the check and the latch.
+            let credential = self
+                .authorization
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if credential.generation != generation {
+                // Not `Http(401)`: once the retries run out that would end the session.
+                return Attempt::Retry(Error::Network);
+            }
+            permit.revoke();
             return Attempt::Done(Err(Error::Http(401)));
         }
         if status == 429 || status == 503 {
@@ -258,7 +301,7 @@ impl Rest {
             let error = Error::RateLimited {
                 retry_after: permit.retry(&headers, &body),
             };
-            return if headers.contains_key("retry-after") {
+            return if headers.contains_key("retry-after") && (status == 429 || idempotent) {
                 Attempt::Retry(error)
             } else {
                 Attempt::Done(Err(error))
